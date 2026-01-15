@@ -1,0 +1,22 @@
+info:
+  contact: {}
+paths:
+  /api/version:
+    get:
+      description: Returns the current version
+      operationId: getVersion
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            type: string
+        "500":
+          description: Server Error
+          schema:
+            type: string
+      summary: Get the current version
+      tags:
+      - Version
+swagger: "2.0"

@@ -1,0 +1,1258 @@
+{{ define "page" }}
+<div class="container-fluid mt-2 d-flex flex-column" style="height: calc(100vh - 80px);">
+  <div class="row flex-grow-1" style="min-height: 0;">
+    <!-- Left column: Timeline visualization -->
+    <div class="col-lg-8 d-flex flex-column">
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Slot Timeline</h5>
+          <span class="badge bg-primary" id="current-slot-badge">Slot: --</span>
+        </div>
+        <div class="card-body p-2">
+          <div id="slot-graphs-container" class="slot-graphs-container"></div>
+          <div class="mt-2">
+            <div class="timeline-legend d-flex flex-wrap gap-2 small">
+              <span class="legend-section">Chain:</span>
+              <span><span class="legend-dot bg-block-received"></span> Block</span>
+              <span><span class="legend-dot bg-payload-received"></span> Payload Envelope</span>
+              <span><span class="legend-dot bg-external-bid"></span> External Bid</span>
+              <span class="legend-section ms-2">Builder:</span>
+              <span><span class="legend-dot bg-payload-created"></span> Payload Created</span>
+              <span><span class="legend-dot bg-bid-submitted"></span> Bid Submitted</span>
+              <span><span class="legend-dot bg-bid-failed"></span> Bid Failed</span>
+              <span><span class="legend-dot bg-reveal-sent"></span> Reveal</span>
+              <span><span class="legend-dot bg-reveal-failed"></span> Reveal Failed</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Events Log -->
+      <div class="card mb-3 flex-grow-1 events-log-container">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Recent Events</h5>
+          <button class="btn btn-sm btn-outline-secondary" onclick="clearEvents()">Clear</button>
+        </div>
+        <div class="card-body p-0 d-flex flex-column" style="min-height: 0;">
+          <div id="events-log" class="events-log"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right column: Config and Stats -->
+    <div class="col-lg-4">
+      <!-- Connection Status -->
+      <div class="card mb-3">
+        <div class="card-body py-2">
+          <div class="d-flex justify-content-between align-items-center">
+            <span>Connection Status:</span>
+            <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="card mb-3">
+        <div class="card-header">
+          <h5 class="mb-0">Statistics</h5>
+        </div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-6">
+              <div class="stat-box">
+                <div class="stat-value" id="stat-slots-built">0</div>
+                <div class="stat-label">Slots Built</div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="stat-box">
+                <div class="stat-value" id="stat-bids-submitted">0</div>
+                <div class="stat-label">Bids Submitted</div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="stat-box">
+                <div class="stat-value" id="stat-bids-won">0</div>
+                <div class="stat-label">Bids Won</div>
+              </div>
+            </div>
+            <div class="col-6">
+              <div class="stat-box">
+                <div class="stat-value" id="stat-reveals-success">0</div>
+                <div class="stat-label">Reveals Success</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- EPBS Config -->
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">EPBS Timing Config</h5>
+          <button class="btn btn-sm btn-outline-primary" onclick="toggleEpbsEdit()">
+            <i class="fas fa-edit"></i>
+          </button>
+        </div>
+        <div class="card-body">
+          <div id="epbs-display">
+            <table class="table table-sm table-borderless mb-0">
+              <tr>
+                <td>Build Start:</td>
+                <td class="text-end"><span id="cfg-build-start">--</span> ms</td>
+              </tr>
+              <tr>
+                <td>Bid Start:</td>
+                <td class="text-end"><span id="cfg-bid-start">--</span> ms</td>
+              </tr>
+              <tr>
+                <td>Bid End:</td>
+                <td class="text-end"><span id="cfg-bid-end">--</span> ms</td>
+              </tr>
+              <tr>
+                <td>Reveal Time:</td>
+                <td class="text-end"><span id="cfg-reveal">--</span> ms</td>
+              </tr>
+              <tr>
+                <td>Bid Min Amount:</td>
+                <td class="text-end"><span id="cfg-bid-min">--</span> gwei</td>
+              </tr>
+              <tr>
+                <td>Bid Increase:</td>
+                <td class="text-end"><span id="cfg-bid-increase">--</span> gwei</td>
+              </tr>
+              <tr>
+                <td>Bid Interval:</td>
+                <td class="text-end"><span id="cfg-bid-interval">--</span> ms</td>
+              </tr>
+            </table>
+          </div>
+          <div id="epbs-edit" style="display: none;">
+            <form id="epbs-form" onsubmit="saveEpbsConfig(event)">
+              <div class="mb-2">
+                <label class="form-label">Build Start Time (ms)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-build-start" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Bid Start Time (ms)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-bid-start" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Bid End Time (ms)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-bid-end" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Reveal Time (ms)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-reveal" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Bid Min Amount (gwei)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-bid-min" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Bid Increase (gwei)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-bid-increase" required>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Bid Interval (ms)</label>
+                <input type="number" class="form-control form-control-sm" id="edit-bid-interval" required>
+              </div>
+              <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="toggleEpbsEdit()">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule Config -->
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0">Schedule Config</h5>
+          <button class="btn btn-sm btn-outline-primary" onclick="toggleScheduleEdit()">
+            <i class="fas fa-edit"></i>
+          </button>
+        </div>
+        <div class="card-body">
+          <div id="schedule-display">
+            <table class="table table-sm table-borderless mb-0">
+              <tr>
+                <td>Mode:</td>
+                <td class="text-end"><span id="cfg-schedule-mode">--</span></td>
+              </tr>
+              <tr>
+                <td>Every Nth:</td>
+                <td class="text-end"><span id="cfg-every-nth">--</span></td>
+              </tr>
+              <tr>
+                <td>Next N:</td>
+                <td class="text-end"><span id="cfg-next-n">--</span></td>
+              </tr>
+            </table>
+          </div>
+          <div id="schedule-edit" style="display: none;">
+            <form id="schedule-form" onsubmit="saveScheduleConfig(event)">
+              <div class="mb-2">
+                <label class="form-label">Mode</label>
+                <select class="form-select form-select-sm" id="edit-schedule-mode" required>
+                  <option value="all">All</option>
+                  <option value="every_nth">Every Nth</option>
+                  <option value="next_n">Next N</option>
+                </select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Every Nth</label>
+                <input type="number" class="form-control form-control-sm" id="edit-every-nth" min="1">
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Next N</label>
+                <input type="number" class="form-control form-control-sm" id="edit-next-n" min="0">
+              </div>
+              <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="toggleScheduleEdit()">Cancel</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{{ end }}
+
+{{ define "js" }}
+<script>
+(function() {
+  /* State */
+  var eventSource = null;
+  var currentSlot = 0;
+  var config = null;
+  var chainInfo = null;
+  var slotStates = {};
+  var slotConfigs = {};  /* Config snapshot per slot */
+  var events = [];
+  var MAX_SLOTS_TO_SHOW = 5;
+  var firstValidSlot = -1;  /* Set only after chainInfo arrives */
+
+  /* Initialize on page load */
+  window.addEventListener('DOMContentLoaded', function() {
+    connectEventStream();
+    requestAnimationFrame(updateTimeline);
+
+    /* Event delegation for dot clicks - handles dynamically created dots */
+    document.getElementById('slot-graphs-container').addEventListener('click', function(e) {
+      var dot = e.target.closest('.event-dot');
+      if (dot) {
+        e.stopPropagation();
+        showPopoverForDot(dot);
+      }
+    });
+  });
+
+  /* Connect to SSE event stream */
+  function connectEventStream() {
+    if (eventSource) {
+      eventSource.close();
+    }
+
+    eventSource = new EventSource('/api/events');
+
+    eventSource.onopen = function() {
+      document.getElementById('connection-status').className = 'badge bg-success';
+      document.getElementById('connection-status').textContent = 'Connected';
+    };
+
+    eventSource.onerror = function() {
+      document.getElementById('connection-status').className = 'badge bg-danger';
+      document.getElementById('connection-status').textContent = 'Disconnected';
+      setTimeout(connectEventStream, 3000);
+    };
+
+    eventSource.onmessage = function(e) {
+      try {
+        var event = JSON.parse(e.data);
+        handleEvent(event);
+      } catch (err) {
+        console.error('Failed to parse event:', err);
+      }
+    };
+  }
+
+  /* Handle incoming events */
+  function handleEvent(event) {
+    switch (event.type) {
+      case 'config':
+        config = event.data;
+        updateConfigDisplay();
+        /* Update config snapshot for current slot so graph reflects changes immediately */
+        if (currentSlot > 0 && config) {
+          slotConfigs[currentSlot] = JSON.parse(JSON.stringify(config));
+        }
+        break;
+      case 'status':
+        currentSlot = event.data.current_slot;
+        document.getElementById('current-slot-badge').textContent = 'Slot: ' + currentSlot;
+        break;
+      case 'chain_info':
+        chainInfo = event.data;
+        break;
+      case 'stats':
+        updateStats(event.data);
+        break;
+      case 'slot_start':
+        /* Note: event.data.slot is the slot we're BUILDING for, not the slot that started */
+        /* The actual slot that started is slot-1 (we build for N when slot N-1 ends / N starts) */
+        currentSlot = event.data.slot;
+        var actualSlot = getActualSlot();
+        document.getElementById('current-slot-badge').textContent = 'Slot: ' + actualSlot + ' (building: ' + currentSlot + ')';
+        addEvent('slot_start', 'Slot ' + actualSlot + ' started', event.timestamp);
+        /* Store config snapshot for this slot */
+        if (config) {
+          slotConfigs[event.data.slot] = JSON.parse(JSON.stringify(config));
+        }
+        /* Check if scheduled for building */
+        var scheduled = isSlotScheduled(event.data.slot);
+        updateSlotState(event.data.slot, { scheduled: scheduled, slotStartTime: event.data.slot_start_time });
+        break;
+      case 'payload_ready':
+        addEvent('payload_ready', 'Payload ready for slot ' + event.data.slot + ' (hash: ' + event.data.block_hash.substring(0, 10) + '...)', event.timestamp);
+        updateSlotState(event.data.slot, {
+          payloadReady: true,
+          payloadReadyAt: event.data.ready_at,
+          payloadCreatedAt: event.data.ready_at,
+          payloadBlockHash: event.data.block_hash,
+          payloadBlockValue: event.data.block_value
+        });
+        break;
+      case 'bid_submitted':
+        var bidSuccess = event.data.success !== false;
+        var bidMsg = bidSuccess
+          ? 'Bid #' + event.data.bid_count + ' submitted for slot ' + event.data.slot + ' (value: ' + event.data.value + ' gwei)'
+          : 'Bid #' + event.data.bid_count + ' FAILED for slot ' + event.data.slot + ': ' + (event.data.error || 'unknown error');
+        addEvent(bidSuccess ? 'bid_submitted' : 'bid_failed', bidMsg, event.timestamp);
+        var ourBids = slotStates[event.data.slot] ? (slotStates[event.data.slot].ourBids || []) : [];
+        ourBids.push({
+          time: event.timestamp,
+          value: event.data.value,
+          blockHash: event.data.block_hash,
+          count: event.data.bid_count,
+          success: bidSuccess,
+          error: event.data.error
+        });
+        updateSlotState(event.data.slot, {
+          bidSubmittedAt: event.timestamp,
+          bidCount: event.data.bid_count,
+          ourBid: event.data.value,
+          ourBids: ourBids
+        });
+        break;
+      case 'head_received':
+        var headMsg = 'Block received for slot ' + event.data.slot;
+        if (event.data.block_root) headMsg += ' (root: ' + event.data.block_root.substring(0, 10) + '...)';
+        addEvent('head_received', headMsg, event.timestamp);
+        updateSlotState(event.data.slot, { blockReceivedAt: event.data.received_at, blockRoot: event.data.block_root, bidsClosed: true });
+        break;
+      case 'reveal':
+        var revealMsg = event.data.skipped ? 'Reveal skipped' : (event.data.success ? 'Reveal successful' : 'Reveal failed');
+        addEvent('reveal', revealMsg + ' for slot ' + event.data.slot, event.timestamp);
+        updateSlotState(event.data.slot, {
+          revealed: event.data.success,
+          revealSkipped: event.data.skipped,
+          revealFailed: !event.data.success && !event.data.skipped,
+          revealSentAt: event.timestamp
+        });
+        break;
+      case 'bid_event':
+        if (event.data.is_ours) {
+          addEvent('bid_event', 'Our bid seen on network for slot ' + event.data.slot, event.timestamp);
+          updateSlotState(event.data.slot, { bidWon: true });
+        } else {
+          /* Track external bids */
+          var extBids = slotStates[event.data.slot] ? (slotStates[event.data.slot].externalBids || []) : [];
+          extBids.push({
+            time: event.data.received_at,
+            value: event.data.value,
+            builder: event.data.builder_index,
+            blockHash: event.data.block_hash
+          });
+          updateSlotState(event.data.slot, { externalBids: extBids });
+        }
+        break;
+      case 'payload_envelope':
+        addEvent('payload_envelope', 'Payload envelope received for slot ' + event.data.slot, event.timestamp);
+        updateSlotState(event.data.slot, {
+          payloadEnvelopeAt: event.data.received_at,
+          payloadEnvelopeBlockHash: event.data.block_hash,
+          payloadEnvelopeBuilder: event.data.builder_index
+        });
+        break;
+      case 'slot_state':
+        mergeSlotState(event.data);
+        break;
+    }
+  }
+
+  /* Update slot state tracking */
+  function updateSlotState(slot, updates) {
+    if (!slotStates[slot]) {
+      slotStates[slot] = { slot: slot };
+    }
+    Object.assign(slotStates[slot], updates);
+  }
+
+  function mergeSlotState(state) {
+    if (!slotStates[state.slot]) {
+      slotStates[state.slot] = {};
+    }
+    Object.assign(slotStates[state.slot], state);
+  }
+
+  /* Get actual slot from time */
+  function getActualSlot() {
+    if (!chainInfo || !chainInfo.genesis_time) return currentSlot;
+    var now = Date.now();
+    var slotDuration = chainInfo.seconds_per_slot || 12000;
+    var elapsed = now - chainInfo.genesis_time;
+    return Math.floor(elapsed / slotDuration);
+  }
+
+  /* Check if slot is scheduled for building based on config */
+  function isSlotScheduled(slot) {
+    if (!config || !config.schedule) return true;
+    var schedule = config.schedule;
+    var mode = schedule.mode || 'all';
+    var startSlot = schedule.start_slot || 0;
+
+    if (slot < startSlot) return false;
+
+    switch (mode) {
+      case 'all':
+        return true;
+      case 'every_nth':
+        var nth = schedule.every_nth || 1;
+        return ((slot - startSlot) % nth) === 0;
+      case 'next_n':
+        var nextN = schedule.next_n || 0;
+        return (slot - startSlot) < nextN;
+      default:
+        return true;
+    }
+  }
+
+  /* Update stats display */
+  function updateStats(stats) {
+    document.getElementById('stat-slots-built').textContent = stats.slots_built || 0;
+    document.getElementById('stat-bids-submitted').textContent = stats.bids_submitted || 0;
+    document.getElementById('stat-bids-won').textContent = stats.bids_won || 0;
+    document.getElementById('stat-reveals-success').textContent = stats.reveals_success || 0;
+  }
+
+  /* Update config display */
+  function updateConfigDisplay() {
+    if (!config) return;
+
+    var epbs = config.epbs || {};
+    document.getElementById('cfg-build-start').textContent = epbs.build_start_time || 0;
+    document.getElementById('cfg-bid-start').textContent = epbs.bid_start_time || 0;
+    document.getElementById('cfg-bid-end').textContent = epbs.bid_end_time || 0;
+    document.getElementById('cfg-reveal').textContent = epbs.reveal_time || 0;
+    document.getElementById('cfg-bid-min').textContent = epbs.bid_min_amount || 0;
+    document.getElementById('cfg-bid-increase').textContent = epbs.bid_increase || 0;
+    document.getElementById('cfg-bid-interval').textContent = epbs.bid_interval || 0;
+
+    var schedule = config.schedule || {};
+    document.getElementById('cfg-schedule-mode').textContent = schedule.mode || 'all';
+    document.getElementById('cfg-every-nth').textContent = schedule.every_nth || 1;
+    document.getElementById('cfg-next-n').textContent = schedule.next_n || 0;
+
+    /* Update edit form values */
+    document.getElementById('edit-build-start').value = epbs.build_start_time || 0;
+    document.getElementById('edit-bid-start').value = epbs.bid_start_time || 0;
+    document.getElementById('edit-bid-end').value = epbs.bid_end_time || 0;
+    document.getElementById('edit-reveal').value = epbs.reveal_time || 0;
+    document.getElementById('edit-bid-min').value = epbs.bid_min_amount || 0;
+    document.getElementById('edit-bid-increase').value = epbs.bid_increase || 0;
+    document.getElementById('edit-bid-interval').value = epbs.bid_interval || 0;
+
+    document.getElementById('edit-schedule-mode').value = schedule.mode || 'all';
+    document.getElementById('edit-every-nth').value = schedule.every_nth || 1;
+    document.getElementById('edit-next-n').value = schedule.next_n || 0;
+  }
+
+  /* Add event to log */
+  function addEvent(type, message, timestamp) {
+    events.unshift({ type: type, message: message, timestamp: timestamp });
+    if (events.length > 100) events.pop();
+    renderEvents();
+  }
+
+  function renderEvents() {
+    var container = document.getElementById('events-log');
+    container.innerHTML = events.slice(0, 50).map(function(e) {
+      var time = new Date(e.timestamp).toLocaleTimeString();
+      var typeClass = getEventTypeClass(e.type);
+      return '<div class="event-item ' + typeClass + '">' +
+        '<span class="event-time">' + time + '</span>' +
+        '<span class="event-message">' + e.message + '</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  function getEventTypeClass(type) {
+    var classes = {
+      'slot_start': 'event-slot-start',
+      'payload_ready': 'event-payload',
+      'bid_submitted': 'event-bid',
+      'bid_failed': 'event-bid-failed',
+      'head_received': 'event-head',
+      'reveal': 'event-reveal',
+      'bid_event': 'event-bid-seen',
+      'payload_envelope': 'event-envelope'
+    };
+    return classes[type] || '';
+  }
+
+  window.clearEvents = function() {
+    events = [];
+    renderEvents();
+  };
+
+  /* Timeline rendering - stacked slot graphs */
+  function updateTimeline() {
+    renderSlotGraphs();
+    requestAnimationFrame(updateTimeline);
+  }
+
+  function renderSlotGraphs() {
+    var container = document.getElementById('slot-graphs-container');
+    if (!container) return;
+
+    var now = Date.now();
+    /* Backend sends milliseconds already */
+    var slotDuration = chainInfo ? chainInfo.seconds_per_slot : 12000;
+    var genesisTime = chainInfo ? chainInfo.genesis_time : 0;
+
+    /* Need chain info to render properly */
+    if (genesisTime === 0) {
+      container.innerHTML = '<div class="text-muted p-3">Waiting for chain info...</div>';
+      return;
+    }
+
+    /* Calculate current slot and position */
+    var elapsed = now - genesisTime;
+    var displaySlot = Math.floor(elapsed / slotDuration);
+    var msIntoCurrentSlot = elapsed % slotDuration;
+
+    /* Track first valid slot (only after we have chain info) */
+    if (firstValidSlot < 0) firstValidSlot = displaySlot;
+
+    /* Calculate how many slots to show: start with 1, grow to MAX_SLOTS_TO_SHOW */
+    var slotsSinceStart = displaySlot - firstValidSlot + 1;
+    var slotsToShow = Math.min(Math.max(1, slotsSinceStart), MAX_SLOTS_TO_SHOW);
+
+    /* Show next slot (n+1) when we're at 75% of current slot */
+    var showNextSlot = msIntoCurrentSlot >= slotDuration * 0.75;
+
+    /* Top slot: current slot, or next slot if showing it */
+    /* But we always keep current slot visible */
+    var topSlot = showNextSlot ? displaySlot + 1 : displaySlot;
+
+    /* Adjust slotsToShow when showing next slot to include it */
+    if (showNextSlot && slotsToShow < MAX_SLOTS_TO_SHOW) {
+      slotsToShow++;
+    }
+
+    var html = '';
+
+    /* Render slot graphs from top slot down */
+    for (var i = 0; i < slotsToShow; i++) {
+      var slot = topSlot - i;
+      if (slot < 0) continue;
+      html += renderSingleSlotGraph(slot, slotDuration, genesisTime, now, displaySlot);
+    }
+
+    container.innerHTML = html;
+  }
+
+  function renderSingleSlotGraph(slot, slotDuration, genesisTime, now, currentDisplaySlot) {
+    /* Each graph shows from slot - 1/4 to slot end (1.25 slot duration total) */
+    var rangeStart = -slotDuration * 0.25;  /* -3000ms for 12s slots */
+    var rangeEnd = slotDuration;             /* 12000ms (full slot) */
+    var totalRange = rangeEnd - rangeStart;
+
+    var state = slotStates[slot] || {};
+    var slotStartTime = genesisTime + (slot * slotDuration);
+
+    /* Get config for this slot (use stored snapshot or current config) */
+    var slotConfig = slotConfigs[slot] || config;
+    var epbsConfig = slotConfig ? slotConfig.epbs : null;
+
+    /* Determine slot status for label */
+    var slotLabel = 'Slot ' + slot;
+    if (slot === currentDisplaySlot) {
+      slotLabel += ' (now)';
+    } else if (slot === currentDisplaySlot + 1) {
+      slotLabel += ' (next)';
+    }
+
+    /* Check if slot was scheduled */
+    var isScheduled = state.scheduled !== undefined ? state.scheduled : isSlotScheduled(slot);
+
+    var html = '<div class="slot-graph" data-slot="' + slot + '">';
+
+    /* Slot label */
+    html += '<div class="slot-graph-label">' + slotLabel + '</div>';
+
+    /* Graph area */
+    html += '<div class="slot-graph-area">';
+
+    /* Background with percentage markers */
+    html += '<div class="slot-graph-bg">';
+
+    /* Slot boundary (0ms = slot start) */
+    var slotStartX = ((0 - rangeStart) / totalRange) * 100;
+    html += '<div class="slot-marker slot-start-marker" style="left: ' + slotStartX + '%;"><span class="marker-label">0%</span></div>';
+
+    /* 25%, 50%, 75% markers */
+    var pct25X = ((slotDuration * 0.25 - rangeStart) / totalRange) * 100;
+    var pct50X = ((slotDuration * 0.50 - rangeStart) / totalRange) * 100;
+    var pct75X = ((slotDuration * 0.75 - rangeStart) / totalRange) * 100;
+    html += '<div class="slot-marker pct-marker" style="left: ' + pct25X + '%;"><span class="marker-label">25%</span></div>';
+    html += '<div class="slot-marker pct-marker" style="left: ' + pct50X + '%;"><span class="marker-label">50%</span></div>';
+    html += '<div class="slot-marker pct-marker" style="left: ' + pct75X + '%;"><span class="marker-label">75%</span></div>';
+
+    /* Slot end marker */
+    var slotEndX = ((slotDuration - rangeStart) / totalRange) * 100;
+    html += '<div class="slot-marker slot-end-marker" style="left: ' + slotEndX + '%;"><span class="marker-label">100%</span></div>';
+
+    /* Bid window shading (use per-slot config if available) - only on lower half */
+    if (epbsConfig) {
+      var bidStartMs = epbsConfig.bid_start_time;
+      var bidEndMs = epbsConfig.bid_end_time;
+      var revealMs = epbsConfig.reveal_time;
+
+      var bidStartX = ((bidStartMs - rangeStart) / totalRange) * 100;
+      var bidEndX = ((bidEndMs - rangeStart) / totalRange) * 100;
+
+      /* Gray out bid window if not scheduled */
+      var bidWindowClass = isScheduled ? 'bid-window-bg' : 'bid-window-bg bid-window-disabled';
+      var bidLabel = 'Bid: ' + bidStartMs + ' - ' + bidEndMs + 'ms';
+
+      if (bidStartX < 100 && bidEndX > 0) {
+        html += '<div class="' + bidWindowClass + '" style="left: ' + Math.max(0, bidStartX) + '%; width: ' + (Math.min(100, bidEndX) - Math.max(0, bidStartX)) + '%;">';
+        html += '<span class="duty-label bid-label">' + bidLabel + '</span>';
+        html += '</div>';
+      }
+
+      /* Reveal time marker - gray out if no bid was won - only on lower half */
+      var revealX = ((revealMs - rangeStart) / totalRange) * 100;
+      var revealClass = state.bidWon ? 'reveal-marker' : 'reveal-marker reveal-marker-disabled';
+      var revealLabel = 'Reveal: ' + revealMs + 'ms';
+      if (revealX >= 0 && revealX <= 100) {
+        html += '<div class="' + revealClass + '" style="left: ' + revealX + '%;">';
+        html += '<span class="duty-label reveal-label">' + revealLabel + '</span>';
+        html += '</div>';
+      }
+    }
+
+    html += '</div>'; /* end slot-graph-bg */
+
+    /* Chain events row (upper) */
+    html += '<div class="event-row chain-events">';
+
+    /* Block received */
+    if (state.blockReceivedAt && genesisTime > 0) {
+      var blockMs = state.blockReceivedAt - slotStartTime;
+      var blockX = ((blockMs - rangeStart) / totalRange) * 100;
+      if (blockX >= 0 && blockX <= 100) {
+        var blockInfo = 'Block Received\\nTime: ' + blockMs + 'ms';
+        if (state.blockRoot) blockInfo += '\\nBlock Root: ' + state.blockRoot.substring(0, 18) + '...';
+        html += '<div class="event-dot block-received" style="left: ' + blockX + '%;" data-info="' + escapeAttr(blockInfo) + '"></div>';
+      }
+    }
+
+    /* Payload envelope received */
+    if (state.payloadEnvelopeAt && genesisTime > 0) {
+      var envMs = state.payloadEnvelopeAt - slotStartTime;
+      var envX = ((envMs - rangeStart) / totalRange) * 100;
+      if (envX >= 0 && envX <= 100) {
+        var envInfo = 'Payload Envelope\\nTime: ' + envMs + 'ms';
+        if (state.payloadEnvelopeBlockHash) envInfo += '\\nPayload Hash: ' + state.payloadEnvelopeBlockHash.substring(0, 18) + '...';
+        if (state.payloadEnvelopeBuilder !== undefined) envInfo += '\\nBuilder Index: ' + state.payloadEnvelopeBuilder;
+        html += '<div class="event-dot payload-envelope" style="left: ' + envX + '%;" data-info="' + escapeAttr(envInfo) + '"></div>';
+      }
+    }
+
+    /* External bids (smaller dots) */
+    if (state.externalBids && genesisTime > 0) {
+      state.externalBids.forEach(function(bid) {
+        var bidMs = bid.time - slotStartTime;
+        var bidX = ((bidMs - rangeStart) / totalRange) * 100;
+        if (bidX >= 0 && bidX <= 100) {
+          var bidInfo = 'External Bid\\nTime: ' + bidMs + 'ms\\nBid Amount: ' + formatGwei(bid.value) + '\\nBuilder Index: ' + bid.builder;
+          if (bid.blockHash) bidInfo += '\\nBlock Hash: ' + bid.blockHash.substring(0, 18) + '...';
+          html += '<div class="event-dot external-bid" style="left: ' + bidX + '%;" data-info="' + escapeAttr(bidInfo) + '"></div>';
+        }
+      });
+    }
+
+    html += '</div>'; /* end chain-events */
+
+    /* Builder events row (lower) */
+    html += '<div class="event-row builder-events">';
+
+    /* Payload created */
+    if (state.payloadCreatedAt && genesisTime > 0) {
+      var payloadMs = state.payloadCreatedAt - slotStartTime;
+      var payloadX = ((payloadMs - rangeStart) / totalRange) * 100;
+      if (payloadX >= 0 && payloadX <= 100) {
+        var payloadInfo = 'Payload Created\\nTime: ' + payloadMs + 'ms';
+        if (state.payloadBlockHash) payloadInfo += '\\nBlock Hash: ' + state.payloadBlockHash.substring(0, 18) + '...';
+        if (state.payloadBlockValue) payloadInfo += '\\nBlock Value: ' + formatGwei(state.payloadBlockValue);
+        html += '<div class="event-dot payload-created" style="left: ' + payloadX + '%;" data-info="' + escapeAttr(payloadInfo) + '"></div>';
+      }
+    }
+
+    /* Bid submissions (can be multiple) - use ourBids for details */
+    if (state.ourBids && state.ourBids.length > 0 && genesisTime > 0) {
+      state.ourBids.forEach(function(bid, idx) {
+        var bidMs = bid.time - slotStartTime;
+        var bidX = ((bidMs - rangeStart) / totalRange) * 100;
+        if (bidX >= 0 && bidX <= 100) {
+          var bidSuccess = bid.success !== false;
+          var bidClass = bidSuccess ? 'event-dot bid-submitted' : 'event-dot bid-failed';
+          var bidInfo = 'Our Bid #' + (idx + 1) + '\\nTime: ' + bidMs + 'ms\\nBid Amount: ' + formatGwei(bid.value);
+          if (bid.blockHash) bidInfo += '\\nBlock Hash: ' + bid.blockHash.substring(0, 18) + '...';
+          bidInfo += '\\nStatus: ' + (bidSuccess ? 'Success' : 'Failed');
+          if (bid.error) bidInfo += '\\nError: ' + bid.error;
+          html += '<div class="' + bidClass + '" style="left: ' + bidX + '%;" data-info="' + escapeAttr(bidInfo) + '"></div>';
+        }
+      });
+    }
+
+    /* Reveal sent/failed */
+    if (state.revealSentAt && genesisTime > 0) {
+      var revealMs = state.revealSentAt - slotStartTime;
+      var revealX = ((revealMs - rangeStart) / totalRange) * 100;
+      if (revealX >= 0 && revealX <= 100) {
+        var revealClass = state.revealFailed ? 'event-dot reveal-failed' : 'event-dot reveal-sent';
+        var revealStatus = state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success');
+        var revealInfo = 'Payload Reveal\\nTime: ' + revealMs + 'ms\\nStatus: ' + revealStatus;
+        html += '<div class="' + revealClass + '" style="left: ' + revealX + '%;" data-info="' + escapeAttr(revealInfo) + '"></div>';
+      }
+    }
+
+    html += '</div>'; /* end builder-events */
+
+    /* Current time indicator (can appear on multiple graphs due to overlap) */
+    if (genesisTime > 0) {
+      /* Calculate where current time falls relative to this slot */
+      var currentTimeRelativeMs = (now - slotStartTime);
+      var currentTimeX = ((currentTimeRelativeMs - rangeStart) / totalRange) * 100;
+
+      if (currentTimeX >= 0 && currentTimeX <= 100) {
+        html += '<div class="current-time-indicator" style="left: ' + currentTimeX + '%;"></div>';
+      }
+    }
+
+    html += '</div>'; /* end slot-graph-area */
+    html += '</div>'; /* end slot-graph */
+
+    return html;
+  }
+
+  /* Helper to escape attribute values */
+  function escapeAttr(str) {
+    return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /* Format gwei to ETH or gwei */
+  function formatGwei(gwei) {
+    if (gwei >= 1000000000) {
+      return (gwei / 1000000000).toFixed(4) + ' ETH';
+    } else if (gwei >= 1000000) {
+      return (gwei / 1000000).toFixed(2) + 'M gwei';
+    }
+    return gwei + ' gwei';
+  }
+
+  /* Show popover for a dot element */
+  function showPopoverForDot(el) {
+    /* Remove any existing popover */
+    var existing = document.querySelector('.event-popover');
+    if (existing) existing.remove();
+
+    var info = el.getAttribute('data-info');
+    if (!info) return;
+
+    var popover = document.createElement('div');
+    popover.className = 'event-popover';
+    popover.innerHTML = info.replace(/\\n/g, '<br>');
+
+    document.body.appendChild(popover);
+
+    var rect = el.getBoundingClientRect();
+    var left = rect.left;
+    var top = rect.bottom + 5;
+
+    /* Ensure popover stays within viewport */
+    if (left + 300 > window.innerWidth) {
+      left = window.innerWidth - 310;
+    }
+
+    popover.style.left = left + 'px';
+    popover.style.top = top + 'px';
+
+    /* Close on click outside popover */
+    function closePopover(e) {
+      if (!popover.contains(e.target) && !e.target.closest('.event-dot')) {
+        popover.remove();
+        document.removeEventListener('click', closePopover);
+      }
+    }
+
+    /* Add close handler after a short delay */
+    setTimeout(function() {
+      document.addEventListener('click', closePopover);
+    }, 100);
+  }
+
+  /* Config editing */
+  window.toggleEpbsEdit = function() {
+    var display = document.getElementById('epbs-display');
+    var edit = document.getElementById('epbs-edit');
+    display.style.display = display.style.display === 'none' ? 'block' : 'none';
+    edit.style.display = edit.style.display === 'none' ? 'block' : 'none';
+  };
+
+  window.toggleScheduleEdit = function() {
+    var display = document.getElementById('schedule-display');
+    var edit = document.getElementById('schedule-edit');
+    display.style.display = display.style.display === 'none' ? 'block' : 'none';
+    edit.style.display = edit.style.display === 'none' ? 'block' : 'none';
+  };
+
+  window.saveEpbsConfig = function(e) {
+    e.preventDefault();
+
+    var data = {
+      build_start_time: parseInt(document.getElementById('edit-build-start').value),
+      bid_start_time: parseInt(document.getElementById('edit-bid-start').value),
+      bid_end_time: parseInt(document.getElementById('edit-bid-end').value),
+      reveal_time: parseInt(document.getElementById('edit-reveal').value),
+      bid_min_amount: parseInt(document.getElementById('edit-bid-min').value),
+      bid_increase: parseInt(document.getElementById('edit-bid-increase').value),
+      bid_interval: parseInt(document.getElementById('edit-bid-interval').value)
+    };
+
+    fetch('/api/config/epbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      if (result.error) {
+        alert('Failed to update: ' + result.error);
+      } else {
+        toggleEpbsEdit();
+      }
+    })
+    .catch(function(err) { alert('Error: ' + err); });
+  };
+
+  window.saveScheduleConfig = function(e) {
+    e.preventDefault();
+
+    var data = {
+      mode: document.getElementById('edit-schedule-mode').value,
+      every_nth: parseInt(document.getElementById('edit-every-nth').value) || 1,
+      next_n: parseInt(document.getElementById('edit-next-n').value) || 0
+    };
+
+    fetch('/api/config/schedule', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(result) {
+      if (result.error) {
+        alert('Failed to update: ' + result.error);
+      } else {
+        toggleScheduleEdit();
+      }
+    })
+    .catch(function(err) { alert('Error: ' + err); });
+  };
+
+})();
+</script>
+{{ end }}
+
+{{ define "css" }}
+<style>
+/* Slot graphs container */
+.slot-graphs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Individual slot graph */
+.slot-graph {
+  display: flex;
+  align-items: stretch;
+  height: 50px;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bs-body-bg);
+}
+
+.slot-graph-label {
+  width: 90px;
+  min-width: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: bold;
+  background: var(--bs-tertiary-bg);
+  border-right: 1px solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
+  text-align: center;
+  line-height: 1.2;
+}
+
+.slot-graph-area {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Background with markers */
+.slot-graph-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Slot markers */
+.slot-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--bs-border-color);
+  pointer-events: none;
+}
+
+.slot-start-marker {
+  background: transparent;
+  border-left: 2px dashed rgba(128, 128, 128, 0.6);
+}
+
+.slot-end-marker {
+  background: var(--bs-secondary);
+  width: 1px;
+  border-left: 1px dashed var(--bs-secondary);
+}
+
+.pct-marker {
+  background: transparent;
+  border-left: 1px dashed rgba(128, 128, 128, 0.3);
+}
+
+.marker-label {
+  position: absolute;
+  bottom: 2px;
+  left: 2px;
+  font-size: 8px;
+  color: var(--bs-secondary-color);
+  opacity: 0.7;
+}
+
+/* Bid window background - lower half only */
+.bid-window-bg {
+  position: absolute;
+  top: 50%;
+  bottom: 0;
+  background: rgba(25, 135, 84, 0.15);
+  border-left: 2px solid rgba(25, 135, 84, 0.6);
+  border-right: 2px solid rgba(255, 193, 7, 0.6);
+  pointer-events: none;
+}
+
+.bid-window-bg.bid-window-disabled {
+  background: rgba(128, 128, 128, 0.08);
+  border-left: 2px solid rgba(128, 128, 128, 0.3);
+  border-right: 2px solid rgba(128, 128, 128, 0.3);
+}
+
+/* Reveal marker - lower half only */
+.reveal-marker {
+  position: absolute;
+  top: 50%;
+  bottom: 0;
+  width: 2px;
+  background: var(--bs-purple);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.reveal-marker.reveal-marker-disabled {
+  background: rgba(128, 128, 128, 0.4);
+  opacity: 0.5;
+}
+
+/* Duty labels inside bid window and reveal marker */
+.duty-label {
+  position: absolute;
+  font-size: 8px;
+  font-weight: 500;
+  white-space: nowrap;
+  top: 2px;
+}
+
+.bid-label {
+  left: 4px;
+  color: rgba(25, 135, 84, 0.9);
+}
+
+.bid-window-disabled .bid-label {
+  color: rgba(128, 128, 128, 0.6);
+}
+
+.reveal-label {
+  left: 4px;
+  color: rgba(111, 66, 193, 0.9);
+}
+
+.reveal-marker-disabled .reveal-label {
+  color: rgba(128, 128, 128, 0.6);
+}
+
+/* Event rows */
+.event-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 20px;
+  pointer-events: none;
+}
+
+.chain-events {
+  top: 4px;
+}
+
+.builder-events {
+  bottom: 4px;
+}
+
+/* Event dots */
+.event-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  cursor: pointer;
+  z-index: 50;
+  top: 4px;
+  pointer-events: auto;
+}
+
+.event-dot:hover {
+  transform: translateX(-50%) scale(1.3);
+  z-index: 20;
+}
+
+/* Chain event colors */
+.block-received {
+  background: #fd7e14;
+  border: 2px solid #dc6a00;
+}
+
+.payload-envelope {
+  background: #20c997;
+  border: 2px solid #17a085;
+}
+
+.external-bid {
+  width: 6px;
+  height: 6px;
+  background: #6c757d;
+  border: 1px solid #495057;
+  top: 7px;
+}
+
+/* Builder event colors */
+.payload-created {
+  background: #17a2b8;
+  border: 2px solid #138496;
+}
+
+.bid-submitted {
+  background: #28a745;
+  border: 2px solid #1e7e34;
+}
+
+.bid-failed {
+  background: #dc3545;
+  border: 2px solid #bd2130;
+}
+
+.reveal-sent {
+  background: #6f42c1;
+  border: 2px solid #5a32a3;
+}
+
+.reveal-failed {
+  background: #dc3545;
+  border: 2px solid #bd2130;
+}
+
+/* Event popover */
+.event-popover {
+  position: fixed;
+  z-index: 1000;
+  padding: 8px 12px;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 11px;
+  line-height: 1.4;
+  max-width: 300px;
+}
+
+/* Current time indicator */
+.current-time-indicator {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--bs-danger);
+  z-index: 30;
+  box-shadow: 0 0 4px var(--bs-danger);
+  pointer-events: none;
+}
+
+.current-time-indicator::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -4px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--bs-danger);
+}
+
+.current-time-indicator::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: -4px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 6px solid var(--bs-danger);
+}
+
+/* Legend */
+.timeline-legend {
+  font-size: 11px;
+}
+
+.legend-section {
+  font-weight: bold;
+  color: var(--bs-secondary-color);
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.bg-block-received { background: #fd7e14; }
+.bg-payload-received { background: #20c997; }
+.bg-external-bid { background: #6c757d; width: 6px; height: 6px; }
+.bg-payload-created { background: #17a2b8; }
+.bg-bid-submitted { background: #28a745; }
+.bg-bid-failed { background: #dc3545; }
+.bg-reveal-sent { background: #6f42c1; }
+.bg-reveal-failed { background: #dc3545; }
+
+/* Events log */
+.events-log-container {
+  flex: 1;
+  min-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+.events-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.event-item {
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--bs-border-color);
+  display: flex;
+  gap: 10px;
+}
+
+.event-time {
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+}
+
+.event-message {
+  flex: 1;
+}
+
+.event-slot-start { border-left: 3px solid var(--bs-info); }
+.event-payload { border-left: 3px solid #17a2b8; }
+.event-bid { border-left: 3px solid #28a745; }
+.event-bid-failed { border-left: 3px solid #dc3545; }
+.event-head { border-left: 3px solid #fd7e14; }
+.event-reveal { border-left: 3px solid #6f42c1; }
+.event-bid-seen { border-left: 3px solid var(--bs-secondary); }
+.event-envelope { border-left: 3px solid #20c997; }
+
+/* Stats */
+.stat-box {
+  text-align: center;
+  padding: 10px;
+  background: var(--bs-tertiary-bg);
+  border-radius: 4px;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--bs-primary);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
+}
+</style>
+{{ end }}
