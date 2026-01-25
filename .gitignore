@@ -8,6 +8,7 @@ config-*.yaml
 log-*
 tmp-*
 ai_plans/
+node_modules/
 
 .hack/devnet/generated-**
 .hack/devnet/custom-**
