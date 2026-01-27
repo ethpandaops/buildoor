@@ -1,6 +1,548 @@
+definitions:
+  api.LifecycleStatusResponse:
+    properties:
+      balance_gwei:
+        type: integer
+      builder_index:
+        type: integer
+      deposit_epoch:
+        type: integer
+      effective_balance_gwei:
+        type: integer
+      is_registered:
+        type: boolean
+      pending_payments_gwei:
+        type: integer
+      withdrawable_epoch:
+        type: integer
+    type: object
+  api.StatsResponse:
+    properties:
+      bids_submitted:
+        type: integer
+      bids_won:
+        type: integer
+      reveals_failed:
+        type: integer
+      reveals_skipped:
+        type: integer
+      reveals_success:
+        type: integer
+      slots_built:
+        type: integer
+      total_paid_gwei:
+        type: integer
+    type: object
+  api.StatusResponse:
+    properties:
+      builder_index:
+        type: integer
+      builder_pubkey:
+        type: string
+      cl_balance_gwei:
+        type: integer
+      current_slot:
+        type: integer
+      deposit_epoch:
+        type: integer
+      effective_balance_gwei:
+        type: integer
+      is_registered:
+        type: boolean
+      lifecycle_enabled:
+        type: boolean
+      pending_payments_gwei:
+        type: integer
+      running:
+        type: boolean
+      wallet_address:
+        type: string
+      wallet_balance_wei:
+        type: string
+      withdrawable_epoch:
+        type: integer
+    type: object
+  api.UpdateEPBSRequest:
+    properties:
+      bid_end_time:
+        type: integer
+      bid_increase:
+        type: integer
+      bid_interval:
+        type: integer
+      bid_min_amount:
+        type: integer
+      bid_start_time:
+        type: integer
+      build_start_time:
+        type: integer
+      reveal_time:
+        type: integer
+    type: object
+  api.UpdateScheduleRequest:
+    properties:
+      every_nth:
+        type: integer
+      mode:
+        type: string
+      next_n:
+        type: integer
+    type: object
+  builder.Config:
+    properties:
+      api_port:
+        description: Optional, 0 = disabled
+        type: integer
+      api_token_key:
+        description: 'Optional: key to use for API token authentication'
+        type: string
+      api_user_header:
+        description: 'Optional: header to use for authentication'
+        type: string
+      builder_privkey:
+        type: string
+      cl_client:
+        type: string
+      debug:
+        type: boolean
+      deposit_amount:
+        description: Gwei, default 10 ETH
+        type: integer
+      el_engine_api:
+        description: Engine API URL (required for payload building)
+        type: string
+      el_jwt_secret:
+        description: Path to JWT secret file for engine API auth
+        type: string
+      el_rpc:
+        description: 'Optional: EL JSON-RPC for transactions (lifecycle only)'
+        type: string
+      epbs:
+        allOf:
+        - $ref: '#/definitions/config.EPBSConfig'
+        description: Time-scheduled ePBS config
+      epbs_enabled:
+        description: Enable ePBS bidding/revealing
+        type: boolean
+      lifecycle_enabled:
+        type: boolean
+      pprof:
+        type: boolean
+      schedule:
+        $ref: '#/definitions/config.ScheduleConfig'
+      topup_amount:
+        description: Gwei
+        type: integer
+      topup_threshold:
+        description: Gwei
+        type: integer
+      validate_withdrawals:
+        description: Validate expected vs actual withdrawals
+        type: boolean
+      wallet_privkey:
+        description: 'Optional: only if lifecycle enabled'
+        type: string
+    type: object
+  config.EPBSConfig:
+    properties:
+      bid_end_time:
+        description: BidEndTime is milliseconds relative to slot start for last bid.
+        type: integer
+      bid_increase:
+        description: BidIncrease is the amount to increase bid per subsequent bid
+          in gwei.
+        type: integer
+      bid_interval:
+        description: BidInterval is milliseconds between bids. 0 means single bid.
+        type: integer
+      bid_min_amount:
+        description: BidMinAmount is the minimum bid amount in gwei.
+        type: integer
+      bid_start_time:
+        description: |-
+          BidStartTime is milliseconds relative to slot start for first bid.
+          Can be negative to bid before slot starts.
+        type: integer
+      build_start_time:
+        description: |-
+          BuildStartTime is milliseconds relative to slot start when we start building.
+          This delays payload building to allow more transactions in mempool.
+          Default 9000 (75% into a 12s slot). Set to 0 to build immediately on head event.
+        type: integer
+      reveal_time:
+        description: RevealTime is milliseconds relative to slot start for reveal.
+        type: integer
+    type: object
+  config.ScheduleConfig:
+    properties:
+      every_nth:
+        description: For every_nth mode
+        type: integer
+      mode:
+        allOf:
+        - $ref: '#/definitions/config.ScheduleMode'
+        description: all, every_nth, next_n
+      next_n:
+        description: For next_n mode
+        type: integer
+      start_slot:
+        description: Optional start slot
+        type: integer
+    type: object
+  config.ScheduleMode:
+    enum:
+    - all
+    - every_nth
+    - next_n
+    type: string
+    x-enum-varnames:
+    - ScheduleModeAll
+    - ScheduleModeEveryN
+    - ScheduleModeNextN
 info:
   contact: {}
 paths:
+  /api/config:
+    get:
+      description: Returns the current builder configuration including schedule and
+        EPBS settings.
+      operationId: getConfig
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/builder.Config'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get current configuration
+      tags:
+      - Config
+  /api/config/epbs:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Updates the EPBS (enshrined PBS) configuration including timing and bid
+        parameters. Requires authentication.
+      operationId: updateEPBS
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: EPBS configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateEPBSRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update EPBS configuration
+      tags:
+      - Config
+  /api/config/schedule:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Updates the builder schedule configuration including mode, every_nth, and next_n
+        settings. Requires authentication.
+      operationId: updateSchedule
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Schedule configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateScheduleRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update schedule configuration
+      tags:
+      - Config
+  /api/lifecycle/deposit:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Initiates a builder registration deposit. If the builder is not yet
+        registered, this will register it with the specified amount. Requires authentication.
+      operationId: postDeposit
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Deposit amount in gwei
+        in: body
+        name: request
+        required: true
+        schema:
+          properties:
+            amount_gwei:
+              type: integer
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Lifecycle management not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Trigger builder deposit
+      tags:
+      - Lifecycle
+  /api/lifecycle/exit:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Initiates a voluntary exit for the builder. This will begin the withdrawal
+        process and the builder will stop being eligible for block building after
+        the exit is processed. Requires authentication.
+      operationId: postExit
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Lifecycle management not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Trigger voluntary exit
+      tags:
+      - Lifecycle
+  /api/lifecycle/status:
+    get:
+      description: |-
+        Returns the builder lifecycle status including registration state, balance,
+        pending payments, and epoch information.
+      operationId: getLifecycleStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.LifecycleStatusResponse'
+        "404":
+          description: Lifecycle management not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get lifecycle status
+      tags:
+      - Lifecycle
+  /api/lifecycle/topup:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Checks the builder balance and initiates a top-up if needed based on
+        configured thresholds. Requires authentication.
+      operationId: postTopup
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Lifecycle management not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Trigger balance top-up
+      tags:
+      - Lifecycle
+  /api/stats:
+    get:
+      description: |-
+        Returns builder statistics including slots built, bids submitted/won,
+        total paid, and reveal success/failure counts.
+      operationId: getStats
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatsResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder statistics
+      tags:
+      - Stats
+  /api/status:
+    get:
+      description: |-
+        Returns the current builder status including running state, current slot,
+        builder index and public key.
+      operationId: getStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatusResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder status
+      tags:
+      - Status
   /api/version:
     get:
       description: Returns the current version

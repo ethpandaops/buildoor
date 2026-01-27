@@ -29,7 +29,12 @@ export const App: React.FC = () => {
           <div className="card mb-3">
             <div className="card-header d-flex justify-content-between align-items-center">
               <h5 className="mb-0">Slot Timeline</h5>
-              <span className="badge bg-primary">Slot: {currentSlot || '--'}</span>
+              <div className="d-flex gap-2">
+                <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
+                  {connected ? 'Connected' : 'Disconnected'}
+                </span>
+                <span className="badge bg-primary">Slot: {currentSlot || '--'}</span>
+              </div>
             </div>
             <div className="card-body p-2">
               <SlotTimeline
@@ -48,18 +53,6 @@ export const App: React.FC = () => {
 
         {/* Right column: Builder Info, Config and Stats */}
         <div className="col-lg-4">
-          {/* Connection Status */}
-          <div className="card mb-3">
-            <div className="card-body py-2">
-              <div className="d-flex justify-content-between align-items-center">
-                <span>Connection Status:</span>
-                <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
-                  {connected ? 'Connected' : 'Disconnected'}
-                </span>
-              </div>
-            </div>
-          </div>
-
           {/* Builder Info */}
           <BuilderInfo builderInfo={builderInfo} />
 

@@ -4,6 +4,491 @@
         "contact": {}
     },
     "paths": {
+        "/api/config": {
+            "get": {
+                "description": "Returns the current builder configuration including schedule and EPBS settings.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Get current configuration",
+                "operationId": "getConfig",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/builder.Config"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/epbs": {
+            "post": {
+                "description": "Updates the EPBS (enshrined PBS) configuration including timing and bid\nparameters. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Update EPBS configuration",
+                "operationId": "updateEPBS",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "EPBS configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateEPBSRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/schedule": {
+            "post": {
+                "description": "Updates the builder schedule configuration including mode, every_nth, and next_n\nsettings. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Update schedule configuration",
+                "operationId": "updateSchedule",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Schedule configuration",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateScheduleRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lifecycle/deposit": {
+            "post": {
+                "description": "Initiates a builder registration deposit. If the builder is not yet\nregistered, this will register it with the specified amount. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lifecycle"
+                ],
+                "summary": "Trigger builder deposit",
+                "operationId": "postDeposit",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Deposit amount in gwei",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "amount_gwei": {
+                                    "type": "integer"
+                                }
+                            }
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Lifecycle management not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lifecycle/exit": {
+            "post": {
+                "description": "Initiates a voluntary exit for the builder. This will begin the withdrawal\nprocess and the builder will stop being eligible for block building after\nthe exit is processed. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lifecycle"
+                ],
+                "summary": "Trigger voluntary exit",
+                "operationId": "postExit",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Lifecycle management not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lifecycle/status": {
+            "get": {
+                "description": "Returns the builder lifecycle status including registration state, balance,\npending payments, and epoch information.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lifecycle"
+                ],
+                "summary": "Get lifecycle status",
+                "operationId": "getLifecycleStatus",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.LifecycleStatusResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lifecycle management not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/lifecycle/topup": {
+            "post": {
+                "description": "Checks the builder balance and initiates a top-up if needed based on\nconfigured thresholds. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Lifecycle"
+                ],
+                "summary": "Trigger balance top-up",
+                "operationId": "postTopup",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Lifecycle management not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/stats": {
+            "get": {
+                "description": "Returns builder statistics including slots built, bids submitted/won,\ntotal paid, and reveal success/failure counts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Get builder statistics",
+                "operationId": "getStats",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.StatsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/status": {
+            "get": {
+                "description": "Returns the current builder status including running state, current slot,\nbuilder index and public key.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Status"
+                ],
+                "summary": "Get builder status",
+                "operationId": "getStatus",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.StatusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/version": {
             "get": {
                 "description": "Returns the current version",
@@ -30,6 +515,294 @@
                     }
                 }
             }
+        }
+    },
+    "definitions": {
+        "api.LifecycleStatusResponse": {
+            "type": "object",
+            "properties": {
+                "balance_gwei": {
+                    "type": "integer"
+                },
+                "builder_index": {
+                    "type": "integer"
+                },
+                "deposit_epoch": {
+                    "type": "integer"
+                },
+                "effective_balance_gwei": {
+                    "type": "integer"
+                },
+                "is_registered": {
+                    "type": "boolean"
+                },
+                "pending_payments_gwei": {
+                    "type": "integer"
+                },
+                "withdrawable_epoch": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.StatsResponse": {
+            "type": "object",
+            "properties": {
+                "bids_submitted": {
+                    "type": "integer"
+                },
+                "bids_won": {
+                    "type": "integer"
+                },
+                "reveals_failed": {
+                    "type": "integer"
+                },
+                "reveals_skipped": {
+                    "type": "integer"
+                },
+                "reveals_success": {
+                    "type": "integer"
+                },
+                "slots_built": {
+                    "type": "integer"
+                },
+                "total_paid_gwei": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.StatusResponse": {
+            "type": "object",
+            "properties": {
+                "builder_index": {
+                    "type": "integer"
+                },
+                "builder_pubkey": {
+                    "type": "string"
+                },
+                "cl_balance_gwei": {
+                    "type": "integer"
+                },
+                "current_slot": {
+                    "type": "integer"
+                },
+                "deposit_epoch": {
+                    "type": "integer"
+                },
+                "effective_balance_gwei": {
+                    "type": "integer"
+                },
+                "is_registered": {
+                    "type": "boolean"
+                },
+                "lifecycle_enabled": {
+                    "type": "boolean"
+                },
+                "pending_payments_gwei": {
+                    "type": "integer"
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "wallet_address": {
+                    "type": "string"
+                },
+                "wallet_balance_wei": {
+                    "type": "string"
+                },
+                "withdrawable_epoch": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.UpdateEPBSRequest": {
+            "type": "object",
+            "properties": {
+                "bid_end_time": {
+                    "type": "integer"
+                },
+                "bid_increase": {
+                    "type": "integer"
+                },
+                "bid_interval": {
+                    "type": "integer"
+                },
+                "bid_min_amount": {
+                    "type": "integer"
+                },
+                "bid_start_time": {
+                    "type": "integer"
+                },
+                "build_start_time": {
+                    "type": "integer"
+                },
+                "reveal_time": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.UpdateScheduleRequest": {
+            "type": "object",
+            "properties": {
+                "every_nth": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "next_n": {
+                    "type": "integer"
+                }
+            }
+        },
+        "builder.Config": {
+            "type": "object",
+            "properties": {
+                "api_port": {
+                    "description": "Optional, 0 = disabled",
+                    "type": "integer"
+                },
+                "api_token_key": {
+                    "description": "Optional: key to use for API token authentication",
+                    "type": "string"
+                },
+                "api_user_header": {
+                    "description": "Optional: header to use for authentication",
+                    "type": "string"
+                },
+                "builder_privkey": {
+                    "type": "string"
+                },
+                "cl_client": {
+                    "type": "string"
+                },
+                "debug": {
+                    "type": "boolean"
+                },
+                "deposit_amount": {
+                    "description": "Gwei, default 10 ETH",
+                    "type": "integer"
+                },
+                "el_engine_api": {
+                    "description": "Engine API URL (required for payload building)",
+                    "type": "string"
+                },
+                "el_jwt_secret": {
+                    "description": "Path to JWT secret file for engine API auth",
+                    "type": "string"
+                },
+                "el_rpc": {
+                    "description": "Optional: EL JSON-RPC for transactions (lifecycle only)",
+                    "type": "string"
+                },
+                "epbs": {
+                    "description": "Time-scheduled ePBS config",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/config.EPBSConfig"
+                        }
+                    ]
+                },
+                "epbs_enabled": {
+                    "description": "Enable ePBS bidding/revealing",
+                    "type": "boolean"
+                },
+                "lifecycle_enabled": {
+                    "type": "boolean"
+                },
+                "pprof": {
+                    "type": "boolean"
+                },
+                "schedule": {
+                    "$ref": "#/definitions/config.ScheduleConfig"
+                },
+                "topup_amount": {
+                    "description": "Gwei",
+                    "type": "integer"
+                },
+                "topup_threshold": {
+                    "description": "Gwei",
+                    "type": "integer"
+                },
+                "validate_withdrawals": {
+                    "description": "Validate expected vs actual withdrawals",
+                    "type": "boolean"
+                },
+                "wallet_privkey": {
+                    "description": "Optional: only if lifecycle enabled",
+                    "type": "string"
+                }
+            }
+        },
+        "config.EPBSConfig": {
+            "type": "object",
+            "properties": {
+                "bid_end_time": {
+                    "description": "BidEndTime is milliseconds relative to slot start for last bid.",
+                    "type": "integer"
+                },
+                "bid_increase": {
+                    "description": "BidIncrease is the amount to increase bid per subsequent bid in gwei.",
+                    "type": "integer"
+                },
+                "bid_interval": {
+                    "description": "BidInterval is milliseconds between bids. 0 means single bid.",
+                    "type": "integer"
+                },
+                "bid_min_amount": {
+                    "description": "BidMinAmount is the minimum bid amount in gwei.",
+                    "type": "integer"
+                },
+                "bid_start_time": {
+                    "description": "BidStartTime is milliseconds relative to slot start for first bid.\nCan be negative to bid before slot starts.",
+                    "type": "integer"
+                },
+                "build_start_time": {
+                    "description": "BuildStartTime is milliseconds relative to slot start when we start building.\nThis delays payload building to allow more transactions in mempool.\nDefault 9000 (75% into a 12s slot). Set to 0 to build immediately on head event.",
+                    "type": "integer"
+                },
+                "reveal_time": {
+                    "description": "RevealTime is milliseconds relative to slot start for reveal.",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.ScheduleConfig": {
+            "type": "object",
+            "properties": {
+                "every_nth": {
+                    "description": "For every_nth mode",
+                    "type": "integer"
+                },
+                "mode": {
+                    "description": "all, every_nth, next_n",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/config.ScheduleMode"
+                        }
+                    ]
+                },
+                "next_n": {
+                    "description": "For next_n mode",
+                    "type": "integer"
+                },
+                "start_slot": {
+                    "description": "Optional start slot",
+                    "type": "integer"
+                }
+            }
+        },
+        "config.ScheduleMode": {
+            "type": "string",
+            "enum": [
+                "all",
+                "every_nth",
+                "next_n"
+            ],
+            "x-enum-varnames": [
+                "ScheduleModeAll",
+                "ScheduleModeEveryN",
+                "ScheduleModeNextN"
+            ]
         }
     }
 }

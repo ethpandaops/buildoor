@@ -51,7 +51,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': authToken,
+          'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify(epbsForm)
       });
@@ -78,7 +78,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': authToken,
+          'Authorization': `Bearer ${authToken}`,
         },
         body: JSON.stringify(scheduleForm)
       });

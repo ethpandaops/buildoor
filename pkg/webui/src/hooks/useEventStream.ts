@@ -36,6 +36,28 @@ export function useEventStream(): UseEventStreamResult {
   useEffect(() => { chainInfoRef.current = chainInfo; }, [chainInfo]);
   useEffect(() => { currentSlotRef.current = currentSlot; }, [currentSlot]);
 
+  // Calculate actual current slot from chain time
+  useEffect(() => {
+    if (!chainInfo) return;
+
+    const calculateCurrentSlot = () => {
+      const now = Date.now();
+      const elapsed = now - chainInfo.genesis_time;
+      const slot = Math.floor(elapsed / chainInfo.seconds_per_slot);
+      if (slot !== currentSlotRef.current) {
+        setCurrentSlot(slot);
+      }
+    };
+
+    // Calculate immediately
+    calculateCurrentSlot();
+
+    // Update every 100ms
+    const interval = setInterval(calculateCurrentSlot, 100);
+
+    return () => clearInterval(interval);
+  }, [chainInfo]);
+
   const clearEvents = useCallback(() => {
     setEvents([]);
   }, []);
@@ -64,7 +86,10 @@ export function useEventStream(): UseEventStreamResult {
 
         case 'status': {
           const status = event.data as { current_slot: number };
-          setCurrentSlot(status.current_slot);
+          // Only use server's slot if we don't have chain info yet to calculate ourselves
+          if (!chainInfoRef.current) {
+            setCurrentSlot(status.current_slot);
+          }
           break;
         }
 
@@ -82,7 +107,7 @@ export function useEventStream(): UseEventStreamResult {
 
         case 'slot_start': {
           const data = event.data as { slot: number; slot_start_time: number };
-          setCurrentSlot(data.slot);
+          // Don't update currentSlot here - it's the "next" slot being prepared
           // Store config snapshot for this slot
           setSlotConfigs(prev => {
             const currentConfig = configRef.current;
@@ -91,17 +116,17 @@ export function useEventStream(): UseEventStreamResult {
             }
             return prev;
           });
-          updateSlotState(data.slot, { slotStartTime: data.slot_start_time });
+          updateSlotState(data.slot, { slotStartTime: data.slot_start_time, scheduled: true });
 
-          // Calculate actual slot from time
+          // Calculate actual slot from time for the log
           const info = chainInfoRef.current;
           if (info) {
             const now = Date.now();
             const elapsed = now - info.genesis_time;
             const actualSlot = Math.floor(elapsed / info.seconds_per_slot);
-            addEvent('slot_start', `Slot ${actualSlot} started`, event.timestamp);
+            addEvent('slot_start', `Preparing for slot ${data.slot} (current: ${actualSlot})`, event.timestamp);
           } else {
-            addEvent('slot_start', `Slot ${data.slot - 1} started`, event.timestamp);
+            addEvent('slot_start', `Preparing for slot ${data.slot}`, event.timestamp);
           }
           break;
         }
