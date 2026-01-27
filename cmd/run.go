@@ -2,9 +2,12 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -152,6 +155,11 @@ and begins building blocks according to configuration.`,
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
 
+			privkey := strings.TrimPrefix(cfg.BuilderPrivkey, "0x")
+			decoded, _ := hex.DecodeString(privkey)
+			apiKeyRaw := sha256.Sum256(append([]byte("buildoor-api-key-"), decoded...))
+			apiKey := hex.EncodeToString(apiKeyRaw[:])
+
 			webui.StartHttpServer(&types.FrontendConfig{
 				Port:     cfg.APIPort,
 				Host:     "0.0.0.0",
@@ -159,6 +167,10 @@ and begins building blocks according to configuration.`,
 				Debug:    cfg.Debug,
 				Pprof:    cfg.Pprof,
 				Minify:   !cfg.Debug,
+
+				AuthKey:    apiKey,
+				UserHeader: cfg.APIUserHeader,
+				TokenKey:   cfg.APITokenKey,
 			}, builderSvc, epbsSvc, lifecycleMgr)
 		}
 

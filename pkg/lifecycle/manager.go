@@ -109,6 +109,11 @@ func (m *Manager) GetBuilderState() *builder.BuilderState {
 	return &state
 }
 
+// GetWallet returns the wallet instance.
+func (m *Manager) GetWallet() *wallet.Wallet {
+	return m.wallet
+}
+
 // EnsureBuilderRegistered checks if builder is registered and deposits if needed.
 func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 	isRegistered, state, err := m.depositSvc.IsBuilderRegistered(ctx)

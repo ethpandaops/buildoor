@@ -11,6 +11,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/docs"
 	"github.com/ethpandaops/buildoor/pkg/webui/server"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
@@ -39,12 +40,17 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 		logrus.Fatalf("error initializing frontend: %v", err)
 	}
 
+	authHandler := auth.NewAuthHandler(config.AuthKey, config.UserHeader, config.TokenKey)
+	authRouter := router.PathPrefix("/auth").Subrouter()
+	authRouter.HandleFunc("/token", authHandler.GetToken).Methods(http.MethodGet)
+	authRouter.HandleFunc("/login", authHandler.GetLogin).Methods(http.MethodGet)
+
 	// register frontend routes
 	frontendHandler := handlers.NewFrontendHandler()
 	router.HandleFunc("/", frontendHandler.Index).Methods("GET")
 
 	// API routes
-	apiHandler := api.NewAPIHandler(builderSvc, epbsSvc, lifecycleMgr)
+	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)

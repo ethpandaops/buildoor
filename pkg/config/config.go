@@ -70,6 +70,8 @@ func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
 	}
 
 	cfg.APIPort = v.GetInt("api-port")
+	cfg.APIUserHeader = v.GetString("api-user-header")
+	cfg.APITokenKey = v.GetString("api-token-key")
 	cfg.LifecycleEnabled = v.GetBool("lifecycle")
 	cfg.DepositAmount = v.GetUint64("deposit-amount")
 	cfg.TopupThreshold = v.GetUint64("topup-threshold")

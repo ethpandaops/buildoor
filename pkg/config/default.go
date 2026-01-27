@@ -4,6 +4,8 @@ package config
 func DefaultConfig() *Config {
 	return &Config{
 		APIPort:          0,
+		APIUserHeader:    "Cf-Access-Authenticated-User-Email",
+		APITokenKey:      "",
 		LifecycleEnabled: false,
 		DepositAmount:    10000000000, // 10 ETH in Gwei
 		TopupThreshold:   1000000000,  // 1 ETH in Gwei

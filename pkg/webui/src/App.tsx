@@ -5,6 +5,7 @@ import { Legend } from './components/Legend';
 import { EventLog } from './components/EventLog';
 import { Stats } from './components/Stats';
 import { ConfigPanel } from './components/ConfigPanel';
+import { BuilderInfo } from './components/BuilderInfo';
 
 export const App: React.FC = () => {
   const {
@@ -12,6 +13,7 @@ export const App: React.FC = () => {
     config,
     chainInfo,
     stats,
+    builderInfo,
     currentSlot,
     slotStates,
     slotConfigs,
@@ -44,7 +46,7 @@ export const App: React.FC = () => {
           <EventLog events={events} onClear={clearEvents} />
         </div>
 
-        {/* Right column: Config and Stats */}
+        {/* Right column: Builder Info, Config and Stats */}
         <div className="col-lg-4">
           {/* Connection Status */}
           <div className="card mb-3">
@@ -57,6 +59,9 @@ export const App: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Builder Info */}
+          <BuilderInfo builderInfo={builderInfo} />
 
           {/* Stats */}
           <Stats stats={stats} />

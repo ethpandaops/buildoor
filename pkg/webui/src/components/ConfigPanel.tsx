@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuthContext } from '../context/AuthContext';
 import type { Config, EPBSConfig, ScheduleConfig } from '../types';
 
 interface ConfigPanelProps {
@@ -6,6 +7,7 @@ interface ConfigPanelProps {
 }
 
 export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
+  const { isLoggedIn, getAuthHeader } = useAuthContext();
   const [editingEpbs, setEditingEpbs] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [epbsForm, setEpbsForm] = useState<EPBSConfig>({
@@ -39,10 +41,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
 
   const handleEpbsSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const authToken = getAuthHeader();
+    if (!authToken) {
+      alert('You must be logged in to update configuration');
+      return;
+    }
     try {
       const response = await fetch('/api/config/epbs', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authToken,
+        },
         body: JSON.stringify(epbsForm)
       });
       const result = await response.json();
@@ -58,10 +68,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
 
   const handleScheduleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const authToken = getAuthHeader();
+    if (!authToken) {
+      alert('You must be logged in to update configuration');
+      return;
+    }
     try {
       const response = await fetch('/api/config/schedule', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authToken,
+        },
         body: JSON.stringify(scheduleForm)
       });
       const result = await response.json();
@@ -75,6 +93,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
     }
   };
 
+  const canEdit = isLoggedIn;
+
   const epbs = config?.epbs;
   const schedule = config?.schedule;
 
@@ -87,6 +107,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
           <button
             className="btn btn-sm btn-outline-primary"
             onClick={() => setEditingEpbs(!editingEpbs)}
+            disabled={!canEdit}
+            title={!canEdit ? 'Login required to edit' : ''}
           >
             <i className="fas fa-edit"></i>
           </button>
@@ -215,6 +237,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config }) => {
           <button
             className="btn btn-sm btn-outline-primary"
             onClick={() => setEditingSchedule(!editingSchedule)}
+            disabled={!canEdit}
+            title={!canEdit ? 'Login required to edit' : ''}
           >
             <i className="fas fa-edit"></i>
           </button>

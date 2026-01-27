@@ -11,10 +11,19 @@ import (
 
 // StatusResponse is the response for the status endpoint.
 type StatusResponse struct {
-	Running       bool   `json:"running"`
-	BuilderIndex  uint64 `json:"builder_index"`
-	BuilderPubkey string `json:"builder_pubkey"`
-	CurrentSlot   uint64 `json:"current_slot"`
+	Running           bool   `json:"running"`
+	BuilderIndex      uint64 `json:"builder_index"`
+	BuilderPubkey     string `json:"builder_pubkey"`
+	CurrentSlot       uint64 `json:"current_slot"`
+	IsRegistered      bool   `json:"is_registered"`
+	CLBalance         uint64 `json:"cl_balance_gwei,omitempty"`
+	PendingPayments   uint64 `json:"pending_payments_gwei,omitempty"`
+	EffectiveBalance  uint64 `json:"effective_balance_gwei,omitempty"`
+	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
+	WalletAddress     string `json:"wallet_address,omitempty"`
+	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
+	DepositEpoch      uint64 `json:"deposit_epoch,omitempty"`
+	WithdrawableEpoch uint64 `json:"withdrawable_epoch,omitempty"`
 }
 
 // StatsResponse is the response for the stats endpoint.
@@ -70,8 +79,17 @@ func (h *APIHandler) GetVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": version.GetBuildVersion()})
 }
 
-// GetStatus returns the current builder status.
-func (h *APIHandler) GetStatus(w http.ResponseWriter, _ *http.Request) {
+// GetStatus godoc
+// @Id getStatus
+// @Summary Get builder status
+// @Tags Status
+// @Description Returns the current builder status including running state, current slot,
+// @Description builder index and public key.
+// @Produce json
+// @Success 200 {object} StatusResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/status [get]
+func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	resp := StatusResponse{
 		Running:     true,
 		CurrentSlot: uint64(h.builderSvc.GetCurrentSlot()),
@@ -82,12 +100,54 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, _ *http.Request) {
 		resp.BuilderIndex = h.epbsSvc.GetBuilderIndex()
 		pubkey := h.epbsSvc.GetBuilderPubkey()
 		resp.BuilderPubkey = pubkey.String()
+
+		// Get pending payments from bid tracker
+		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
+			resp.PendingPayments = tracker.GetTotalPendingPayments()
+		}
+	}
+
+	// Get lifecycle info if available
+	if h.lifecycleMgr != nil {
+		resp.LifecycleEnabled = true
+		state := h.lifecycleMgr.GetBuilderState()
+
+		if state != nil {
+			resp.IsRegistered = state.IsRegistered
+			resp.CLBalance = state.Balance
+			resp.DepositEpoch = state.DepositEpoch
+			resp.WithdrawableEpoch = state.WithdrawableEpoch
+
+			// Calculate effective balance
+			if resp.CLBalance > resp.PendingPayments {
+				resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
+			}
+		}
+
+		// Get wallet info
+		if wallet := h.lifecycleMgr.GetWallet(); wallet != nil {
+			resp.WalletAddress = wallet.Address().Hex()
+
+			// Get wallet balance
+			if balance, err := wallet.GetBalance(r.Context()); err == nil && balance != nil {
+				resp.WalletBalance = balance.String()
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// GetStats returns builder statistics.
+// GetStats godoc
+// @Id getStats
+// @Summary Get builder statistics
+// @Tags Stats
+// @Description Returns builder statistics including slots built, bids submitted/won,
+// @Description total paid, and reveal success/failure counts.
+// @Produce json
+// @Success 200 {object} StatsResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/stats [get]
 func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 	stats := h.builderSvc.GetStats()
 
@@ -104,14 +164,42 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// GetConfig returns the current configuration.
+// GetConfig godoc
+// @Id getConfig
+// @Summary Get current configuration
+// @Tags Config
+// @Description Returns the current builder configuration including schedule and EPBS settings.
+// @Produce json
+// @Success 200 {object} builder.Config "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/config [get]
 func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
 	writeJSON(w, http.StatusOK, cfg)
 }
 
-// UpdateSchedule updates the schedule configuration.
+// UpdateSchedule godoc
+// @Id updateSchedule
+// @Summary Update schedule configuration
+// @Tags Config
+// @Description Updates the builder schedule configuration including mode, every_nth, and next_n
+// @Description settings. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Param request body UpdateScheduleRequest true "Schedule configuration"
+// @Success 200 {object} map[string]string "Success"
+// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/config/schedule [post]
 func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req UpdateScheduleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -142,8 +230,28 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// UpdateEPBS updates the EPBS configuration.
+// UpdateEPBS godoc
+// @Id updateEPBS
+// @Summary Update EPBS configuration
+// @Tags Config
+// @Description Updates the EPBS (enshrined PBS) configuration including timing and bid
+// @Description parameters. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Param request body UpdateEPBSRequest true "EPBS configuration"
+// @Success 200 {object} map[string]string "Success"
+// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/config/epbs [post]
 func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	var req UpdateEPBSRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -198,7 +306,17 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// GetLifecycleStatus returns the lifecycle status.
+// GetLifecycleStatus godoc
+// @Id getLifecycleStatus
+// @Summary Get lifecycle status
+// @Tags Lifecycle
+// @Description Returns the builder lifecycle status including registration state, balance,
+// @Description pending payments, and epoch information.
+// @Produce json
+// @Success 200 {object} LifecycleStatusResponse "Success"
+// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/lifecycle/status [get]
 func (h *APIHandler) GetLifecycleStatus(w http.ResponseWriter, _ *http.Request) {
 	if h.lifecycleMgr == nil {
 		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
@@ -229,8 +347,29 @@ func (h *APIHandler) GetLifecycleStatus(w http.ResponseWriter, _ *http.Request) 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// PostDeposit triggers a deposit.
+// PostDeposit godoc
+// @Id postDeposit
+// @Summary Trigger builder deposit
+// @Tags Lifecycle
+// @Description Initiates a builder registration deposit. If the builder is not yet
+// @Description registered, this will register it with the specified amount. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Param request body object{amount_gwei=uint64} true "Deposit amount in gwei"
+// @Success 200 {object} map[string]string "Success"
+// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/lifecycle/deposit [post]
 func (h *APIHandler) PostDeposit(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	if h.lifecycleMgr == nil {
 		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
 		return
@@ -253,8 +392,27 @@ func (h *APIHandler) PostDeposit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deposit initiated"})
 }
 
-// PostTopup triggers a balance top-up.
-func (h *APIHandler) PostTopup(w http.ResponseWriter, _ *http.Request) {
+// PostTopup godoc
+// @Id postTopup
+// @Summary Trigger balance top-up
+// @Tags Lifecycle
+// @Description Checks the builder balance and initiates a top-up if needed based on
+// @Description configured thresholds. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Success 200 {object} map[string]string "Success"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/lifecycle/topup [post]
+func (h *APIHandler) PostTopup(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	if h.lifecycleMgr == nil {
 		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
 		return
@@ -268,8 +426,28 @@ func (h *APIHandler) PostTopup(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "topup initiated"})
 }
 
-// PostExit triggers a voluntary exit.
-func (h *APIHandler) PostExit(w http.ResponseWriter, _ *http.Request) {
+// PostExit godoc
+// @Id postExit
+// @Summary Trigger voluntary exit
+// @Tags Lifecycle
+// @Description Initiates a voluntary exit for the builder. This will begin the withdrawal
+// @Description process and the builder will stop being eligible for block building after
+// @Description the exit is processed. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Success 200 {object} map[string]string "Success"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/lifecycle/exit [post]
+func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	if h.lifecycleMgr == nil {
 		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
 		return

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -30,6 +31,7 @@ const (
 	EventTypeStats           EventType = "stats"
 	EventTypeSlotState       EventType = "slot_state"
 	EventTypePayloadEnvelope EventType = "payload_envelope"
+	EventTypeBuilderInfo     EventType = "builder_info"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -112,15 +114,32 @@ type PayloadEnvelopeStreamEvent struct {
 	ReceivedAt   int64  `json:"received_at"`
 }
 
+// BuilderInfoEvent contains builder identity and balance information.
+type BuilderInfoEvent struct {
+	BuilderPubkey     string `json:"builder_pubkey"`
+	BuilderIndex      uint64 `json:"builder_index"`
+	IsRegistered      bool   `json:"is_registered"`
+	CLBalance         uint64 `json:"cl_balance_gwei"`
+	PendingPayments   uint64 `json:"pending_payments_gwei"`
+	EffectiveBalance  uint64 `json:"effective_balance_gwei"`
+	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
+	WalletAddress     string `json:"wallet_address,omitempty"`
+	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
+	PendingDeposit    uint64 `json:"pending_deposit_gwei,omitempty"`
+	DepositEpoch      uint64 `json:"deposit_epoch"`
+	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
+}
+
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
-	builderSvc *builder.Service
-	epbsSvc    *epbs.Service // Optional ePBS service for bid events
-	clients    map[chan *StreamEvent]struct{}
-	mu         sync.RWMutex
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	builderSvc   *builder.Service
+	epbsSvc      *epbs.Service      // Optional ePBS service for bid events
+	lifecycleMgr *lifecycle.Manager // Optional lifecycle manager for balance info
+	clients      map[chan *StreamEvent]struct{}
+	mu           sync.RWMutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 
 	// Track slot states for UI
 	slotStates   map[phase0.Slot]*SlotStateEvent
@@ -129,19 +148,28 @@ type EventStreamManager struct {
 	// Track last sent stats to avoid spam
 	lastStats   builder.BuilderStats
 	lastStatsMu sync.Mutex
+
+	// Track last sent builder info to avoid spam
+	lastBuilderInfo   BuilderInfoEvent
+	lastBuilderInfoMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
-func NewEventStreamManager(builderSvc *builder.Service, epbsSvc *epbs.Service) *EventStreamManager {
+func NewEventStreamManager(
+	builderSvc *builder.Service,
+	epbsSvc *epbs.Service,
+	lifecycleMgr *lifecycle.Manager,
+) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &EventStreamManager{
-		builderSvc: builderSvc,
-		epbsSvc:    epbsSvc,
-		clients:    make(map[chan *StreamEvent]struct{}, 8),
-		ctx:        ctx,
-		cancel:     cancel,
-		slotStates: make(map[phase0.Slot]*SlotStateEvent, 16),
+		builderSvc:   builderSvc,
+		epbsSvc:      epbsSvc,
+		lifecycleMgr: lifecycleMgr,
+		clients:      make(map[chan *StreamEvent]struct{}, 8),
+		ctx:          ctx,
+		cancel:       cancel,
+		slotStates:   make(map[phase0.Slot]*SlotStateEvent, 16),
 	}
 }
 
@@ -206,8 +234,9 @@ func (m *EventStreamManager) Start() {
 					lastSlot = currentSlot
 					m.handleSlotStart(currentSlot)
 				}
-				// Periodically send stats
+				// Periodically send stats and builder info
 				m.sendStats()
+				m.sendBuilderInfo()
 			}
 		}
 	}()
@@ -468,6 +497,74 @@ func (m *EventStreamManager) sendStats() {
 	})
 }
 
+func (m *EventStreamManager) sendBuilderInfo() {
+	info := m.getBuilderInfo()
+
+	// Only send if info changed
+	m.lastBuilderInfoMu.Lock()
+	changed := info != m.lastBuilderInfo
+	if changed {
+		m.lastBuilderInfo = info
+	}
+	m.lastBuilderInfoMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderInfo,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      info,
+	})
+}
+
+func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
+	info := BuilderInfoEvent{}
+
+	// Get builder pubkey and index from ePBS service
+	if m.epbsSvc != nil {
+		pubkey := m.epbsSvc.GetBuilderPubkey()
+		info.BuilderPubkey = pubkey.String()
+		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
+
+		// Get pending payments from bid tracker
+		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
+			info.PendingPayments = tracker.GetTotalPendingPayments()
+		}
+	}
+
+	// Get lifecycle info if available
+	if m.lifecycleMgr != nil {
+		info.LifecycleEnabled = true
+		state := m.lifecycleMgr.GetBuilderState()
+
+		if state != nil {
+			info.IsRegistered = state.IsRegistered
+			info.CLBalance = state.Balance
+			info.DepositEpoch = state.DepositEpoch
+			info.WithdrawableEpoch = state.WithdrawableEpoch
+
+			// Calculate effective balance
+			if info.CLBalance > info.PendingPayments {
+				info.EffectiveBalance = info.CLBalance - info.PendingPayments
+			}
+		}
+
+		// Get wallet info
+		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
+			info.WalletAddress = wallet.Address().Hex()
+
+			// Get wallet balance (async-safe, we just use cached value or fetch)
+			if balance, err := wallet.GetBalance(m.ctx); err == nil && balance != nil {
+				info.WalletBalance = balance.String()
+			}
+		}
+	}
+
+	return info
+}
+
 func (m *EventStreamManager) cleanupOldSlots(currentSlot phase0.Slot) {
 	m.slotStatesMu.Lock()
 	defer m.slotStatesMu.Unlock()
@@ -515,6 +612,13 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 			RevealsFailed:  stats.RevealsFailed,
 			RevealsSkipped: stats.RevealsSkipped,
 		},
+	}
+
+	// Send builder info
+	ch <- &StreamEvent{
+		Type:      EventTypeBuilderInfo,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.getBuilderInfo(),
 	}
 
 	// Send genesis and chain spec info

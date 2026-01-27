@@ -10,6 +10,8 @@ type Config struct {
 	ELRPC               string         `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
 	WalletPrivkey       string         `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
 	APIPort             int            `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
+	APIUserHeader       string         `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
+	APITokenKey         string         `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
 	LifecycleEnabled    bool           `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
 	EPBSEnabled         bool           `yaml:"epbs_enabled" json:"epbs_enabled"`       // Enable ePBS bidding/revealing
 	DepositAmount       uint64         `yaml:"deposit_amount" json:"deposit_amount"`   // Gwei, default 10 ETH

@@ -7,4 +7,8 @@ type FrontendConfig struct {
 	Debug    bool
 	Pprof    bool
 	Minify   bool
+
+	AuthKey    string
+	UserHeader string
+	TokenKey   string
 }

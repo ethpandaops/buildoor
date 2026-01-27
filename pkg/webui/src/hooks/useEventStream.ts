@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
   config: Config | null;
   chainInfo: ChainInfo | null;
   stats: Stats | null;
+  builderInfo: BuilderInfo | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -18,6 +19,7 @@ export function useEventStream(): UseEventStreamResult {
   const [config, setConfig] = useState<Config | null>(null);
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [builderInfo, setBuilderInfo] = useState<BuilderInfo | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -72,6 +74,10 @@ export function useEventStream(): UseEventStreamResult {
 
         case 'stats':
           setStats(event.data as Stats);
+          break;
+
+        case 'builder_info':
+          setBuilderInfo(event.data as BuilderInfo);
           break;
 
         case 'slot_start': {
@@ -238,6 +244,7 @@ export function useEventStream(): UseEventStreamResult {
     config,
     chainInfo,
     stats,
+    builderInfo,
     currentSlot,
     slotStates,
     slotConfigs,

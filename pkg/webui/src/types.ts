@@ -1,3 +1,18 @@
+// Auth types
+export interface AuthTokenResponse {
+  token: string;
+  user: string;
+  expr: string;  // Unix timestamp as string
+  now: string;   // Server's current time as string
+}
+
+export interface AuthState {
+  isLoggedIn: boolean;
+  user: string | null;
+  token: string | null;
+  expiresAt: number | null;  // Local timestamp
+}
+
 // Event types from the SSE stream
 export interface StreamEvent {
   type: string;
@@ -40,6 +55,21 @@ export interface Stats {
   reveals_success: number;
   reveals_failed: number;
   reveals_skipped: number;
+}
+
+export interface BuilderInfo {
+  builder_pubkey: string;
+  builder_index: number;
+  is_registered: boolean;
+  cl_balance_gwei: number;
+  pending_payments_gwei: number;
+  effective_balance_gwei: number;
+  lifecycle_enabled: boolean;
+  wallet_address?: string;
+  wallet_balance_wei?: string;
+  pending_deposit_gwei?: number;
+  deposit_epoch: number;
+  withdrawable_epoch: number;
 }
 
 export interface SlotStartEvent {
