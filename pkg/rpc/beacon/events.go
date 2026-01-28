@@ -139,6 +139,12 @@ type EventStream struct {
 	running                     bool
 	mu                          sync.Mutex
 	wg                          sync.WaitGroup
+
+	// Per-slot cache of latest payload_attributes events.
+	// Multiple events may arrive for the same slot (e.g. reorgs, updated attributes);
+	// we always keep the latest one so the builder uses the most up-to-date data.
+	payloadAttrCache   map[phase0.Slot]*PayloadAttributesEvent
+	payloadAttrCacheMu sync.RWMutex
 }
 
 // NewEventStream creates a new event stream for the given client.
@@ -149,6 +155,7 @@ func NewEventStream(client *Client) *EventStream {
 		bidDispatcher:               &utils.Dispatcher[*BidEvent]{},
 		payloadDispatcher:           &utils.Dispatcher[*PayloadEnvelopeEvent]{},
 		payloadAttributesDispatcher: &utils.Dispatcher[*PayloadAttributesEvent]{},
+		payloadAttrCache:            make(map[phase0.Slot]*PayloadAttributesEvent, 4),
 	}
 }
 
@@ -208,6 +215,28 @@ func (e *EventStream) SubscribePayloadEnvelope() *utils.Subscription[*PayloadEnv
 // SubscribePayloadAttributes returns a subscription for payload attributes events.
 func (e *EventStream) SubscribePayloadAttributes() *utils.Subscription[*PayloadAttributesEvent] {
 	return e.payloadAttributesDispatcher.Subscribe(16, false)
+}
+
+// GetLatestPayloadAttributes returns the latest cached payload_attributes event
+// for the given slot, or nil if none has been received.
+func (e *EventStream) GetLatestPayloadAttributes(slot phase0.Slot) *PayloadAttributesEvent {
+	e.payloadAttrCacheMu.RLock()
+	defer e.payloadAttrCacheMu.RUnlock()
+
+	return e.payloadAttrCache[slot]
+}
+
+// CleanupPayloadAttributesCache removes cached payload_attributes entries
+// for slots older than beforeSlot.
+func (e *EventStream) CleanupPayloadAttributesCache(beforeSlot phase0.Slot) {
+	e.payloadAttrCacheMu.Lock()
+	defer e.payloadAttrCacheMu.Unlock()
+
+	for slot := range e.payloadAttrCache {
+		if slot < beforeSlot {
+			delete(e.payloadAttrCache, slot)
+		}
+	}
 }
 
 // runTopicLoop connects to the SSE endpoint for a specific topic and processes events.
@@ -391,6 +420,11 @@ func (e *EventStream) handleEvent(eventType, data string) {
 			"slot":        event.ProposalSlot,
 			"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 		}).Debug("Payload attributes event received")
+
+		// Cache the latest attributes per slot (overwrites any previous event for the same slot).
+		e.payloadAttrCacheMu.Lock()
+		e.payloadAttrCache[event.ProposalSlot] = event
+		e.payloadAttrCacheMu.Unlock()
 
 		e.payloadAttributesDispatcher.Fire(event)
 

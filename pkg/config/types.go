@@ -46,9 +46,11 @@ const (
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
 type EPBSConfig struct {
-	// BuildStartTime is milliseconds relative to slot start when we start building.
-	// This delays payload building to allow more transactions in mempool.
-	// Default 9000 (75% into a 12s slot). Set to 0 to build immediately on head event.
+	// BuildStartTime is milliseconds relative to the proposal slot start when we
+	// start building. Negative values mean before the slot starts (e.g. -3000 =
+	// 3 seconds before slot start). Positive values mean after slot start.
+	// Set to 0 to build immediately when payload_attributes is received.
+	// Default: -3000.
 	BuildStartTime int64 `yaml:"build_start_time" json:"build_start_time"`
 
 	// BidStartTime is milliseconds relative to slot start for first bid.

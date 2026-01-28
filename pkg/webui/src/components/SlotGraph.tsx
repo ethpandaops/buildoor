@@ -92,13 +92,16 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     key: string
   ) => {
     const x = calculatePosition(timeMs, rangeStart, totalRange);
-    if (x < 0 || x > 100) return null;
+    if (x > 100) return null;
+
+    // Clamp to left border if event occurred before the displayed range
+    const clampedX = Math.max(0, x);
 
     return (
       <div
         key={key}
         className={`event-dot ${className}`}
-        style={{ left: `${x}%` }}
+        style={{ left: `${clampedX}%` }}
         onClick={(e) => showPopover(e, data)}
       />
     );

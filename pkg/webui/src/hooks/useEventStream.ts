@@ -240,6 +240,9 @@ export function useEventStream(): UseEventStreamResult {
 
       eventSource.onerror = () => {
         setConnected(false);
+        // Close explicitly to prevent the browser's built-in auto-reconnect,
+        // which would create a duplicate connection alongside our manual retry.
+        eventSource.close();
         eventSourceRef.current = null;
         setTimeout(connect, 3000);
       };

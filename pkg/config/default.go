@@ -15,9 +15,9 @@ func DefaultConfig() *Config {
 			EveryNth: 1,
 		},
 		EPBS: EPBSConfig{
-			BuildStartTime: 0,       // Build immediately on payload_attributes event
+			BuildStartTime: -2000,   // 2 seconds before slot start
 			BidStartTime:   -1000,   // 1 second before slot start
-			BidEndTime:     2000,    // 2 seconds into slot
+			BidEndTime:     1000,    // 1 second into slot
 			RevealTime:     6000,    // 6 seconds into slot
 			BidMinAmount:   1000000, // 1M gwei = 0.001 ETH
 			BidIncrease:    100000,  // 100k gwei per subsequent bid

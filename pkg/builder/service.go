@@ -230,6 +230,8 @@ func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 
 // handlePayloadAttributesEvent processes a payload_attributes event.
 // This is the primary trigger for building payloads.
+// The event is cached by the EventStream; this method schedules the build
+// at the configured BuildStartTime rather than building immediately.
 func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
 	s.log.WithFields(logrus.Fields{
 		"proposal_slot": event.ProposalSlot,
@@ -244,48 +246,88 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		return
 	}
 
-	// Check if already building/built for this slot
+	// Check if already scheduled/building/built for this slot
 	s.scheduledBuildMu.Lock()
 	if s.buildStartedSlots[event.ProposalSlot] {
 		s.scheduledBuildMu.Unlock()
-		s.log.WithField("slot", event.ProposalSlot).Debug("Already building/built for this slot")
+		s.log.WithField("slot", event.ProposalSlot).Debug(
+			"Already scheduled/building for this slot",
+		)
 		return
 	}
 	s.buildStartedSlots[event.ProposalSlot] = true
 	s.scheduledBuildMu.Unlock()
 
-	// Build immediately (BuildStartTime is not used with payload_attributes)
-	go s.executeBuildFromAttributes(event)
+	s.scheduleBuildForSlot(event.ProposalSlot)
 }
 
-// executeBuildFromAttributes performs payload building using data from payload_attributes event.
-func (s *Service) executeBuildFromAttributes(event *beacon.PayloadAttributesEvent) {
+// scheduleBuildForSlot schedules payload building for the given slot.
+// BuildStartTime is milliseconds relative to the proposal slot start:
+//   - Negative values (e.g. -3000) mean before the slot starts.
+//   - Positive values mean after the slot starts.
+//   - Zero means build immediately when the event is received.
+func (s *Service) scheduleBuildForSlot(slot phase0.Slot) {
+	buildStartMs := s.cfg.EPBS.BuildStartTime
+	if buildStartMs == 0 {
+		// Build immediately when event is received.
+		go s.executeBuildForSlot(slot)
+		return
+	}
+
+	slotStart := s.chainSvc.SlotToTime(slot)
+	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
+	delay := time.Until(buildTime)
+
+	if delay <= 0 {
+		// Build time already passed – build immediately.
+		s.log.WithFields(logrus.Fields{
+			"slot":     slot,
+			"delay_ms": delay.Milliseconds(),
+		}).Debug("Build start time already passed, building immediately")
+
+		go s.executeBuildForSlot(slot)
+
+		return
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":     slot,
+		"delay_ms": delay.Milliseconds(),
+	}).Info("Scheduling build for slot")
+
+	time.AfterFunc(delay, func() {
+		s.executeBuildForSlot(slot)
+	})
+}
+
+// executeBuildForSlot fetches the latest cached payload_attributes for the
+// given slot and performs payload building.
+func (s *Service) executeBuildForSlot(slot phase0.Slot) {
+	event := s.clClient.Events().GetLatestPayloadAttributes(slot)
+	if event == nil {
+		s.log.WithField("slot", slot).Warn(
+			"No cached payload attributes for slot, skipping build",
+		)
+		return
+	}
+
 	s.log.WithFields(logrus.Fields{
 		"slot":        event.ProposalSlot,
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
-	}).Info("Starting payload build from attributes")
+	}).Info("Starting payload build")
 
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 	defer cancel()
 
-	var payloadEvent *PayloadReadyEvent
-	var err error
-
-	if s.chainSvc.IsGloas() {
-		// For Gloas, we still use the last known payload approach
-		// TODO: May need special handling for Gloas with payload_attributes
-		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
-	} else {
-		// Pre-Gloas (Electra/Fulu)
-		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
-	}
-
+	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
 	if err != nil {
-		s.log.WithError(err).WithField("slot", event.ProposalSlot).Error("Failed to build payload from attributes")
+		s.log.WithError(err).WithField("slot", slot).Error(
+			"Failed to build payload from attributes",
+		)
 		return
 	}
 
-	s.emitPayloadReady(event.ProposalSlot, payloadEvent)
+	s.emitPayloadReady(slot, payloadEvent)
 }
 
 // handlePayloadEnvelopeEvent processes a payload envelope event (Gloas only).
@@ -335,6 +377,7 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 	if slot > 64 {
 		cleanupSlot := slot - 64
 		s.payloadCache.Cleanup(cleanupSlot)
+		s.clClient.Events().CleanupPayloadAttributesCache(cleanupSlot)
 
 		// Cleanup old build tracking
 		s.scheduledBuildMu.Lock()
