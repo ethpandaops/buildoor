@@ -49,7 +49,6 @@ type Client struct {
 	client         eth2client.Service
 	baseURL        string
 	eventStream    *EventStream
-	stateCache     *StateCache
 	log            logrus.FieldLogger
 	buildersCache  []*BuilderInfo // Cached builders from beacon state
 	buildersLoaded bool           // Whether builders have been loaded
@@ -75,7 +74,6 @@ func NewClient(ctx context.Context, baseURL string, log logrus.FieldLogger) (*Cl
 	}
 
 	c.eventStream = NewEventStream(c)
-	c.stateCache = NewStateCache(c, 2) // Cache last 2 states
 
 	return c, nil
 }
@@ -428,50 +426,6 @@ func (c *Client) GetRandao(ctx context.Context, stateID string) (phase0.Root, er
 	}
 
 	return *resp.Data, nil
-}
-
-// StateCache returns the beacon state cache.
-func (c *Client) StateCache() *StateCache {
-	return c.stateCache
-}
-
-// FetchStateForBlock fetches and caches the beacon state for a block.
-// This should be called after receiving head events.
-func (c *Client) FetchStateForBlock(
-	ctx context.Context,
-	blockRoot phase0.Root,
-	stateRoot phase0.Root,
-	slot phase0.Slot,
-) error {
-	return c.stateCache.FetchAndCache(ctx, blockRoot, stateRoot, slot)
-}
-
-// GetExpectedWithdrawals calculates the expected withdrawals for a new block.
-// It uses the cached state from the parent block.
-// Returns nil withdrawals if no state is cached for the parent block.
-func (c *Client) GetExpectedWithdrawals(
-	parentBlockRoot phase0.Root,
-	slotsPerEpoch uint64,
-) ([]*capella.Withdrawal, error) {
-	cached := c.stateCache.Get(parentBlockRoot)
-	if cached == nil {
-		c.log.WithField("block_root", fmt.Sprintf("%x", parentBlockRoot[:8])).
-			Warn("No cached state for parent block, cannot calculate withdrawals")
-
-		return nil, nil
-	}
-
-	calculator := NewWithdrawalCalculator(slotsPerEpoch)
-
-	expected, err := calculator.GetExpectedWithdrawals(cached.State)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate expected withdrawals: %w", err)
-	}
-
-	c.log.WithField("withdrawal_count", len(expected.Withdrawals)).
-		Debug("Calculated expected withdrawals")
-
-	return expected.Withdrawals, nil
 }
 
 // GetBlockWithdrawals fetches the withdrawals from a beacon block's execution payload.

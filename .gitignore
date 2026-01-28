@@ -13,3 +13,4 @@ node_modules/
 .hack/devnet/generated-**
 .hack/devnet/custom-**
 
+buildoor
