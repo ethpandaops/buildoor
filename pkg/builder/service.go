@@ -3,11 +3,9 @@ package builder
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/sirupsen/logrus"
@@ -23,6 +21,9 @@ import (
 // Fork-aware building:
 // - Electra/Fulu: Build on parent block (payload is in the block)
 // - Gloas: Build on last known payload (payload is separate from block)
+//
+// Building is triggered by payload_attributes events from the beacon node,
+// which contain all the information needed to build a payload.
 type Service struct {
 	cfg                    *Config
 	clClient               *beacon.Client
@@ -52,13 +53,9 @@ type Service struct {
 	lastKnownPayloadBlockHash phase0.Hash32 // Execution block hash from that payload
 	lastKnownPayloadSlot      phase0.Slot   // Slot of the block with known payload
 
-	// Scheduled build tracking
-	// We delay building until BuildStartTime (75% into slot by default)
-	scheduledBuildMu    sync.Mutex
-	scheduledBuildSlot  phase0.Slot          // The slot we're scheduled to build for
-	scheduledBuildTimer *time.Timer          // Timer for scheduled build
-	scheduledBuildEvent *beacon.HeadEvent    // Head event to use for building
-	buildStartedSlots   map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
+	// Build tracking
+	scheduledBuildMu  sync.Mutex
+	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
 }
 
 // NewService creates a new builder service.
@@ -221,9 +218,11 @@ func (s *Service) run() {
 	defer s.wg.Done()
 
 	headSub := s.clClient.Events().SubscribeHead()
+	payloadAttrSub := s.clClient.Events().SubscribePayloadAttributes()
 	payloadSub := s.clClient.Events().SubscribePayloadEnvelope()
 
 	defer headSub.Unsubscribe()
+	defer payloadAttrSub.Unsubscribe()
 	defer payloadSub.Unsubscribe()
 
 	for {
@@ -234,6 +233,9 @@ func (s *Service) run() {
 		case event := <-headSub.Channel():
 			s.handleHeadEvent(event)
 
+		case event := <-payloadAttrSub.Channel():
+			s.handlePayloadAttributesEvent(event)
+
 		case event := <-payloadSub.Channel():
 			s.handlePayloadEnvelopeEvent(event)
 		}
@@ -241,130 +243,81 @@ func (s *Service) run() {
 }
 
 // handleHeadEvent processes a head event (new block received).
+// With payload_attributes-based building, this is only used for logging.
+// Building is triggered by payload_attributes events, not head events.
 func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"head_slot": event.Slot,
-		"next_slot": event.Slot + 1,
 		"is_gloas":  s.isGloas,
 	}).Debug("Head event received")
 
-	// Build for the next slot
-	nextSlot := event.Slot + 1
+	// NOTE: We no longer trigger builds from head events.
+	// Building is now triggered by payload_attributes events from the beacon node.
+}
+
+// handlePayloadAttributesEvent processes a payload_attributes event.
+// This is the primary trigger for building payloads.
+func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
+	s.log.WithFields(logrus.Fields{
+		"proposal_slot": event.ProposalSlot,
+		"parent_hash":   fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+		"timestamp":     event.Timestamp,
+		"withdrawals":   len(event.Withdrawals),
+	}).Info("Payload attributes event received")
 
 	// Check if we should build for this slot
-	if !s.slotManager.ShouldBuildForSlot(nextSlot) {
-		s.log.WithField("slot", nextSlot).Debug("Skipping slot per schedule")
+	if !s.slotManager.ShouldBuildForSlot(event.ProposalSlot) {
+		s.log.WithField("slot", event.ProposalSlot).Debug("Skipping slot per schedule")
 		return
 	}
 
-	// Fetch and cache the beacon state for this block (do this immediately)
-	go func() {
-		ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-		defer cancel()
-
-		if err := s.clClient.FetchStateForBlock(ctx, event.Block, event.State, event.Slot); err != nil {
-			s.log.WithError(err).WithField("slot", event.Slot).Warn("Failed to fetch beacon state")
-		}
-
-		// For pre-Gloas, validate the withdrawals in this block against expected
-		if !s.isGloas && s.cfg.ValidateWithdrawals {
-			s.runBlockWithdrawalValidation(ctx, event.Block, event.Slot)
-		}
-	}()
-
-	// Schedule the payload build for BuildStartTime into the current slot
-	s.scheduleBuild(nextSlot, event)
-}
-
-// scheduleBuild schedules a payload build for the specified slot.
-// Building is delayed until BuildStartTime into the current slot (default 75%).
-func (s *Service) scheduleBuild(slot phase0.Slot, headEvent *beacon.HeadEvent) {
+	// Check if already building/built for this slot
 	s.scheduledBuildMu.Lock()
-	defer s.scheduledBuildMu.Unlock()
-
-	// Check if we've already started building for this slot
-	if s.buildStartedSlots[slot] {
-		s.log.WithField("slot", slot).Debug("Already built for this slot, not scheduling")
+	if s.buildStartedSlots[event.ProposalSlot] {
+		s.scheduledBuildMu.Unlock()
+		s.log.WithField("slot", event.ProposalSlot).Debug("Already building/built for this slot")
 		return
 	}
+	s.buildStartedSlots[event.ProposalSlot] = true
+	s.scheduledBuildMu.Unlock()
 
-	// Cancel any existing timer for a different slot
-	if s.scheduledBuildTimer != nil && s.scheduledBuildSlot != slot {
-		s.scheduledBuildTimer.Stop()
-		s.scheduledBuildTimer = nil
-	}
-
-	// Calculate when to build
-	// BuildStartTime is relative to the current slot start (the slot whose head we received)
-	currentSlotStart := s.genesis.GenesisTime.Add(time.Duration(headEvent.Slot) * s.chainSpec.SecondsPerSlot)
-	buildTime := currentSlotStart.Add(time.Duration(s.cfg.EPBS.BuildStartTime) * time.Millisecond)
-	delay := time.Until(buildTime)
-
-	// If BuildStartTime is 0 or we're past the build time, build immediately
-	if s.cfg.EPBS.BuildStartTime == 0 || delay <= 0 {
-		s.log.WithFields(logrus.Fields{
-			"slot":             slot,
-			"build_start_time": s.cfg.EPBS.BuildStartTime,
-		}).Debug("Building immediately (no delay or past build time)")
-
-		s.buildStartedSlots[slot] = true
-		go s.executeBuild(slot, headEvent)
-
-		return
-	}
-
-	// Schedule the build
-	s.scheduledBuildSlot = slot
-	s.scheduledBuildEvent = headEvent
-
-	s.log.WithFields(logrus.Fields{
-		"slot":             slot,
-		"build_start_time": s.cfg.EPBS.BuildStartTime,
-		"delay_ms":         delay.Milliseconds(),
-	}).Info("Scheduled payload build")
-
-	s.scheduledBuildTimer = time.AfterFunc(delay, func() {
-		s.scheduledBuildMu.Lock()
-		defer s.scheduledBuildMu.Unlock()
-
-		// Check if this is still the scheduled slot
-		if s.scheduledBuildSlot != slot {
-			return
-		}
-
-		// Check if already built (by payload envelope)
-		if s.buildStartedSlots[slot] {
-			s.log.WithField("slot", slot).Debug("Slot already built, skipping scheduled build")
-			return
-		}
-
-		s.buildStartedSlots[slot] = true
-		go s.executeBuild(slot, s.scheduledBuildEvent)
-	})
+	// Build immediately (BuildStartTime is not used with payload_attributes)
+	go s.executeBuildFromAttributes(event)
 }
 
-// executeBuild performs the actual payload building.
-func (s *Service) executeBuild(slot phase0.Slot, headEvent *beacon.HeadEvent) {
+// executeBuildFromAttributes performs payload building using data from payload_attributes event.
+func (s *Service) executeBuildFromAttributes(event *beacon.PayloadAttributesEvent) {
 	s.log.WithFields(logrus.Fields{
-		"slot":     slot,
-		"is_gloas": s.isGloas,
-	}).Info("Starting payload build")
+		"slot":        event.ProposalSlot,
+		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+	}).Info("Starting payload build from attributes")
+
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	var payloadEvent *PayloadReadyEvent
+	var err error
 
 	if s.isGloas {
-		// Gloas: Build based on last known payload, not this block
-		if err := s.processSlotGloas(slot, headEvent); err != nil {
-			s.log.WithError(err).WithField("slot", slot).Error("Failed to process slot (Gloas)")
-		}
+		// For Gloas, we still use the last known payload approach
+		// TODO: May need special handling for Gloas with payload_attributes
+		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
 	} else {
-		// Electra/Fulu: Build based on this block (payload is in the block)
-		if err := s.processSlotPreGloas(slot, headEvent); err != nil {
-			s.log.WithError(err).WithField("slot", slot).Error("Failed to process slot (pre-Gloas)")
-		}
+		// Pre-Gloas (Electra/Fulu)
+		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
 	}
+
+	if err != nil {
+		s.log.WithError(err).WithField("slot", event.ProposalSlot).Error("Failed to build payload from attributes")
+		return
+	}
+
+	s.emitPayloadReady(event.ProposalSlot, payloadEvent)
 }
 
 // handlePayloadEnvelopeEvent processes a payload envelope event (Gloas only).
 // This is called when a payload is revealed for a block.
+// With payload_attributes-based building, we only track the last known payload here.
 func (s *Service) handlePayloadEnvelopeEvent(event *beacon.PayloadEnvelopeEvent) {
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
@@ -372,168 +325,15 @@ func (s *Service) handlePayloadEnvelopeEvent(event *beacon.PayloadEnvelopeEvent)
 		"block_hash": fmt.Sprintf("%x", event.BlockHash[:8]),
 	}).Debug("Payload envelope event received")
 
-	// Update last known payload
+	// Update last known payload (for Gloas tracking)
 	s.lastKnownPayloadMu.Lock()
 	s.lastKnownPayloadBlockRoot = event.BlockRoot
 	s.lastKnownPayloadBlockHash = event.BlockHash
 	s.lastKnownPayloadSlot = event.Slot
 	s.lastKnownPayloadMu.Unlock()
 
-	// Validate payload envelope withdrawals if enabled
-	if s.cfg.ValidateWithdrawals {
-		go func() {
-			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-			defer cancel()
-
-			s.runPayloadEnvelopeWithdrawalValidation(ctx, event.BlockRoot, event.Slot)
-		}()
-	}
-
-	// If this is Gloas, check if we should build on this envelope
-	// We only build if:
-	// 1. We're past the BuildStartTime (75% into slot by default)
-	// 2. We haven't already started building for the next slot
-	if s.isGloas {
-		nextSlot := event.Slot + 1
-
-		// Check if we should build for this slot
-		if !s.slotManager.ShouldBuildForSlot(nextSlot) {
-			return
-		}
-
-		// Check if we're past the build start time
-		currentSlotStart := s.genesis.GenesisTime.Add(time.Duration(event.Slot) * s.chainSpec.SecondsPerSlot)
-		buildTime := currentSlotStart.Add(time.Duration(s.cfg.EPBS.BuildStartTime) * time.Millisecond)
-
-		if time.Now().Before(buildTime) {
-			// We're before BuildStartTime - the scheduled build will handle this
-			// Just update the last known payload (already done above)
-			s.log.WithFields(logrus.Fields{
-				"slot":             nextSlot,
-				"build_start_time": s.cfg.EPBS.BuildStartTime,
-			}).Debug("Payload envelope received before build time, scheduled build will use it")
-			return
-		}
-
-		// We're past BuildStartTime - check if we've already started building
-		s.scheduledBuildMu.Lock()
-		alreadyBuilding := s.buildStartedSlots[nextSlot]
-		if !alreadyBuilding {
-			s.buildStartedSlots[nextSlot] = true
-		}
-		s.scheduledBuildMu.Unlock()
-
-		if alreadyBuilding {
-			s.log.WithField("slot", nextSlot).Debug("Already building for this slot, ignoring late payload envelope")
-			return
-		}
-
-		// Check if we already have a payload in cache
-		if s.payloadCache.Get(nextSlot) != nil {
-			s.log.WithField("slot", nextSlot).Debug("Already built for this slot, skipping")
-			return
-		}
-
-		s.log.WithField("slot", nextSlot).Info("Building on payload envelope (past build time, not yet built)")
-
-		go func() {
-			ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-			defer cancel()
-
-			if err := s.buildOnPayloadEnvelope(ctx, nextSlot, event); err != nil {
-				s.log.WithError(err).WithField("slot", nextSlot).Error("Failed to build on payload envelope")
-			}
-		}()
-	}
-}
-
-// processSlotPreGloas handles building a payload for pre-Gloas forks (Electra/Fulu).
-// In these forks, the execution payload is included in the beacon block.
-func (s *Service) processSlotPreGloas(slot phase0.Slot, headEvent *beacon.HeadEvent) error {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	s.log.WithFields(logrus.Fields{
-		"slot":        slot,
-		"parent_root": fmt.Sprintf("%x", headEvent.Block[:8]),
-	}).Info("Building payload for slot (pre-Gloas)")
-
-	// Build the payload - use head block as parent
-	payloadEvent, err := s.payloadBuilder.BuildPayload(ctx, slot, headEvent)
-	if err != nil {
-		return fmt.Errorf("failed to build payload: %w", err)
-	}
-
-	s.emitPayloadReady(slot, payloadEvent)
-
-	return nil
-}
-
-// processSlotGloas handles building a payload for Gloas fork.
-// In Gloas, execution payloads are separate from beacon blocks.
-// We build based on the last block that has a known payload.
-func (s *Service) processSlotGloas(slot phase0.Slot, headEvent *beacon.HeadEvent) error {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	s.lastKnownPayloadMu.RLock()
-	lastPayloadBlockRoot := s.lastKnownPayloadBlockRoot
-	lastPayloadBlockHash := s.lastKnownPayloadBlockHash
-	lastPayloadSlot := s.lastKnownPayloadSlot
-	s.lastKnownPayloadMu.RUnlock()
-
-	// Check if we have a known payload to build on
-	if lastPayloadBlockHash == (phase0.Hash32{}) {
-		s.log.WithField("slot", slot).Warn("No known execution payload yet, cannot build (Gloas)")
-		return nil
-	}
-
-	s.log.WithFields(logrus.Fields{
-		"slot":                    slot,
-		"parent_root":             fmt.Sprintf("%x", headEvent.Block[:8]),
-		"last_payload_slot":       lastPayloadSlot,
-		"last_payload_block_hash": fmt.Sprintf("%x", lastPayloadBlockHash[:8]),
-	}).Info("Building payload for slot (Gloas - on last known payload)")
-
-	// Build the payload using last known execution block hash
-	payloadEvent, err := s.payloadBuilder.BuildPayloadGloas(
-		ctx,
-		slot,
-		headEvent,
-		lastPayloadBlockRoot,
-		lastPayloadBlockHash,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to build payload (Gloas): %w", err)
-	}
-
-	s.emitPayloadReady(slot, payloadEvent)
-
-	return nil
-}
-
-// buildOnPayloadEnvelope builds a payload when a payload envelope is received.
-// This allows building on the now-complete parent block.
-func (s *Service) buildOnPayloadEnvelope(
-	ctx context.Context,
-	slot phase0.Slot,
-	envelope *beacon.PayloadEnvelopeEvent,
-) error {
-	s.log.WithFields(logrus.Fields{
-		"slot":        slot,
-		"parent_root": fmt.Sprintf("%x", envelope.BlockRoot[:8]),
-		"parent_hash": fmt.Sprintf("%x", envelope.BlockHash[:8]),
-	}).Info("Building payload on received payload envelope (Gloas)")
-
-	// Build the payload using the envelope's block hash as parent
-	payloadEvent, err := s.payloadBuilder.BuildPayloadOnEnvelope(ctx, slot, envelope)
-	if err != nil {
-		return fmt.Errorf("failed to build payload on envelope: %w", err)
-	}
-
-	s.emitPayloadReady(slot, payloadEvent)
-
-	return nil
+	// NOTE: We no longer build from payload envelope events.
+	// Building is now triggered by payload_attributes events.
 }
 
 // emitPayloadReady stores the payload and emits the ready event.
@@ -617,187 +417,4 @@ func (s *Service) IncrementRevealsSkipped() {
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.RevealsSkipped++
 	})
-}
-
-// runBlockWithdrawalValidation runs withdrawal validation for a pre-Gloas block.
-// It fetches the block info to get the parent root, then validates.
-func (s *Service) runBlockWithdrawalValidation(ctx context.Context, blockRoot phase0.Root, slot phase0.Slot) {
-	// Get block info to find the parent root
-	blockID := fmt.Sprintf("0x%x", blockRoot[:])
-
-	blockInfo, err := s.clClient.GetBlockInfo(ctx, blockID)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to get block info for withdrawal validation")
-		return
-	}
-
-	// Validate withdrawals using parent block's state
-	s.validateBlockWithdrawals(ctx, blockRoot, blockInfo.ParentRoot, slot)
-}
-
-// runPayloadEnvelopeWithdrawalValidation runs withdrawal validation for a Gloas payload envelope.
-// It fetches the block info to get the parent root, then validates.
-func (s *Service) runPayloadEnvelopeWithdrawalValidation(
-	ctx context.Context,
-	blockRoot phase0.Root,
-	slot phase0.Slot,
-) {
-	// Get block info to find the parent root
-	blockID := fmt.Sprintf("0x%x", blockRoot[:])
-
-	blockInfo, err := s.clClient.GetBlockInfo(ctx, blockID)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to get block info for payload envelope validation")
-		return
-	}
-
-	// Validate withdrawals using parent block's state
-	s.validatePayloadEnvelopeWithdrawals(ctx, blockRoot, blockInfo.ParentRoot, slot)
-}
-
-// validateBlockWithdrawals validates that the withdrawals in a block match expected withdrawals.
-// This is called for pre-Gloas blocks where the execution payload is embedded in the block.
-// parentBlockRoot is the root of the block whose state we use to calculate expected withdrawals.
-func (s *Service) validateBlockWithdrawals(
-	ctx context.Context,
-	blockRoot phase0.Root,
-	parentBlockRoot phase0.Root,
-	slot phase0.Slot,
-) {
-	if !s.cfg.ValidateWithdrawals {
-		return
-	}
-
-	// Fetch actual withdrawals from the block
-	actualWithdrawals, err := s.clClient.GetBlockWithdrawals(ctx, blockRoot)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to fetch block withdrawals for validation")
-		return
-	}
-
-	// Calculate expected withdrawals from parent state
-	expectedWithdrawals, err := s.clClient.GetExpectedWithdrawals(parentBlockRoot, s.chainSpec.SlotsPerEpoch)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to calculate expected withdrawals")
-		return
-	}
-
-	// Compare
-	s.compareWithdrawals(slot, expectedWithdrawals, actualWithdrawals, "block")
-}
-
-// validatePayloadEnvelopeWithdrawals validates that the withdrawals in a payload envelope match expected.
-// This is called for Gloas where the execution payload is in a separate envelope.
-// parentBlockRoot is the root of the block whose state we use to calculate expected withdrawals.
-func (s *Service) validatePayloadEnvelopeWithdrawals(
-	ctx context.Context,
-	blockRoot phase0.Root,
-	parentBlockRoot phase0.Root,
-	slot phase0.Slot,
-) {
-	if !s.cfg.ValidateWithdrawals {
-		return
-	}
-
-	// Fetch actual withdrawals from the payload envelope
-	actualWithdrawals, err := s.clClient.GetPayloadEnvelopeWithdrawals(ctx, blockRoot)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to fetch payload envelope withdrawals for validation")
-		return
-	}
-
-	// Calculate expected withdrawals from parent state
-	expectedWithdrawals, err := s.clClient.GetExpectedWithdrawals(parentBlockRoot, s.chainSpec.SlotsPerEpoch)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Warn("Failed to calculate expected withdrawals")
-		return
-	}
-
-	// Compare
-	s.compareWithdrawals(slot, expectedWithdrawals, actualWithdrawals, "payload_envelope")
-}
-
-// compareWithdrawals compares expected and actual withdrawals and logs errors on mismatch.
-func (s *Service) compareWithdrawals(
-	slot phase0.Slot,
-	expected []*capella.Withdrawal,
-	actual []*capella.Withdrawal,
-	source string,
-) {
-	if len(expected) != len(actual) {
-		s.log.WithFields(logrus.Fields{
-			"slot":           slot,
-			"source":         source,
-			"expected_count": len(expected),
-			"actual_count":   len(actual),
-		}).Error("Withdrawal count mismatch!")
-		s.logWithdrawalDetails(expected, actual)
-		return
-	}
-
-	for i := range expected {
-		if !withdrawalsEqual(expected[i], actual[i]) {
-			s.log.WithFields(logrus.Fields{
-				"slot":               slot,
-				"source":             source,
-				"withdrawal_index":   i,
-				"expected_index":     expected[i].Index,
-				"expected_validator": expected[i].ValidatorIndex,
-				"expected_address":   fmt.Sprintf("%x", expected[i].Address),
-				"expected_amount":    expected[i].Amount,
-				"actual_index":       actual[i].Index,
-				"actual_validator":   actual[i].ValidatorIndex,
-				"actual_address":     fmt.Sprintf("%x", actual[i].Address),
-				"actual_amount":      actual[i].Amount,
-			}).Error("Withdrawal mismatch at index!")
-			return
-		}
-	}
-
-	s.log.WithFields(logrus.Fields{
-		"slot":             slot,
-		"source":           source,
-		"withdrawal_count": len(actual),
-	}).Debug("Withdrawal validation passed")
-}
-
-// logWithdrawalDetails logs detailed information about expected and actual withdrawals.
-func (s *Service) logWithdrawalDetails(expected, actual []*capella.Withdrawal) {
-	s.log.WithField("expected_withdrawals", formatWithdrawals(expected)).Debug("Expected withdrawals")
-	s.log.WithField("actual_withdrawals", formatWithdrawals(actual)).Debug("Actual withdrawals")
-}
-
-// withdrawalsEqual checks if two withdrawals are equal.
-func withdrawalsEqual(a, b *capella.Withdrawal) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Index == b.Index &&
-		a.ValidatorIndex == b.ValidatorIndex &&
-		a.Address == b.Address &&
-		a.Amount == b.Amount
-}
-
-// formatWithdrawals formats a slice of withdrawals for logging.
-func formatWithdrawals(withdrawals []*capella.Withdrawal) string {
-	if len(withdrawals) == 0 {
-		return "[]"
-	}
-
-	var sb strings.Builder
-
-	sb.WriteString("[")
-
-	for i, w := range withdrawals {
-		if i > 0 {
-			sb.WriteString(", ")
-		}
-
-		sb.WriteString(fmt.Sprintf("{idx:%d val:%d addr:%x amt:%d}",
-			w.Index, w.ValidatorIndex, w.Address[:4], w.Amount))
-	}
-
-	sb.WriteString("]")
-
-	return sb.String()
 }

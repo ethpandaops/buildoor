@@ -15,7 +15,7 @@ func DefaultConfig() *Config {
 			EveryNth: 1,
 		},
 		EPBS: EPBSConfig{
-			BuildStartTime: 9000,    // Build at 75% into slot (9s for 12s slots)
+			BuildStartTime: 0,       // Build immediately on payload_attributes event
 			BidStartTime:   -1000,   // 1 second before slot start
 			BidEndTime:     2000,    // 2 seconds into slot
 			RevealTime:     6000,    // 6 seconds into slot

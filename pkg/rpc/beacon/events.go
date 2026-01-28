@@ -13,7 +13,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -64,6 +66,47 @@ type PayloadEnvelopeEvent struct {
 	ReceivedAt      time.Time
 }
 
+// PayloadAttributesEvent represents a payload_attributes event from the beacon node.
+// This is emitted when a validator is scheduled to propose and contains all parameters
+// needed for building an execution payload.
+type PayloadAttributesEvent struct {
+	Version               string
+	ProposalSlot          phase0.Slot
+	ProposerIndex         phase0.ValidatorIndex
+	ParentBlockRoot       phase0.Root
+	ParentBlockNumber     uint64
+	ParentBlockHash       phase0.Hash32
+	Timestamp             uint64
+	PrevRandao            phase0.Root
+	SuggestedFeeRecipient common.Address
+	Withdrawals           []*capella.Withdrawal
+	ParentBeaconBlockRoot phase0.Root
+}
+
+// payloadAttributesEventJSON is used for JSON unmarshaling of payload_attributes events.
+type payloadAttributesEventJSON struct {
+	Version string `json:"version"`
+	Data    struct {
+		ProposalSlot      string `json:"proposal_slot"`
+		ProposerIndex     string `json:"proposer_index"`
+		ParentBlockRoot   string `json:"parent_block_root"`
+		ParentBlockNumber string `json:"parent_block_number"`
+		ParentBlockHash   string `json:"parent_block_hash"`
+		PayloadAttributes struct {
+			Timestamp             string `json:"timestamp"`
+			PrevRandao            string `json:"prev_randao"`
+			SuggestedFeeRecipient string `json:"suggested_fee_recipient"`
+			Withdrawals           []struct {
+				Index          string `json:"index"`
+				ValidatorIndex string `json:"validator_index"`
+				Address        string `json:"address"`
+				Amount         string `json:"amount"`
+			} `json:"withdrawals"`
+			ParentBeaconBlockRoot string `json:"parent_beacon_block_root"`
+		} `json:"payload_attributes"`
+	} `json:"data"`
+}
+
 // payloadEnvelopeEventJSON is used for JSON unmarshaling of payload envelope events.
 type payloadEnvelopeEventJSON struct {
 	Slot            string `json:"slot"`
@@ -87,23 +130,25 @@ type bidEventJSON struct {
 
 // EventStream manages SSE connections to the beacon node event stream.
 type EventStream struct {
-	client            *Client
-	headDispatcher    *utils.Dispatcher[*HeadEvent]
-	bidDispatcher     *utils.Dispatcher[*BidEvent]
-	payloadDispatcher *utils.Dispatcher[*PayloadEnvelopeEvent]
-	cancelFunc        context.CancelFunc
-	running           bool
-	mu                sync.Mutex
-	wg                sync.WaitGroup
+	client                      *Client
+	headDispatcher              *utils.Dispatcher[*HeadEvent]
+	bidDispatcher               *utils.Dispatcher[*BidEvent]
+	payloadDispatcher           *utils.Dispatcher[*PayloadEnvelopeEvent]
+	payloadAttributesDispatcher *utils.Dispatcher[*PayloadAttributesEvent]
+	cancelFunc                  context.CancelFunc
+	running                     bool
+	mu                          sync.Mutex
+	wg                          sync.WaitGroup
 }
 
 // NewEventStream creates a new event stream for the given client.
 func NewEventStream(client *Client) *EventStream {
 	return &EventStream{
-		client:            client,
-		headDispatcher:    &utils.Dispatcher[*HeadEvent]{},
-		bidDispatcher:     &utils.Dispatcher[*BidEvent]{},
-		payloadDispatcher: &utils.Dispatcher[*PayloadEnvelopeEvent]{},
+		client:                      client,
+		headDispatcher:              &utils.Dispatcher[*HeadEvent]{},
+		bidDispatcher:               &utils.Dispatcher[*BidEvent]{},
+		payloadDispatcher:           &utils.Dispatcher[*PayloadEnvelopeEvent]{},
+		payloadAttributesDispatcher: &utils.Dispatcher[*PayloadAttributesEvent]{},
 	}
 }
 
@@ -121,9 +166,10 @@ func (e *EventStream) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	// Start separate goroutines for each topic
-	e.wg.Add(3)
+	e.wg.Add(4)
 
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
+	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_envelope", 30*time.Second)
 
@@ -157,6 +203,11 @@ func (e *EventStream) SubscribeBids() *utils.Subscription[*BidEvent] {
 // SubscribePayloadEnvelope returns a subscription for payload envelope events.
 func (e *EventStream) SubscribePayloadEnvelope() *utils.Subscription[*PayloadEnvelopeEvent] {
 	return e.payloadDispatcher.Subscribe(16, false)
+}
+
+// SubscribePayloadAttributes returns a subscription for payload attributes events.
+func (e *EventStream) SubscribePayloadAttributes() *utils.Subscription[*PayloadAttributesEvent] {
+	return e.payloadAttributesDispatcher.Subscribe(16, false)
 }
 
 // runTopicLoop connects to the SSE endpoint for a specific topic and processes events.
@@ -322,6 +373,26 @@ func (e *EventStream) handleEvent(eventType, data string) {
 
 		event.ReceivedAt = time.Now()
 		e.payloadDispatcher.Fire(event)
+
+	case "payload_attributes":
+		var raw payloadAttributesEventJSON
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse payload attributes event JSON")
+			return
+		}
+
+		event, err := parsePayloadAttributesEvent(&raw)
+		if err != nil {
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to convert payload attributes event")
+			return
+		}
+
+		e.client.log.WithFields(map[string]interface{}{
+			"slot":        event.ProposalSlot,
+			"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+		}).Debug("Payload attributes event received")
+
+		e.payloadAttributesDispatcher.Fire(event)
 
 	default:
 		e.client.log.WithField("event_type", eventType).Debug("Unknown event type")
@@ -513,5 +584,80 @@ func parsePayloadEnvelopeEvent(raw *payloadEnvelopeEventJSON) (*PayloadEnvelopeE
 		BlockHash:       blockHash,
 		BuilderIndex:    builderIndex,
 		ParentBlockHash: parentBlockHash,
+	}, nil
+}
+
+// parsePayloadAttributesEvent converts a raw JSON payload attributes event to typed event.
+func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttributesEvent, error) {
+	slot, err := strconv.ParseUint(raw.Data.ProposalSlot, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proposal_slot: %w", err)
+	}
+
+	proposerIndex, err := strconv.ParseUint(raw.Data.ProposerIndex, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proposer_index: %w", err)
+	}
+
+	parentBlockRoot, err := parseRoot(raw.Data.ParentBlockRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid parent_block_root: %w", err)
+	}
+
+	parentBlockNumber, _ := strconv.ParseUint(raw.Data.ParentBlockNumber, 10, 64)
+
+	parentBlockHash, err := parseHash32(raw.Data.ParentBlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid parent_block_hash: %w", err)
+	}
+
+	timestamp, err := strconv.ParseUint(raw.Data.PayloadAttributes.Timestamp, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+
+	prevRandao, err := parseRoot(raw.Data.PayloadAttributes.PrevRandao)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prev_randao: %w", err)
+	}
+
+	parentBeaconBlockRoot, err := parseRoot(raw.Data.PayloadAttributes.ParentBeaconBlockRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
+	}
+
+	// Parse withdrawals
+	withdrawals := make([]*capella.Withdrawal, len(raw.Data.PayloadAttributes.Withdrawals))
+	for i, w := range raw.Data.PayloadAttributes.Withdrawals {
+		index, _ := strconv.ParseUint(w.Index, 10, 64)
+		validatorIndex, _ := strconv.ParseUint(w.ValidatorIndex, 10, 64)
+		amount, _ := strconv.ParseUint(w.Amount, 10, 64)
+
+		var address [20]byte
+		addrBytes := common.FromHex(w.Address)
+		if len(addrBytes) >= 20 {
+			copy(address[:], addrBytes[:20])
+		}
+
+		withdrawals[i] = &capella.Withdrawal{
+			Index:          capella.WithdrawalIndex(index),
+			ValidatorIndex: phase0.ValidatorIndex(validatorIndex),
+			Address:        address,
+			Amount:         phase0.Gwei(amount),
+		}
+	}
+
+	return &PayloadAttributesEvent{
+		Version:               raw.Version,
+		ProposalSlot:          phase0.Slot(slot),
+		ProposerIndex:         phase0.ValidatorIndex(proposerIndex),
+		ParentBlockRoot:       parentBlockRoot,
+		ParentBlockNumber:     parentBlockNumber,
+		ParentBlockHash:       parentBlockHash,
+		Timestamp:             timestamp,
+		PrevRandao:            prevRandao,
+		SuggestedFeeRecipient: common.HexToAddress(raw.Data.PayloadAttributes.SuggestedFeeRecipient),
+		Withdrawals:           withdrawals,
+		ParentBeaconBlockRoot: parentBeaconBlockRoot,
 	}, nil
 }
