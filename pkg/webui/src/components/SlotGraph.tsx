@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import type { SlotState, Config, ChainInfo, OurBid, ExternalBid } from '../types';
+import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint } from '../types';
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
 import { Popover, PopoverData } from './Popover';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
@@ -18,6 +18,47 @@ interface PopoverState {
   x: number;
   y: number;
 }
+
+// Extension in viewBox units (~50px at typical container widths).
+const HEAD_VOTES_EXTEND = 5;
+
+// Maps participation percentage (0-100) to SVG Y coordinate (100=bottom, 0=top).
+const pctToY = (pct: number): number => {
+  return 100 - Math.max(0, Math.min(100, pct));
+};
+
+// Builds extended SVG paths with horizontal extensions that fade at the edges.
+const buildHeadVotesPaths = (
+  points: HeadVoteDataPoint[],
+  slotStartTime: number,
+  rangeStart: number,
+  totalRange: number
+): { linePath: string; areaPath: string; startX: number; endX: number } | null => {
+  if (points.length === 0) return null;
+
+  const coords = points.map(p => ({
+    x: ((p.time - slotStartTime - rangeStart) / totalRange) * 100,
+    y: pctToY(p.pct)
+  }));
+
+  const firstY = coords[0].y;
+  const lastY = coords[coords.length - 1].y;
+  const startX = coords[0].x - HEAD_VOTES_EXTEND;
+  const endX = coords[coords.length - 1].x + HEAD_VOTES_EXTEND;
+
+  // Line: horizontal extension left → data points → horizontal extension right
+  const parts = [
+    `M ${startX} ${firstY}`,
+    ...coords.map(c => `L ${c.x} ${c.y}`),
+    `L ${endX} ${lastY}`
+  ];
+  const linePath = parts.join(' ');
+
+  // Close via bottom for gradient fill area
+  const areaPath = `${linePath} L ${endX} 100 L ${startX} 100 Z`;
+
+  return { linePath, areaPath, startX, endX };
+};
 
 export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
@@ -154,6 +195,74 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             </div>
           )}
         </div>
+
+        {/* Head votes participation graph */}
+        {state.headVotes && state.headVotes.length > 0 && (() => {
+          const paths = buildHeadVotesPaths(state.headVotes, slotStartTime, rangeStart, totalRange);
+          if (!paths) return null;
+
+          const { linePath, areaPath, startX, endX } = paths;
+          const totalWidth = endX - startX;
+          const fadeIn = `${(HEAD_VOTES_EXTEND / totalWidth) * 100}%`;
+          const fadeOut = `${(1 - HEAD_VOTES_EXTEND / totalWidth) * 100}%`;
+          const maxVote = state.headVotes.reduce((best, p) => p.pct > best.pct ? p : best, state.headVotes[0]);
+
+          return (
+            <svg
+              className="head-votes-graph"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              style={{ overflow: 'visible' }}
+            >
+              <defs>
+                <linearGradient id={`hvg-${slot}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="rgba(0, 188, 212, 0.3)" />
+                  <stop offset="100%" stopColor="rgba(0, 188, 212, 0.05)" />
+                </linearGradient>
+                <linearGradient
+                  id={`hvfade-${slot}`}
+                  gradientUnits="userSpaceOnUse"
+                  x1={String(startX)} y1="0" x2={String(endX)} y2="0"
+                >
+                  <stop offset="0%" stopColor="white" stopOpacity="0" />
+                  <stop offset={fadeIn} stopColor="white" stopOpacity="1" />
+                  <stop offset={fadeOut} stopColor="white" stopOpacity="1" />
+                  <stop offset="100%" stopColor="white" stopOpacity="0" />
+                </linearGradient>
+                <mask id={`hvmask-${slot}`}>
+                  <rect x={startX} y="0" width={totalWidth} height="100" fill={`url(#hvfade-${slot})`} />
+                </mask>
+              </defs>
+              <g mask={`url(#hvmask-${slot})`}>
+                <path d={areaPath} fill={`url(#hvg-${slot})`} />
+                <path d={linePath} fill="none" stroke="#00bcd4" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+              </g>
+              {/* Wider invisible hit area for click interaction */}
+              <path
+                d={linePath}
+                fill="none"
+                stroke="transparent"
+                strokeWidth="12"
+                vectorEffect="non-scaling-stroke"
+                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPopover({
+                    data: {
+                      title: 'Head Vote Participation',
+                      items: [
+                        { label: 'Max Participation', value: `${maxVote.pct.toFixed(1)}%` },
+                        { label: 'Participating ETH', value: `${maxVote.eth.toLocaleString()} ETH` }
+                      ]
+                    },
+                    x: Math.min(e.clientX, window.innerWidth - 330),
+                    y: e.clientY + 10
+                  });
+                }}
+              />
+            </svg>
+          );
+        })()}
 
         {/* Chain events row */}
         <div className="event-row chain-events">

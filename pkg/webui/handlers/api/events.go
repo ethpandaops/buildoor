@@ -11,6 +11,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -32,6 +33,7 @@ const (
 	EventTypeSlotState       EventType = "slot_state"
 	EventTypePayloadEnvelope EventType = "payload_envelope"
 	EventTypeBuilderInfo     EventType = "builder_info"
+	EventTypeHeadVotes       EventType = "head_votes"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -130,11 +132,21 @@ type BuilderInfoEvent struct {
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
 }
 
+// HeadVotesStreamEvent is sent when head vote participation changes.
+type HeadVotesStreamEvent struct {
+	Slot             uint64  `json:"slot"`
+	ParticipationPct float64 `json:"participation_pct"`
+	ParticipationETH uint64  `json:"participation_eth"`
+	TotalSlotETH     uint64  `json:"total_slot_eth"`
+	Timestamp        int64   `json:"timestamp"`
+}
+
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
 	builderSvc   *builder.Service
 	epbsSvc      *epbs.Service      // Optional ePBS service for bid events
 	lifecycleMgr *lifecycle.Manager // Optional lifecycle manager for balance info
+	chainSvc     chain.Service      // Optional chain service for head vote tracking
 	clients      map[chan *StreamEvent]struct{}
 	mu           sync.RWMutex
 	ctx          context.Context
@@ -159,6 +171,7 @@ func NewEventStreamManager(
 	builderSvc *builder.Service,
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
+	chainSvc chain.Service,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -166,6 +179,7 @@ func NewEventStreamManager(
 		builderSvc:   builderSvc,
 		epbsSvc:      epbsSvc,
 		lifecycleMgr: lifecycleMgr,
+		chainSvc:     chainSvc,
 		clients:      make(map[chan *StreamEvent]struct{}, 8),
 		ctx:          ctx,
 		cancel:       cancel,
@@ -189,6 +203,16 @@ func (m *EventStreamManager) Start() {
 		bidSubmitSub := m.epbsSvc.SubscribeBidSubmissions(16)
 		bidSubmitChan = bidSubmitSub.Channel()
 		defer bidSubmitSub.Unsubscribe()
+	}
+
+	// Subscribe to head vote updates (if chain service available)
+	var headVoteChan <-chan *chain.HeadVoteUpdate
+	if m.chainSvc != nil {
+		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
+			hvSub := tracker.SubscribeUpdates()
+			headVoteChan = hvSub.Channel()
+			defer hvSub.Unsubscribe()
+		}
 	}
 
 	m.wg.Add(1)
@@ -226,6 +250,11 @@ func (m *EventStreamManager) Start() {
 			case event, ok := <-bidSubmitChan:
 				if ok {
 					m.handleBidSubmissionEvent(event)
+				}
+
+			case event, ok := <-headVoteChan:
+				if ok {
+					m.handleHeadVoteUpdate(event)
 				}
 
 			case <-ticker.C:
@@ -445,6 +474,20 @@ func (m *EventStreamManager) handlePayloadEnvelopeEvent(event *beacon.PayloadEnv
 			BlockHash:    fmt.Sprintf("0x%x", event.BlockHash[:]),
 			BuilderIndex: event.BuilderIndex,
 			ReceivedAt:   event.ReceivedAt.UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeHeadVotes,
+		Timestamp: time.Now().UnixMilli(),
+		Data: HeadVotesStreamEvent{
+			Slot:             uint64(event.Slot),
+			ParticipationPct: event.ParticipationPct,
+			ParticipationETH: event.ParticipationETH,
+			TotalSlotETH:     event.TotalSlotETH,
+			Timestamp:        event.Timestamp,
 		},
 	})
 }

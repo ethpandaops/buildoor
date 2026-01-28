@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
@@ -31,7 +32,7 @@ var (
 	templateEmbedFS embed.FS
 )
 
-func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager) {
+func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service) {
 	// init router
 	router := mux.NewRouter()
 
@@ -50,7 +51,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	router.HandleFunc("/", frontendHandler.Index).Methods("GET")
 
 	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr)
+	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)

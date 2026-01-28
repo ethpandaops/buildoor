@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
@@ -22,6 +23,7 @@ func NewAPIHandler(
 	builderSvc *builder.Service,
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
+	chainSvc chain.Service,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:  authHandler,
@@ -32,7 +34,9 @@ func NewAPIHandler(
 
 	// Create and start event stream manager
 	if builderSvc != nil {
-		h.eventStreamMgr = NewEventStreamManager(builderSvc, epbsSvc, lifecycleMgr)
+		h.eventStreamMgr = NewEventStreamManager(
+			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
+		)
 		h.eventStreamMgr.Start()
 	}
 

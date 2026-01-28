@@ -191,7 +191,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc)
 		}
 
 		// 10. Start lifecycle manager (if enabled)

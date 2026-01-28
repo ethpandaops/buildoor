@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -220,6 +220,29 @@ export function useEventStream(): UseEventStreamResult {
             payloadEnvelopeAt: data.received_at,
             payloadEnvelopeBlockHash: data.block_hash,
             payloadEnvelopeBuilder: data.builder_index
+          });
+          break;
+        }
+
+        case 'head_votes': {
+          const data = event.data as {
+            slot: number;
+            participation_pct: number;
+            participation_eth: number;
+            total_slot_eth: number;
+            timestamp: number;
+          };
+          const point: HeadVoteDataPoint = {
+            time: data.timestamp,
+            pct: data.participation_pct,
+            eth: data.participation_eth
+          };
+          setSlotStates(prev => {
+            const state = prev[data.slot] || { slot: data.slot };
+            const headVotes: HeadVoteDataPoint[] = state.headVotes
+              ? [...state.headVotes, point]
+              : [{ time: data.timestamp, pct: 0, eth: 0 }, point];
+            return { ...prev, [data.slot]: { ...state, headVotes } };
           });
           break;
         }

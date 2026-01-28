@@ -125,6 +125,12 @@ export interface RevealEvent {
   timestamp: number;
 }
 
+export interface HeadVoteDataPoint {
+  time: number;
+  pct: number;
+  eth: number;
+}
+
 // UI State types
 export interface SlotState {
   slot: number;
@@ -147,6 +153,7 @@ export interface SlotState {
   revealSkipped?: boolean;
   revealFailed?: boolean;
   revealSentAt?: number;
+  headVotes?: HeadVoteDataPoint[];
 }
 
 export interface OurBid {

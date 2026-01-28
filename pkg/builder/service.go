@@ -250,9 +250,6 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	s.scheduledBuildMu.Lock()
 	if s.buildStartedSlots[event.ProposalSlot] {
 		s.scheduledBuildMu.Unlock()
-		s.log.WithField("slot", event.ProposalSlot).Debug(
-			"Already scheduled/building for this slot",
-		)
 		return
 	}
 	s.buildStartedSlots[event.ProposalSlot] = true
@@ -268,12 +265,6 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 //   - Zero means build immediately when the event is received.
 func (s *Service) scheduleBuildForSlot(slot phase0.Slot) {
 	buildStartMs := s.cfg.EPBS.BuildStartTime
-	if buildStartMs == 0 {
-		// Build immediately when event is received.
-		go s.executeBuildForSlot(slot)
-		return
-	}
-
 	slotStart := s.chainSvc.SlotToTime(slot)
 	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
 	delay := time.Until(buildTime)

@@ -34,6 +34,9 @@ type Service interface {
 	// Subscriptions
 	SubscribeEpochStats() *utils.Subscription[*EpochStats]
 
+	// Head vote tracking
+	GetHeadVoteTracker() *HeadVoteTracker
+
 	// Builder access
 	GetBuilderByIndex(index uint64) *BuilderInfo
 	GetBuilderByPubkey(pubkey phase0.BLSPubKey) *BuilderInfo
@@ -59,6 +62,9 @@ type service struct {
 	currentEpoch   phase0.Epoch
 	buildersLoaded bool
 	cacheMu        sync.RWMutex
+
+	// Head vote tracking
+	headVoteTracker *HeadVoteTracker
 
 	// Event dispatching
 	epochStatsDispatcher *utils.Dispatcher[*EpochStats]
@@ -95,6 +101,10 @@ func (s *service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to fetch initial state: %w", err)
 	}
 
+	// Start head vote tracker
+	s.headVoteTracker = NewHeadVoteTracker(s, s.clClient, s.log)
+	s.headVoteTracker.Start(s.ctx)
+
 	// Subscribe to head events to detect epoch transitions
 	s.wg.Add(1)
 	go s.runEpochMonitor()
@@ -107,6 +117,10 @@ func (s *service) Start(ctx context.Context) error {
 // Stop stops the chain service.
 func (s *service) Stop() error {
 	s.log.Info("Stopping chain service")
+
+	if s.headVoteTracker != nil {
+		s.headVoteTracker.Stop()
+	}
 
 	if s.cancel != nil {
 		s.cancel()
@@ -231,6 +245,11 @@ func (s *service) IsGloas() bool {
 	}
 
 	return stats.IsGloas
+}
+
+// GetHeadVoteTracker returns the head vote tracker.
+func (s *service) GetHeadVoteTracker() *HeadVoteTracker {
+	return s.headVoteTracker
 }
 
 // RefreshBuilders re-fetches the head state to pick up new builder registrations.

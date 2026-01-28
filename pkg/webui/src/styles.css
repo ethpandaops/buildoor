@@ -141,6 +141,17 @@
   color: rgba(128, 128, 128, 0.6);
 }
 
+/* Head votes participation graph */
+.head-votes-graph {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
 /* Event rows */
 .event-row {
   position: absolute;
@@ -371,6 +382,7 @@
 .bg-bid-failed { background: #dc3545; }
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
+.bg-head-votes { background: #00bcd4; }
 
 /* Events log */
 .events-log-container {

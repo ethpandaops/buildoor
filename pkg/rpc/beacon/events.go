@@ -107,6 +107,27 @@ type payloadAttributesEventJSON struct {
 	} `json:"data"`
 }
 
+// AttestationEvent represents an attestation event from the beacon node.
+type AttestationEvent struct {
+	AggregationBits []byte
+	Slot            phase0.Slot
+	Index           uint64
+	BeaconBlockRoot phase0.Root
+	CommitteeBits   []byte // nil for pre-Electra
+	ReceivedAt      time.Time
+}
+
+// attestationEventJSON is used for JSON unmarshaling of attestation events.
+type attestationEventJSON struct {
+	AggregationBits string `json:"aggregation_bits"`
+	Data            struct {
+		Slot            string `json:"slot"`
+		Index           string `json:"index"`
+		BeaconBlockRoot string `json:"beacon_block_root"`
+	} `json:"data"`
+	CommitteeBits string `json:"committee_bits,omitempty"`
+}
+
 // payloadEnvelopeEventJSON is used for JSON unmarshaling of payload envelope events.
 type payloadEnvelopeEventJSON struct {
 	Slot            string `json:"slot"`
@@ -135,6 +156,7 @@ type EventStream struct {
 	bidDispatcher               *utils.Dispatcher[*BidEvent]
 	payloadDispatcher           *utils.Dispatcher[*PayloadEnvelopeEvent]
 	payloadAttributesDispatcher *utils.Dispatcher[*PayloadAttributesEvent]
+	attestationDispatcher       *utils.Dispatcher[*AttestationEvent]
 	cancelFunc                  context.CancelFunc
 	running                     bool
 	mu                          sync.Mutex
@@ -155,6 +177,7 @@ func NewEventStream(client *Client) *EventStream {
 		bidDispatcher:               &utils.Dispatcher[*BidEvent]{},
 		payloadDispatcher:           &utils.Dispatcher[*PayloadEnvelopeEvent]{},
 		payloadAttributesDispatcher: &utils.Dispatcher[*PayloadAttributesEvent]{},
+		attestationDispatcher:       &utils.Dispatcher[*AttestationEvent]{},
 		payloadAttrCache:            make(map[phase0.Slot]*PayloadAttributesEvent, 4),
 	}
 }
@@ -173,12 +196,13 @@ func (e *EventStream) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	// Start separate goroutines for each topic
-	e.wg.Add(4)
+	e.wg.Add(5)
 
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_envelope", 30*time.Second)
+	go e.runTopicLoop(streamCtx, "attestation", 5*time.Second)
 
 	return nil
 }
@@ -215,6 +239,11 @@ func (e *EventStream) SubscribePayloadEnvelope() *utils.Subscription[*PayloadEnv
 // SubscribePayloadAttributes returns a subscription for payload attributes events.
 func (e *EventStream) SubscribePayloadAttributes() *utils.Subscription[*PayloadAttributesEvent] {
 	return e.payloadAttributesDispatcher.Subscribe(16, false)
+}
+
+// SubscribeAttestations returns a subscription for attestation events.
+func (e *EventStream) SubscribeAttestations() *utils.Subscription[*AttestationEvent] {
+	return e.attestationDispatcher.Subscribe(256, false)
 }
 
 // GetLatestPayloadAttributes returns the latest cached payload_attributes event
@@ -427,6 +456,22 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		e.payloadAttrCacheMu.Unlock()
 
 		e.payloadAttributesDispatcher.Fire(event)
+
+	case "attestation":
+		var raw attestationEventJSON
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			e.client.log.WithError(err).Debug("Failed to parse attestation event JSON")
+			return
+		}
+
+		event, err := parseAttestationEvent(&raw)
+		if err != nil {
+			e.client.log.WithError(err).Debug("Failed to convert attestation event")
+			return
+		}
+
+		event.ReceivedAt = time.Now()
+		e.attestationDispatcher.Fire(event)
 
 	default:
 		e.client.log.WithField("event_type", eventType).Debug("Unknown event type")
@@ -694,4 +739,45 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		Withdrawals:           withdrawals,
 		ParentBeaconBlockRoot: parentBeaconBlockRoot,
 	}, nil
+}
+
+// parseAttestationEvent converts a raw JSON attestation event to the typed AttestationEvent.
+func parseAttestationEvent(raw *attestationEventJSON) (*AttestationEvent, error) {
+	slot, err := strconv.ParseUint(raw.Data.Slot, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid slot: %w", err)
+	}
+
+	index, err := strconv.ParseUint(raw.Data.Index, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid index: %w", err)
+	}
+
+	blockRoot, err := parseRoot(raw.Data.BeaconBlockRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid beacon_block_root: %w", err)
+	}
+
+	aggBits, err := hex.DecodeString(strings.TrimPrefix(raw.AggregationBits, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid aggregation_bits: %w", err)
+	}
+
+	event := &AttestationEvent{
+		AggregationBits: aggBits,
+		Slot:            phase0.Slot(slot),
+		Index:           index,
+		BeaconBlockRoot: blockRoot,
+	}
+
+	if raw.CommitteeBits != "" {
+		cbBits, err := hex.DecodeString(strings.TrimPrefix(raw.CommitteeBits, "0x"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid committee_bits: %w", err)
+		}
+
+		event.CommitteeBits = cbBits
+	}
+
+	return event, nil
 }
