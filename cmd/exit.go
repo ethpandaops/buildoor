@@ -7,6 +7,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/spf13/cobra"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -42,22 +43,6 @@ var exitCmd = &cobra.Command{
 
 		pubkey := blsSigner.PublicKey()
 
-		// Get builder index
-		builderIndex, _ := cmd.Flags().GetUint64("builder-index")
-		if builderIndex == 0 {
-			// Look up builder by pubkey
-			builderInfo, err := clClient.GetBuilderByPubkey(ctx, pubkey)
-			if err != nil {
-				return fmt.Errorf("failed to get builder info: %w", err)
-			}
-
-			if builderInfo == nil {
-				return fmt.Errorf("builder not registered")
-			}
-
-			builderIndex = builderInfo.Index
-		}
-
 		// Get chain spec and genesis
 		chainSpec, err := clClient.GetChainSpec(ctx)
 		if err != nil {
@@ -69,14 +54,32 @@ var exitCmd = &cobra.Command{
 			return fmt.Errorf("failed to get genesis: %w", err)
 		}
 
+		// Initialize chain service
+		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		if err := chainSvc.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start chain service: %w", err)
+		}
+		defer chainSvc.Stop() //nolint:errcheck // cleanup
+
+		// Get builder index
+		builderIndex, _ := cmd.Flags().GetUint64("builder-index")
+		if builderIndex == 0 {
+			builderInfo := chainSvc.GetBuilderByPubkey(pubkey)
+			if builderInfo == nil {
+				return fmt.Errorf("builder not registered")
+			}
+
+			builderIndex = builderInfo.Index
+		}
+
 		// Get current epoch
-		currentEpoch, err := clClient.GetCurrentEpoch(ctx)
+		currentEpoch, err := chainSvc.GetCurrentEpoch(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get current epoch: %w", err)
 		}
 
 		// Get fork version
-		forkVersion, err := clClient.GetForkVersion(ctx)
+		forkVersion, err := chainSvc.GetForkVersion(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to get fork version: %w", err)
 		}
@@ -112,9 +115,6 @@ var exitCmd = &cobra.Command{
 		}
 
 		logger.WithField("builder_index", builderIndex).Info("Voluntary exit submitted")
-
-		// Note about chain spec and genesis - they're fetched but only used for context
-		_ = chainSpec
 
 		return nil
 	},

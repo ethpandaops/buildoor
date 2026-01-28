@@ -9,8 +9,6 @@ import (
 	eth2client "github.com/attestantio/go-eth2-client"
 	"github.com/attestantio/go-eth2-client/api"
 	"github.com/attestantio/go-eth2-client/http"
-	"github.com/attestantio/go-eth2-client/spec"
-	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
@@ -25,6 +23,26 @@ type ChainSpec struct {
 	GenesisForkVersion           phase0.Version
 	DepositContractAddress       string
 	DepositChainID               uint64
+
+	// Duty calculation parameters
+	ShuffleRoundCount          uint64
+	TargetCommitteeSize        uint64
+	MaxCommitteesPerSlot       uint64
+	MaxEffectiveBalance        uint64
+	MaxEffectiveBalanceElectra uint64
+	EpochsPerHistoricalVector  uint64
+	MinSeedLookahead           uint64
+
+	// Domain types
+	DomainBeaconProposer phase0.DomainType
+	DomainBeaconAttester phase0.DomainType
+	DomainPtcAttester    phase0.DomainType
+
+	// Fork epochs (nil if not configured)
+	ElectraForkEpoch *uint64
+
+	// ePBS parameters
+	PtcSize uint64
 }
 
 // Genesis holds genesis information.
@@ -34,24 +52,12 @@ type Genesis struct {
 	GenesisForkVersion    phase0.Version
 }
 
-// BuilderInfo represents information about a builder from the beacon state.
-type BuilderInfo struct {
-	Index             uint64
-	Pubkey            phase0.BLSPubKey
-	Balance           uint64
-	Active            bool
-	DepositEpoch      uint64
-	WithdrawableEpoch uint64
-}
-
 // Client wraps the consensus layer client for beacon node interactions.
 type Client struct {
-	client         eth2client.Service
-	baseURL        string
-	eventStream    *EventStream
-	log            logrus.FieldLogger
-	buildersCache  []*BuilderInfo // Cached builders from beacon state
-	buildersLoaded bool           // Whether builders have been loaded
+	client      eth2client.Service
+	baseURL     string
+	eventStream *EventStream
+	log         logrus.FieldLogger
 }
 
 // NewClient creates a new CL client connected to the specified beacon node.
@@ -119,10 +125,64 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 		return nil, fmt.Errorf("SLOTS_PER_EPOCH not found or invalid type")
 	}
 
-	return &ChainSpec{
+	cs := &ChainSpec{
 		SecondsPerSlot: secondsPerSlot,
 		SlotsPerEpoch:  slotsPerEpoch,
-	}, nil
+	}
+
+	// Parse duty calculation parameters (use defaults if not present)
+	if v, ok := spec["SHUFFLE_ROUND_COUNT"].(uint64); ok {
+		cs.ShuffleRoundCount = v
+	}
+
+	if v, ok := spec["TARGET_COMMITTEE_SIZE"].(uint64); ok {
+		cs.TargetCommitteeSize = v
+	}
+
+	if v, ok := spec["MAX_COMMITTEES_PER_SLOT"].(uint64); ok {
+		cs.MaxCommitteesPerSlot = v
+	}
+
+	if v, ok := spec["MAX_EFFECTIVE_BALANCE"].(uint64); ok {
+		cs.MaxEffectiveBalance = v
+	}
+
+	if v, ok := spec["MAX_EFFECTIVE_BALANCE_ELECTRA"].(uint64); ok {
+		cs.MaxEffectiveBalanceElectra = v
+	}
+
+	if v, ok := spec["EPOCHS_PER_HISTORICAL_VECTOR"].(uint64); ok {
+		cs.EpochsPerHistoricalVector = v
+	}
+
+	if v, ok := spec["MIN_SEED_LOOKAHEAD"].(uint64); ok {
+		cs.MinSeedLookahead = v
+	}
+
+	// Parse domain types
+	if v, ok := spec["DOMAIN_BEACON_PROPOSER"].(phase0.DomainType); ok {
+		cs.DomainBeaconProposer = v
+	}
+
+	if v, ok := spec["DOMAIN_BEACON_ATTESTER"].(phase0.DomainType); ok {
+		cs.DomainBeaconAttester = v
+	}
+
+	if v, ok := spec["DOMAIN_PTC_ATTESTER"].(phase0.DomainType); ok {
+		cs.DomainPtcAttester = v
+	}
+
+	// Parse fork epochs
+	if v, ok := spec["ELECTRA_FORK_EPOCH"].(uint64); ok {
+		cs.ElectraForkEpoch = &v
+	}
+
+	// Parse ePBS parameters
+	if v, ok := spec["PTC_SIZE"].(uint64); ok {
+		cs.PtcSize = v
+	}
+
+	return cs, nil
 }
 
 // GetGenesis fetches genesis information from the beacon node.
@@ -163,21 +223,6 @@ func (c *Client) GetHeadSlot(ctx context.Context) (phase0.Slot, error) {
 	return resp.Data.Header.Message.Slot, nil
 }
 
-// GetCurrentEpoch calculates the current epoch based on slot.
-func (c *Client) GetCurrentEpoch(ctx context.Context) (phase0.Epoch, error) {
-	slot, err := c.GetHeadSlot(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	spec, err := c.GetChainSpec(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	return phase0.Epoch(uint64(slot) / spec.SlotsPerEpoch), nil
-}
-
 // GetForkVersion returns the current fork version.
 func (c *Client) GetForkVersion(ctx context.Context) (phase0.Version, error) {
 	provider, ok := c.client.(eth2client.ForkProvider)
@@ -195,91 +240,9 @@ func (c *Client) GetForkVersion(ctx context.Context) (phase0.Version, error) {
 	return resp.Data.CurrentVersion, nil
 }
 
-// SlotToTime converts a slot number to a timestamp.
-func (c *Client) SlotToTime(genesis *Genesis, spec *ChainSpec, slot phase0.Slot) time.Time {
-	slotDuration := time.Duration(uint64(slot)) * spec.SecondsPerSlot
-	return genesis.GenesisTime.Add(slotDuration)
-}
-
-// TimeToSlot converts a timestamp to a slot number.
-func (c *Client) TimeToSlot(genesis *Genesis, spec *ChainSpec, t time.Time) phase0.Slot {
-	if t.Before(genesis.GenesisTime) {
-		return 0
-	}
-
-	elapsed := t.Sub(genesis.GenesisTime)
-
-	return phase0.Slot(elapsed / spec.SecondsPerSlot)
-}
-
 // GetRawClient returns the underlying eth2client.Service for direct API access.
 func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
-}
-
-// IsGloas checks if the beacon node is running the Gloas fork.
-func (c *Client) IsGloas(ctx context.Context) (bool, error) {
-	state, err := c.fetchBeaconState(ctx, "head")
-	if err != nil {
-		return false, fmt.Errorf("failed to fetch beacon state: %w", err)
-	}
-
-	return state.Version == spec.DataVersionGloas && state.Gloas != nil, nil
-}
-
-// LoadBuilders fetches the beacon state once and caches the builders list.
-// This should be called once at startup. Returns true if builders were loaded.
-func (c *Client) LoadBuilders(ctx context.Context) (bool, error) {
-	if c.buildersLoaded {
-		return len(c.buildersCache) > 0, nil
-	}
-
-	c.log.Info("Loading builders from beacon state...")
-
-	state, err := c.fetchBeaconState(ctx, "head")
-	if err != nil {
-		return false, fmt.Errorf("failed to fetch beacon state: %w", err)
-	}
-
-	c.buildersLoaded = true
-
-	// Only Gloas state has builders
-	if state.Version != spec.DataVersionGloas || state.Gloas == nil {
-		c.log.WithField("version", state.Version).Info("Beacon state is not Gloas version, no builders available")
-		c.buildersCache = nil
-
-		return false, nil
-	}
-
-	// Convert and cache builders
-	builders := state.Gloas.Builders
-	c.buildersCache = make([]*BuilderInfo, len(builders))
-
-	for i, builder := range builders {
-		c.buildersCache[i] = builderToInfo(uint64(i), builder)
-	}
-
-	c.log.WithField("count", len(c.buildersCache)).Info("Builders loaded from beacon state")
-
-	return len(c.buildersCache) > 0, nil
-}
-
-// GetCachedBuilders returns the cached builders list.
-func (c *Client) GetCachedBuilders() []*BuilderInfo {
-	return c.buildersCache
-}
-
-// HasBuildersLoaded returns whether builders have been loaded.
-func (c *Client) HasBuildersLoaded() bool {
-	return c.buildersLoaded
-}
-
-// RefreshBuilders forces a re-fetch of the builders from the beacon state.
-// Use this when polling for changes (e.g., waiting for registration).
-func (c *Client) RefreshBuilders(ctx context.Context) (bool, error) {
-	c.buildersLoaded = false // Reset to force re-fetch
-
-	return c.LoadBuilders(ctx)
 }
 
 // BlockInfo contains execution-relevant information from a beacon block.
@@ -405,110 +368,4 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 		SafeExecutionBlockHash:      safeBlockHash,
 		FinalizedExecutionBlockHash: finalizedBlockHash,
 	}, nil
-}
-
-// GetRandao fetches the RANDAO value for the given state.
-func (c *Client) GetRandao(ctx context.Context, stateID string) (phase0.Root, error) {
-	provider, ok := c.client.(eth2client.BeaconStateRandaoProvider)
-	if !ok {
-		return phase0.Root{}, fmt.Errorf("client does not support beacon state randao provider")
-	}
-
-	resp, err := provider.BeaconStateRandao(ctx, &api.BeaconStateRandaoOpts{
-		State: stateID,
-	})
-	if err != nil {
-		return phase0.Root{}, fmt.Errorf("failed to get randao: %w", err)
-	}
-
-	if resp.Data == nil {
-		return phase0.Root{}, fmt.Errorf("randao response is nil")
-	}
-
-	return *resp.Data, nil
-}
-
-// GetBlockWithdrawals fetches the withdrawals from a beacon block's execution payload.
-// This is used for pre-Gloas forks where the execution payload is embedded in the block.
-func (c *Client) GetBlockWithdrawals(ctx context.Context, blockRoot phase0.Root) ([]*capella.Withdrawal, error) {
-	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support signed beacon block provider")
-	}
-
-	blockID := fmt.Sprintf("0x%x", blockRoot[:])
-
-	resp, err := provider.SignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
-		Block: blockID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get beacon block: %w", err)
-	}
-
-	if resp.Data == nil {
-		return nil, fmt.Errorf("beacon block response is nil")
-	}
-
-	block := resp.Data
-
-	// Extract withdrawals based on block version
-	switch block.Version {
-	case spec.DataVersionCapella:
-		if block.Capella != nil && block.Capella.Message != nil &&
-			block.Capella.Message.Body != nil && block.Capella.Message.Body.ExecutionPayload != nil {
-			return block.Capella.Message.Body.ExecutionPayload.Withdrawals, nil
-		}
-	case spec.DataVersionDeneb:
-		if block.Deneb != nil && block.Deneb.Message != nil &&
-			block.Deneb.Message.Body != nil && block.Deneb.Message.Body.ExecutionPayload != nil {
-			return block.Deneb.Message.Body.ExecutionPayload.Withdrawals, nil
-		}
-	case spec.DataVersionElectra:
-		if block.Electra != nil && block.Electra.Message != nil &&
-			block.Electra.Message.Body != nil && block.Electra.Message.Body.ExecutionPayload != nil {
-			return block.Electra.Message.Body.ExecutionPayload.Withdrawals, nil
-		}
-	case spec.DataVersionFulu:
-		if block.Fulu != nil && block.Fulu.Message != nil &&
-			block.Fulu.Message.Body != nil && block.Fulu.Message.Body.ExecutionPayload != nil {
-			return block.Fulu.Message.Body.ExecutionPayload.Withdrawals, nil
-		}
-	case spec.DataVersionGloas:
-		// Gloas blocks don't have execution payload embedded - use GetPayloadEnvelopeWithdrawals instead
-		return nil, fmt.Errorf("gloas blocks do not contain execution payload, use GetPayloadEnvelopeWithdrawals")
-	}
-
-	return nil, fmt.Errorf("unsupported block version or missing execution payload: %s", block.Version)
-}
-
-// GetPayloadEnvelopeWithdrawals fetches the withdrawals from a payload envelope (Gloas only).
-// This fetches the signed execution payload envelope for a block and extracts the withdrawals.
-func (c *Client) GetPayloadEnvelopeWithdrawals(
-	ctx context.Context,
-	blockRoot phase0.Root,
-) ([]*capella.Withdrawal, error) {
-	provider, ok := c.client.(eth2client.ExecutionPayloadProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support execution payload provider")
-	}
-
-	blockID := fmt.Sprintf("0x%x", blockRoot[:])
-
-	resp, err := provider.SignedExecutionPayloadEnvelope(ctx, &api.SignedExecutionPayloadEnvelopeOpts{
-		Block: blockID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payload envelope: %w", err)
-	}
-
-	if resp.Data == nil {
-		return nil, fmt.Errorf("payload envelope response is nil")
-	}
-
-	envelope := resp.Data
-	if envelope.Message == nil || envelope.Message.Payload == nil {
-		return nil, fmt.Errorf("payload envelope message or payload is nil")
-	}
-
-	return envelope.Message.Payload.Withdrawals, nil
 }

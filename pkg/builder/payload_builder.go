@@ -23,8 +23,6 @@ import (
 type PayloadBuilder struct {
 	clClient     *beacon.Client
 	engineClient *engine.Client
-	chainSpec    *beacon.ChainSpec
-	genesis      *beacon.Genesis
 	feeRecipient common.Address
 	log          logrus.FieldLogger
 
@@ -44,16 +42,12 @@ type activeBuild struct {
 func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
-	chainSpec *beacon.ChainSpec,
-	genesis *beacon.Genesis,
 	feeRecipient common.Address,
 	log logrus.FieldLogger,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
 		clClient:     clClient,
 		engineClient: engineClient,
-		chainSpec:    chainSpec,
-		genesis:      genesis,
 		feeRecipient: feeRecipient,
 		log:          log.WithField("component", "payload-builder"),
 	}

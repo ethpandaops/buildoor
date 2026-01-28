@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -20,7 +21,7 @@ import (
 type Manager struct {
 	cfg          *builder.Config
 	clClient     *beacon.Client
-	chainSpec    *beacon.ChainSpec
+	chainSvc     chain.Service
 	signer       *signer.BLSSigner
 	wallet       *wallet.Wallet
 	builderState *builder.BuilderState
@@ -37,6 +38,7 @@ type Manager struct {
 func NewManager(
 	cfg *builder.Config,
 	clClient *beacon.Client,
+	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
@@ -46,6 +48,7 @@ func NewManager(
 	m := &Manager{
 		cfg:          cfg,
 		clClient:     clClient,
+		chainSvc:     chainSvc,
 		signer:       blsSigner,
 		wallet:       w,
 		builderState: &builder.BuilderState{},
@@ -54,28 +57,15 @@ func NewManager(
 	}
 
 	// Initialize services
-	depositSvc, err := NewDepositService(cfg, clClient, blsSigner, w, managerLog)
+	depositSvc, err := NewDepositService(cfg, chainSvc, blsSigner, w, managerLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deposit service: %w", err)
 	}
 
 	m.depositSvc = depositSvc
 
-	// Get chain spec
-	chainSpec, err := clClient.GetChainSpec(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get chain spec: %w", err)
-	}
-
-	m.chainSpec = chainSpec
-
-	genesis, err := clClient.GetGenesis(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get genesis: %w", err)
-	}
-
 	// Exit service
-	m.exitSvc = NewExitService(cfg, clClient, blsSigner, chainSpec, genesis, managerLog)
+	m.exitSvc = NewExitService(clClient, chainSvc, blsSigner, managerLog)
 
 	return m, nil
 }
@@ -171,7 +161,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(m.chainSpec.SecondsPerSlot) // Check every slot
+	ticker := time.NewTicker(m.chainSvc.GetChainSpec().SecondsPerSlot) // Check every slot
 	defer ticker.Stop()
 
 	pubkey := m.signer.PublicKey()
@@ -183,17 +173,12 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 
 		case <-ticker.C:
 			// Refresh builders cache to pick up new registrations
-			if _, err := m.clClient.RefreshBuilders(ctx); err != nil {
+			if err := m.chainSvc.RefreshBuilders(ctx); err != nil {
 				m.log.WithError(err).Debug("Error refreshing builders")
 				continue
 			}
 
-			info, err := m.clClient.GetBuilderByPubkey(ctx, pubkey)
-			if err != nil {
-				m.log.WithError(err).Debug("Error checking registration")
-				continue
-			}
-
+			info := m.chainSvc.GetBuilderByPubkey(pubkey)
 			if info != nil {
 				m.stateMu.Lock()
 				m.builderState = &builder.BuilderState{

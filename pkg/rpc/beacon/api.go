@@ -8,10 +8,6 @@ import (
 	"io"
 	"net/http"
 
-	eth2client "github.com/attestantio/go-eth2-client"
-	"github.com/attestantio/go-eth2-client/api"
-	"github.com/attestantio/go-eth2-client/spec"
-	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
@@ -180,79 +176,4 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 	}
 
 	return nil
-}
-
-// GetBuilderByIndex returns builder information by index from the cached builders list.
-// LoadBuilders must be called first to populate the cache.
-// Returns nil if builders are not loaded or index is out of range.
-func (c *Client) GetBuilderByIndex(_ context.Context, index uint64) (*BuilderInfo, error) {
-	if !c.buildersLoaded {
-		return nil, fmt.Errorf("builders not loaded, call LoadBuilders first")
-	}
-
-	if c.buildersCache == nil || index >= uint64(len(c.buildersCache)) {
-		return nil, nil // Builder not found
-	}
-
-	return c.buildersCache[index], nil
-}
-
-// GetBuilderByPubkey returns builder information by public key from the cached builders list.
-// LoadBuilders must be called first to populate the cache.
-// Returns nil if builders are not loaded or pubkey not found.
-func (c *Client) GetBuilderByPubkey(_ context.Context, pubkey phase0.BLSPubKey) (*BuilderInfo, error) {
-	if !c.buildersLoaded {
-		return nil, fmt.Errorf("builders not loaded, call LoadBuilders first")
-	}
-
-	if c.buildersCache == nil {
-		return nil, nil // No builders available (pre-Gloas)
-	}
-
-	for _, builder := range c.buildersCache {
-		if builder.Pubkey == pubkey {
-			return builder, nil
-		}
-	}
-
-	return nil, nil // Builder not found
-}
-
-// fetchBeaconState fetches the beacon state at the given state ID.
-func (c *Client) fetchBeaconState(ctx context.Context, stateID string) (*spec.VersionedBeaconState, error) {
-	provider, ok := c.client.(eth2client.BeaconStateProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support beacon state provider")
-	}
-
-	resp, err := provider.BeaconState(ctx, &api.BeaconStateOpts{
-		State: stateID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get beacon state: %w", err)
-	}
-
-	if resp.Data == nil {
-		return nil, fmt.Errorf("beacon state response is nil")
-	}
-
-	return resp.Data, nil
-}
-
-// builderToInfo converts a gloas.Builder to BuilderInfo.
-func builderToInfo(index uint64, builder *gloas.Builder) *BuilderInfo {
-	const farFutureEpoch = uint64(0xFFFFFFFFFFFFFFFF)
-
-	info := &BuilderInfo{
-		Index:             index,
-		Pubkey:            builder.PublicKey,
-		Balance:           uint64(builder.Balance),
-		DepositEpoch:      uint64(builder.DepositEpoch),
-		WithdrawableEpoch: uint64(builder.WithdrawableEpoch),
-	}
-
-	// Determine if active (not yet exited)
-	info.Active = info.WithdrawableEpoch == farFutureEpoch
-
-	return info
 }

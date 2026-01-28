@@ -7,37 +7,31 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // ExitService handles voluntary exits for builders.
 type ExitService struct {
-	cfg       *builder.Config
-	clClient  *beacon.Client
-	signer    *signer.BLSSigner
-	chainSpec *beacon.ChainSpec
-	genesis   *beacon.Genesis
-	log       logrus.FieldLogger
+	clClient *beacon.Client
+	chainSvc chain.Service
+	signer   *signer.BLSSigner
+	log      logrus.FieldLogger
 }
 
 // NewExitService creates a new exit service.
 func NewExitService(
-	cfg *builder.Config,
 	clClient *beacon.Client,
+	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
-	chainSpec *beacon.ChainSpec,
-	genesis *beacon.Genesis,
 	log logrus.FieldLogger,
 ) *ExitService {
 	return &ExitService{
-		cfg:       cfg,
-		clClient:  clClient,
-		signer:    blsSigner,
-		chainSpec: chainSpec,
-		genesis:   genesis,
-		log:       log.WithField("component", "exit-service"),
+		clClient: clClient,
+		chainSvc: chainSvc,
+		signer:   blsSigner,
+		log:      log.WithField("component", "exit-service"),
 	}
 }
 
@@ -46,7 +40,7 @@ func (s *ExitService) CreateVoluntaryExit(ctx context.Context, builderIndex uint
 	s.log.WithField("builder_index", builderIndex).Info("Creating voluntary exit")
 
 	// Get current epoch
-	currentEpoch, err := s.clClient.GetCurrentEpoch(ctx)
+	currentEpoch, err := s.chainSvc.GetCurrentEpoch(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get current epoch: %w", err)
 	}
@@ -84,17 +78,19 @@ func (s *ExitService) buildExitMessage(builderIndex uint64, epoch phase0.Epoch) 
 // signExitMessage signs a voluntary exit message.
 func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.SignedVoluntaryExit, error) {
 	// Get fork version
-	forkVersion, err := s.clClient.GetForkVersion(context.Background())
+	forkVersion, err := s.chainSvc.GetForkVersion(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("failed to get fork version: %w", err)
 	}
+
+	genesis := s.chainSvc.GetGenesis()
 
 	// Sign the exit
 	signature, err := s.signer.SignVoluntaryExit(
 		exit.Epoch,
 		exit.ValidatorIndex,
 		forkVersion,
-		s.genesis.GenesisValidatorsRoot,
+		genesis.GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign exit: %w", err)
@@ -109,15 +105,17 @@ func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.Signe
 // computeExitDomain computes the domain for exit signing.
 func (s *ExitService) computeExitDomain(_ phase0.Epoch) (phase0.Domain, error) {
 	// Get fork version
-	forkVersion, err := s.clClient.GetForkVersion(context.Background())
+	forkVersion, err := s.chainSvc.GetForkVersion(context.Background())
 	if err != nil {
 		return phase0.Domain{}, fmt.Errorf("failed to get fork version: %w", err)
 	}
 
+	genesis := s.chainSvc.GetGenesis()
+
 	domain := signer.ComputeDomain(
 		signer.DomainVoluntaryExit,
 		forkVersion,
-		s.genesis.GenesisValidatorsRoot,
+		genesis.GenesisValidatorsRoot,
 	)
 
 	return domain, nil

@@ -11,11 +11,10 @@ participants_matrix:
     # - cl_type: lodestar
 
 network_params:
-  preset: minimal
+  seconds_per_slot: 12
 
 additional_services:
-  - dora # needed for config exctraction
-  - spamoor
+  - dora
 
 # mev_type: flashbots
 # snooper_enabled: true

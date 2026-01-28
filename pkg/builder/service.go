@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -27,23 +28,19 @@ import (
 type Service struct {
 	cfg                    *Config
 	clClient               *beacon.Client
+	chainSvc               chain.Service
 	engineClient           *engine.Client
 	feeRecipient           common.Address
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
 	slotManager            *SlotManager
-	chainSpec              *beacon.ChainSpec
-	genesis                *beacon.Genesis
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	log                    logrus.FieldLogger
 	wg                     sync.WaitGroup
-
-	// Fork tracking
-	isGloas bool
 
 	// Last known execution payload tracking (for Gloas)
 	// In Gloas, blocks don't contain execution payloads - they come separately.
@@ -62,6 +59,7 @@ type Service struct {
 func NewService(
 	cfg *Config,
 	clClient *beacon.Client,
+	chainSvc chain.Service,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
 	log logrus.FieldLogger,
@@ -71,6 +69,7 @@ func NewService(
 	s := &Service{
 		cfg:                    cfg,
 		clClient:               clClient,
+		chainSvc:               chainSvc,
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
@@ -87,31 +86,7 @@ func NewService(
 func (s *Service) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	// Fetch chain spec
-	chainSpec, err := s.clClient.GetChainSpec(s.ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get chain spec: %w", err)
-	}
-
-	s.chainSpec = chainSpec
-
-	// Fetch genesis
-	genesis, err := s.clClient.GetGenesis(s.ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get genesis: %w", err)
-	}
-
-	s.genesis = genesis
-
-	// Check if we're on Gloas fork
-	isGloas, err := s.clClient.IsGloas(s.ctx)
-	if err != nil {
-		s.log.WithError(err).Warn("Failed to check Gloas fork, assuming non-Gloas")
-		isGloas = false
-	}
-
-	s.isGloas = isGloas
-	s.log.WithField("is_gloas", isGloas).Info("Fork detected")
+	s.log.WithField("is_gloas", s.chainSvc.IsGloas()).Info("Fork detected")
 
 	// Initialize managers
 	s.slotManager = NewSlotManager(s.cfg)
@@ -120,8 +95,6 @@ func (s *Service) Start(ctx context.Context) error {
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
-		s.chainSpec,
-		s.genesis,
 		s.feeRecipient,
 		s.log,
 	)
@@ -184,12 +157,12 @@ func (s *Service) GetCurrentSlot() phase0.Slot {
 
 // GetChainSpec returns the chain specification.
 func (s *Service) GetChainSpec() *beacon.ChainSpec {
-	return s.chainSpec
+	return s.chainSvc.GetChainSpec()
 }
 
 // GetGenesis returns the genesis information.
 func (s *Service) GetGenesis() *beacon.Genesis {
-	return s.genesis
+	return s.chainSvc.GetGenesis()
 }
 
 // GetCLClient returns the consensus layer client.
@@ -199,7 +172,7 @@ func (s *Service) GetCLClient() *beacon.Client {
 
 // IsGloas returns whether we're on the Gloas fork.
 func (s *Service) IsGloas() bool {
-	return s.isGloas
+	return s.chainSvc.IsGloas()
 }
 
 // SubscribePayloadReady subscribes to payload ready events.
@@ -248,7 +221,7 @@ func (s *Service) run() {
 func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"head_slot": event.Slot,
-		"is_gloas":  s.isGloas,
+		"is_gloas":  s.chainSvc.IsGloas(),
 	}).Debug("Head event received")
 
 	// NOTE: We no longer trigger builds from head events.
@@ -298,7 +271,7 @@ func (s *Service) executeBuildFromAttributes(event *beacon.PayloadAttributesEven
 	var payloadEvent *PayloadReadyEvent
 	var err error
 
-	if s.isGloas {
+	if s.chainSvc.IsGloas() {
 		// For Gloas, we still use the last known payload approach
 		// TODO: May need special handling for Gloas with payload_attributes
 		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)

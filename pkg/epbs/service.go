@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -36,6 +37,7 @@ type Service struct {
 	bidTracker            *BidTracker
 	payloadStore          *PayloadStore
 	clClient              *beacon.Client
+	chainSvc              chain.Service
 	builderIndex          uint64
 	builderPubkey         phase0.BLSPubKey
 	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
@@ -51,6 +53,7 @@ type Service struct {
 func NewService(
 	cfg *builder.EPBSConfig,
 	clClient *beacon.Client,
+	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	log logrus.FieldLogger,
 ) (*Service, error) {
@@ -63,6 +66,7 @@ func NewService(
 		cfg:                   cfg,
 		signer:                epbsSigner,
 		clClient:              clClient,
+		chainSvc:              chainSvc,
 		builderPubkey:         blsSigner.PublicKey(),
 		payloadStore:          NewPayloadStore(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
@@ -99,16 +103,11 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		return fmt.Errorf("builder service not initialized (missing chainspec or genesis)")
 	}
 
-	// Load builder index from beacon state
-	hasBuilders, err := s.clClient.LoadBuilders(s.ctx)
-	if err != nil {
-		return fmt.Errorf("failed to load builders: %w", err)
-	}
-
-	if !hasBuilders {
+	// Load builder index from chain service
+	if !s.chainSvc.HasBuildersLoaded() {
 		s.log.Warn("No builders in beacon state (pre-Gloas), using index 0 for testing")
 		s.builderIndex = 0
-	} else if builderInfo, _ := s.clClient.GetBuilderByPubkey(s.ctx, s.builderPubkey); builderInfo == nil {
+	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(s.builderPubkey); builderInfo == nil {
 		s.log.Warn("Builder not found in beacon state (not registered), using index 0 for testing")
 		s.builderIndex = 0
 	} else {

@@ -10,7 +10,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/contracts"
 	"github.com/ethpandaops/buildoor/pkg/builder"
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
@@ -21,20 +21,18 @@ var DepositContractAddress = common.HexToAddress("0x00000000219ab540356cbb839cbe
 
 // DepositService handles builder deposits and top-ups.
 type DepositService struct {
-	cfg       *builder.Config
-	clClient  *beacon.Client
-	signer    *signer.BLSSigner
-	wallet    *wallet.Wallet
-	contract  *contracts.BuilderDepositContract
-	chainSpec *beacon.ChainSpec
-	genesis   *beacon.Genesis
-	log       logrus.FieldLogger
+	cfg      *builder.Config
+	chainSvc chain.Service
+	signer   *signer.BLSSigner
+	wallet   *wallet.Wallet
+	contract *contracts.BuilderDepositContract
+	log      logrus.FieldLogger
 }
 
 // NewDepositService creates a new deposit service.
 func NewDepositService(
 	cfg *builder.Config,
-	clClient *beacon.Client,
+	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
@@ -46,17 +44,6 @@ func NewDepositService(
 		return nil, fmt.Errorf("failed to sync wallet: %w", err)
 	}
 
-	// Get chain spec
-	chainSpec, err := clClient.GetChainSpec(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get chain spec: %w", err)
-	}
-
-	genesis, err := clClient.GetGenesis(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get genesis: %w", err)
-	}
-
 	// Initialize deposit contract
 	// TODO: Get actual deposit contract address from chain spec
 	contract, err := contracts.NewBuilderDepositContract(DepositContractAddress, w.GetRPCClient())
@@ -65,31 +52,20 @@ func NewDepositService(
 	}
 
 	return &DepositService{
-		cfg:       cfg,
-		clClient:  clClient,
-		signer:    blsSigner,
-		wallet:    w,
-		contract:  contract,
-		chainSpec: chainSpec,
-		genesis:   genesis,
-		log:       depositLog,
+		cfg:      cfg,
+		chainSvc: chainSvc,
+		signer:   blsSigner,
+		wallet:   w,
+		contract: contract,
+		log:      depositLog,
 	}, nil
 }
 
 // IsBuilderRegistered checks if the builder is registered on the beacon chain.
-func (s *DepositService) IsBuilderRegistered(ctx context.Context) (bool, *builder.BuilderState, error) {
+func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *builder.BuilderState, error) {
 	pubkey := s.signer.PublicKey()
 
-	// Ensure builders are loaded (idempotent - safe to call multiple times)
-	if _, err := s.clClient.LoadBuilders(ctx); err != nil {
-		return false, nil, fmt.Errorf("failed to load builders: %w", err)
-	}
-
-	info, err := s.clClient.GetBuilderByPubkey(ctx, pubkey)
-	if err != nil {
-		return false, nil, fmt.Errorf("failed to get builder info: %w", err)
-	}
-
+	info := s.chainSvc.GetBuilderByPubkey(pubkey)
 	if info == nil {
 		return false, &builder.BuilderState{
 			Pubkey:       pubkey[:],
@@ -120,7 +96,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 		pubkey,
 		withdrawalCredentials,
 		amountGwei,
-		s.genesis.GenesisForkVersion,
+		s.chainSvc.GetGenesis().GenesisForkVersion,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to compute signing root: %w", err)
@@ -147,7 +123,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 		"pubkey":               fmt.Sprintf("0x%x", pubkey[:]),
 		"withdrawal_creds":     fmt.Sprintf("0x%x", withdrawalCredentials[:]),
 		"amount_gwei":          amountGwei,
-		"genesis_fork_version": fmt.Sprintf("0x%x", s.genesis.GenesisForkVersion[:]),
+		"genesis_fork_version": fmt.Sprintf("0x%x", s.chainSvc.GetGenesis().GenesisForkVersion[:]),
 		"signing_root":         fmt.Sprintf("0x%x", signingRoot[:]),
 		"signature":            fmt.Sprintf("0x%x", signature[:]),
 		"deposit_data_root":    fmt.Sprintf("0x%x", depositDataRoot[:]),

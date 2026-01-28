@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -108,11 +109,30 @@ and begins building blocks according to configuration.`,
 			logger.WithField("wallet", w.Address().Hex()).Info("Wallet loaded")
 		}
 
-		// 5. Initialize lifecycle manager (if enabled)
+		// 5. Initialize chain service (epoch-level state management)
+		logger.Info("Initializing chain service...")
+
+		chainSpec, err := clClient.GetChainSpec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
+
+		genesis, err := clClient.GetGenesis(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get genesis: %w", err)
+		}
+
+		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		if err := chainSvc.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start chain service: %w", err)
+		}
+		defer chainSvc.Stop() //nolint:errcheck // cleanup
+
+		// 6. Initialize lifecycle manager (if enabled)
 		var lifecycleMgr *lifecycle.Manager
 
 		if cfg.LifecycleEnabled {
-			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, blsSigner, w, logger)
+			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
 			}
@@ -125,7 +145,7 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
-		// 6. Initialize builder service (standalone block building)
+		// 7. Initialize builder service (standalone block building)
 		logger.Info("Initializing builder service...")
 
 		// Get fee recipient from wallet or use zero address
@@ -134,24 +154,24 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		builderSvc, err := builder.NewService(cfg, clClient, engineClient, feeRecipient, logger)
+		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
-		// 7. Initialize ePBS service (if enabled)
+		// 8. Initialize ePBS service (if enabled)
 		var epbsSvc *epbs.Service
 
 		if cfg.EPBSEnabled {
 			logger.Info("Initializing ePBS service...")
 
-			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, blsSigner, logger)
+			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize ePBS: %w", err)
 			}
 		}
 
-		// 8. Start API server (if configured)
+		// 9. Start API server (if configured)
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
 
@@ -174,7 +194,7 @@ and begins building blocks according to configuration.`,
 			}, builderSvc, epbsSvc, lifecycleMgr)
 		}
 
-		// 9. Start lifecycle manager (if enabled)
+		// 10. Start lifecycle manager (if enabled)
 		if lifecycleMgr != nil {
 			// Connect bid tracker to lifecycle manager for balance tracking
 			if epbsSvc != nil {
@@ -187,7 +207,7 @@ and begins building blocks according to configuration.`,
 			defer lifecycleMgr.Stop()
 		}
 
-		// 10. Start builder service
+		// 11. Start builder service
 		logger.Info("Starting builder service...")
 
 		if err := builderSvc.Start(ctx); err != nil {
@@ -195,7 +215,7 @@ and begins building blocks according to configuration.`,
 		}
 		defer builderSvc.Stop()
 
-		// 11. Start ePBS service (if enabled)
+		// 12. Start ePBS service (if enabled)
 		if epbsSvc != nil {
 			logger.Info("Starting ePBS service...")
 
@@ -207,7 +227,7 @@ and begins building blocks according to configuration.`,
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")
 
-		// 12. Wait for shutdown signal
+		// 13. Wait for shutdown signal
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 

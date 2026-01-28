@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -64,14 +65,28 @@ var depositCmd = &cobra.Command{
 			return fmt.Errorf("invalid wallet key: %w", err)
 		}
 
-		// Check if builder already registered
-		pubkey := blsSigner.PublicKey()
-		builderInfo, err := clClient.GetBuilderByPubkey(ctx, pubkey)
-
+		// Get chain spec and genesis
+		chainSpec, err := clClient.GetChainSpec(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to check builder registration: %w", err)
+			return fmt.Errorf("failed to get chain spec: %w", err)
 		}
 
+		genesis, err := clClient.GetGenesis(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get genesis: %w", err)
+		}
+
+		// Initialize chain service
+		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		if err := chainSvc.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start chain service: %w", err)
+		}
+		defer chainSvc.Stop() //nolint:errcheck // cleanup
+
+		// Check if builder already registered
+		pubkey := blsSigner.PublicKey()
+
+		builderInfo := chainSvc.GetBuilderByPubkey(pubkey)
 		if builderInfo != nil {
 			logger.WithField("builder_index", builderInfo.Index).Info("Builder already registered")
 			return nil
@@ -87,7 +102,7 @@ var depositCmd = &cobra.Command{
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 
 		// Initialize lifecycle manager
-		lifecycleMgr, err := lifecycle.NewManager(cfg, clClient, blsSigner, w, logger)
+		lifecycleMgr, err := lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize lifecycle manager: %w", err)
 		}
