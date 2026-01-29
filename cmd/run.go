@@ -178,7 +178,7 @@ and begins building blocks according to configuration.`,
 		if cfg.BuilderAPIEnabled {
 			logger.Info("Initializing Builder API server...")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)
 			}
