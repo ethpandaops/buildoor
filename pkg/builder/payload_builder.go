@@ -136,14 +136,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
-	// Get the built payload
-	payloadJSON, blockValue, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
+	// Get the built payload with all components (blobs, execution requests)
+	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
 	// Parse block hash from the payload
-	blockHashCommon, err := engine.ParseBlockHashFromPayload(payloadJSON)
+	blockHashCommon, err := engine.ParseBlockHashFromPayload(payloadResult.ExecutionPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse block hash from payload: %w", err)
 	}
@@ -151,7 +151,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	var blockHash phase0.Hash32
 	copy(blockHash[:], blockHashCommon[:])
 
-	payloadFields, err := engine.ParsePayloadFields(payloadJSON)
+	payloadFields, err := engine.ParsePayloadFields(payloadResult.ExecutionPayload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse payload fields: %w", err)
 	}
@@ -159,30 +159,43 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	gasLimit, _ := strconv.ParseUint(strings.TrimPrefix(payloadFields.GasLimit, "0x"), 16, 64)
 
 	var blockValueGwei uint64
-	if blockValue != nil {
-		blockValueGwei = blockValue.Uint64()
+	if payloadResult.BlockValue != nil {
+		blockValueGwei = payloadResult.BlockValue.Uint64()
+	}
+
+	// Convert blobs bundle to JSON if present
+	var blobsBundleJSON json.RawMessage
+	if payloadResult.BlobsBundle != nil {
+		blobsBundleJSON, err = json.Marshal(payloadResult.BlobsBundle)
+		if err != nil {
+			b.log.WithError(err).Warn("Failed to marshal blobs bundle")
+		}
 	}
 
 	event := &PayloadReadyEvent{
-		Slot:            attrs.ProposalSlot,
-		ParentBlockRoot: attrs.ParentBlockRoot,
-		ParentBlockHash: attrs.ParentBlockHash,
-		BlockHash:       blockHash,
-		Payload:         payloadJSON,
-		Timestamp:       attrs.Timestamp,
-		GasLimit:        gasLimit,
-		PrevRandao:      attrs.PrevRandao,
-		FeeRecipient:    b.feeRecipient,
-		BlockValue:      blockValueGwei,
-		BuildSource:     BuildSourceBlock,
-		ReadyAt:         time.Now(),
+		Slot:              attrs.ProposalSlot,
+		ParentBlockRoot:   attrs.ParentBlockRoot,
+		ParentBlockHash:   attrs.ParentBlockHash,
+		BlockHash:         blockHash,
+		Payload:           payloadResult.ExecutionPayload,
+		BlobsBundle:       blobsBundleJSON,
+		ExecutionRequests: payloadResult.ExecutionRequests,
+		Timestamp:         attrs.Timestamp,
+		GasLimit:          gasLimit,
+		PrevRandao:        attrs.PrevRandao,
+		FeeRecipient:      b.feeRecipient,
+		BlockValue:        blockValueGwei,
+		BuildSource:       BuildSourceBlock,
+		ReadyAt:           time.Now(),
 	}
 
 	b.log.WithFields(logrus.Fields{
-		"slot":        attrs.ProposalSlot,
-		"block_hash":  fmt.Sprintf("%x", blockHash[:8]),
-		"parent_hash": fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
-		"block_value": blockValueGwei,
+		"slot":              attrs.ProposalSlot,
+		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
+		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"block_value":       blockValueGwei,
+		"has_blobs":         payloadResult.BlobsBundle != nil,
+		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 	}).Debug("Payload built from attributes")
 
 	return event, nil
@@ -265,10 +278,10 @@ func (b *PayloadBuilder) BuildPayloadWithContext(
 		return nil, fmt.Errorf("failed to request payload build: %w", err)
 	}
 
-	payloadJSON, _, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
+	result, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	return payloadJSON, nil
+	return result.ExecutionPayload, nil
 }
