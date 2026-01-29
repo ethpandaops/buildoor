@@ -99,6 +99,13 @@ definitions:
       api_user_header:
         description: 'Optional: header to use for authentication'
         type: string
+      builder_api:
+        allOf:
+        - $ref: '#/definitions/config.BuilderAPIConfig'
+        description: Builder API configuration
+      builder_api_enabled:
+        description: Enable traditional Builder API (pre-ePBS)
+        type: boolean
       builder_privkey:
         type: string
       cl_client:
@@ -142,6 +149,14 @@ definitions:
       wallet_privkey:
         description: 'Optional: only if lifecycle enabled'
         type: string
+    type: object
+  config.BuilderAPIConfig:
+    properties:
+      port:
+        description: |-
+          Port is the HTTP port for the Builder API server.
+          Default: 9000.
+        type: integer
     type: object
   config.EPBSConfig:
     properties:

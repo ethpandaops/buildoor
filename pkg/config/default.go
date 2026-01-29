@@ -3,13 +3,17 @@ package config
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		APIPort:          0,
-		APIUserHeader:    "Cf-Access-Authenticated-User-Email",
-		APITokenKey:      "",
-		LifecycleEnabled: false,
-		DepositAmount:    10000000000, // 10 ETH in Gwei
-		TopupThreshold:   1000000000,  // 1 ETH in Gwei
-		TopupAmount:      5000000000,  // 5 ETH in Gwei
+		APIPort:           0,
+		APIUserHeader:     "Cf-Access-Authenticated-User-Email",
+		APITokenKey:       "",
+		LifecycleEnabled:  false,
+		BuilderAPIEnabled: false, // Disabled by default
+		BuilderAPI: BuilderAPIConfig{
+			Port: 9000, // Default Builder API port
+		},
+		DepositAmount:  10000000000, // 10 ETH in Gwei
+		TopupThreshold: 1000000000,  // 1 ETH in Gwei
+		TopupAmount:    5000000000,  // 5 ETH in Gwei
 		Schedule: ScheduleConfig{
 			Mode:     ScheduleModeAll,
 			EveryNth: 1,

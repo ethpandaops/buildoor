@@ -680,6 +680,18 @@ const docTemplate = `{
                     "description": "Optional: header to use for authentication",
                     "type": "string"
                 },
+                "builder_api": {
+                    "description": "Builder API configuration",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/config.BuilderAPIConfig"
+                        }
+                    ]
+                },
+                "builder_api_enabled": {
+                    "description": "Enable traditional Builder API (pre-ePBS)",
+                    "type": "boolean"
+                },
                 "builder_privkey": {
                     "type": "string"
                 },
@@ -741,6 +753,15 @@ const docTemplate = `{
                 "wallet_privkey": {
                     "description": "Optional: only if lifecycle enabled",
                     "type": "string"
+                }
+            }
+        },
+        "config.BuilderAPIConfig": {
+            "type": "object",
+            "properties": {
+                "port": {
+                    "description": "Port is the HTTP port for the Builder API server.\nDefault: 9000.",
+                    "type": "integer"
                 }
             }
         },
