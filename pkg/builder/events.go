@@ -34,19 +34,20 @@ func (s BuildSource) String() string {
 
 // PayloadReadyEvent is emitted when a new payload is built.
 type PayloadReadyEvent struct {
-	Slot            phase0.Slot
-	ParentBlockRoot phase0.Root
-	ParentBlockHash phase0.Hash32
-	BlockHash       phase0.Hash32
-	Payload         json.RawMessage
-	BlobsBundle     json.RawMessage
-	Timestamp       uint64
-	GasLimit        uint64
-	PrevRandao      phase0.Root
-	FeeRecipient    common.Address
-	BlockValue      uint64      // MEV value from EL in wei
-	BuildSource     BuildSource // How the payload was built
-	ReadyAt         time.Time   // When the payload became ready
+	Slot             phase0.Slot
+	ParentBlockRoot  phase0.Root
+	ParentBlockHash  phase0.Hash32
+	BlockHash        phase0.Hash32
+	Payload          json.RawMessage
+	BlobsBundle      json.RawMessage
+	Timestamp        uint64
+	GasLimit         uint64
+	PrevRandao       phase0.Root
+	FeeRecipient     common.Address
+	BlockValue       uint64      // MEV value from EL in wei
+	BuildSource      BuildSource // How the payload was built
+	BuildRequestedAt time.Time   // When the FCU was sent to request the build
+	ReadyAt          time.Time   // When the payload became ready
 }
 
 // PayloadReadyDispatcher dispatches payload ready events to subscribers.

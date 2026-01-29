@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, LegacyBuilderInfo, ServiceStatus } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, LegacyBuilderInfo, LegacySubmission, ServiceStatus } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -136,10 +136,11 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_ready': {
-          const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
+          const data = event.data as { slot: number; block_hash: string; block_value: number; build_requested_at: number; ready_at: number };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
+            buildRequestedAt: data.build_requested_at,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value
@@ -265,6 +266,20 @@ export function useEventStream(): UseEventStreamResult {
             ? `Legacy block submitted for slot ${data.slot} to ${data.relay_url} (value: ${data.value} wei)`
             : `Legacy block submission FAILED for slot ${data.slot} to ${data.relay_url}: ${data.error || 'unknown'}`;
           addEvent(data.success ? 'legacy_submitted' : 'legacy_failed', msg, event.timestamp);
+
+          setSlotStates(prev => {
+            const state = prev[data.slot] || { slot: data.slot };
+            const legacySubmissions: LegacySubmission[] = state.legacySubmissions ? [...state.legacySubmissions] : [];
+            legacySubmissions.push({
+              time: event.timestamp,
+              blockHash: data.block_hash,
+              value: data.value,
+              relayUrl: data.relay_url,
+              success: data.success,
+              error: data.error
+            });
+            return { ...prev, [data.slot]: { ...state, legacySubmissions } };
+          });
           break;
         }
       }

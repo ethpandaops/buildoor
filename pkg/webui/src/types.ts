@@ -40,6 +40,7 @@ export interface EPBSConfig {
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
+  payload_build_delay: number;
 }
 
 export interface ChainInfo {
@@ -67,6 +68,7 @@ export interface BuilderInfo {
   lifecycle_enabled: boolean;
   wallet_address?: string;
   wallet_balance_wei?: string;
+  wallet_nonce?: number;
   pending_deposit_gwei?: number;
   deposit_epoch: number;
   withdrawable_epoch: number;
@@ -82,6 +84,7 @@ export interface PayloadReadyEvent {
   block_hash: string;
   parent_block_hash: string;
   block_value: number;
+  build_requested_at: number;
   ready_at: number;
 }
 
@@ -137,6 +140,7 @@ export interface SlotState {
   scheduled?: boolean;
   slotStartTime?: number;
   payloadReady?: boolean;
+  buildRequestedAt?: number;
   payloadCreatedAt?: number;
   payloadBlockHash?: string;
   payloadBlockValue?: number;
@@ -154,6 +158,7 @@ export interface SlotState {
   revealFailed?: boolean;
   revealSentAt?: number;
   headVotes?: HeadVoteDataPoint[];
+  legacySubmissions?: LegacySubmission[];
 }
 
 export interface OurBid {
@@ -172,6 +177,15 @@ export interface ExternalBid {
   blockHash?: string;
 }
 
+export interface LegacySubmission {
+  time: number;
+  blockHash: string;
+  value: string;
+  relayUrl: string;
+  success: boolean;
+  error?: string;
+}
+
 export interface LegacyBuilderInfo {
   enabled: boolean;
   relay_count: number;
@@ -179,6 +193,10 @@ export interface LegacyBuilderInfo {
   blocks_submitted: number;
   blocks_accepted: number;
   submission_failures: number;
+  submit_start_time: number;
+  submit_end_time: number;
+  submit_interval: number;
+  bid_increase: number;
 }
 
 export interface LegacyBlockSubmittedEvent {
@@ -193,13 +211,17 @@ export interface LegacyBlockSubmittedEvent {
 }
 
 export interface LegacyBuilderConfig {
-  build_start_time: number;
+  schedule_mode: string;
+  schedule_every_nth: number;
+  schedule_next_n: number;
   submit_start_time: number;
   submit_end_time: number;
   submit_interval: number;
+  bid_increase: number;
   payment_mode: string;
   fixed_payment: string;
   payment_percentage: number;
+  payload_build_delay: number;
 }
 
 export interface ServiceStatus {

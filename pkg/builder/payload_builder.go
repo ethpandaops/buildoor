@@ -21,10 +21,11 @@ import (
 
 // PayloadBuilder handles execution payload building via the Engine API.
 type PayloadBuilder struct {
-	clClient     *beacon.Client
-	engineClient *engine.Client
-	feeRecipient common.Address
-	log          logrus.FieldLogger
+	clClient          *beacon.Client
+	engineClient      *engine.Client
+	feeRecipient      common.Address
+	payloadBuildDelay int64 // Delay in milliseconds between FCU and getPayload
+	log               logrus.FieldLogger
 
 	// Active build tracking
 	activeBuild *activeBuild
@@ -43,13 +44,15 @@ func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
+	payloadBuildDelay int64,
 	log logrus.FieldLogger,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
-		clClient:     clClient,
-		engineClient: engineClient,
-		feeRecipient: feeRecipient,
-		log:          log.WithField("component", "payload-builder"),
+		clClient:          clClient,
+		engineClient:      engineClient,
+		feeRecipient:      feeRecipient,
+		payloadBuildDelay: payloadBuildDelay,
+		log:               log.WithField("component", "payload-builder"),
 	}
 }
 
@@ -107,6 +110,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
 	}).Debug("Building payload from attributes")
 
+	// Capture when we send the FCU
+	buildRequestedAt := time.Now()
+
 	// Request payload build from the EL
 	payloadID, err := b.engineClient.RequestPayloadBuild(
 		buildCtx,
@@ -135,6 +141,15 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"slot":       attrs.ProposalSlot,
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
+
+	// Wait for the execution client to build a block with transactions
+	if b.payloadBuildDelay > 0 {
+		select {
+		case <-buildCtx.Done():
+			return nil, buildCtx.Err()
+		case <-time.After(time.Duration(b.payloadBuildDelay) * time.Millisecond):
+		}
+	}
 
 	// Get the built payload
 	payloadJSON, blockValue, execRequests, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
@@ -172,18 +187,19 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	event := &PayloadReadyEvent{
-		Slot:            attrs.ProposalSlot,
-		ParentBlockRoot: attrs.ParentBlockRoot,
-		ParentBlockHash: attrs.ParentBlockHash,
-		BlockHash:       blockHash,
-		Payload:         payloadJSON,
-		Timestamp:       attrs.Timestamp,
-		GasLimit:        gasLimit,
-		PrevRandao:      attrs.PrevRandao,
-		FeeRecipient:    b.feeRecipient,
-		BlockValue:      blockValueGwei,
-		BuildSource:     BuildSourceBlock,
-		ReadyAt:         time.Now(),
+		Slot:             attrs.ProposalSlot,
+		ParentBlockRoot:  attrs.ParentBlockRoot,
+		ParentBlockHash:  attrs.ParentBlockHash,
+		BlockHash:        blockHash,
+		Payload:          payloadJSON,
+		Timestamp:        attrs.Timestamp,
+		GasLimit:         gasLimit,
+		PrevRandao:       attrs.PrevRandao,
+		FeeRecipient:     b.feeRecipient,
+		BlockValue:       blockValueGwei,
+		BuildSource:      BuildSourceBlock,
+		BuildRequestedAt: buildRequestedAt,
+		ReadyAt:          time.Now(),
 	}
 
 	b.log.WithFields(logrus.Fields{
@@ -215,6 +231,14 @@ func (b *PayloadBuilder) SetFeeRecipient(feeRecipient common.Address) {
 	defer b.mu.Unlock()
 
 	b.feeRecipient = feeRecipient
+}
+
+// SetPayloadBuildDelay updates the delay between FCU and getPayload.
+func (b *PayloadBuilder) SetPayloadBuildDelay(delayMs int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.payloadBuildDelay = delayMs
 }
 
 // convertWithdrawalsToEngineFormat converts CL withdrawals to engine API format.
@@ -271,6 +295,15 @@ func (b *PayloadBuilder) BuildPayloadWithContext(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to request payload build: %w", err)
+	}
+
+	// Wait for the execution client to build a block with transactions
+	if b.payloadBuildDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(b.payloadBuildDelay) * time.Millisecond):
+		}
 	}
 
 	payloadJSON, _, _, err := b.engineClient.GetPayloadRaw(ctx, payloadID)

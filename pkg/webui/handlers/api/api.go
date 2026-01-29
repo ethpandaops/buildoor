@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -22,6 +23,7 @@ type StatusResponse struct {
 	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
 	WalletAddress     string `json:"wallet_address,omitempty"`
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
+	WalletNonce       uint64 `json:"wallet_nonce,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch,omitempty"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch,omitempty"`
 }
@@ -46,13 +48,14 @@ type UpdateScheduleRequest struct {
 
 // UpdateEPBSRequest is the request for updating EPBS config.
 type UpdateEPBSRequest struct {
-	BuildStartTime *int64  `json:"build_start_time,omitempty"`
-	BidStartTime   *int64  `json:"bid_start_time,omitempty"`
-	BidEndTime     *int64  `json:"bid_end_time,omitempty"`
-	RevealTime     *int64  `json:"reveal_time,omitempty"`
-	BidMinAmount   *uint64 `json:"bid_min_amount,omitempty"`
-	BidIncrease    *uint64 `json:"bid_increase,omitempty"`
-	BidInterval    *int64  `json:"bid_interval,omitempty"`
+	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	BidStartTime      *int64  `json:"bid_start_time,omitempty"`
+	BidEndTime        *int64  `json:"bid_end_time,omitempty"`
+	RevealTime        *int64  `json:"reveal_time,omitempty"`
+	BidMinAmount      *uint64 `json:"bid_min_amount,omitempty"`
+	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
+	BidInterval       *int64  `json:"bid_interval,omitempty"`
+	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
 }
 
 // LifecycleStatusResponse is the response for lifecycle status.
@@ -127,8 +130,21 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		// Get wallet info
 		if wallet := h.lifecycleMgr.GetWallet(); wallet != nil {
 			resp.WalletAddress = wallet.Address().Hex()
+			resp.WalletNonce = wallet.PendingNonce()
 
 			// Get wallet balance
+			if balance, err := wallet.GetBalance(r.Context()); err == nil && balance != nil {
+				resp.WalletBalance = balance.String()
+			}
+		}
+	}
+
+	// If lifecycle isn't providing wallet details, fall back to legacy builder wallet (when configured).
+	if resp.WalletAddress == "" && h.legacyBuilderSvc != nil {
+		if wallet := h.legacyBuilderSvc.GetWallet(); wallet != nil {
+			resp.WalletAddress = wallet.Address().Hex()
+			resp.WalletNonce = h.legacyBuilderSvc.GetConfirmedNonce()
+
 			if balance, err := wallet.GetBalance(r.Context()); err == nil && balance != nil {
 				resp.WalletBalance = balance.String()
 			}
@@ -286,6 +302,10 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	if req.BidInterval != nil {
 		cfg.EPBS.BidInterval = *req.BidInterval
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.EPBS.PayloadBuildDelay = *req.PayloadBuildDelay
 	}
 
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
@@ -469,6 +489,14 @@ type LegacyBuilderStatusResponse struct {
 	BlocksSubmitted    uint64   `json:"blocks_submitted"`
 	BlocksAccepted     uint64   `json:"blocks_accepted"`
 	SubmissionFailures uint64   `json:"submission_failures"`
+	ScheduleMode       string   `json:"schedule_mode"`
+	ScheduleEveryNth   uint64   `json:"schedule_every_nth"`
+	ScheduleNextN      uint64   `json:"schedule_next_n"`
+	SubmitStartTime    int64    `json:"submit_start_time"`
+	SubmitEndTime      int64    `json:"submit_end_time"`
+	SubmitInterval     int64    `json:"submit_interval"`
+	BidIncrease        uint64   `json:"bid_increase"`
+	PayloadBuildDelay  int64    `json:"payload_build_delay"`
 	PaymentMode        string   `json:"payment_mode"`
 	FixedPayment       string   `json:"fixed_payment,omitempty"`
 	PaymentPercentage  uint64   `json:"payment_percentage,omitempty"`
@@ -476,10 +504,14 @@ type LegacyBuilderStatusResponse struct {
 
 // UpdateLegacyBuilderRequest is the request for updating legacy builder config.
 type UpdateLegacyBuilderRequest struct {
-	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	ScheduleMode      *string `json:"schedule_mode,omitempty"`
+	ScheduleEveryNth  *uint64 `json:"schedule_every_nth,omitempty"`
+	ScheduleNextN     *uint64 `json:"schedule_next_n,omitempty"`
 	SubmitStartTime   *int64  `json:"submit_start_time,omitempty"`
 	SubmitEndTime     *int64  `json:"submit_end_time,omitempty"`
 	SubmitInterval    *int64  `json:"submit_interval,omitempty"`
+	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
+	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
 	PaymentMode       *string `json:"payment_mode,omitempty"`
 	FixedPayment      *string `json:"fixed_payment,omitempty"`
 	PaymentPercentage *uint64 `json:"payment_percentage,omitempty"`
@@ -502,6 +534,14 @@ func (h *APIHandler) GetLegacyBuilderStatus(w http.ResponseWriter, _ *http.Reque
 		BlocksSubmitted:    stats.BlocksSubmitted,
 		BlocksAccepted:     stats.BlocksAccepted,
 		SubmissionFailures: stats.SubmissionFailures,
+		ScheduleMode:       string(cfg.Schedule.Mode),
+		ScheduleEveryNth:   cfg.Schedule.EveryNth,
+		ScheduleNextN:      cfg.Schedule.NextN,
+		SubmitStartTime:    cfg.SubmitStartTime,
+		SubmitEndTime:      cfg.SubmitEndTime,
+		SubmitInterval:     cfg.SubmitInterval,
+		BidIncrease:        cfg.BidIncrease,
+		PayloadBuildDelay:  cfg.PayloadBuildDelay,
 		PaymentMode:        cfg.PaymentMode,
 		FixedPayment:       cfg.FixedPayment,
 		PaymentPercentage:  cfg.PaymentPercentage,
@@ -531,8 +571,16 @@ func (h *APIHandler) UpdateLegacyBuilder(w http.ResponseWriter, r *http.Request)
 
 	cfg := h.legacyBuilderSvc.GetConfig()
 
-	if req.BuildStartTime != nil {
-		cfg.BuildStartTime = *req.BuildStartTime
+	if req.ScheduleMode != nil {
+		cfg.Schedule.Mode = config.ScheduleMode(*req.ScheduleMode)
+	}
+
+	if req.ScheduleEveryNth != nil {
+		cfg.Schedule.EveryNth = *req.ScheduleEveryNth
+	}
+
+	if req.ScheduleNextN != nil {
+		cfg.Schedule.NextN = *req.ScheduleNextN
 	}
 
 	if req.SubmitStartTime != nil {
@@ -545,6 +593,14 @@ func (h *APIHandler) UpdateLegacyBuilder(w http.ResponseWriter, r *http.Request)
 
 	if req.SubmitInterval != nil {
 		cfg.SubmitInterval = *req.SubmitInterval
+	}
+
+	if req.BidIncrease != nil {
+		cfg.BidIncrease = *req.BidIncrease
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.PayloadBuildDelay = *req.PayloadBuildDelay
 	}
 
 	if req.PaymentMode != nil {

@@ -90,6 +90,12 @@ func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
 		cfg.LegacyBuilder.RelayURLs = relays
 	}
 
+	cfg.LegacyBuilder.SubmitStartTime = v.GetInt64("legacy-submit-start")
+	cfg.LegacyBuilder.SubmitEndTime = v.GetInt64("legacy-submit-end")
+	cfg.LegacyBuilder.SubmitInterval = v.GetInt64("legacy-submit-interval")
+	cfg.LegacyBuilder.BidIncrease = v.GetUint64("legacy-bid-increase")
+	cfg.LegacyBuilder.PayloadBuildDelay = v.GetInt64("legacy-payload-build-delay")
+
 	if val := v.GetString("legacy-payment-mode"); val != "" {
 		cfg.LegacyBuilder.PaymentMode = val
 	}
@@ -215,6 +221,10 @@ func ValidateConfig(cfg *Config) error {
 		if cfg.LegacyBuilder.SubmitStartTime > cfg.LegacyBuilder.SubmitEndTime {
 			return fmt.Errorf("legacy_builder.submit_start_time cannot be after submit_end_time")
 		}
+
+		if cfg.LegacyBuilder.SubmitInterval < 0 {
+			return fmt.Errorf("legacy_builder.submit_interval must be >= 0")
+		}
 	}
 
 	return nil
@@ -311,6 +321,10 @@ func MergeConfigs(base, override *Config) *Config {
 		result.EPBS.BidInterval = override.EPBS.BidInterval
 	}
 
+	if override.EPBS.PayloadBuildDelay != 0 {
+		result.EPBS.PayloadBuildDelay = override.EPBS.PayloadBuildDelay
+	}
+
 	// Legacy builder config
 	if override.LegacyBuilderEnabled {
 		result.LegacyBuilderEnabled = true
@@ -320,8 +334,21 @@ func MergeConfigs(base, override *Config) *Config {
 		result.LegacyBuilder.RelayURLs = override.LegacyBuilder.RelayURLs
 	}
 
-	if override.LegacyBuilder.BuildStartTime != 0 {
-		result.LegacyBuilder.BuildStartTime = override.LegacyBuilder.BuildStartTime
+	// Legacy builder schedule
+	if override.LegacyBuilder.Schedule.Mode != "" {
+		result.LegacyBuilder.Schedule.Mode = override.LegacyBuilder.Schedule.Mode
+	}
+
+	if override.LegacyBuilder.Schedule.EveryNth != 0 {
+		result.LegacyBuilder.Schedule.EveryNth = override.LegacyBuilder.Schedule.EveryNth
+	}
+
+	if override.LegacyBuilder.Schedule.NextN != 0 {
+		result.LegacyBuilder.Schedule.NextN = override.LegacyBuilder.Schedule.NextN
+	}
+
+	if override.LegacyBuilder.Schedule.StartSlot != 0 {
+		result.LegacyBuilder.Schedule.StartSlot = override.LegacyBuilder.Schedule.StartSlot
 	}
 
 	if override.LegacyBuilder.SubmitStartTime != 0 {
@@ -334,6 +361,10 @@ func MergeConfigs(base, override *Config) *Config {
 
 	if override.LegacyBuilder.SubmitInterval != 0 {
 		result.LegacyBuilder.SubmitInterval = override.LegacyBuilder.SubmitInterval
+	}
+
+	if override.LegacyBuilder.BidIncrease != 0 {
+		result.LegacyBuilder.BidIncrease = override.LegacyBuilder.BidIncrease
 	}
 
 	if override.LegacyBuilder.PaymentMode != "" {
@@ -350,6 +381,10 @@ func MergeConfigs(base, override *Config) *Config {
 
 	if override.LegacyBuilder.PaymentGasLimit != 0 {
 		result.LegacyBuilder.PaymentGasLimit = override.LegacyBuilder.PaymentGasLimit
+	}
+
+	if override.LegacyBuilder.PayloadBuildDelay != 0 {
+		result.LegacyBuilder.PayloadBuildDelay = override.LegacyBuilder.PayloadBuildDelay
 	}
 
 	if override.LegacyBuilder.ValidatorPollSecs != 0 {

@@ -9,17 +9,22 @@ interface LegacyBuilderInfoProps {
 
 export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuilderInfo, serviceStatus }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
+  const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [configData, setConfigData] = useState<LegacyBuilderConfig | null>(null);
   const [form, setForm] = useState<LegacyBuilderConfig>({
-    build_start_time: -2000,
+    schedule_mode: 'all',
+    schedule_every_nth: 1,
+    schedule_next_n: 0,
     submit_start_time: -500,
     submit_end_time: 4000,
     submit_interval: 0,
+    bid_increase: 0,
     payment_mode: 'fixed',
     fixed_payment: '10000000000000000',
-    payment_percentage: 9000
+    payment_percentage: 9000,
+    payload_build_delay: 500
   });
 
   useEffect(() => {
@@ -31,9 +36,17 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
         if (data.payment_mode) {
           setForm(prev => ({
             ...prev,
+            schedule_mode: data.schedule_mode || prev.schedule_mode,
+            schedule_every_nth: data.schedule_every_nth ?? prev.schedule_every_nth,
+            schedule_next_n: data.schedule_next_n ?? prev.schedule_next_n,
+            submit_start_time: data.submit_start_time ?? prev.submit_start_time,
+            submit_end_time: data.submit_end_time ?? prev.submit_end_time,
+            submit_interval: data.submit_interval ?? prev.submit_interval,
+            bid_increase: data.bid_increase ?? prev.bid_increase,
             payment_mode: data.payment_mode || prev.payment_mode,
             fixed_payment: data.fixed_payment || prev.fixed_payment,
-            payment_percentage: data.payment_percentage || prev.payment_percentage
+            payment_percentage: data.payment_percentage || prev.payment_percentage,
+            payload_build_delay: data.payload_build_delay ?? prev.payload_build_delay
           }));
         }
         setConfigData(data);
@@ -109,7 +122,14 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
   return (
     <div className="card mb-3">
       <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">Legacy PBS</h5>
+        <div
+          className="d-flex align-items-center gap-2 flex-grow-1"
+          style={{ cursor: 'pointer' }}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} text-muted`} style={{ fontSize: '12px', width: '12px' }}></i>
+          <h5 className="mb-0">Legacy PBS</h5>
+        </div>
         <div className="d-flex gap-2 align-items-center">
           <span className={`badge ${legacyEnabled ? 'bg-success' : 'bg-secondary'}`}>
             {legacyEnabled ? 'Active' : 'Inactive'}
@@ -117,7 +137,7 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
           {canEdit && (
             <button
               className={`btn btn-sm ${legacyEnabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
-              onClick={handleToggleLegacy}
+              onClick={(e) => { e.stopPropagation(); handleToggleLegacy(); }}
               disabled={toggling}
               title={legacyEnabled ? 'Disable Legacy Builder' : 'Enable Legacy Builder'}
             >
@@ -126,7 +146,7 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
           )}
         </div>
       </div>
-      <div className="card-body p-2">
+      {!collapsed && <div className="card-body p-2">
         {/* Statistics */}
         <div className="section-header mb-2">Statistics</div>
         <div className="row g-2 mb-3">
@@ -180,10 +200,26 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
           <div className="row g-2">
             <div className="col-12 col-sm-6">
               <div className="config-item">
-                <div className="config-item-label">Build Start</div>
-                <div className="config-item-value">{form.build_start_time} ms</div>
+                <div className="config-item-label">Schedule Mode</div>
+                <div className="config-item-value">{form.schedule_mode}</div>
               </div>
             </div>
+            {form.schedule_mode === 'every_nth' && (
+              <div className="col-12 col-sm-6">
+                <div className="config-item">
+                  <div className="config-item-label">Every Nth</div>
+                  <div className="config-item-value">{form.schedule_every_nth}</div>
+                </div>
+              </div>
+            )}
+            {form.schedule_mode === 'next_n' && (
+              <div className="col-12 col-sm-6">
+                <div className="config-item">
+                  <div className="config-item-label">Next N</div>
+                  <div className="config-item-value">{form.schedule_next_n}</div>
+                </div>
+              </div>
+            )}
             <div className="col-12 col-sm-6">
               <div className="config-item">
                 <div className="config-item-label">Submit Start</div>
@@ -194,6 +230,24 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
               <div className="config-item">
                 <div className="config-item-label">Submit End</div>
                 <div className="config-item-value">{form.submit_end_time} ms</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6">
+              <div className="config-item">
+                <div className="config-item-label">Submit Interval</div>
+                <div className="config-item-value">{form.submit_interval} ms</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6">
+              <div className="config-item">
+                <div className="config-item-label">Bid Increase</div>
+                <div className="config-item-value">{form.bid_increase} gwei</div>
+              </div>
+            </div>
+            <div className="col-12 col-sm-6">
+              <div className="config-item">
+                <div className="config-item-label">Payload Build Delay</div>
+                <div className="config-item-value">{form.payload_build_delay} ms</div>
               </div>
             </div>
             <div className="col-12 col-sm-6">
@@ -223,14 +277,41 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
           <form onSubmit={handleSave}>
             <div className="row g-2 mb-2">
               <div className="col-12 col-sm-6">
-                <label className="form-label mb-0 small">Build Start (ms)</label>
-                <input
-                  type="number"
-                  className="form-control form-control-sm"
-                  value={form.build_start_time}
-                  onChange={(e) => setForm({ ...form, build_start_time: parseInt(e.target.value) || 0 })}
-                />
+                <label className="form-label mb-0 small">Schedule Mode</label>
+                <select
+                  className="form-select form-select-sm"
+                  value={form.schedule_mode}
+                  onChange={(e) => setForm({ ...form, schedule_mode: e.target.value })}
+                >
+                  <option value="all">All</option>
+                  <option value="every_nth">Every Nth</option>
+                  <option value="next_n">Next N</option>
+                </select>
               </div>
+              {form.schedule_mode === 'every_nth' && (
+                <div className="col-12 col-sm-6">
+                  <label className="form-label mb-0 small">Every Nth</label>
+                  <input
+                    type="number"
+                    className="form-control form-control-sm"
+                    value={form.schedule_every_nth}
+                    onChange={(e) => setForm({ ...form, schedule_every_nth: parseInt(e.target.value) || 1 })}
+                    min={1}
+                  />
+                </div>
+              )}
+              {form.schedule_mode === 'next_n' && (
+                <div className="col-12 col-sm-6">
+                  <label className="form-label mb-0 small">Next N</label>
+                  <input
+                    type="number"
+                    className="form-control form-control-sm"
+                    value={form.schedule_next_n}
+                    onChange={(e) => setForm({ ...form, schedule_next_n: parseInt(e.target.value) || 0 })}
+                    min={0}
+                  />
+                </div>
+              )}
               <div className="col-12 col-sm-6">
                 <label className="form-label mb-0 small">Submit Start (ms)</label>
                 <input
@@ -247,6 +328,36 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
                   className="form-control form-control-sm"
                   value={form.submit_end_time}
                   onChange={(e) => setForm({ ...form, submit_end_time: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label mb-0 small">Submit Interval (ms)</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={form.submit_interval}
+                  onChange={(e) => setForm({ ...form, submit_interval: parseInt(e.target.value) || 0 })}
+                  min={0}
+                />
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label mb-0 small">Bid Increase (gwei)</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={form.bid_increase}
+                  onChange={(e) => setForm({ ...form, bid_increase: parseInt(e.target.value) || 0 })}
+                  min={0}
+                />
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label mb-0 small">Payload Build Delay (ms)</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={form.payload_build_delay}
+                  onChange={(e) => setForm({ ...form, payload_build_delay: parseInt(e.target.value) || 0 })}
+                  min={0}
                 />
               </div>
               <div className="col-12 col-sm-6">
@@ -293,7 +404,7 @@ export const LegacyBuilderInfo: React.FC<LegacyBuilderInfoProps> = ({ legacyBuil
             </div>
           </form>
         )}
-      </div>
+      </div>}
     </div>
   );
 };

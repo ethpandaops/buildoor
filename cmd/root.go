@@ -76,6 +76,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
+	rootCmd.PersistentFlags().Int64("epbs-payload-build-delay", defaults.EPBS.PayloadBuildDelay, "Delay between FCU and getPayload in ms")
 
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
@@ -83,6 +84,11 @@ func init() {
 	// Legacy builder flags
 	rootCmd.PersistentFlags().String("enable-legacy", "false", "Enable legacy builder API (MEV-Boost relay)")
 	rootCmd.PersistentFlags().StringSlice("relay-urls", nil, "Relay URLs for legacy builder")
+	rootCmd.PersistentFlags().Int64("legacy-submit-start", defaults.LegacyBuilder.SubmitStartTime, "Legacy first submission time in ms relative to slot start")
+	rootCmd.PersistentFlags().Int64("legacy-submit-end", defaults.LegacyBuilder.SubmitEndTime, "Legacy last submission time in ms relative to slot start")
+	rootCmd.PersistentFlags().Int64("legacy-submit-interval", defaults.LegacyBuilder.SubmitInterval, "Legacy interval between submissions in ms (0 = single submit)")
+	rootCmd.PersistentFlags().Uint64("legacy-bid-increase", defaults.LegacyBuilder.BidIncrease, "Legacy bid increase per subsequent submission in gwei")
+	rootCmd.PersistentFlags().Int64("legacy-payload-build-delay", defaults.LegacyBuilder.PayloadBuildDelay, "Legacy delay between FCU and getPayload in ms")
 	rootCmd.PersistentFlags().String("legacy-payment-mode", defaults.LegacyBuilder.PaymentMode, "Payment mode (fixed/percentage)")
 	rootCmd.PersistentFlags().String("legacy-fixed-payment", defaults.LegacyBuilder.FixedPayment, "Fixed payment in wei")
 	rootCmd.PersistentFlags().Uint64("legacy-payment-percentage", defaults.LegacyBuilder.PaymentPercentage, "Payment percentage in basis points")
@@ -159,18 +165,24 @@ func initConfig() error {
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
 		EPBS: builder.EPBSConfig{
-			BuildStartTime: v.GetInt64("build-start-time"),
-			BidStartTime:   v.GetInt64("epbs-bid-start"),
-			BidEndTime:     v.GetInt64("epbs-bid-end"),
-			RevealTime:     v.GetInt64("epbs-reveal-time"),
-			BidMinAmount:   v.GetUint64("epbs-bid-min"),
-			BidIncrease:    v.GetUint64("epbs-bid-increase"),
-			BidInterval:    v.GetInt64("epbs-bid-interval"),
+			BuildStartTime:    v.GetInt64("build-start-time"),
+			BidStartTime:      v.GetInt64("epbs-bid-start"),
+			BidEndTime:        v.GetInt64("epbs-bid-end"),
+			RevealTime:        v.GetInt64("epbs-reveal-time"),
+			BidMinAmount:      v.GetUint64("epbs-bid-min"),
+			BidIncrease:       v.GetUint64("epbs-bid-increase"),
+			BidInterval:       v.GetInt64("epbs-bid-interval"),
+			PayloadBuildDelay: v.GetInt64("epbs-payload-build-delay"),
 		},
 		ValidateWithdrawals:  v.GetBool("validate-withdrawals"),
 		LegacyBuilderEnabled: v.GetString("enable-legacy") == "true",
 		LegacyBuilder: builder.LegacyBuilderConfig{
 			RelayURLs:         v.GetStringSlice("relay-urls"),
+			SubmitStartTime:   v.GetInt64("legacy-submit-start"),
+			SubmitEndTime:     v.GetInt64("legacy-submit-end"),
+			SubmitInterval:    v.GetInt64("legacy-submit-interval"),
+			BidIncrease:       v.GetUint64("legacy-bid-increase"),
+			PayloadBuildDelay: v.GetInt64("legacy-payload-build-delay"),
 			PaymentMode:       v.GetString("legacy-payment-mode"),
 			FixedPayment:      v.GetString("legacy-fixed-payment"),
 			PaymentPercentage: v.GetUint64("legacy-payment-percentage"),

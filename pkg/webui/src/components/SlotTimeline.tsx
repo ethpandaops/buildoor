@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import type { SlotState, Config, ChainInfo } from '../types';
+import type { SlotState, Config, ChainInfo, ServiceStatus, LegacyBuilderInfo } from '../types';
 import { SlotGraph } from './SlotGraph';
 
 interface SlotTimelineProps {
@@ -7,6 +7,8 @@ interface SlotTimelineProps {
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
   currentConfig: Config | null;
+  serviceStatus: ServiceStatus | null;
+  legacyBuilderInfo: LegacyBuilderInfo | null;
 }
 
 const MAX_SLOTS_TO_SHOW = 5;
@@ -20,7 +22,9 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
   chainInfo,
   slotStates,
   slotConfigs,
-  currentConfig
+  currentConfig,
+  serviceStatus,
+  legacyBuilderInfo
 }) => {
   const [slotDisplay, setSlotDisplay] = useState<SlotDisplayState>({ displaySlot: 0, showNextSlot: false });
   const firstValidSlotRef = useRef<number>(-1);
@@ -118,6 +122,8 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
           currentConfig={currentConfig}
           chainInfo={chainInfo}
           currentDisplaySlot={displaySlot}
+          serviceStatus={serviceStatus}
+          legacyBuilderInfo={legacyBuilderInfo}
         />
       ))}
     </div>

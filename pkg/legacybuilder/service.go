@@ -35,6 +35,7 @@ type Service struct {
 	nonceManager   *NonceManager
 	paymentBuilder *PaymentBuilder
 	validatorCache *ValidatorCache
+	slotScheduler  *SlotScheduler
 	engineClient   *engine.Client
 	clClient       *beacon.Client
 	chainSvc       chain.Service
@@ -52,8 +53,10 @@ type Service struct {
 	statsMu sync.RWMutex
 
 	// Build tracking
-	buildStartedSlots map[phase0.Slot]bool
-	buildMu           sync.Mutex
+	submissionScheduledSlots map[phase0.Slot]bool
+	slotAttemptCounts        map[phase0.Slot]int
+	submissionsClosed        map[phase0.Slot]bool // Block received, no more submissions needed
+	buildMu                  sync.Mutex
 
 	// Runtime toggle
 	enabled atomic.Bool
@@ -82,6 +85,7 @@ func NewService(
 	validatorCache := NewValidatorCache()
 	nonceManager := NewNonceManager(w, serviceLog)
 	paymentBuilder := NewPaymentBuilder(w, serviceLog)
+	slotScheduler := NewSlotScheduler(cfg)
 
 	builderPubkey := blsSigner.PublicKey()
 
@@ -106,23 +110,26 @@ func NewService(
 	)
 
 	return &Service{
-		cfg:                cfg,
-		relayClient:        relayClient,
-		blockSubmitter:     blockSubmitter,
-		nonceManager:       nonceManager,
-		paymentBuilder:     paymentBuilder,
-		validatorCache:     validatorCache,
-		engineClient:       engineClient,
-		clClient:           clClient,
-		chainSvc:           chainSvc,
-		wallet:             w,
-		rpcClient:          rpcClient,
-		blsSigner:          blsSigner,
-		builderPubkey:      builderPubkey,
-		feeRecipient:       w.Address(),
-		submissionDispatch: &utils.Dispatcher[*BlockSubmissionEvent]{},
-		buildStartedSlots:  make(map[phase0.Slot]bool),
-		log:                serviceLog,
+		cfg:                      cfg,
+		relayClient:              relayClient,
+		blockSubmitter:           blockSubmitter,
+		nonceManager:             nonceManager,
+		paymentBuilder:           paymentBuilder,
+		validatorCache:           validatorCache,
+		slotScheduler:            slotScheduler,
+		engineClient:             engineClient,
+		clClient:                 clClient,
+		chainSvc:                 chainSvc,
+		wallet:                   w,
+		rpcClient:                rpcClient,
+		blsSigner:                blsSigner,
+		builderPubkey:            builderPubkey,
+		feeRecipient:             w.Address(),
+		submissionDispatch:       &utils.Dispatcher[*BlockSubmissionEvent]{},
+		submissionScheduledSlots: make(map[phase0.Slot]bool),
+		slotAttemptCounts:        make(map[phase0.Slot]int),
+		submissionsClosed:        make(map[phase0.Slot]bool),
+		log:                      serviceLog,
 	}, nil
 }
 
@@ -200,6 +207,19 @@ func (s *Service) GetConfig() *config.LegacyBuilderConfig {
 	return s.cfg
 }
 
+// GetWallet returns the wallet used for EL payment transactions.
+func (s *Service) GetWallet() *wallet.Wallet {
+	return s.wallet
+}
+
+// GetConfirmedNonce returns the confirmed on-chain nonce tracked by the nonce manager.
+func (s *Service) GetConfirmedNonce() uint64 {
+	if s.nonceManager == nil {
+		return 0
+	}
+	return s.nonceManager.GetBaseNonce()
+}
+
 // SetEnabled sets whether the legacy builder is actively building/submitting.
 func (s *Service) SetEnabled(enabled bool) {
 	s.enabled.Store(enabled)
@@ -219,6 +239,7 @@ func (s *Service) IsEnabled() bool {
 // UpdateConfig updates the service configuration at runtime.
 func (s *Service) UpdateConfig(cfg *config.LegacyBuilderConfig) {
 	s.cfg = cfg
+	s.slotScheduler.UpdateConfig(cfg)
 	s.log.Info("Legacy builder configuration updated")
 }
 
@@ -229,6 +250,9 @@ func (s *Service) run() {
 	payloadAttrSub := s.clClient.Events().SubscribePayloadAttributes()
 	defer payloadAttrSub.Unsubscribe()
 
+	headSub := s.clClient.Events().SubscribeHead()
+	defer headSub.Unsubscribe()
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -236,7 +260,21 @@ func (s *Service) run() {
 
 		case event := <-payloadAttrSub.Channel():
 			s.handlePayloadAttributes(event)
+
+		case event := <-headSub.Channel():
+			s.handleHeadEvent(event)
 		}
+	}
+}
+
+// handleHeadEvent closes submissions for a slot when a block is received.
+func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+
+	if !s.submissionsClosed[event.Slot] {
+		s.submissionsClosed[event.Slot] = true
+		s.log.WithField("slot", event.Slot).Debug("Submissions closed for slot (block received)")
 	}
 }
 
@@ -284,6 +322,14 @@ func (s *Service) handlePayloadAttributes(event *beacon.PayloadAttributesEvent) 
 		return
 	}
 
+	// Check schedule
+	if !s.slotScheduler.ShouldBuildForSlot(event.ProposalSlot) {
+		s.log.WithField("slot", event.ProposalSlot).Debug(
+			"Slot not in schedule, skipping legacy build",
+		)
+		return
+	}
+
 	// Check if the proposer for this slot is registered on a relay
 	reg := s.validatorCache.GetRegistration(event.ProposalSlot)
 	if reg == nil {
@@ -295,54 +341,129 @@ func (s *Service) handlePayloadAttributes(event *beacon.PayloadAttributesEvent) 
 
 	// Check if already building for this slot
 	s.buildMu.Lock()
-	if s.buildStartedSlots[event.ProposalSlot] {
+	if s.submissionScheduledSlots[event.ProposalSlot] {
 		s.buildMu.Unlock()
 		return
 	}
 
-	s.buildStartedSlots[event.ProposalSlot] = true
+	s.submissionScheduledSlots[event.ProposalSlot] = true
 	s.buildMu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
 		"slot":        event.ProposalSlot,
 		"proposer":    reg.Entry.Message.Pubkey[:16],
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
-	}).Info("Relay-registered proposer found, scheduling legacy build")
+	}).Info("Relay-registered proposer found, scheduling legacy submissions")
 
-	s.scheduleBuildForSlot(event.ProposalSlot, event, reg)
+	s.scheduleSubmissionsForSlot(event.ProposalSlot, event, reg)
 }
 
-// scheduleBuildForSlot schedules a payload build at the configured BuildStartTime.
-func (s *Service) scheduleBuildForSlot(
+// scheduleSubmissionsForSlot schedules submissions within the configured submit window.
+// Each scheduled submission rebuilds a fresh payload with the configured payment, then submits.
+func (s *Service) scheduleSubmissionsForSlot(
 	slot phase0.Slot,
 	event *beacon.PayloadAttributesEvent,
 	reg *ValidatorRegistration,
 ) {
-	buildStartMs := s.cfg.BuildStartTime
 	slotStart := s.chainSvc.SlotToTime(slot)
-	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
-	delay := time.Until(buildTime)
+	startTime := slotStart.Add(time.Duration(s.cfg.SubmitStartTime) * time.Millisecond)
+	endTime := slotStart.Add(time.Duration(s.cfg.SubmitEndTime) * time.Millisecond)
 
-	if delay <= 0 {
-		go s.executeBuildForSlot(slot, event, reg)
+	if endTime.Before(startTime) {
+		s.log.WithFields(logrus.Fields{
+			"slot":            slot,
+			"submit_start_ms": s.cfg.SubmitStartTime,
+			"submit_end_ms":   s.cfg.SubmitEndTime,
+		}).Warn("Invalid legacy submit window (end before start); skipping")
 		return
 	}
 
-	s.log.WithFields(logrus.Fields{
-		"slot":     slot,
-		"delay_ms": delay.Milliseconds(),
-	}).Debug("Scheduling legacy build for slot")
+	interval := s.cfg.SubmitInterval
+	if interval < 0 {
+		s.log.WithField("slot", slot).Warn("Negative legacy submit interval; skipping submissions")
+		return
+	}
 
-	time.AfterFunc(delay, func() {
-		s.executeBuildForSlot(slot, event, reg)
-	})
+	// Build absolute submission times.
+	var times []time.Time
+	if interval == 0 {
+		times = []time.Time{startTime}
+	} else {
+		step := time.Duration(interval) * time.Millisecond
+		for t := startTime; !t.After(endTime); t = t.Add(step) {
+			times = append(times, t)
+		}
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":            slot,
+		"submit_start_ms": s.cfg.SubmitStartTime,
+		"submit_end_ms":   s.cfg.SubmitEndTime,
+		"submit_interval": s.cfg.SubmitInterval,
+		"count":           len(times),
+	}).Debug("Scheduling legacy submissions for slot")
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+
+		for _, submitAt := range times {
+			// Check if block already received for this slot
+			s.buildMu.Lock()
+			closed := s.submissionsClosed[slot]
+			s.buildMu.Unlock()
+
+			if closed {
+				s.log.WithField("slot", slot).Debug("Stopping legacy submissions (block received)")
+				return
+			}
+
+			// Wait until it's time (or context cancelled)
+			delay := time.Until(submitAt)
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				select {
+				case <-s.ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			} else {
+				// If we're already past this tick, skip it (don't "catch up" spam).
+				continue
+			}
+
+			// Check again after waiting - block may have arrived while we waited
+			s.buildMu.Lock()
+			closed = s.submissionsClosed[slot]
+			s.buildMu.Unlock()
+
+			if closed {
+				s.log.WithField("slot", slot).Debug("Stopping legacy submissions (block received)")
+				return
+			}
+
+			attempt := s.nextAttemptIndex(slot)
+			s.executeSubmissionForSlot(slot, event, reg, attempt)
+		}
+	}()
 }
 
-// executeBuildForSlot builds a payload with a builder payment tx and submits to relays.
-func (s *Service) executeBuildForSlot(
+func (s *Service) nextAttemptIndex(slot phase0.Slot) int {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+
+	n := s.slotAttemptCounts[slot]
+	s.slotAttemptCounts[slot] = n + 1
+	return n
+}
+
+// executeSubmissionForSlot builds a fresh payload with a builder payment tx and submits to relays.
+func (s *Service) executeSubmissionForSlot(
 	slot phase0.Slot,
 	attrs *beacon.PayloadAttributesEvent,
 	reg *ValidatorRegistration,
+	attempt int,
 ) {
 	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
 	defer cancel()
@@ -365,6 +486,16 @@ func (s *Service) executeBuildForSlot(
 			"Failed to calculate payment amount",
 		)
 		return
+	}
+
+	// Apply bid increase (like ePBS continuous bidding): bump payment per subsequent submission.
+	if attempt > 0 && s.cfg.SubmitInterval > 0 && s.cfg.BidIncrease > 0 {
+		incWei := new(big.Int).Mul(
+			big.NewInt(int64(s.cfg.BidIncrease)),
+			big.NewInt(1_000_000_000), // gwei -> wei
+		)
+		incWei.Mul(incWei, big.NewInt(int64(attempt)))
+		paymentAmount = new(big.Int).Add(paymentAmount, incWei)
 	}
 
 	// Sync nonce from chain before building. Payment txs are included via BuilderTxs,
@@ -479,6 +610,8 @@ func (s *Service) executeBuildForSlot(
 	}
 
 	// Process results
+	slotCounted := false
+
 	for _, result := range results {
 		submissionEvent := &BlockSubmissionEvent{
 			Slot:           slot,
@@ -494,6 +627,12 @@ func (s *Service) executeBuildForSlot(
 		s.submissionDispatch.Fire(submissionEvent)
 
 		if result.Success {
+			// Count slot as built once (for schedule tracking)
+			if !slotCounted {
+				s.slotScheduler.OnSlotBuilt()
+				slotCounted = true
+			}
+
 			s.incrementStat(func(stats *LegacyBuilderStats) {
 				stats.BlocksSubmitted++
 			})
@@ -523,9 +662,11 @@ func (s *Service) executeBuildForSlot(
 		s.clClient.Events().CleanupPayloadAttributesCache(cleanupSlot)
 
 		s.buildMu.Lock()
-		for oldSlot := range s.buildStartedSlots {
+		for oldSlot := range s.submissionScheduledSlots {
 			if oldSlot < cleanupSlot {
-				delete(s.buildStartedSlots, oldSlot)
+				delete(s.submissionScheduledSlots, oldSlot)
+				delete(s.slotAttemptCounts, oldSlot)
+				delete(s.submissionsClosed, oldSlot)
 			}
 		}
 		s.buildMu.Unlock()
@@ -656,6 +797,15 @@ func (s *Service) buildPayloadWithBuilderTxs(
 	)
 	if err != nil {
 		return nil, nil, nil, nil, "", fmt.Errorf("failed to request payload build: %w", err)
+	}
+
+	// Wait for the execution client to build a block with transactions
+	if s.cfg.PayloadBuildDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, nil, nil, nil, "", ctx.Err()
+		case <-time.After(time.Duration(s.cfg.PayloadBuildDelay) * time.Millisecond):
+		}
 	}
 
 	executionPayload, blobsBundle, blockValue, execRequests, consensusVersion, err := s.engineClient.GetPayloadRawFull(

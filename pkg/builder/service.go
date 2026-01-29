@@ -96,6 +96,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.clClient,
 		s.engineClient,
 		s.feeRecipient,
+		s.cfg.EPBS.PayloadBuildDelay,
 		s.log,
 	)
 
@@ -144,6 +145,11 @@ func (s *Service) GetConfig() *Config {
 func (s *Service) UpdateConfig(cfg *Config) error {
 	s.cfg = cfg
 	s.slotManager.UpdateConfig(cfg)
+
+	// Update payload builder delay if available
+	if s.payloadBuilder != nil {
+		s.payloadBuilder.SetPayloadBuildDelay(cfg.EPBS.PayloadBuildDelay)
+	}
 
 	s.log.Info("Configuration updated")
 

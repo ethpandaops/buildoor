@@ -16,6 +16,9 @@ export const Legend: React.FC = () => {
         <span><span className="legend-dot bg-bid-failed"></span> Bid Failed</span>
         <span><span className="legend-dot bg-reveal-sent"></span> Reveal</span>
         <span><span className="legend-dot bg-reveal-failed"></span> Reveal Failed</span>
+        <span className="legend-section ms-2">Legacy PBS:</span>
+        <span><span className="legend-dot bg-legacy-submitted"></span> Submission</span>
+        <span><span className="legend-dot bg-legacy-failed"></span> Submission Failed</span>
       </div>
     </div>
   );

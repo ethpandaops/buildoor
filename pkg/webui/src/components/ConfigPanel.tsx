@@ -10,6 +10,7 @@ interface ConfigPanelProps {
 
 export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus, stats }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
+  const [collapsed, setCollapsed] = useState(true);
   const [editingEpbs, setEditingEpbs] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [toggling, setToggling] = useState(false);
@@ -20,7 +21,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
     reveal_time: 0,
     bid_min_amount: 0,
     bid_increase: 0,
-    bid_interval: 0
+    bid_interval: 0,
+    payload_build_delay: 500
   });
   const [scheduleForm, setScheduleForm] = useState<ScheduleConfig>({
     mode: 'all',
@@ -135,7 +137,14 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
   return (
     <div className="card mb-3">
       <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">ePBS</h5>
+        <div
+          className="d-flex align-items-center gap-2 flex-grow-1"
+          style={{ cursor: 'pointer' }}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} text-muted`} style={{ fontSize: '12px', width: '12px' }}></i>
+          <h5 className="mb-0">ePBS</h5>
+        </div>
         <div className="d-flex gap-2 align-items-center">
           <span className={`badge ${epbsEnabled ? 'bg-success' : 'bg-secondary'}`}>
             {epbsEnabled ? 'Active' : 'Inactive'}
@@ -143,7 +152,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
           {canEdit && (
             <button
               className={`btn btn-sm ${epbsEnabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
-              onClick={handleToggleEpbs}
+              onClick={(e) => { e.stopPropagation(); handleToggleEpbs(); }}
               disabled={toggling}
               title={epbsEnabled ? 'Disable ePBS' : 'Enable ePBS'}
             >
@@ -152,7 +161,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
           )}
         </div>
       </div>
-      <div className="card-body p-2">
+      {!collapsed && <div className="card-body p-2">
         {/* Statistics */}
         <div className="section-header mb-2">Statistics</div>
         <div className="row g-2 mb-3">
@@ -238,6 +247,12 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
                 <div className="config-item-value">{epbs?.bid_interval || 0} ms</div>
               </div>
             </div>
+            <div className="col-12 col-sm-6">
+              <div className="config-item">
+                <div className="config-item-label">Payload Build Delay</div>
+                <div className="config-item-value">{epbs?.payload_build_delay || 0} ms</div>
+              </div>
+            </div>
           </div>
         ) : (
           <form onSubmit={handleEpbsSave}>
@@ -309,6 +324,16 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
                   className="form-control form-control-sm"
                   value={epbsForm.bid_interval}
                   onChange={(e) => setEpbsForm({ ...epbsForm, bid_interval: parseInt(e.target.value) || 0 })}
+                  required
+                />
+              </div>
+              <div className="col-12 col-sm-6">
+                <label className="form-label mb-0 small">Payload Build Delay (ms)</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={epbsForm.payload_build_delay}
+                  onChange={(e) => setEpbsForm({ ...epbsForm, payload_build_delay: parseInt(e.target.value) || 0 })}
                   required
                 />
               </div>
@@ -400,7 +425,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
             </div>
           </form>
         )}
-      </div>
+      </div>}
     </div>
   );
 };

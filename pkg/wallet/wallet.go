@@ -70,6 +70,15 @@ func (w *Wallet) Address() common.Address {
 	return w.address
 }
 
+// PendingNonce returns the next nonce the wallet will use when building txs.
+// This is set by Sync() and then incremented locally on each BuildTransaction().
+func (w *Wallet) PendingNonce() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.pendingNonce
+}
+
 // GetBalance fetches the current balance from the chain.
 func (w *Wallet) GetBalance(ctx context.Context) (*big.Int, error) {
 	balance, err := w.rpcClient.GetBalance(ctx, w.address)

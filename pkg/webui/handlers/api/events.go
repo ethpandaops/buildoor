@@ -55,11 +55,12 @@ type SlotStartEvent struct {
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
 type PayloadReadyStreamEvent struct {
-	Slot            uint64 `json:"slot"`
-	BlockHash       string `json:"block_hash"`
-	ParentBlockHash string `json:"parent_block_hash"`
-	BlockValue      uint64 `json:"block_value"`
-	ReadyAt         int64  `json:"ready_at"`
+	Slot             uint64 `json:"slot"`
+	BlockHash        string `json:"block_hash"`
+	ParentBlockHash  string `json:"parent_block_hash"`
+	BlockValue       uint64 `json:"block_value"`
+	BuildRequestedAt int64  `json:"build_requested_at"`
+	ReadyAt          int64  `json:"ready_at"`
 }
 
 // BidSubmittedEvent is sent when we submit a bid (success or failure).
@@ -131,6 +132,7 @@ type BuilderInfoEvent struct {
 	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
 	WalletAddress     string `json:"wallet_address,omitempty"`
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
+	WalletNonce       uint64 `json:"wallet_nonce,omitempty"`
 	PendingDeposit    uint64 `json:"pending_deposit_gwei,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
@@ -165,6 +167,10 @@ type LegacyBuilderInfoEvent struct {
 	BlocksSubmitted    uint64 `json:"blocks_submitted"`
 	BlocksAccepted     uint64 `json:"blocks_accepted"`
 	SubmissionFailures uint64 `json:"submission_failures"`
+	SubmitStartTime    int64  `json:"submit_start_time"`
+	SubmitEndTime      int64  `json:"submit_end_time"`
+	SubmitInterval     int64  `json:"submit_interval"`
+	BidIncrease        uint64 `json:"bid_increase"`
 }
 
 // ServiceStatusEvent contains the enabled/disabled status of all services.
@@ -399,11 +405,12 @@ func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadReadyStreamEvent{
-			Slot:            uint64(event.Slot),
-			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-			ParentBlockHash: fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
-			BlockValue:      event.BlockValue,
-			ReadyAt:         event.ReadyAt.UnixMilli(),
+			Slot:             uint64(event.Slot),
+			BlockHash:        fmt.Sprintf("0x%x", event.BlockHash[:]),
+			ParentBlockHash:  fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			BlockValue:       event.BlockValue,
+			BuildRequestedAt: event.BuildRequestedAt.UnixMilli(),
+			ReadyAt:          event.ReadyAt.UnixMilli(),
 		},
 	})
 
@@ -605,6 +612,10 @@ func (m *EventStreamManager) getLegacyBuilderInfo() LegacyBuilderInfoEvent {
 		BlocksSubmitted:    stats.BlocksSubmitted,
 		BlocksAccepted:     stats.BlocksAccepted,
 		SubmissionFailures: stats.SubmissionFailures,
+		SubmitStartTime:    cfg.SubmitStartTime,
+		SubmitEndTime:      cfg.SubmitEndTime,
+		SubmitInterval:     cfg.SubmitInterval,
+		BidIncrease:        cfg.BidIncrease,
 	}
 }
 
@@ -713,8 +724,21 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		// Get wallet info
 		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
 			info.WalletAddress = wallet.Address().Hex()
+			info.WalletNonce = wallet.PendingNonce()
 
 			// Get wallet balance (async-safe, we just use cached value or fetch)
+			if balance, err := wallet.GetBalance(m.ctx); err == nil && balance != nil {
+				info.WalletBalance = balance.String()
+			}
+		}
+	}
+
+	// If lifecycle isn't providing wallet details, fall back to legacy builder wallet (when configured).
+	if info.WalletAddress == "" && m.legacyBuilderSvc != nil {
+		if wallet := m.legacyBuilderSvc.GetWallet(); wallet != nil {
+			info.WalletAddress = wallet.Address().Hex()
+			info.WalletNonce = m.legacyBuilderSvc.GetConfirmedNonce()
+
 			if balance, err := wallet.GetBalance(m.ctx); err == nil && balance != nil {
 				info.WalletBalance = balance.String()
 			}

@@ -66,16 +66,24 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo }) => {
               </td>
             </tr>
 
-            {/* Wallet Info (if lifecycle enabled) */}
-            {builderInfo.lifecycle_enabled && builderInfo.wallet_address && (
-              <tr>
-                <td className="text-muted">Wallet:</td>
-                <td className="text-end font-monospace small">
-                  <span title={builderInfo.wallet_address}>
-                    {truncateHash(builderInfo.wallet_address, 6)}
-                  </span>
-                </td>
-              </tr>
+            {/* Wallet Info (lifecycle or legacy builder) */}
+            {builderInfo.wallet_address && (
+              <>
+                <tr>
+                  <td className="text-muted">Wallet:</td>
+                  <td className="text-end font-monospace small">
+                    <span title={builderInfo.wallet_address}>
+                      {truncateHash(builderInfo.wallet_address, 6)}
+                    </span>
+                  </td>
+                </tr>
+                {typeof builderInfo.wallet_nonce === 'number' && (
+                  <tr>
+                    <td className="text-muted">Nonce:</td>
+                    <td className="text-end font-monospace small">{builderInfo.wallet_nonce}</td>
+                  </tr>
+                )}
+              </>
             )}
 
             {/* Separator */}
@@ -113,8 +121,8 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo }) => {
               </tr>
             )}
 
-            {/* Wallet Balance (if lifecycle enabled) */}
-            {builderInfo.lifecycle_enabled && builderInfo.wallet_balance_wei && (
+            {/* Wallet Balance (lifecycle or legacy builder) */}
+            {builderInfo.wallet_balance_wei && (
               <>
                 <tr>
                   <td colSpan={2}><hr className="my-1" /></td>

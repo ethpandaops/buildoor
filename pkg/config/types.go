@@ -73,6 +73,10 @@ type EPBSConfig struct {
 
 	// BidInterval is milliseconds between bids. 0 means single bid.
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
+
+	// PayloadBuildDelay is the delay in milliseconds between requesting payload build (FCU)
+	// and retrieving the payload. This allows the execution client time to include transactions.
+	PayloadBuildDelay int64 `yaml:"payload_build_delay" json:"payload_build_delay"`
 }
 
 // LegacyBuilderConfig defines parameters for the legacy (MEV-Boost compatible) builder API.
@@ -80,9 +84,8 @@ type LegacyBuilderConfig struct {
 	// RelayURLs is the list of relay endpoints to poll and submit blocks to.
 	RelayURLs []string `yaml:"relay_urls" json:"relay_urls"`
 
-	// BuildStartTime is milliseconds relative to slot start when building begins.
-	// Negative values mean before slot start (e.g. -2000 = 2s before slot).
-	BuildStartTime int64 `yaml:"build_start_time" json:"build_start_time"`
+	// Schedule controls which slots the legacy builder builds for.
+	Schedule ScheduleConfig `yaml:"schedule" json:"schedule"`
 
 	// SubmitStartTime is milliseconds relative to slot start for first relay submission.
 	SubmitStartTime int64 `yaml:"submit_start_time" json:"submit_start_time"`
@@ -92,6 +95,10 @@ type LegacyBuilderConfig struct {
 
 	// SubmitInterval is milliseconds between submissions. 0 = single submit.
 	SubmitInterval int64 `yaml:"submit_interval" json:"submit_interval"`
+
+	// BidIncrease is the amount to increase payment per subsequent submission, in gwei.
+	// Only applies when multiple submissions are scheduled (SubmitInterval > 0).
+	BidIncrease uint64 `yaml:"bid_increase" json:"bid_increase"`
 
 	// PaymentMode is "fixed" or "percentage".
 	PaymentMode string `yaml:"payment_mode" json:"payment_mode"`
@@ -104,6 +111,10 @@ type LegacyBuilderConfig struct {
 
 	// PaymentGasLimit is the gas limit for the builder payment transaction.
 	PaymentGasLimit uint64 `yaml:"payment_gas_limit" json:"payment_gas_limit"`
+
+	// PayloadBuildDelay is the delay in milliseconds between requesting payload build (FCU)
+	// and retrieving the payload. This allows the execution client time to include transactions.
+	PayloadBuildDelay int64 `yaml:"payload_build_delay" json:"payload_build_delay"`
 
 	// ValidatorPollSecs is how often to poll relays for validator registrations.
 	ValidatorPollSecs int64 `yaml:"validator_poll_secs" json:"validator_poll_secs"`

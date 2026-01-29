@@ -262,18 +262,18 @@ func (c *Client) RequestPayloadBuild(
 	}
 
 	if len(attrs.BuilderTxs) > 0 {
-		builderTxsHex := make([]string, 0, len(attrs.BuilderTxs))
+		builderTxsJSON := make([]json.RawMessage, 0, len(attrs.BuilderTxs))
 
 		for _, tx := range attrs.BuilderTxs {
-			txBytes, err := tx.MarshalBinary()
+			txJSON, err := tx.MarshalJSON()
 			if err != nil {
-				return PayloadID{}, fmt.Errorf("failed to marshal builder tx: %w", err)
+				return PayloadID{}, fmt.Errorf("failed to marshal builder tx to JSON: %w", err)
 			}
 
-			builderTxsHex = append(builderTxsHex, "0x"+hex.EncodeToString(txBytes))
+			builderTxsJSON = append(builderTxsJSON, txJSON)
 		}
 
-		attrsMap["builderTxs"] = builderTxsHex
+		attrsMap["builderTxs"] = builderTxsJSON
 	}
 
 	var response ForkchoiceUpdatedResponse

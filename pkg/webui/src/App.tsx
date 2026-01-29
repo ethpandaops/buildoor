@@ -44,6 +44,8 @@ export const App: React.FC = () => {
                 slotStates={slotStates}
                 slotConfigs={slotConfigs}
                 currentConfig={config}
+                serviceStatus={serviceStatus}
+                legacyBuilderInfo={legacyBuilderInfo}
               />
               <Legend />
             </div>
