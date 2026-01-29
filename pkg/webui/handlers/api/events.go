@@ -13,6 +13,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/legacybuilder"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
@@ -21,19 +22,22 @@ import (
 type EventType string
 
 const (
-	EventTypeConfig          EventType = "config"
-	EventTypeStatus          EventType = "status"
-	EventTypeSlotStart       EventType = "slot_start"
-	EventTypePayloadReady    EventType = "payload_ready"
-	EventTypeBidSubmitted    EventType = "bid_submitted"
-	EventTypeHeadReceived    EventType = "head_received"
-	EventTypeReveal          EventType = "reveal"
-	EventTypeBidEvent        EventType = "bid_event"
-	EventTypeStats           EventType = "stats"
-	EventTypeSlotState       EventType = "slot_state"
-	EventTypePayloadEnvelope EventType = "payload_envelope"
-	EventTypeBuilderInfo     EventType = "builder_info"
-	EventTypeHeadVotes       EventType = "head_votes"
+	EventTypeConfig               EventType = "config"
+	EventTypeStatus               EventType = "status"
+	EventTypeSlotStart            EventType = "slot_start"
+	EventTypePayloadReady         EventType = "payload_ready"
+	EventTypeBidSubmitted         EventType = "bid_submitted"
+	EventTypeHeadReceived         EventType = "head_received"
+	EventTypeReveal               EventType = "reveal"
+	EventTypeBidEvent             EventType = "bid_event"
+	EventTypeStats                EventType = "stats"
+	EventTypeSlotState            EventType = "slot_state"
+	EventTypePayloadEnvelope      EventType = "payload_envelope"
+	EventTypeBuilderInfo          EventType = "builder_info"
+	EventTypeHeadVotes            EventType = "head_votes"
+	EventTypeLegacyBlockSubmitted EventType = "legacy_block_submitted"
+	EventTypeLegacyBuilderInfo    EventType = "legacy_builder_info"
+	EventTypeServiceStatus        EventType = "service_status"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -141,17 +145,48 @@ type HeadVotesStreamEvent struct {
 	Timestamp        int64   `json:"timestamp"`
 }
 
+// LegacyBlockSubmittedStreamEvent is sent when a block is submitted to a relay.
+type LegacyBlockSubmittedStreamEvent struct {
+	Slot           uint64 `json:"slot"`
+	BlockHash      string `json:"block_hash"`
+	Value          string `json:"value"`
+	ProposerPubkey string `json:"proposer_pubkey"`
+	RelayURL       string `json:"relay_url"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+	Timestamp      int64  `json:"timestamp"`
+}
+
+// LegacyBuilderInfoEvent contains legacy builder status information.
+type LegacyBuilderInfoEvent struct {
+	Enabled            bool   `json:"enabled"`
+	RelayCount         int    `json:"relay_count"`
+	ValidatorsTracked  uint64 `json:"validators_tracked"`
+	BlocksSubmitted    uint64 `json:"blocks_submitted"`
+	BlocksAccepted     uint64 `json:"blocks_accepted"`
+	SubmissionFailures uint64 `json:"submission_failures"`
+}
+
+// ServiceStatusEvent contains the enabled/disabled status of all services.
+type ServiceStatusEvent struct {
+	EPBSAvailable   bool `json:"epbs_available"`
+	EPBSEnabled     bool `json:"epbs_enabled"`
+	LegacyAvailable bool `json:"legacy_available"`
+	LegacyEnabled   bool `json:"legacy_enabled"`
+}
+
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
-	builderSvc   *builder.Service
-	epbsSvc      *epbs.Service      // Optional ePBS service for bid events
-	lifecycleMgr *lifecycle.Manager // Optional lifecycle manager for balance info
-	chainSvc     chain.Service      // Optional chain service for head vote tracking
-	clients      map[chan *StreamEvent]struct{}
-	mu           sync.RWMutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+	builderSvc       *builder.Service
+	epbsSvc          *epbs.Service          // Optional ePBS service for bid events
+	lifecycleMgr     *lifecycle.Manager     // Optional lifecycle manager for balance info
+	chainSvc         chain.Service          // Optional chain service for head vote tracking
+	legacyBuilderSvc *legacybuilder.Service // Optional legacy builder service
+	clients          map[chan *StreamEvent]struct{}
+	mu               sync.RWMutex
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 
 	// Track slot states for UI
 	slotStates   map[phase0.Slot]*SlotStateEvent
@@ -164,6 +199,10 @@ type EventStreamManager struct {
 	// Track last sent builder info to avoid spam
 	lastBuilderInfo   BuilderInfoEvent
 	lastBuilderInfoMu sync.Mutex
+
+	// Track last sent legacy builder info to avoid spam
+	lastLegacyInfo   LegacyBuilderInfoEvent
+	lastLegacyInfoMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
@@ -172,18 +211,20 @@ func NewEventStreamManager(
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
+	legacyBuilderSvc *legacybuilder.Service,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &EventStreamManager{
-		builderSvc:   builderSvc,
-		epbsSvc:      epbsSvc,
-		lifecycleMgr: lifecycleMgr,
-		chainSvc:     chainSvc,
-		clients:      make(map[chan *StreamEvent]struct{}, 8),
-		ctx:          ctx,
-		cancel:       cancel,
-		slotStates:   make(map[phase0.Slot]*SlotStateEvent, 16),
+		builderSvc:       builderSvc,
+		epbsSvc:          epbsSvc,
+		lifecycleMgr:     lifecycleMgr,
+		chainSvc:         chainSvc,
+		legacyBuilderSvc: legacyBuilderSvc,
+		clients:          make(map[chan *StreamEvent]struct{}, 8),
+		ctx:              ctx,
+		cancel:           cancel,
+		slotStates:       make(map[phase0.Slot]*SlotStateEvent, 16),
 	}
 }
 
@@ -213,6 +254,14 @@ func (m *EventStreamManager) Start() {
 			headVoteChan = hvSub.Channel()
 			defer hvSub.Unsubscribe()
 		}
+	}
+
+	// Subscribe to legacy builder events (if available)
+	var legacySubmitChan <-chan *legacybuilder.BlockSubmissionEvent
+	if m.legacyBuilderSvc != nil {
+		legacySubmitSub := m.legacyBuilderSvc.SubscribeBlockSubmissions(16)
+		legacySubmitChan = legacySubmitSub.Channel()
+		defer legacySubmitSub.Unsubscribe()
 	}
 
 	m.wg.Add(1)
@@ -257,6 +306,11 @@ func (m *EventStreamManager) Start() {
 					m.handleHeadVoteUpdate(event)
 				}
 
+			case event, ok := <-legacySubmitChan:
+				if ok {
+					m.handleLegacyBlockSubmission(event)
+				}
+
 			case <-ticker.C:
 				currentSlot := m.builderSvc.GetCurrentSlot()
 				if currentSlot != lastSlot {
@@ -266,6 +320,7 @@ func (m *EventStreamManager) Start() {
 				// Periodically send stats and builder info
 				m.sendStats()
 				m.sendBuilderInfo()
+				m.sendLegacyBuilderInfo()
 			}
 		}
 	}()
@@ -492,6 +547,67 @@ func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 	})
 }
 
+func (m *EventStreamManager) handleLegacyBlockSubmission(event *legacybuilder.BlockSubmissionEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLegacyBlockSubmitted,
+		Timestamp: time.Now().UnixMilli(),
+		Data: LegacyBlockSubmittedStreamEvent{
+			Slot:           uint64(event.Slot),
+			BlockHash:      event.BlockHash,
+			Value:          event.Value,
+			ProposerPubkey: event.ProposerPubkey,
+			RelayURL:       event.RelayURL,
+			Success:        event.Success,
+			Error:          event.Error,
+			Timestamp:      event.Timestamp.UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) sendLegacyBuilderInfo() {
+	if m.legacyBuilderSvc == nil {
+		return
+	}
+
+	info := m.getLegacyBuilderInfo()
+
+	// Only send if info changed
+	m.lastLegacyInfoMu.Lock()
+	changed := info != m.lastLegacyInfo
+	if changed {
+		m.lastLegacyInfo = info
+	}
+	m.lastLegacyInfoMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLegacyBuilderInfo,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      info,
+	})
+}
+
+func (m *EventStreamManager) getLegacyBuilderInfo() LegacyBuilderInfoEvent {
+	if m.legacyBuilderSvc == nil {
+		return LegacyBuilderInfoEvent{}
+	}
+
+	stats := m.legacyBuilderSvc.GetStats()
+	cfg := m.legacyBuilderSvc.GetConfig()
+
+	return LegacyBuilderInfoEvent{
+		Enabled:            true,
+		RelayCount:         len(cfg.RelayURLs),
+		ValidatorsTracked:  stats.ValidatorsTracked,
+		BlocksSubmitted:    stats.BlocksSubmitted,
+		BlocksAccepted:     stats.BlocksAccepted,
+		SubmissionFailures: stats.SubmissionFailures,
+	}
+}
+
 func (m *EventStreamManager) broadcastSlotState(slot phase0.Slot) {
 	m.slotStatesMu.RLock()
 	state, ok := m.slotStates[slot]
@@ -641,6 +757,13 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 		},
 	}
 
+	// Send service status
+	ch <- &StreamEvent{
+		Type:      EventTypeServiceStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.getServiceStatus(),
+	}
+
 	// Send current stats
 	stats := m.builderSvc.GetStats()
 	ch <- &StreamEvent{
@@ -676,6 +799,15 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 				"genesis_time":     genesis.GenesisTime.UnixMilli(),
 				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
 			},
+		}
+	}
+
+	// Send legacy builder info
+	if m.legacyBuilderSvc != nil {
+		ch <- &StreamEvent{
+			Type:      EventTypeLegacyBuilderInfo,
+			Timestamp: time.Now().UnixMilli(),
+			Data:      m.getLegacyBuilderInfo(),
 		}
 	}
 
@@ -820,4 +952,30 @@ func (m *EventStreamManager) BroadcastConfigUpdate() {
 		Timestamp: time.Now().UnixMilli(),
 		Data:      cfg,
 	})
+}
+
+// BroadcastServiceStatus broadcasts the current service enabled/disabled status.
+func (m *EventStreamManager) BroadcastServiceStatus() {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeServiceStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.getServiceStatus(),
+	})
+}
+
+func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
+	status := ServiceStatusEvent{
+		EPBSAvailable:   m.epbsSvc != nil,
+		LegacyAvailable: m.legacyBuilderSvc != nil,
+	}
+
+	if m.epbsSvc != nil {
+		status.EPBSEnabled = m.epbsSvc.IsEnabled()
+	}
+
+	if m.legacyBuilderSvc != nil {
+		status.LegacyEnabled = m.legacyBuilderSvc.IsEnabled()
+	}
+
+	return status
 }

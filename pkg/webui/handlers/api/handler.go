@@ -4,17 +4,19 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/legacybuilder"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // APIHandler handles API requests for the buildoor web UI.
 type APIHandler struct {
-	authHandler    *auth.AuthHandler
-	builderSvc     *builder.Service
-	epbsSvc        *epbs.Service       // May be nil
-	lifecycleMgr   *lifecycle.Manager  // May be nil
-	eventStreamMgr *EventStreamManager // May be nil
+	authHandler      *auth.AuthHandler
+	builderSvc       *builder.Service
+	epbsSvc          *epbs.Service          // May be nil
+	lifecycleMgr     *lifecycle.Manager     // May be nil
+	legacyBuilderSvc *legacybuilder.Service // May be nil
+	eventStreamMgr   *EventStreamManager    // May be nil
 }
 
 // NewAPIHandler creates a new API handler.
@@ -24,18 +26,20 @@ func NewAPIHandler(
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
+	legacyBuilderSvc *legacybuilder.Service,
 ) *APIHandler {
 	h := &APIHandler{
-		authHandler:  authHandler,
-		builderSvc:   builderSvc,
-		epbsSvc:      epbsSvc,
-		lifecycleMgr: lifecycleMgr,
+		authHandler:      authHandler,
+		builderSvc:       builderSvc,
+		epbsSvc:          epbsSvc,
+		lifecycleMgr:     lifecycleMgr,
+		legacyBuilderSvc: legacyBuilderSvc,
 	}
 
 	// Create and start event stream manager
 	if builderSvc != nil {
 		h.eventStreamMgr = NewEventStreamManager(
-			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
+			builderSvc, epbsSvc, lifecycleMgr, chainSvc, legacyBuilderSvc,
 		)
 		h.eventStreamMgr.Start()
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -43,6 +44,7 @@ type Service struct {
 	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
 	builderSvc            *builder.Service
+	enabled               atomic.Bool
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	log                   logrus.FieldLogger
@@ -150,6 +152,9 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 	// Subscribe to builder's payload ready events
 	s.payloadSubscription = builderSvc.SubscribePayloadReady(16)
 
+	// Enable by default
+	s.enabled.Store(true)
+
 	// Start the main event loop
 	s.wg.Add(1)
 
@@ -205,7 +210,9 @@ func (s *Service) run() {
 			s.handleBidEvent(event)
 
 		case <-ticker.C:
-			s.scheduler.ProcessTick(s.ctx)
+			if s.enabled.Load() {
+				s.scheduler.ProcessTick(s.ctx)
+			}
 		}
 	}
 }
@@ -310,6 +317,22 @@ func (s *Service) GetBuilderIndex() uint64 {
 // GetBuilderPubkey returns the builder public key.
 func (s *Service) GetBuilderPubkey() phase0.BLSPubKey {
 	return s.builderPubkey
+}
+
+// SetEnabled sets whether the ePBS service is actively bidding/revealing.
+func (s *Service) SetEnabled(enabled bool) {
+	s.enabled.Store(enabled)
+
+	if enabled {
+		s.log.Info("ePBS service enabled")
+	} else {
+		s.log.Info("ePBS service disabled")
+	}
+}
+
+// IsEnabled returns whether the ePBS service is actively bidding/revealing.
+func (s *Service) IsEnabled() bool {
+	return s.enabled.Load()
 }
 
 // UpdateConfig updates the service configuration at runtime.

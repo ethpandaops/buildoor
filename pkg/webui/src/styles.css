@@ -444,6 +444,33 @@
   color: var(--bs-secondary-color);
 }
 
+/* Config items (2-column settings display) */
+.config-item {
+  padding: 6px 10px;
+  background: var(--bs-tertiary-bg);
+  border-radius: 4px;
+}
+
+.config-item-label {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+}
+
+.config-item-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bs-body-color);
+}
+
+/* Section headers within panels */
+.section-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 /* User display in header */
 .user-name {
   max-width: 150px;

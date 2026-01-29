@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, LegacyBuilderInfo, ServiceStatus } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -7,6 +7,8 @@ interface UseEventStreamResult {
   chainInfo: ChainInfo | null;
   stats: Stats | null;
   builderInfo: BuilderInfo | null;
+  legacyBuilderInfo: LegacyBuilderInfo | null;
+  serviceStatus: ServiceStatus | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -20,6 +22,8 @@ export function useEventStream(): UseEventStreamResult {
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [builderInfo, setBuilderInfo] = useState<BuilderInfo | null>(null);
+  const [legacyBuilderInfo, setLegacyBuilderInfo] = useState<LegacyBuilderInfo | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -246,6 +250,23 @@ export function useEventStream(): UseEventStreamResult {
           });
           break;
         }
+
+        case 'legacy_builder_info':
+          setLegacyBuilderInfo(event.data as LegacyBuilderInfo);
+          break;
+
+        case 'service_status':
+          setServiceStatus(event.data as ServiceStatus);
+          break;
+
+        case 'legacy_block_submitted': {
+          const data = event.data as { slot: number; block_hash: string; value: string; relay_url: string; success: boolean; error?: string };
+          const msg = data.success
+            ? `Legacy block submitted for slot ${data.slot} to ${data.relay_url} (value: ${data.value} wei)`
+            : `Legacy block submission FAILED for slot ${data.slot} to ${data.relay_url}: ${data.error || 'unknown'}`;
+          addEvent(data.success ? 'legacy_submitted' : 'legacy_failed', msg, event.timestamp);
+          break;
+        }
       }
     };
 
@@ -296,6 +317,8 @@ export function useEventStream(): UseEventStreamResult {
     chainInfo,
     stats,
     builderInfo,
+    legacyBuilderInfo,
+    serviceStatus,
     currentSlot,
     slotStates,
     slotConfigs,

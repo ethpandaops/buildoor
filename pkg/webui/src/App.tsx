@@ -3,9 +3,9 @@ import { useEventStream } from './hooks/useEventStream';
 import { SlotTimeline } from './components/SlotTimeline';
 import { Legend } from './components/Legend';
 import { EventLog } from './components/EventLog';
-import { Stats } from './components/Stats';
 import { ConfigPanel } from './components/ConfigPanel';
 import { BuilderInfo } from './components/BuilderInfo';
+import { LegacyBuilderInfo } from './components/LegacyBuilderInfo';
 
 export const App: React.FC = () => {
   const {
@@ -14,6 +14,8 @@ export const App: React.FC = () => {
     chainInfo,
     stats,
     builderInfo,
+    legacyBuilderInfo,
+    serviceStatus,
     currentSlot,
     slotStates,
     slotConfigs,
@@ -22,7 +24,7 @@ export const App: React.FC = () => {
   } = useEventStream();
 
   return (
-    <div className="container-fluid mt-2 d-flex flex-column" style={{ height: 'calc(100vh - 80px)' }}>
+    <div className="container-fluid mt-2 d-flex flex-column" style={{ minHeight: 'calc(100vh - 150px)' }}>
       <div className="row flex-grow-1" style={{ minHeight: 0 }}>
         {/* Left column: Timeline visualization */}
         <div className="col-lg-8 d-flex flex-column">
@@ -51,16 +53,11 @@ export const App: React.FC = () => {
           <EventLog events={events} onClear={clearEvents} />
         </div>
 
-        {/* Right column: Builder Info, Config and Stats */}
+        {/* Right column: Builder Info, ePBS, Legacy PBS */}
         <div className="col-lg-4">
-          {/* Builder Info */}
           <BuilderInfo builderInfo={builderInfo} />
-
-          {/* Stats */}
-          <Stats stats={stats} />
-
-          {/* Config panels */}
-          <ConfigPanel config={config} />
+          <ConfigPanel config={config} serviceStatus={serviceStatus} stats={stats} />
+          <LegacyBuilderInfo legacyBuilderInfo={legacyBuilderInfo} serviceStatus={serviceStatus} />
         </div>
       </div>
     </div>

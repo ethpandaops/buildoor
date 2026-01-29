@@ -16,6 +16,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/legacybuilder"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -79,21 +80,24 @@ and begins building blocks according to configuration.`,
 		pubkey := blsSigner.PublicKey()
 		logger.WithField("pubkey", fmt.Sprintf("%x", pubkey[:8])).Info("Builder key loaded")
 
-		// 4. Initialize RPC client and wallet (if lifecycle enabled)
+		// 4. Initialize RPC client and wallet
+		// Required if lifecycle is enabled; optional for legacy builder (available if config present).
 		var rpcClient *execution.Client
 
 		var w *wallet.Wallet
 
-		if cfg.LifecycleEnabled {
+		hasWalletConfig := cfg.ELRPC != "" && cfg.WalletPrivkey != ""
+
+		if cfg.LifecycleEnabled && !hasWalletConfig {
 			if cfg.ELRPC == "" {
 				return fmt.Errorf("--el-rpc is required when lifecycle is enabled")
 			}
 
-			if cfg.WalletPrivkey == "" {
-				return fmt.Errorf("--wallet-privkey is required when lifecycle is enabled")
-			}
+			return fmt.Errorf("--wallet-privkey is required when lifecycle is enabled")
+		}
 
-			logger.Info("Connecting to EL RPC for lifecycle management...")
+		if hasWalletConfig {
+			logger.Info("Connecting to EL RPC...")
 
 			rpcClient, err = execution.NewClient(ctx, cfg.ELRPC, logger)
 			if err != nil {
@@ -159,15 +163,32 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
-		// 8. Initialize ePBS service (if enabled)
-		var epbsSvc *epbs.Service
+		// 8. Initialize ePBS service (always available)
+		logger.Info("Initializing ePBS service...")
 
-		if cfg.EPBSEnabled {
-			logger.Info("Initializing ePBS service...")
+		epbsSvc, err := epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+		if err != nil {
+			return fmt.Errorf("failed to initialize ePBS: %w", err)
+		}
 
-			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+		// 8b. Initialize legacy builder service (available if relay URLs + wallet configured)
+		var legacyBuilderSvc *legacybuilder.Service
+
+		if len(cfg.LegacyBuilder.RelayURLs) > 0 && w != nil {
+			logger.Info("Initializing legacy builder service...")
+
+			legacyBuilderSvc, err = legacybuilder.NewService(
+				&cfg.LegacyBuilder,
+				clClient,
+				chainSvc,
+				engineClient,
+				blsSigner,
+				w,
+				rpcClient,
+				logger,
+			)
 			if err != nil {
-				return fmt.Errorf("failed to initialize ePBS: %w", err)
+				return fmt.Errorf("failed to initialize legacy builder: %w", err)
 			}
 		}
 
@@ -191,7 +212,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, legacyBuilderSvc)
 		}
 
 		// 10. Start lifecycle manager (if enabled)
@@ -215,14 +236,26 @@ and begins building blocks according to configuration.`,
 		}
 		defer builderSvc.Stop()
 
-		// 12. Start ePBS service (if enabled)
-		if epbsSvc != nil {
-			logger.Info("Starting ePBS service...")
+		// 12. Start ePBS service (always available, flag controls initial enabled state)
+		logger.Info("Starting ePBS service...")
 
-			if err := epbsSvc.Start(ctx, builderSvc); err != nil {
-				return fmt.Errorf("failed to start ePBS: %w", err)
+		if err := epbsSvc.Start(ctx, builderSvc); err != nil {
+			return fmt.Errorf("failed to start ePBS: %w", err)
+		}
+		defer epbsSvc.Stop()
+
+		epbsSvc.SetEnabled(cfg.EPBSEnabled)
+
+		// 13. Start legacy builder service (flag controls initial enabled state)
+		if legacyBuilderSvc != nil {
+			logger.Info("Starting legacy builder service...")
+
+			if err := legacyBuilderSvc.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start legacy builder: %w", err)
 			}
-			defer epbsSvc.Stop()
+			defer legacyBuilderSvc.Stop()
+
+			legacyBuilderSvc.SetEnabled(cfg.LegacyBuilderEnabled)
 		}
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")

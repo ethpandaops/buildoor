@@ -172,6 +172,43 @@ export interface ExternalBid {
   blockHash?: string;
 }
 
+export interface LegacyBuilderInfo {
+  enabled: boolean;
+  relay_count: number;
+  validators_tracked: number;
+  blocks_submitted: number;
+  blocks_accepted: number;
+  submission_failures: number;
+}
+
+export interface LegacyBlockSubmittedEvent {
+  slot: number;
+  block_hash: string;
+  value: string;
+  proposer_pubkey: string;
+  relay_url: string;
+  success: boolean;
+  error?: string;
+  timestamp: number;
+}
+
+export interface LegacyBuilderConfig {
+  build_start_time: number;
+  submit_start_time: number;
+  submit_end_time: number;
+  submit_interval: number;
+  payment_mode: string;
+  fixed_payment: string;
+  payment_percentage: number;
+}
+
+export interface ServiceStatus {
+  epbs_available: boolean;
+  epbs_enabled: boolean;
+  legacy_available: boolean;
+  legacy_enabled: boolean;
+}
+
 export interface LogEvent {
   type: string;
   message: string;

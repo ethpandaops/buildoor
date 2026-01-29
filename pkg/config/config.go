@@ -83,6 +83,25 @@ func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
 	cfg.Schedule.NextN = v.GetUint64("schedule-next-n")
 	cfg.Schedule.StartSlot = v.GetUint64("schedule-start-slot")
 
+	// Legacy builder config
+	cfg.LegacyBuilderEnabled = v.GetString("enable-legacy") == "true"
+
+	if relays := v.GetStringSlice("relay-urls"); len(relays) > 0 {
+		cfg.LegacyBuilder.RelayURLs = relays
+	}
+
+	if val := v.GetString("legacy-payment-mode"); val != "" {
+		cfg.LegacyBuilder.PaymentMode = val
+	}
+
+	if val := v.GetString("legacy-fixed-payment"); val != "" {
+		cfg.LegacyBuilder.FixedPayment = val
+	}
+
+	if val := v.GetUint64("legacy-payment-percentage"); val != 0 {
+		cfg.LegacyBuilder.PaymentPercentage = val
+	}
+
 	return cfg, nil
 }
 
@@ -167,6 +186,35 @@ func ValidateConfig(cfg *Config) error {
 
 	if cfg.EPBS.BidInterval < 0 {
 		return fmt.Errorf("epbs.bid_interval must be >= 0")
+	}
+
+	// Legacy builder validation (validate config if relay URLs are provided)
+	if len(cfg.LegacyBuilder.RelayURLs) > 0 {
+		for _, relayURL := range cfg.LegacyBuilder.RelayURLs {
+			if _, err := url.Parse(relayURL); err != nil {
+				return fmt.Errorf("legacy_builder.relay_urls: invalid URL %q: %w", relayURL, err)
+			}
+		}
+
+		if cfg.WalletPrivkey == "" {
+			return fmt.Errorf("wallet_privkey is required when relay URLs are configured")
+		}
+
+		if cfg.ELRPC == "" {
+			return fmt.Errorf("el_rpc is required when relay URLs are configured")
+		}
+
+		switch cfg.LegacyBuilder.PaymentMode {
+		case "fixed", "percentage":
+			// Valid
+		default:
+			return fmt.Errorf("legacy_builder.payment_mode must be 'fixed' or 'percentage', got %q",
+				cfg.LegacyBuilder.PaymentMode)
+		}
+
+		if cfg.LegacyBuilder.SubmitStartTime > cfg.LegacyBuilder.SubmitEndTime {
+			return fmt.Errorf("legacy_builder.submit_start_time cannot be after submit_end_time")
+		}
 	}
 
 	return nil
@@ -261,6 +309,51 @@ func MergeConfigs(base, override *Config) *Config {
 
 	if override.EPBS.BidInterval != 0 {
 		result.EPBS.BidInterval = override.EPBS.BidInterval
+	}
+
+	// Legacy builder config
+	if override.LegacyBuilderEnabled {
+		result.LegacyBuilderEnabled = true
+	}
+
+	if len(override.LegacyBuilder.RelayURLs) > 0 {
+		result.LegacyBuilder.RelayURLs = override.LegacyBuilder.RelayURLs
+	}
+
+	if override.LegacyBuilder.BuildStartTime != 0 {
+		result.LegacyBuilder.BuildStartTime = override.LegacyBuilder.BuildStartTime
+	}
+
+	if override.LegacyBuilder.SubmitStartTime != 0 {
+		result.LegacyBuilder.SubmitStartTime = override.LegacyBuilder.SubmitStartTime
+	}
+
+	if override.LegacyBuilder.SubmitEndTime != 0 {
+		result.LegacyBuilder.SubmitEndTime = override.LegacyBuilder.SubmitEndTime
+	}
+
+	if override.LegacyBuilder.SubmitInterval != 0 {
+		result.LegacyBuilder.SubmitInterval = override.LegacyBuilder.SubmitInterval
+	}
+
+	if override.LegacyBuilder.PaymentMode != "" {
+		result.LegacyBuilder.PaymentMode = override.LegacyBuilder.PaymentMode
+	}
+
+	if override.LegacyBuilder.FixedPayment != "" {
+		result.LegacyBuilder.FixedPayment = override.LegacyBuilder.FixedPayment
+	}
+
+	if override.LegacyBuilder.PaymentPercentage != 0 {
+		result.LegacyBuilder.PaymentPercentage = override.LegacyBuilder.PaymentPercentage
+	}
+
+	if override.LegacyBuilder.PaymentGasLimit != 0 {
+		result.LegacyBuilder.PaymentGasLimit = override.LegacyBuilder.PaymentGasLimit
+	}
+
+	if override.LegacyBuilder.ValidatorPollSecs != 0 {
+		result.LegacyBuilder.ValidatorPollSecs = override.LegacyBuilder.ValidatorPollSecs
 	}
 
 	return &result

@@ -54,7 +54,7 @@ func init() {
 	rootCmd.PersistentFlags().String("api-user-header", defaults.APIUserHeader, "HTTP API user header")
 	rootCmd.PersistentFlags().String("api-token-key", defaults.APITokenKey, "HTTP API token key")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
-	rootCmd.PersistentFlags().Bool("epbs", true, "Enable ePBS bidding/revealing")
+	rootCmd.PersistentFlags().String("enable-epbs", "false", "Enable ePBS bidding/revealing (true/false)")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -79,6 +79,13 @@ func init() {
 
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
+
+	// Legacy builder flags
+	rootCmd.PersistentFlags().String("enable-legacy", "false", "Enable legacy builder API (MEV-Boost relay)")
+	rootCmd.PersistentFlags().StringSlice("relay-urls", nil, "Relay URLs for legacy builder")
+	rootCmd.PersistentFlags().String("legacy-payment-mode", defaults.LegacyBuilder.PaymentMode, "Payment mode (fixed/percentage)")
+	rootCmd.PersistentFlags().String("legacy-fixed-payment", defaults.LegacyBuilder.FixedPayment, "Fixed payment in wei")
+	rootCmd.PersistentFlags().Uint64("legacy-payment-percentage", defaults.LegacyBuilder.PaymentPercentage, "Payment percentage in basis points")
 
 	// Bind all flags to viper
 	if err := v.BindPFlags(rootCmd.PersistentFlags()); err != nil {
@@ -141,7 +148,7 @@ func initConfig() error {
 		APIUserHeader:    v.GetString("api-user-header"),
 		APITokenKey:      v.GetString("api-token-key"),
 		LifecycleEnabled: v.GetBool("lifecycle"),
-		EPBSEnabled:      v.GetBool("epbs"),
+		EPBSEnabled:      v.GetString("enable-epbs") == "true",
 		DepositAmount:    v.GetUint64("deposit-amount"),
 		TopupThreshold:   v.GetUint64("topup-threshold"),
 		TopupAmount:      v.GetUint64("topup-amount"),
@@ -160,7 +167,14 @@ func initConfig() error {
 			BidIncrease:    v.GetUint64("epbs-bid-increase"),
 			BidInterval:    v.GetInt64("epbs-bid-interval"),
 		},
-		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
+		ValidateWithdrawals:  v.GetBool("validate-withdrawals"),
+		LegacyBuilderEnabled: v.GetString("enable-legacy") == "true",
+		LegacyBuilder: builder.LegacyBuilderConfig{
+			RelayURLs:         v.GetStringSlice("relay-urls"),
+			PaymentMode:       v.GetString("legacy-payment-mode"),
+			FixedPayment:      v.GetString("legacy-fixed-payment"),
+			PaymentPercentage: v.GetUint64("legacy-payment-percentage"),
+		},
 	}
 
 	return nil

@@ -23,6 +23,17 @@ func DefaultConfig() *Config {
 			BidIncrease:    100000,  // 100k gwei per subsequent bid
 			BidInterval:    250,     // 250ms between bids
 		},
+		LegacyBuilder: LegacyBuilderConfig{
+			BuildStartTime:    -2000,
+			SubmitStartTime:   -500,
+			SubmitEndTime:     4000,
+			SubmitInterval:    0,
+			PaymentMode:       "fixed",
+			FixedPayment:      "10000000000000000", // 0.01 ETH
+			PaymentPercentage: 9000,                // 90%
+			PaymentGasLimit:   21000,
+			ValidatorPollSecs: 60,
+		},
 		ValidateWithdrawals: false,
 	}
 }

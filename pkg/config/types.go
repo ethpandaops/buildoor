@@ -3,25 +3,27 @@ package config
 
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
-	BuilderPrivkey      string         `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
-	CLClient            string         `yaml:"cl_client" json:"cl_client,omitempty"`
-	ELEngineAPI         string         `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
-	ELJWTSecret         string         `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
-	ELRPC               string         `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
-	WalletPrivkey       string         `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
-	APIPort             int            `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
-	APIUserHeader       string         `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
-	APITokenKey         string         `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
-	LifecycleEnabled    bool           `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
-	EPBSEnabled         bool           `yaml:"epbs_enabled" json:"epbs_enabled"`       // Enable ePBS bidding/revealing
-	DepositAmount       uint64         `yaml:"deposit_amount" json:"deposit_amount"`   // Gwei, default 10 ETH
-	TopupThreshold      uint64         `yaml:"topup_threshold" json:"topup_threshold"` // Gwei
-	TopupAmount         uint64         `yaml:"topup_amount" json:"topup_amount"`       // Gwei
-	Schedule            ScheduleConfig `yaml:"schedule" json:"schedule"`
-	EPBS                EPBSConfig     `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
-	Debug               bool           `yaml:"debug" json:"debug"`
-	Pprof               bool           `yaml:"pprof" json:"pprof"`
-	ValidateWithdrawals bool           `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
+	BuilderPrivkey       string              `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	CLClient             string              `yaml:"cl_client" json:"cl_client,omitempty"`
+	ELEngineAPI          string              `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
+	ELJWTSecret          string              `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
+	ELRPC                string              `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	WalletPrivkey        string              `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
+	APIPort              int                 `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
+	APIUserHeader        string              `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
+	APITokenKey          string              `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
+	LifecycleEnabled     bool                `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
+	EPBSEnabled          bool                `yaml:"epbs_enabled" json:"epbs_enabled"`       // Enable ePBS bidding/revealing
+	DepositAmount        uint64              `yaml:"deposit_amount" json:"deposit_amount"`   // Gwei, default 10 ETH
+	TopupThreshold       uint64              `yaml:"topup_threshold" json:"topup_threshold"` // Gwei
+	TopupAmount          uint64              `yaml:"topup_amount" json:"topup_amount"`       // Gwei
+	Schedule             ScheduleConfig      `yaml:"schedule" json:"schedule"`
+	EPBS                 EPBSConfig          `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	LegacyBuilderEnabled bool                `yaml:"legacy_builder_enabled" json:"legacy_builder_enabled"`
+	LegacyBuilder        LegacyBuilderConfig `yaml:"legacy_builder" json:"legacy_builder"`
+	Debug                bool                `yaml:"debug" json:"debug"`
+	Pprof                bool                `yaml:"pprof" json:"pprof"`
+	ValidateWithdrawals  bool                `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
 }
 
 // ScheduleConfig defines when the builder should build blocks.
@@ -71,6 +73,40 @@ type EPBSConfig struct {
 
 	// BidInterval is milliseconds between bids. 0 means single bid.
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
+}
+
+// LegacyBuilderConfig defines parameters for the legacy (MEV-Boost compatible) builder API.
+type LegacyBuilderConfig struct {
+	// RelayURLs is the list of relay endpoints to poll and submit blocks to.
+	RelayURLs []string `yaml:"relay_urls" json:"relay_urls"`
+
+	// BuildStartTime is milliseconds relative to slot start when building begins.
+	// Negative values mean before slot start (e.g. -2000 = 2s before slot).
+	BuildStartTime int64 `yaml:"build_start_time" json:"build_start_time"`
+
+	// SubmitStartTime is milliseconds relative to slot start for first relay submission.
+	SubmitStartTime int64 `yaml:"submit_start_time" json:"submit_start_time"`
+
+	// SubmitEndTime is milliseconds relative to slot start for last relay submission.
+	SubmitEndTime int64 `yaml:"submit_end_time" json:"submit_end_time"`
+
+	// SubmitInterval is milliseconds between submissions. 0 = single submit.
+	SubmitInterval int64 `yaml:"submit_interval" json:"submit_interval"`
+
+	// PaymentMode is "fixed" or "percentage".
+	PaymentMode string `yaml:"payment_mode" json:"payment_mode"`
+
+	// FixedPayment is the fixed payment amount in wei (string for large values).
+	FixedPayment string `yaml:"fixed_payment" json:"fixed_payment"`
+
+	// PaymentPercentage is basis points (10000 = 100%) of block value to pay proposer.
+	PaymentPercentage uint64 `yaml:"payment_percentage" json:"payment_percentage"`
+
+	// PaymentGasLimit is the gas limit for the builder payment transaction.
+	PaymentGasLimit uint64 `yaml:"payment_gas_limit" json:"payment_gas_limit"`
+
+	// ValidatorPollSecs is how often to poll relays for validator registrations.
+	ValidatorPollSecs int64 `yaml:"validator_poll_secs" json:"validator_poll_secs"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

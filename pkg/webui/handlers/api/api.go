@@ -461,6 +461,185 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "exit initiated"})
 }
 
+// LegacyBuilderStatusResponse is the response for the legacy builder status endpoint.
+type LegacyBuilderStatusResponse struct {
+	Enabled            bool     `json:"enabled"`
+	RelayURLs          []string `json:"relay_urls"`
+	ValidatorsTracked  uint64   `json:"validators_tracked"`
+	BlocksSubmitted    uint64   `json:"blocks_submitted"`
+	BlocksAccepted     uint64   `json:"blocks_accepted"`
+	SubmissionFailures uint64   `json:"submission_failures"`
+	PaymentMode        string   `json:"payment_mode"`
+	FixedPayment       string   `json:"fixed_payment,omitempty"`
+	PaymentPercentage  uint64   `json:"payment_percentage,omitempty"`
+}
+
+// UpdateLegacyBuilderRequest is the request for updating legacy builder config.
+type UpdateLegacyBuilderRequest struct {
+	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	SubmitStartTime   *int64  `json:"submit_start_time,omitempty"`
+	SubmitEndTime     *int64  `json:"submit_end_time,omitempty"`
+	SubmitInterval    *int64  `json:"submit_interval,omitempty"`
+	PaymentMode       *string `json:"payment_mode,omitempty"`
+	FixedPayment      *string `json:"fixed_payment,omitempty"`
+	PaymentPercentage *uint64 `json:"payment_percentage,omitempty"`
+}
+
+// GetLegacyBuilderStatus returns the legacy builder status and statistics.
+func (h *APIHandler) GetLegacyBuilderStatus(w http.ResponseWriter, _ *http.Request) {
+	if h.legacyBuilderSvc == nil {
+		writeError(w, http.StatusNotFound, "legacy builder not enabled")
+		return
+	}
+
+	stats := h.legacyBuilderSvc.GetStats()
+	cfg := h.legacyBuilderSvc.GetConfig()
+
+	resp := LegacyBuilderStatusResponse{
+		Enabled:            true,
+		RelayURLs:          cfg.RelayURLs,
+		ValidatorsTracked:  stats.ValidatorsTracked,
+		BlocksSubmitted:    stats.BlocksSubmitted,
+		BlocksAccepted:     stats.BlocksAccepted,
+		SubmissionFailures: stats.SubmissionFailures,
+		PaymentMode:        cfg.PaymentMode,
+		FixedPayment:       cfg.FixedPayment,
+		PaymentPercentage:  cfg.PaymentPercentage,
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// UpdateLegacyBuilder updates the legacy builder configuration at runtime.
+func (h *APIHandler) UpdateLegacyBuilder(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if h.legacyBuilderSvc == nil {
+		writeError(w, http.StatusNotFound, "legacy builder not enabled")
+		return
+	}
+
+	var req UpdateLegacyBuilderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.legacyBuilderSvc.GetConfig()
+
+	if req.BuildStartTime != nil {
+		cfg.BuildStartTime = *req.BuildStartTime
+	}
+
+	if req.SubmitStartTime != nil {
+		cfg.SubmitStartTime = *req.SubmitStartTime
+	}
+
+	if req.SubmitEndTime != nil {
+		cfg.SubmitEndTime = *req.SubmitEndTime
+	}
+
+	if req.SubmitInterval != nil {
+		cfg.SubmitInterval = *req.SubmitInterval
+	}
+
+	if req.PaymentMode != nil {
+		cfg.PaymentMode = *req.PaymentMode
+	}
+
+	if req.FixedPayment != nil {
+		cfg.FixedPayment = *req.FixedPayment
+	}
+
+	if req.PaymentPercentage != nil {
+		cfg.PaymentPercentage = *req.PaymentPercentage
+	}
+
+	h.legacyBuilderSvc.UpdateConfig(cfg)
+
+	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// ToggleServiceRequest is the request for toggling services.
+type ToggleServiceRequest struct {
+	EPBSEnabled   *bool `json:"epbs_enabled,omitempty"`
+	LegacyEnabled *bool `json:"legacy_enabled,omitempty"`
+}
+
+// ToggleServiceResponse is the response for the toggle endpoint.
+type ToggleServiceResponse struct {
+	EPBSAvailable   bool `json:"epbs_available"`
+	EPBSEnabled     bool `json:"epbs_enabled"`
+	LegacyAvailable bool `json:"legacy_available"`
+	LegacyEnabled   bool `json:"legacy_enabled"`
+}
+
+// ToggleServices enables or disables ePBS and/or legacy builder at runtime.
+func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req ToggleServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.EPBSEnabled != nil && h.epbsSvc != nil {
+		h.epbsSvc.SetEnabled(*req.EPBSEnabled)
+	}
+
+	if req.LegacyEnabled != nil && h.legacyBuilderSvc != nil {
+		h.legacyBuilderSvc.SetEnabled(*req.LegacyEnabled)
+	}
+
+	// Broadcast updated info to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastServiceStatus()
+	}
+
+	resp := ToggleServiceResponse{
+		EPBSAvailable:   h.epbsSvc != nil,
+		LegacyAvailable: h.legacyBuilderSvc != nil,
+	}
+	if h.epbsSvc != nil {
+		resp.EPBSEnabled = h.epbsSvc.IsEnabled()
+	}
+	if h.legacyBuilderSvc != nil {
+		resp.LegacyEnabled = h.legacyBuilderSvc.IsEnabled()
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetServiceStatus returns the current enabled/disabled status of services.
+func (h *APIHandler) GetServiceStatus(w http.ResponseWriter, _ *http.Request) {
+	resp := ToggleServiceResponse{
+		EPBSAvailable:   h.epbsSvc != nil,
+		LegacyAvailable: h.legacyBuilderSvc != nil,
+	}
+	if h.epbsSvc != nil {
+		resp.EPBSEnabled = h.epbsSvc.IsEnabled()
+	}
+	if h.legacyBuilderSvc != nil {
+		resp.LegacyEnabled = h.legacyBuilderSvc.IsEnabled()
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // writeJSON writes a JSON response.
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")

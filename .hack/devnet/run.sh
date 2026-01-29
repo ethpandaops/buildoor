@@ -33,15 +33,21 @@ EXECUTION_NODE=$(docker ps -aq -f "label=kurtosis_enclave_uuid=$ENCLAVE_UUID" \
               -f "label=com.kurtosistech.app-id=kurtosis" \
               -f "label=com.kurtosistech.custom.ethereum-package.client-type=execution" | tac | head -n 1)
 
+MEVRELAY_NODES=$(docker ps -aq -f "label=kurtosis_enclave_uuid=$ENCLAVE_UUID" \
+              -f "label=com.kurtosistech.app-id=kurtosis" \
+              -f "label=com.kurtosistech.id=mev-relay-api" | tac | head -n 1)
+
 # Get URLs from first node of each type
 BEACON_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "4000/tcp") 0).HostPort }}' $BEACON_NODE)"
 ENGINE_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "8551/tcp") 0).HostPort }}' $EXECUTION_NODE)"
 EXECUTION_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "8545/tcp") 0).HostPort }}' $EXECUTION_NODE)"
+MEVRELAY_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "9062/tcp") 0).HostPort }}' $MEVRELAY_NODES)"
 
 # Write config
 cat <<EOF > "${__dir}/generated-vars.env"
 BEACON_API=http://$BEACON_URL
 ENGINE_API=http://$ENGINE_URL
 EXECUTION_API=http://$EXECUTION_URL
+MEVRELAY_API=http://$MEVRELAY_URL
 JWT_SECRET=${__dir}/generated-jwtsecret.txt
 EOF

@@ -50,6 +50,7 @@ type PayloadAttributes struct {
 	SuggestedFeeRecipient common.Address
 	Withdrawals           []*types.Withdrawal
 	ParentBeaconBlockRoot *common.Hash
+	BuilderTxs            []*types.Transaction // Optional: transactions injected by the builder
 }
 
 // ExecutionPayload represents an execution layer payload.
@@ -260,6 +261,21 @@ func (c *Client) RequestPayloadBuild(
 		attrsMap["parentBeaconBlockRoot"] = attrs.ParentBeaconBlockRoot.Hex()
 	}
 
+	if len(attrs.BuilderTxs) > 0 {
+		builderTxsHex := make([]string, 0, len(attrs.BuilderTxs))
+
+		for _, tx := range attrs.BuilderTxs {
+			txBytes, err := tx.MarshalBinary()
+			if err != nil {
+				return PayloadID{}, fmt.Errorf("failed to marshal builder tx: %w", err)
+			}
+
+			builderTxsHex = append(builderTxsHex, "0x"+hex.EncodeToString(txBytes))
+		}
+
+		attrsMap["builderTxs"] = builderTxsHex
+	}
+
 	var response ForkchoiceUpdatedResponse
 	if err := c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap); err != nil {
 		return PayloadID{}, fmt.Errorf("forkchoiceUpdated failed: %w", err)
@@ -282,6 +298,7 @@ type GetPayloadResponse struct {
 	BlockValue            string          `json:"blockValue"`
 	BlobsBundle           *BlobsBundleRaw `json:"blobsBundle"`
 	ShouldOverrideBuilder bool            `json:"shouldOverrideBuilder"`
+	ExecutionRequests     []string        `json:"executionRequests"` // EIP-7685 (Electra+)
 }
 
 // BlobsBundleRaw is the raw blobs bundle from engine API.
@@ -354,7 +371,7 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 func (c *Client) GetPayloadRaw(
 	ctx context.Context,
 	payloadID PayloadID,
-) (json.RawMessage, *big.Int, error) {
+) (json.RawMessage, *big.Int, [][]byte, error) {
 	var response GetPayloadResponse
 
 	payloadIDHex := fmt.Sprintf("0x%x", payloadID[:])
@@ -374,15 +391,99 @@ func (c *Client) GetPayloadRaw(
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("getPayload failed: %w", err)
+		return nil, nil, nil, fmt.Errorf("getPayload failed: %w", err)
 	}
 
 	blockValue := new(big.Int)
 	if _, ok := blockValue.SetString(strings.TrimPrefix(response.BlockValue, "0x"), 16); !ok {
-		return nil, nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
+		return nil, nil, nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
 	}
 
-	return response.ExecutionPayload, blockValue, nil
+	execRequests := decodeExecutionRequests(response.ExecutionRequests)
+
+	return response.ExecutionPayload, blockValue, execRequests, nil
+}
+
+// Consensus version strings for the Eth-Consensus-Version header.
+const (
+	ConsensusVersionDeneb   = "deneb"
+	ConsensusVersionElectra = "electra"
+	ConsensusVersionFulu    = "fulu"
+)
+
+// GetPayloadRawFull retrieves a payload and returns the raw JSON for execution payload
+// and blobs bundle. Tries V5, V4, V3 in order based on fork support.
+// Returns the consensus version string based on which engine API version succeeded.
+func (c *Client) GetPayloadRawFull(
+	ctx context.Context,
+	payloadID PayloadID,
+) (json.RawMessage, json.RawMessage, *big.Int, [][]byte, string, error) {
+	var response GetPayloadResponse
+
+	payloadIDHex := fmt.Sprintf("0x%x", payloadID[:])
+
+	// Try V5 first, fall back to V4, then V3
+	consensusVersion := ConsensusVersionFulu
+
+	err := c.call(ctx, "engine_getPayloadV5", &response, payloadIDHex)
+	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
+		c.log.Debug("engine_getPayloadV5 unsupported for full, trying V4")
+
+		consensusVersion = ConsensusVersionElectra
+
+		err = c.call(ctx, "engine_getPayloadV4", &response, payloadIDHex)
+	}
+
+	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
+		c.log.Debug("engine_getPayloadV4 unsupported for full, trying V3")
+
+		consensusVersion = ConsensusVersionDeneb
+
+		err = c.call(ctx, "engine_getPayloadV3", &response, payloadIDHex)
+	}
+
+	if err != nil {
+		return nil, nil, nil, nil, "", fmt.Errorf("getPayload failed: %w", err)
+	}
+
+	blockValue := new(big.Int)
+	if _, ok := blockValue.SetString(strings.TrimPrefix(response.BlockValue, "0x"), 16); !ok {
+		return nil, nil, nil, nil, "", fmt.Errorf("failed to parse block value: %s", response.BlockValue)
+	}
+
+	// Marshal blobs bundle to raw JSON if present
+	var blobsBundleJSON json.RawMessage
+	if response.BlobsBundle != nil {
+		blobsBundleJSON, err = json.Marshal(response.BlobsBundle)
+		if err != nil {
+			return nil, nil, nil, nil, "", fmt.Errorf("failed to marshal blobs bundle: %w", err)
+		}
+	}
+
+	execRequests := decodeExecutionRequests(response.ExecutionRequests)
+
+	return response.ExecutionPayload, blobsBundleJSON, blockValue, execRequests, consensusVersion, nil
+}
+
+// decodeExecutionRequests decodes hex-encoded execution requests from the
+// engine API response into raw byte slices.
+// Returns nil when the input is nil (field absent in response, pre-Electra).
+// Returns an empty non-nil slice when the input is empty (Electra+ with no requests).
+// This distinction is important because Electra+ blocks always include
+// requestsHash in the header, even when there are no requests.
+func decodeExecutionRequests(hexRequests []string) [][]byte {
+	if hexRequests == nil {
+		return nil
+	}
+
+	requests := make([][]byte, 0, len(hexRequests))
+
+	for _, reqHex := range hexRequests {
+		reqBytes := common.FromHex(reqHex)
+		requests = append(requests, reqBytes)
+	}
+
+	return requests
 }
 
 // BlockResponse represents a block from eth_getBlockByNumber.

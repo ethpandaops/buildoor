@@ -137,9 +137,17 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}).Debug("Payload build requested from attributes")
 
 	// Get the built payload
-	payloadJSON, blockValue, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
+	payloadJSON, blockValue, execRequests, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
+	}
+
+	// Modify extra data to brand the block and produce a unique block hash
+	payloadJSON, _, err = engine.ModifyPayloadExtraData(
+		payloadJSON, []byte("buildoor/"), parentBeaconRoot, execRequests,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
 	}
 
 	// Parse block hash from the payload
@@ -265,7 +273,7 @@ func (b *PayloadBuilder) BuildPayloadWithContext(
 		return nil, fmt.Errorf("failed to request payload build: %w", err)
 	}
 
-	payloadJSON, _, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
+	payloadJSON, _, _, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}

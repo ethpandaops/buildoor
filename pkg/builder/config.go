@@ -4,10 +4,11 @@ import "github.com/ethpandaops/buildoor/pkg/config"
 
 // Type aliases for backwards compatibility - prefer using config package directly
 type (
-	Config         = config.Config
-	ScheduleConfig = config.ScheduleConfig
-	ScheduleMode   = config.ScheduleMode
-	EPBSConfig     = config.EPBSConfig
+	Config              = config.Config
+	ScheduleConfig      = config.ScheduleConfig
+	ScheduleMode        = config.ScheduleMode
+	EPBSConfig          = config.EPBSConfig
+	LegacyBuilderConfig = config.LegacyBuilderConfig
 )
 
 // Constants aliases for backwards compatibility
