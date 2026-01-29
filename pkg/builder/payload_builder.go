@@ -172,6 +172,18 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		}
 	}
 
+	// Parse transaction count from the payload
+	var txCount int
+	if payloadFields != nil {
+		// Parse the execution payload to get transaction details
+		var payloadData struct {
+			Transactions []json.RawMessage `json:"transactions"`
+		}
+		if err := json.Unmarshal(payloadResult.ExecutionPayload, &payloadData); err == nil {
+			txCount = len(payloadData.Transactions)
+		}
+	}
+
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
@@ -196,6 +208,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"block_value":       blockValueGwei,
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
+		"txs_in_payload":    txCount,
 	}).Debug("Payload built from attributes")
 
 	return event, nil
