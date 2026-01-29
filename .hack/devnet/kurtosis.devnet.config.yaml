@@ -15,6 +15,7 @@ network_params:
 
 additional_services:
   - dora
+  - spamoor
 
 # mev_type: flashbots
 # snooper_enabled: true
