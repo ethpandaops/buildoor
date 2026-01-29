@@ -44,7 +44,7 @@ type PayloadReadyEvent struct {
 	GasLimit         uint64
 	PrevRandao       phase0.Root
 	FeeRecipient     common.Address
-	BlockValue       uint64      // MEV value from EL in wei
+	BlockValue       uint64      // MEV value from EL in gwei
 	BuildSource      BuildSource // How the payload was built
 	BuildRequestedAt time.Time   // When the FCU was sent to request the build
 	ReadyAt          time.Time   // When the payload became ready

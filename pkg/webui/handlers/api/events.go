@@ -149,14 +149,16 @@ type HeadVotesStreamEvent struct {
 
 // LegacyBlockSubmittedStreamEvent is sent when a block is submitted to a relay.
 type LegacyBlockSubmittedStreamEvent struct {
-	Slot           uint64 `json:"slot"`
-	BlockHash      string `json:"block_hash"`
-	Value          string `json:"value"`
-	ProposerPubkey string `json:"proposer_pubkey"`
-	RelayURL       string `json:"relay_url"`
-	Success        bool   `json:"success"`
-	Error          string `json:"error,omitempty"`
-	Timestamp      int64  `json:"timestamp"`
+	Slot             uint64 `json:"slot"`
+	BlockHash        string `json:"block_hash"`
+	Value            string `json:"value"`
+	ProposerPubkey   string `json:"proposer_pubkey"`
+	RelayURL         string `json:"relay_url"`
+	Success          bool   `json:"success"`
+	Error            string `json:"error,omitempty"`
+	Timestamp        int64  `json:"timestamp"`
+	BuildRequestedAt int64  `json:"build_requested_at"`
+	PayloadReadyAt   int64  `json:"payload_ready_at"`
 }
 
 // LegacyBuilderInfoEvent contains legacy builder status information.
@@ -559,14 +561,16 @@ func (m *EventStreamManager) handleLegacyBlockSubmission(event *legacybuilder.Bl
 		Type:      EventTypeLegacyBlockSubmitted,
 		Timestamp: time.Now().UnixMilli(),
 		Data: LegacyBlockSubmittedStreamEvent{
-			Slot:           uint64(event.Slot),
-			BlockHash:      event.BlockHash,
-			Value:          event.Value,
-			ProposerPubkey: event.ProposerPubkey,
-			RelayURL:       event.RelayURL,
-			Success:        event.Success,
-			Error:          event.Error,
-			Timestamp:      event.Timestamp.UnixMilli(),
+			Slot:             uint64(event.Slot),
+			BlockHash:        event.BlockHash,
+			Value:            event.Value,
+			ProposerPubkey:   event.ProposerPubkey,
+			RelayURL:         event.RelayURL,
+			Success:          event.Success,
+			Error:            event.Error,
+			Timestamp:        event.Timestamp.UnixMilli(),
+			BuildRequestedAt: event.BuildRequestedAt.UnixMilli(),
+			PayloadReadyAt:   event.PayloadReadyAt.UnixMilli(),
 		},
 	})
 }

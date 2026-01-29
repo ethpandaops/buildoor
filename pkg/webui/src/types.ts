@@ -184,6 +184,8 @@ export interface LegacySubmission {
   relayUrl: string;
   success: boolean;
   error?: string;
+  buildRequestedAt?: number;
+  payloadReadyAt?: number;
 }
 
 export interface LegacyBuilderInfo {
@@ -208,6 +210,8 @@ export interface LegacyBlockSubmittedEvent {
   success: boolean;
   error?: string;
   timestamp: number;
+  build_requested_at: number;
+  payload_ready_at: number;
 }
 
 export interface LegacyBuilderConfig {

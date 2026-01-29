@@ -9,11 +9,59 @@ import (
 	"net/http"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // ExecutionPayloadBidResponse represents the response from getting a bid template.
 type ExecutionPayloadBidResponse struct {
 	Data json.RawMessage `json:"data"`
+}
+
+// ProposerPreparationData represents the data for preparing a proposer.
+type ProposerPreparationData struct {
+	ValidatorIndex phase0.ValidatorIndex `json:"validator_index,string"`
+	FeeRecipient   common.Address        `json:"fee_recipient"`
+}
+
+// PrepareBeaconProposer sends proposer preparation data to the beacon node.
+// This tells the beacon node to emit payload_attributes events for the specified validators.
+func (c *Client) PrepareBeaconProposer(
+	ctx context.Context,
+	preparations []ProposerPreparationData,
+) error {
+	if len(preparations) == 0 {
+		return nil
+	}
+
+	url := fmt.Sprintf("%s/eth/v1/validator/prepare_beacon_proposer", c.baseURL)
+
+	data, err := json.Marshal(preparations)
+	if err != nil {
+		return fmt.Errorf("failed to marshal preparations: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	httpClient := &http.Client{}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to prepare proposer: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+
+		return fmt.Errorf("failed to prepare proposer: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.

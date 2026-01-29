@@ -550,6 +550,8 @@ func (s *Service) executeSubmissionForSlot(
 	}
 
 	// Build payload with BuilderTxs
+	buildRequestedAt := time.Now()
+
 	executionPayload, blobsBundle, _, execRequests, consensusVersion, err := s.buildPayloadWithBuilderTxs(
 		ctx, attrs, []*types.Transaction{paymentTx},
 	)
@@ -559,6 +561,8 @@ func (s *Service) executeSubmissionForSlot(
 		)
 		return
 	}
+
+	payloadReadyAt := time.Now()
 
 	// Parse payload fields for BidTrace
 	payloadFields, err := engine.ParsePayloadFields(executionPayload)
@@ -597,6 +601,16 @@ func (s *Service) executeSubmissionForSlot(
 		Value:                paymentAmount,
 	}
 
+	// Check if slot is still open for submissions (block may have arrived during build)
+	s.buildMu.Lock()
+	closed := s.submissionsClosed[slot]
+	s.buildMu.Unlock()
+
+	if closed {
+		s.log.WithField("slot", slot).Debug("Skipping submission (block received during build)")
+		return
+	}
+
 	// Submit to relays
 	results, err := s.blockSubmitter.Submit(ctx, trace, executionPayload, blobsBundle, execRequests, consensusVersion)
 	if err != nil {
@@ -614,14 +628,16 @@ func (s *Service) executeSubmissionForSlot(
 
 	for _, result := range results {
 		submissionEvent := &BlockSubmissionEvent{
-			Slot:           slot,
-			BlockHash:      blockHash.Hex(),
-			Value:          paymentAmount.String(),
-			ProposerPubkey: reg.Entry.Message.Pubkey,
-			RelayURL:       result.RelayURL,
-			Success:        result.Success,
-			Error:          result.Error,
-			Timestamp:      time.Now(),
+			Slot:             slot,
+			BlockHash:        blockHash.Hex(),
+			Value:            paymentAmount.String(),
+			ProposerPubkey:   reg.Entry.Message.Pubkey,
+			RelayURL:         result.RelayURL,
+			Success:          result.Success,
+			Error:            result.Error,
+			Timestamp:        time.Now(),
+			BuildRequestedAt: buildRequestedAt,
+			PayloadReadyAt:   payloadReadyAt,
 		}
 
 		s.submissionDispatch.Fire(submissionEvent)

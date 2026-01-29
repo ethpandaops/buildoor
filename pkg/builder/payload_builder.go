@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strconv"
 	"strings"
 	"sync"
@@ -183,7 +184,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	var blockValueGwei uint64
 	if blockValue != nil {
-		blockValueGwei = blockValue.Uint64()
+		// Convert from wei to gwei (divide by 1e9)
+		gweiValue := new(big.Int).Div(blockValue, big.NewInt(1e9))
+		blockValueGwei = gweiValue.Uint64()
 	}
 
 	event := &PayloadReadyEvent{

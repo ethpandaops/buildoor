@@ -106,9 +106,10 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	// Start main loop
-	s.wg.Add(1)
+	s.wg.Add(2)
 
 	go s.run()
+	go s.runProposerPreparation()
 
 	s.log.Info("Builder service started")
 
@@ -430,4 +431,83 @@ func (s *Service) IncrementRevealsSkipped() {
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.RevealsSkipped++
 	})
+}
+
+// runProposerPreparation runs a loop that prepares upcoming proposers with the beacon node.
+// This ensures we receive payload_attributes events for all upcoming slots.
+// The beacon node only emits payload_attributes events for registered proposers.
+func (s *Service) runProposerPreparation() {
+	defer s.wg.Done()
+
+	// Run preparation at the start of each slot
+	ticker := time.NewTicker(s.chainSvc.GetChainSpec().SecondsPerSlot)
+	defer ticker.Stop()
+
+	// Do an initial preparation immediately
+	s.prepareUpcomingProposers()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.prepareUpcomingProposers()
+		}
+	}
+}
+
+// prepareUpcomingProposers sends proposer preparation data for upcoming slots.
+// This tells the beacon node to emit payload_attributes events for these proposers.
+func (s *Service) prepareUpcomingProposers() {
+	epochStats := s.chainSvc.GetCurrentEpochStats()
+	if epochStats == nil {
+		s.log.Debug("No epoch stats available for proposer preparation")
+		return
+	}
+
+	spec := s.chainSvc.GetChainSpec()
+	currentSlot := s.chainSvc.TimeToSlot(time.Now())
+	epochStartSlot := phase0.Slot(uint64(epochStats.Epoch) * spec.SlotsPerEpoch)
+
+	// Prepare proposers for slots from current+1 to end of epoch (or current+1 to current+32)
+	var preparations []beacon.ProposerPreparationData
+
+	// Prepare for remaining slots in current epoch
+	for slotIdx := uint64(0); slotIdx < spec.SlotsPerEpoch; slotIdx++ {
+		slot := epochStartSlot + phase0.Slot(slotIdx)
+
+		// Skip past slots
+		if slot <= currentSlot {
+			continue
+		}
+
+		// Get proposer for this slot
+		if slotIdx >= uint64(len(epochStats.ProposerDuties)) {
+			continue
+		}
+
+		proposerIndex := epochStats.ProposerDuties[slotIdx]
+
+		preparations = append(preparations, beacon.ProposerPreparationData{
+			ValidatorIndex: proposerIndex,
+			FeeRecipient:   s.feeRecipient,
+		})
+	}
+
+	if len(preparations) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	if err := s.clClient.PrepareBeaconProposer(ctx, preparations); err != nil {
+		s.log.WithError(err).Warn("Failed to prepare beacon proposers")
+		return
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"count":        len(preparations),
+		"current_slot": currentSlot,
+	}).Debug("Prepared upcoming proposers")
 }

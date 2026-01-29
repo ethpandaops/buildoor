@@ -2,7 +2,6 @@ package legacybuilder
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -11,7 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	builderApiV1 "github.com/attestantio/go-builder-client/api/v1"
+	"github.com/attestantio/go-eth2-client/spec/bellatrix"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/holiman/uint256"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -97,15 +99,30 @@ func (s *BlockSubmitter) Submit(
 	root := computeBidTraceRoot(trace)
 
 	// Compute domain for signing
+	// Per builder spec, genesis_validators_root is always zero for DomainApplicationBuilder
+	var emptyRoot phase0.Root
 	domain := signer.ComputeDomain(
 		DomainApplicationBuilder,
 		s.genesisForkVersion,
-		s.genesisValidatorsRoot,
+		emptyRoot,
 	)
 
 	// Sign the bid trace root with domain
 	var rootPhase0 phase0.Root
 	copy(rootPhase0[:], root[:])
+
+	// Compute signing root for debugging
+	signingRoot := signer.ComputeSigningRoot(rootPhase0, domain)
+
+	s.log.WithFields(logrus.Fields{
+		"bid_trace_root": fmt.Sprintf("0x%x", root[:]),
+		"domain":         fmt.Sprintf("0x%x", domain[:]),
+		"signing_root":   fmt.Sprintf("0x%x", signingRoot[:]),
+		"fork_version":   fmt.Sprintf("0x%x", s.genesisForkVersion[:]),
+		"builder_pubkey": fmt.Sprintf("0x%x", s.builderPubkey[:]),
+		"slot":           trace.Slot,
+		"value":          trace.Value.String(),
+	}).Debug("Signing bid trace")
 
 	sig, err := s.blsSigner.SignWithDomain(rootPhase0, domain)
 	if err != nil {
@@ -168,73 +185,36 @@ func (s *BlockSubmitter) Submit(
 	return results, nil
 }
 
-// computeBidTraceRoot computes the SSZ hash tree root of a BidTrace.
-// BidTrace has 9 fields, padded to 16 leaves for Merkle tree.
-//
-// Fields:
-//  1. Slot (uint64)
-//  2. ParentHash (Bytes32)
-//  3. BlockHash (Bytes32)
-//  4. BuilderPubkey (BLSPubKey, 48 bytes)
-//  5. ProposerPubkey (BLSPubKey, 48 bytes)
-//  6. ProposerFeeRecipient (ExecutionAddress, 20 bytes)
-//  7. GasLimit (uint64)
-//  8. GasUsed (uint64)
-//  9. Value (uint256)
+// computeBidTraceRoot computes the SSZ hash tree root of a BidTrace
+// using the official go-builder-client library implementation.
 func computeBidTraceRoot(trace *BidTrace) [32]byte {
-	var leaves [16][32]byte
-
-	// 1. Slot: uint64 LE padded to 32 bytes
-	binary.LittleEndian.PutUint64(leaves[0][:8], trace.Slot)
-
-	// 2. ParentHash: already 32 bytes
-	leaves[1] = trace.ParentHash
-
-	// 3. BlockHash: already 32 bytes
-	leaves[2] = trace.BlockHash
-
-	// 4. BuilderPubkey: 48 bytes -> split into 2x32 chunks, hash
-	leaves[3] = hashBLSPubkey(trace.BuilderPubkey)
-
-	// 5. ProposerPubkey: 48 bytes -> split into 2x32 chunks, hash
-	leaves[4] = hashBLSPubkey(trace.ProposerPubkey)
-
-	// 6. ProposerFeeRecipient: 20 bytes padded to 32
-	copy(leaves[5][:20], trace.ProposerFeeRecipient[:])
-
-	// 7. GasLimit: uint64 LE padded to 32 bytes
-	binary.LittleEndian.PutUint64(leaves[6][:8], trace.GasLimit)
-
-	// 8. GasUsed: uint64 LE padded to 32 bytes
-	binary.LittleEndian.PutUint64(leaves[7][:8], trace.GasUsed)
-
-	// 9. Value: uint256 LE padded to 32 bytes
+	// Convert our BidTrace to the official library's BidTrace
+	var value *uint256.Int
 	if trace.Value != nil {
-		b := trace.Value.Bytes()
-		// Convert big-endian to little-endian
-		for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
-			b[i], b[j] = b[j], b[i]
-		}
-
-		copy(leaves[8][:], b)
+		value = uint256.MustFromBig(trace.Value)
+	} else {
+		value = uint256.NewInt(0)
 	}
 
-	// Leaves 9-15 are zero (padding to next power of 2)
+	officialTrace := &builderApiV1.BidTrace{
+		Slot:                 trace.Slot,
+		ParentHash:           phase0.Hash32(trace.ParentHash),
+		BlockHash:            phase0.Hash32(trace.BlockHash),
+		BuilderPubkey:        phase0.BLSPubKey(trace.BuilderPubkey),
+		ProposerPubkey:       phase0.BLSPubKey(trace.ProposerPubkey),
+		ProposerFeeRecipient: bellatrix.ExecutionAddress(trace.ProposerFeeRecipient),
+		GasLimit:             trace.GasLimit,
+		GasUsed:              trace.GasUsed,
+		Value:                value,
+	}
 
-	// Build 4-level Merkle tree (16 leaves)
-	return merkleRoot(leaves[:])
-}
+	root, err := officialTrace.HashTreeRoot()
+	if err != nil {
+		// This should never happen with a well-defined struct
+		panic(fmt.Sprintf("failed to compute BidTrace hash tree root: %v", err))
+	}
 
-// hashBLSPubkey hashes a 48-byte BLS public key into a 32-byte SSZ leaf.
-// The key is split into two 32-byte chunks (padded), then hashed together.
-func hashBLSPubkey(pubkey [48]byte) [32]byte {
-	var chunks [64]byte
-
-	copy(chunks[:32], pubkey[:32])
-	copy(chunks[32:48], pubkey[32:])
-	// remaining bytes are already zero
-
-	return sha256.Sum256(chunks[:])
+	return root
 }
 
 // hexToDecimal converts a hex string (with or without 0x prefix) to a decimal string.
@@ -515,25 +495,4 @@ func convertExecutionRequestsToBuilderAPI(requests [][]byte) (json.RawMessage, e
 	}
 
 	return json.Marshal(result)
-}
-
-// merkleRoot computes the Merkle root of the given leaves using SHA-256.
-func merkleRoot(leaves [][32]byte) [32]byte {
-	if len(leaves) == 1 {
-		return leaves[0]
-	}
-
-	// Pair up and hash
-	next := make([][32]byte, len(leaves)/2)
-
-	for i := 0; i < len(leaves); i += 2 {
-		var combined [64]byte
-
-		copy(combined[:32], leaves[i][:])
-		copy(combined[32:], leaves[i+1][:])
-
-		next[i/2] = sha256.Sum256(combined[:])
-	}
-
-	return merkleRoot(next)
 }

@@ -110,8 +110,17 @@ func ComputeDomain(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) phase0.Domain {
-	// Compute fork data root
-	forkDataRoot := computeForkDataRoot(forkVersion, genesisValidatorsRoot)
+	// Use official ForkData type for correct SSZ hash tree root
+	forkData := &phase0.ForkData{
+		CurrentVersion:        forkVersion,
+		GenesisValidatorsRoot: genesisValidatorsRoot,
+	}
+
+	forkDataRoot, err := forkData.HashTreeRoot()
+	if err != nil {
+		// This should never fail for ForkData
+		panic(fmt.Sprintf("failed to compute fork data root: %v", err))
+	}
 
 	// Domain = domain_type + fork_data_root[:28]
 	var domain phase0.Domain
@@ -122,35 +131,19 @@ func ComputeDomain(
 	return domain
 }
 
-// computeForkDataRoot computes the fork data root from fork version and genesis validators root.
-func computeForkDataRoot(forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) phase0.Root {
-	// ForkData{current_version: forkVersion, genesis_validators_root: genesisValidatorsRoot}
-	// Hash tree root of ForkData
-	var forkData [64]byte
-
-	copy(forkData[:4], forkVersion[:])
-	copy(forkData[32:], genesisValidatorsRoot[:])
-
-	hash := sha256.Sum256(forkData[:])
-
-	var root phase0.Root
-	copy(root[:], hash[:])
-
-	return root
-}
-
 // ComputeSigningRoot computes the signing root from an object root and domain.
 func ComputeSigningRoot(objectRoot phase0.Root, domain phase0.Domain) phase0.Root {
-	// SigningData{object_root: objectRoot, domain: domain}
-	var signingData [64]byte
+	// Use official SigningData type for correct SSZ hash tree root
+	signingData := &phase0.SigningData{
+		ObjectRoot: objectRoot,
+		Domain:     domain,
+	}
 
-	copy(signingData[:32], objectRoot[:])
-	copy(signingData[32:], domain[:])
-
-	hash := sha256.Sum256(signingData[:])
-
-	var root phase0.Root
-	copy(root[:], hash[:])
+	root, err := signingData.HashTreeRoot()
+	if err != nil {
+		// This should never fail for SigningData
+		panic(fmt.Sprintf("failed to compute signing data root: %v", err))
+	}
 
 	return root
 }

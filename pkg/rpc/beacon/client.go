@@ -182,6 +182,11 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 		cs.PtcSize = v
 	}
 
+	// Parse genesis fork version (required for builder API domain computation)
+	if v, ok := spec["GENESIS_FORK_VERSION"].(phase0.Version); ok {
+		cs.GenesisForkVersion = v
+	}
+
 	return cs, nil
 }
 

@@ -261,7 +261,7 @@ export function useEventStream(): UseEventStreamResult {
           break;
 
         case 'legacy_block_submitted': {
-          const data = event.data as { slot: number; block_hash: string; value: string; relay_url: string; success: boolean; error?: string };
+          const data = event.data as { slot: number; block_hash: string; value: string; relay_url: string; success: boolean; error?: string; build_requested_at: number; payload_ready_at: number };
           const msg = data.success
             ? `Legacy block submitted for slot ${data.slot} to ${data.relay_url} (value: ${data.value} wei)`
             : `Legacy block submission FAILED for slot ${data.slot} to ${data.relay_url}: ${data.error || 'unknown'}`;
@@ -276,7 +276,9 @@ export function useEventStream(): UseEventStreamResult {
               value: data.value,
               relayUrl: data.relay_url,
               success: data.success,
-              error: data.error
+              error: data.error,
+              buildRequestedAt: data.build_requested_at,
+              payloadReadyAt: data.payload_ready_at
             });
             return { ...prev, [data.slot]: { ...state, legacySubmissions } };
           });

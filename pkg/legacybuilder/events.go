@@ -9,14 +9,16 @@ import (
 
 // BlockSubmissionEvent is emitted when a block is submitted to a relay.
 type BlockSubmissionEvent struct {
-	Slot           phase0.Slot
-	BlockHash      string
-	Value          string // wei
-	ProposerPubkey string
-	RelayURL       string
-	Success        bool
-	Error          string
-	Timestamp      time.Time
+	Slot             phase0.Slot
+	BlockHash        string
+	Value            string // wei
+	ProposerPubkey   string
+	RelayURL         string
+	Success          bool
+	Error            string
+	Timestamp        time.Time
+	BuildRequestedAt time.Time // when FCU was sent to execution client
+	PayloadReadyAt   time.Time // when payload was received from execution client
 }
 
 // LegacyBuilderStats tracks statistics for legacy builder operations.

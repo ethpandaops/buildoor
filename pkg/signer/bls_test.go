@@ -98,13 +98,19 @@ func TestForkDataRootComputation(t *testing.T) {
 	forkVersion := phase0.Version{}
 	genesisRoot := phase0.Root{}
 
-	forkDataRoot := computeForkDataRoot(forkVersion, genesisRoot)
+	forkData := &phase0.ForkData{
+		CurrentVersion:        forkVersion,
+		GenesisValidatorsRoot: genesisRoot,
+	}
+	forkDataRoot, err := forkData.HashTreeRoot()
+	require.NoError(t, err)
 
 	t.Logf("Fork version: 0x%x", forkVersion[:])
 	t.Logf("Genesis validators root: 0x%x", genesisRoot[:])
 	t.Logf("Fork data root: 0x%x", forkDataRoot[:])
 
 	// Fork data root should be deterministic for same inputs
-	forkDataRoot2 := computeForkDataRoot(forkVersion, genesisRoot)
+	forkDataRoot2, err := forkData.HashTreeRoot()
+	require.NoError(t, err)
 	assert.Equal(t, forkDataRoot, forkDataRoot2, "fork data root should be deterministic")
 }

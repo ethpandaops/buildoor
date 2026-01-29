@@ -500,8 +500,46 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
         {/* Legacy PBS events row */}
         {legacyRowActive && legacyRowBottom !== undefined && (
           <div className="event-row" style={{ bottom: `${legacyRowBottom}px` }}>
+            {/* Build delay indicator for first legacy submission with timing data */}
+            {state.legacySubmissions && state.legacySubmissions.length > 0 && genesisTime > 0 && (() => {
+              // Find first submission with build timing data
+              const subWithTiming = state.legacySubmissions.find(s => s.buildRequestedAt && s.payloadReadyAt);
+              if (!subWithTiming || !subWithTiming.buildRequestedAt || !subWithTiming.payloadReadyAt) return null;
+
+              const buildStartMs = subWithTiming.buildRequestedAt - slotStartTime;
+              const buildEndMs = subWithTiming.payloadReadyAt - slotStartTime;
+              const startX = calculatePosition(buildStartMs, rangeStart, totalRange);
+              const endX = calculatePosition(buildEndMs, rangeStart, totalRange);
+              const buildDuration = buildEndMs - buildStartMs;
+              if (startX > 100 || endX < 0) return null;
+              const clampedStartX = Math.max(0, Math.min(100, startX));
+              const clampedEndX = Math.max(0, Math.min(100, endX));
+              const width = clampedEndX - clampedStartX;
+              if (width <= 0) return null;
+              return (
+                <div
+                  className="build-delay-line legacy-build-delay"
+                  style={{
+                    left: `${clampedStartX}%`,
+                    width: `${width}%`
+                  }}
+                  onClick={(e) => showPopover(e, {
+                    title: 'Legacy Build Delay',
+                    items: [
+                      { label: 'FCU Sent', value: `${buildStartMs}ms` },
+                      { label: 'Payload Ready', value: `${buildEndMs}ms` },
+                      { label: 'Build Duration', value: `${buildDuration}ms` }
+                    ]
+                  })}
+                />
+              );
+            })()}
+
             {state.legacySubmissions?.map((sub: LegacySubmission, idx: number) => {
               const subMs = sub.time - slotStartTime;
+              const buildDuration = (sub.buildRequestedAt && sub.payloadReadyAt)
+                ? sub.payloadReadyAt - sub.buildRequestedAt
+                : undefined;
               return renderEventDot(
                 sub.success ? 'legacy-submitted' : 'legacy-failed',
                 subMs,
@@ -511,6 +549,10 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     { label: 'Time', value: `${subMs}ms` },
                     { label: 'Relay', value: sub.relayUrl },
                     { label: 'Value', value: `${sub.value} wei` },
+                    ...(buildDuration !== undefined ? [{
+                      label: 'Build Duration',
+                      value: `${buildDuration}ms`
+                    }] : []),
                     ...(sub.blockHash ? [{
                       label: 'Block Hash',
                       value: truncateHash(sub.blockHash),
