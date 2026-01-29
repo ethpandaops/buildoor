@@ -142,6 +142,35 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
+	// Debug: Log blobs bundle details
+	if payloadResult.BlobsBundle != nil {
+		b.log.WithFields(logrus.Fields{
+			"slot":            attrs.ProposalSlot,
+			"num_commitments": len(payloadResult.BlobsBundle.Commitments),
+			"num_proofs":      len(payloadResult.BlobsBundle.Proofs),
+			"num_blobs":       len(payloadResult.BlobsBundle.Blobs),
+		}).Debug("BlobsBundle received from engine API")
+
+		// Log first commitment if available (truncated for readability)
+		if len(payloadResult.BlobsBundle.Commitments) > 0 {
+			b.log.WithField("first_commitment", payloadResult.BlobsBundle.Commitments[0]).
+				Debug("BlobsBundle first commitment")
+		}
+	} else {
+		b.log.WithField("slot", attrs.ProposalSlot).Debug("No BlobsBundle in payload response")
+	}
+
+	// Debug: Log execution requests details
+	if len(payloadResult.ExecutionRequests) > 0 {
+		b.log.WithFields(logrus.Fields{
+			"slot":        attrs.ProposalSlot,
+			"raw_length":  len(payloadResult.ExecutionRequests),
+			"raw_preview": string(payloadResult.ExecutionRequests),
+		}).Debug("ExecutionRequests received from engine API")
+	} else {
+		b.log.WithField("slot", attrs.ProposalSlot).Debug("No ExecutionRequests in payload response")
+	}
+
 	// Parse block hash from the payload
 	blockHashCommon, err := engine.ParseBlockHashFromPayload(payloadResult.ExecutionPayload)
 	if err != nil {
