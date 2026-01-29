@@ -16,13 +16,8 @@ import (
 
 // ChainSpec holds chain specification parameters.
 type ChainSpec struct {
-	SecondsPerSlot               time.Duration
-	SlotsPerEpoch                uint64
-	EpochsPerSyncCommitteePeriod uint64
-	GenesisTime                  time.Time
-	GenesisForkVersion           phase0.Version
-	DepositContractAddress       string
-	DepositChainID               uint64
+	SecondsPerSlot time.Duration
+	SlotsPerEpoch  uint64
 
 	// Duty calculation parameters
 	ShuffleRoundCount          uint64
