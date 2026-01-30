@@ -732,10 +732,6 @@ const docTemplate = `{
                 "lifecycle_enabled": {
                     "type": "boolean"
                 },
-                "payload_build_time": {
-                    "description": "The time given to the EL to build the payload after triggering the payload build via fcu (in ms)",
-                    "type": "integer"
-                },
                 "pprof": {
                     "type": "boolean"
                 },
