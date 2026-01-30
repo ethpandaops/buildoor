@@ -276,12 +276,13 @@ func (c *Client) RequestPayloadBuild(
 	return *response.PayloadID, nil
 }
 
-// GetPayloadResponse is the response from engine_getPayloadV4.
+// GetPayloadResponse is the response from engine_getPayloadV4/V5.
 type GetPayloadResponse struct {
 	ExecutionPayload      json.RawMessage `json:"executionPayload"`
 	BlockValue            string          `json:"blockValue"`
 	BlobsBundle           *BlobsBundleRaw `json:"blobsBundle"`
 	ShouldOverrideBuilder bool            `json:"shouldOverrideBuilder"`
+	ExecutionRequests     json.RawMessage `json:"executionRequests"` // V5+ (Electra/Fulu)
 }
 
 // BlobsBundleRaw is the raw blobs bundle from engine API.
@@ -349,12 +350,20 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 	return envelope, nil
 }
 
-// GetPayloadRaw retrieves a payload and returns the raw JSON for the execution payload.
+// GetPayloadRawResult contains all the raw data from engine_getPayload.
+type GetPayloadRawResult struct {
+	ExecutionPayload  json.RawMessage
+	BlockValue        *big.Int
+	BlobsBundle       *BlobsBundleRaw
+	ExecutionRequests json.RawMessage // V5+ (Electra/Fulu)
+}
+
+// GetPayloadRaw retrieves a payload and returns all raw data.
 // Tries V5, V4, V3 in order based on fork support.
 func (c *Client) GetPayloadRaw(
 	ctx context.Context,
 	payloadID PayloadID,
-) (json.RawMessage, *big.Int, error) {
+) (*GetPayloadRawResult, error) {
 	var response GetPayloadResponse
 
 	payloadIDHex := fmt.Sprintf("0x%x", payloadID[:])
@@ -374,15 +383,20 @@ func (c *Client) GetPayloadRaw(
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("getPayload failed: %w", err)
+		return nil, fmt.Errorf("getPayload failed: %w", err)
 	}
 
 	blockValue := new(big.Int)
 	if _, ok := blockValue.SetString(strings.TrimPrefix(response.BlockValue, "0x"), 16); !ok {
-		return nil, nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
+		return nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
 	}
 
-	return response.ExecutionPayload, blockValue, nil
+	return &GetPayloadRawResult{
+		ExecutionPayload:  response.ExecutionPayload,
+		BlockValue:        blockValue,
+		BlobsBundle:       response.BlobsBundle,
+		ExecutionRequests: response.ExecutionRequests,
+	}, nil
 }
 
 // BlockResponse represents a block from eth_getBlockByNumber.
