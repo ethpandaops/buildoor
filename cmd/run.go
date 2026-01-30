@@ -162,6 +162,7 @@ and begins building blocks according to configuration.`,
 
 		// 8. Initialize ePBS service (if enabled)
 		var epbsSvc *epbs.Service
+		logger.Info("ePBS enabled: ", cfg.EPBSEnabled)
 
 		if cfg.EPBSEnabled {
 			logger.Info("Initializing ePBS service...")
