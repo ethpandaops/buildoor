@@ -391,7 +391,10 @@ func (c *Client) GetPayloadRaw(
 		return nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
 	}
 
-	c.log.Debug("GetPayloadRaw: GetPayloadResponse is: ", response)
+	c.log.Debug("GetPayloadRaw: GetPayloadResponse transactions: ", string(response.ExecutionPayload))
+	c.log.Debug("GetPayloadRaw: GetPayloadResponse blobs bundle: ", len(response.BlobsBundle.Blobs))
+	c.log.Debug("GetPayloadRaw: GetPayloadResponse block value: ", response.BlockValue)
+	c.log.Debug("GetPayloadRaw: GetPayloadResponse execution requests: ", string(response.ExecutionRequests))
 
 	return &GetPayloadRawResult{
 		ExecutionPayload:  response.ExecutionPayload,
