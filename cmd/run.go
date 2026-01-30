@@ -162,16 +162,16 @@ and begins building blocks according to configuration.`,
 
 		// 8. Initialize ePBS service (if enabled)
 		var epbsSvc *epbs.Service
-		logger.Info("ePBS enabled: ", cfg.EPBSEnabled)
+		// logger.Info("ePBS enabled: ", cfg.EPBSEnabled)
 
-		if cfg.EPBSEnabled {
-			logger.Info("Initializing ePBS service...")
+		// if cfg.EPBSEnabled {
+		// 	logger.Info("Initializing ePBS service...")
 
-			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
-			if err != nil {
-				return fmt.Errorf("failed to initialize ePBS: %w", err)
-			}
-		}
+		// 	epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+		// 	if err != nil {
+		// 		return fmt.Errorf("failed to initialize ePBS: %w", err)
+		// 	}
+		// }
 
 		// 8a. Start Builder API server (if enabled)
 		var builderAPISrv *builderapi.Server
