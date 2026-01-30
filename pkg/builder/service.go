@@ -96,6 +96,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.clClient,
 		s.engineClient,
 		s.feeRecipient,
+		s.cfg.PayloadBuildTime,
 		s.log,
 	)
 

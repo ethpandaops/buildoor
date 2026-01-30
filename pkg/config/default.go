@@ -24,5 +24,6 @@ func DefaultConfig() *Config {
 			BidInterval:    250,     // 250ms between bids
 		},
 		ValidateWithdrawals: false,
+		PayloadBuildTime:    2000,
 	}
 }

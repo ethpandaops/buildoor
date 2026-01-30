@@ -21,10 +21,11 @@ import (
 
 // PayloadBuilder handles execution payload building via the Engine API.
 type PayloadBuilder struct {
-	clClient     *beacon.Client
-	engineClient *engine.Client
-	feeRecipient common.Address
-	log          logrus.FieldLogger
+	clClient         *beacon.Client
+	engineClient     *engine.Client
+	feeRecipient     common.Address
+	payloadBuildTime uint64
+	log              logrus.FieldLogger
 
 	// Active build tracking
 	activeBuild *activeBuild
@@ -43,13 +44,15 @@ func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
+	payloadBuildTime uint64,
 	log logrus.FieldLogger,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
-		clClient:     clClient,
-		engineClient: engineClient,
-		feeRecipient: feeRecipient,
-		log:          log.WithField("component", "payload-builder"),
+		clClient:         clClient,
+		engineClient:     engineClient,
+		feeRecipient:     feeRecipient,
+		payloadBuildTime: payloadBuildTime,
+		log:              log.WithField("component", "payload-builder"),
 	}
 }
 
@@ -135,6 +138,8 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"slot":       attrs.ProposalSlot,
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
+
+	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
 
 	// Get the built payload
 	payloadJSON, blockValue, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
