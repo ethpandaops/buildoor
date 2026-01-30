@@ -45,6 +45,13 @@ const (
 	ScheduleModeNextN ScheduleMode = "next_n"
 )
 
+// BuilderAPIConfig defines configuration for the traditional Builder API (pre-ePBS).
+type BuilderAPIConfig struct {
+	// Port is the HTTP port for the Builder API server.
+	// Default: 9000.
+	Port int `yaml:"port" json:"port"`
+}
+
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
 type EPBSConfig struct {
 	// BuildStartTime is milliseconds relative to the proposal slot start when we
