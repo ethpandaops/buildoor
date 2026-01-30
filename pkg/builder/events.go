@@ -1,12 +1,12 @@
 package builder
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -33,20 +33,22 @@ func (s BuildSource) String() string {
 }
 
 // PayloadReadyEvent is emitted when a new payload is built.
+// Payload, BlobsBundle, and ExecutionRequests are stored typed; marshal to JSON only when sending API responses.
 type PayloadReadyEvent struct {
-	Slot            phase0.Slot
-	ParentBlockRoot phase0.Root
-	ParentBlockHash phase0.Hash32
-	BlockHash       phase0.Hash32
-	Payload         json.RawMessage
-	BlobsBundle     json.RawMessage
-	Timestamp       uint64
-	GasLimit        uint64
-	PrevRandao      phase0.Root
-	FeeRecipient    common.Address
-	BlockValue      uint64      // MEV value from EL in wei
-	BuildSource     BuildSource // How the payload was built
-	ReadyAt         time.Time   // When the payload became ready
+	Slot              phase0.Slot
+	ParentBlockRoot   phase0.Root
+	ParentBlockHash   phase0.Hash32
+	BlockHash         phase0.Hash32
+	Payload           *engine.ExecutionPayload // Typed execution payload
+	BlobsBundle       *engine.BlobsBundle      // Deneb+ blobs bundle (typed)
+	ExecutionRequests engine.ExecutionRequests // Electra+ execution requests (typed)
+	Timestamp         uint64
+	GasLimit          uint64
+	PrevRandao        phase0.Root
+	FeeRecipient      common.Address
+	BlockValue        uint64      // MEV value from EL in wei
+	BuildSource       BuildSource // How the payload was built
+	ReadyAt           time.Time   // When the payload became ready
 }
 
 // PayloadReadyDispatcher dispatches payload ready events to subscribers.

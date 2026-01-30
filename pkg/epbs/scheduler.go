@@ -84,17 +84,18 @@ func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 // OnPayloadReady stores the payload for reveals.
 func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
 	s.payloadStore.Store(&BuiltPayload{
-		Slot:             event.Slot,
-		BlockHash:        event.BlockHash,
-		ParentBlockHash:  event.ParentBlockHash,
-		ParentBlockRoot:  event.ParentBlockRoot,
-		ExecutionPayload: event.Payload,
-		BlobsBundle:      event.BlobsBundle,
-		BidValue:         event.BlockValue,
-		FeeRecipient:     event.FeeRecipient,
-		Timestamp:        event.Timestamp,
-		PrevRandao:       event.PrevRandao,
-		GasLimit:         event.GasLimit,
+		Slot:              event.Slot,
+		BlockHash:         event.BlockHash,
+		ParentBlockHash:   event.ParentBlockHash,
+		ParentBlockRoot:   event.ParentBlockRoot,
+		ExecutionPayload:  event.Payload,
+		BlobsBundle:       event.BlobsBundle,
+		ExecutionRequests: event.ExecutionRequests,
+		BidValue:          event.BlockValue,
+		FeeRecipient:      event.FeeRecipient,
+		Timestamp:         event.Timestamp,
+		PrevRandao:        event.PrevRandao,
+		GasLimit:          event.GasLimit,
 	})
 }
 

@@ -2,10 +2,7 @@ package builder
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -141,53 +138,48 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
 
-	// Get the built payload
-	payloadJSON, blockValue, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
+	// Get the built payload with all components (blobs, execution requests) as typed values
+	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	// Parse block hash from the payload
-	blockHashCommon, err := engine.ParseBlockHashFromPayload(payloadJSON)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse block hash from payload: %w", err)
-	}
-
+	payload := payloadResult.ExecutionPayload
 	var blockHash phase0.Hash32
-	copy(blockHash[:], blockHashCommon[:])
-
-	payloadFields, err := engine.ParsePayloadFields(payloadJSON)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse payload fields: %w", err)
-	}
-
-	gasLimit, _ := strconv.ParseUint(strings.TrimPrefix(payloadFields.GasLimit, "0x"), 16, 64)
+	copy(blockHash[:], payload.BlockHash[:])
 
 	var blockValueGwei uint64
-	if blockValue != nil {
-		blockValueGwei = blockValue.Uint64()
+	if payloadResult.BlockValue != nil {
+		blockValueGwei = payloadResult.BlockValue.Uint64()
 	}
 
+	txCount := len(payload.Transactions)
+
 	event := &PayloadReadyEvent{
-		Slot:            attrs.ProposalSlot,
-		ParentBlockRoot: attrs.ParentBlockRoot,
-		ParentBlockHash: attrs.ParentBlockHash,
-		BlockHash:       blockHash,
-		Payload:         payloadJSON,
-		Timestamp:       attrs.Timestamp,
-		GasLimit:        gasLimit,
-		PrevRandao:      attrs.PrevRandao,
-		FeeRecipient:    b.feeRecipient,
-		BlockValue:      blockValueGwei,
-		BuildSource:     BuildSourceBlock,
-		ReadyAt:         time.Now(),
+		Slot:              attrs.ProposalSlot,
+		ParentBlockRoot:   attrs.ParentBlockRoot,
+		ParentBlockHash:   attrs.ParentBlockHash,
+		BlockHash:         blockHash,
+		Payload:           payload,
+		BlobsBundle:       payloadResult.BlobsBundle,
+		ExecutionRequests: payloadResult.ExecutionRequests,
+		Timestamp:         attrs.Timestamp,
+		GasLimit:          payload.GasLimit,
+		PrevRandao:        attrs.PrevRandao,
+		FeeRecipient:      b.feeRecipient,
+		BlockValue:        blockValueGwei,
+		BuildSource:       BuildSourceBlock,
+		ReadyAt:           time.Now(),
 	}
 
 	b.log.WithFields(logrus.Fields{
-		"slot":        attrs.ProposalSlot,
-		"block_hash":  fmt.Sprintf("%x", blockHash[:8]),
-		"parent_hash": fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
-		"block_value": blockValueGwei,
+		"slot":              attrs.ProposalSlot,
+		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
+		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"block_value":       blockValueGwei,
+		"has_blobs":         payloadResult.BlobsBundle != nil,
+		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
+		"txs_in_payload":    txCount,
 	}).Debug("Payload built from attributes")
 
 	return event, nil
@@ -252,7 +244,7 @@ type BuildContext struct {
 func (b *PayloadBuilder) BuildPayloadWithContext(
 	ctx context.Context,
 	buildCtx *BuildContext,
-) (json.RawMessage, error) {
+) (*engine.ExecutionPayload, error) {
 	payloadID, err := b.engineClient.RequestPayloadBuild(
 		ctx,
 		buildCtx.HeadBlockHash,
@@ -270,10 +262,10 @@ func (b *PayloadBuilder) BuildPayloadWithContext(
 		return nil, fmt.Errorf("failed to request payload build: %w", err)
 	}
 
-	payloadJSON, _, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
+	result, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	return payloadJSON, nil
+	return result.ExecutionPayload, nil
 }
