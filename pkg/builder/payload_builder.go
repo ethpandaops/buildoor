@@ -90,6 +90,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
+
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
 	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
