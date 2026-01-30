@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/golang-jwt/jwt/v5"
@@ -52,32 +53,193 @@ type PayloadAttributes struct {
 	ParentBeaconBlockRoot *common.Hash
 }
 
-// ExecutionPayload represents an execution layer payload.
+// ExecutionPayload represents an execution layer payload (typed, with JSON marshal/unmarshal for API).
 type ExecutionPayload struct {
-	ParentHash    common.Hash
-	FeeRecipient  common.Address
-	StateRoot     common.Hash
-	ReceiptsRoot  common.Hash
-	LogsBloom     types.Bloom
-	PrevRandao    common.Hash
-	BlockNumber   uint64
-	GasLimit      uint64
-	GasUsed       uint64
-	Timestamp     uint64
-	ExtraData     []byte
-	BaseFeePerGas *big.Int
-	BlockHash     common.Hash
-	Transactions  [][]byte
-	Withdrawals   []*types.Withdrawal
-	BlobGasUsed   uint64
-	ExcessBlobGas uint64
+	ParentHash       common.Hash
+	FeeRecipient     common.Address
+	StateRoot        common.Hash
+	ReceiptsRoot     common.Hash
+	LogsBloom        types.Bloom
+	PrevRandao       common.Hash
+	BlockNumber      uint64
+	GasLimit         uint64
+	GasUsed          uint64
+	Timestamp        uint64
+	ExtraData        []byte
+	BaseFeePerGas    *big.Int
+	BlockHash        common.Hash
+	Transactions     [][]byte
+	Withdrawals      []*types.Withdrawal
+	BlobGasUsed      uint64
+	ExcessBlobGas    uint64
+	ParentBeaconRoot *common.Hash
 }
 
-// BlobsBundle contains the blob-related data for a payload.
+// executionPayloadJSON is the Engine API JSON shape for executionPayload (used for marshal/unmarshal).
+type executionPayloadJSON struct {
+	ParentHash       common.Hash         `json:"parentHash"`
+	FeeRecipient     common.Address      `json:"feeRecipient"`
+	StateRoot        common.Hash         `json:"stateRoot"`
+	ReceiptsRoot     common.Hash         `json:"receiptsRoot"`
+	LogsBloom        types.Bloom         `json:"logsBloom"`
+	PrevRandao       common.Hash         `json:"prevRandao"`
+	BlockNumber      hexutil.Uint64      `json:"blockNumber"`
+	GasLimit         hexutil.Uint64      `json:"gasLimit"`
+	GasUsed          hexutil.Uint64      `json:"gasUsed"`
+	Timestamp        hexutil.Uint64      `json:"timestamp"`
+	ExtraData        hexutil.Bytes       `json:"extraData"`
+	BaseFeePerGas    *hexutil.Big        `json:"baseFeePerGas"`
+	BlockHash        common.Hash         `json:"blockHash"`
+	Transactions     []hexutil.Bytes     `json:"transactions"`
+	Withdrawals      []*types.Withdrawal `json:"withdrawals"`
+	BlobGasUsed      hexutil.Uint64      `json:"blobGasUsed,omitempty"`
+	ExcessBlobGas    hexutil.Uint64      `json:"excessBlobGas,omitempty"`
+	ParentBeaconRoot *common.Hash        `json:"parentBeaconBlockRoot,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for ExecutionPayload.
+func (p *ExecutionPayload) UnmarshalJSON(data []byte) error {
+	var j executionPayloadJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	p.ParentHash = j.ParentHash
+	p.FeeRecipient = j.FeeRecipient
+	p.StateRoot = j.StateRoot
+	p.ReceiptsRoot = j.ReceiptsRoot
+	p.LogsBloom = j.LogsBloom
+	p.PrevRandao = j.PrevRandao
+	p.BlockNumber = uint64(j.BlockNumber)
+	p.GasLimit = uint64(j.GasLimit)
+	p.GasUsed = uint64(j.GasUsed)
+	p.Timestamp = uint64(j.Timestamp)
+	p.ExtraData = j.ExtraData
+	if j.BaseFeePerGas != nil {
+		p.BaseFeePerGas = (*big.Int)(j.BaseFeePerGas)
+	}
+	p.BlockHash = j.BlockHash
+	p.Transactions = make([][]byte, len(j.Transactions))
+	for i, tx := range j.Transactions {
+		p.Transactions[i] = tx
+	}
+	p.Withdrawals = j.Withdrawals
+	p.BlobGasUsed = uint64(j.BlobGasUsed)
+	p.ExcessBlobGas = uint64(j.ExcessBlobGas)
+	p.ParentBeaconRoot = j.ParentBeaconRoot
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for ExecutionPayload.
+func (p *ExecutionPayload) MarshalJSON() ([]byte, error) {
+	j := executionPayloadJSON{
+		ParentHash:       p.ParentHash,
+		FeeRecipient:     p.FeeRecipient,
+		StateRoot:        p.StateRoot,
+		ReceiptsRoot:     p.ReceiptsRoot,
+		LogsBloom:        p.LogsBloom,
+		PrevRandao:       p.PrevRandao,
+		BlockNumber:      hexutil.Uint64(p.BlockNumber),
+		GasLimit:         hexutil.Uint64(p.GasLimit),
+		GasUsed:          hexutil.Uint64(p.GasUsed),
+		Timestamp:        hexutil.Uint64(p.Timestamp),
+		ExtraData:        p.ExtraData,
+		BlockHash:        p.BlockHash,
+		Transactions:     make([]hexutil.Bytes, len(p.Transactions)),
+		Withdrawals:      p.Withdrawals,
+		BlobGasUsed:      hexutil.Uint64(p.BlobGasUsed),
+		ExcessBlobGas:    hexutil.Uint64(p.ExcessBlobGas),
+		ParentBeaconRoot: p.ParentBeaconRoot,
+	}
+	if p.BaseFeePerGas != nil {
+		j.BaseFeePerGas = (*hexutil.Big)(p.BaseFeePerGas)
+	}
+	for i, tx := range p.Transactions {
+		j.Transactions[i] = tx
+	}
+	return json.Marshal(j)
+}
+
+// BlobsBundle contains the blob-related data for a payload (typed, with JSON marshal/unmarshal for API).
 type BlobsBundle struct {
 	Commitments []common.Hash
 	Proofs      []common.Hash
 	Blobs       [][]byte
+}
+
+// blobsBundleJSON is the Engine API JSON shape (hex strings).
+type blobsBundleJSON struct {
+	Commitments []string `json:"commitments"`
+	Proofs      []string `json:"proofs"`
+	Blobs       []string `json:"blobs"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler for BlobsBundle.
+func (b *BlobsBundle) UnmarshalJSON(data []byte) error {
+	var j blobsBundleJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	b.Commitments = make([]common.Hash, len(j.Commitments))
+	for i, s := range j.Commitments {
+		b.Commitments[i] = common.HexToHash(s)
+	}
+	b.Proofs = make([]common.Hash, len(j.Proofs))
+	for i, s := range j.Proofs {
+		b.Proofs[i] = common.HexToHash(s)
+	}
+	b.Blobs = make([][]byte, len(j.Blobs))
+	for i, s := range j.Blobs {
+		decoded, err := hexutil.Decode(s)
+		if err != nil {
+			return fmt.Errorf("blob %d: %w", i, err)
+		}
+		b.Blobs[i] = decoded
+	}
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for BlobsBundle.
+func (b *BlobsBundle) MarshalJSON() ([]byte, error) {
+	j := blobsBundleJSON{
+		Commitments: make([]string, len(b.Commitments)),
+		Proofs:      make([]string, len(b.Proofs)),
+		Blobs:       make([]string, len(b.Blobs)),
+	}
+	for i, c := range b.Commitments {
+		j.Commitments[i] = c.Hex()
+	}
+	for i, pr := range b.Proofs {
+		j.Proofs[i] = pr.Hex()
+	}
+	for i, blob := range b.Blobs {
+		j.Blobs[i] = hexutil.Bytes(blob).String()
+	}
+	return json.Marshal(j)
+}
+
+// ExecutionRequests is the Electra/Fulu execution requests array (typed container, round-trips as JSON array).
+type ExecutionRequests []json.RawMessage
+
+// UnmarshalJSON implements json.Unmarshaler for ExecutionRequests.
+func (e *ExecutionRequests) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*e = nil
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*e = raw
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for ExecutionRequests.
+func (e ExecutionRequests) MarshalJSON() ([]byte, error) {
+	if e == nil {
+		return []byte("[]"), nil
+	}
+	return json.Marshal([]json.RawMessage(e))
 }
 
 // ExecutionPayloadEnvelope wraps an execution payload with additional metadata.
@@ -307,12 +469,17 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 		return nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
 	}
 
+	var payload ExecutionPayload
+	if err := json.Unmarshal(response.ExecutionPayload, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal execution payload: %w", err)
+	}
+
 	envelope := &ExecutionPayloadEnvelope{
+		ExecutionPayload:      &payload,
 		BlockValue:            blockValue,
 		ShouldOverrideBuilder: response.ShouldOverrideBuilder,
 	}
 
-	// Parse execution payload - store raw for later use
 	c.log.WithField("payload_size", len(response.ExecutionPayload)).Debug("Received execution payload")
 
 	// Parse blobs bundle if present
@@ -350,15 +517,15 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 	return envelope, nil
 }
 
-// GetPayloadRawResult contains all the raw data from engine_getPayload.
+// GetPayloadRawResult contains typed payload, blobs, and execution requests from engine_getPayload.
 type GetPayloadRawResult struct {
-	ExecutionPayload  json.RawMessage
+	ExecutionPayload  *ExecutionPayload
 	BlockValue        *big.Int
-	BlobsBundle       *BlobsBundleRaw
-	ExecutionRequests json.RawMessage // V5+ (Electra/Fulu)
+	BlobsBundle       *BlobsBundle
+	ExecutionRequests ExecutionRequests
 }
 
-// GetPayloadRaw retrieves a payload and returns all raw data.
+// GetPayloadRaw retrieves a payload and returns typed ExecutionPayload, BlobsBundle, and ExecutionRequests.
 // Tries V5, V4, V3 in order based on fork support.
 func (c *Client) GetPayloadRaw(
 	ctx context.Context,
@@ -391,11 +558,45 @@ func (c *Client) GetPayloadRaw(
 		return nil, fmt.Errorf("failed to parse block value: %s", response.BlockValue)
 	}
 
+	var payload ExecutionPayload
+	if err := json.Unmarshal(response.ExecutionPayload, &payload); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal execution payload: %w", err)
+	}
+
+	var blobsBundle *BlobsBundle
+	if response.BlobsBundle != nil {
+		blobsBundle = &BlobsBundle{
+			Commitments: make([]common.Hash, len(response.BlobsBundle.Commitments)),
+			Proofs:      make([]common.Hash, len(response.BlobsBundle.Proofs)),
+			Blobs:       make([][]byte, len(response.BlobsBundle.Blobs)),
+		}
+		for i, s := range response.BlobsBundle.Commitments {
+			blobsBundle.Commitments[i] = common.HexToHash(s)
+		}
+		for i, s := range response.BlobsBundle.Proofs {
+			blobsBundle.Proofs[i] = common.HexToHash(s)
+		}
+		for i, s := range response.BlobsBundle.Blobs {
+			decoded, err := hexutil.Decode(s)
+			if err != nil {
+				return nil, fmt.Errorf("blob %d: %w", i, err)
+			}
+			blobsBundle.Blobs[i] = decoded
+		}
+	}
+
+	var execRequests ExecutionRequests
+	if len(response.ExecutionRequests) > 0 {
+		if err := json.Unmarshal(response.ExecutionRequests, &execRequests); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal execution requests: %w", err)
+		}
+	}
+
 	return &GetPayloadRawResult{
-		ExecutionPayload:  response.ExecutionPayload,
+		ExecutionPayload:  &payload,
 		BlockValue:        blockValue,
-		BlobsBundle:       response.BlobsBundle,
-		ExecutionRequests: response.ExecutionRequests,
+		BlobsBundle:       blobsBundle,
+		ExecutionRequests: execRequests,
 	}, nil
 }
 

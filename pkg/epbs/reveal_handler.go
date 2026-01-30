@@ -45,9 +45,13 @@ func (h *RevealHandler) SubmitReveal(
 	payload *BuiltPayload,
 	blockRoot phase0.Root,
 ) error {
-	// Parse the execution payload from JSON
+	// Marshal typed execution payload to JSON for beacon API (deneb.ExecutionPayload shape)
+	payloadJSON, err := json.Marshal(payload.ExecutionPayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal execution payload: %w", err)
+	}
 	var execPayload deneb.ExecutionPayload
-	if err := json.Unmarshal(payload.ExecutionPayload, &execPayload); err != nil {
+	if err := json.Unmarshal(payloadJSON, &execPayload); err != nil {
 		return fmt.Errorf("failed to parse execution payload: %w", err)
 	}
 

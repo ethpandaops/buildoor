@@ -1,26 +1,29 @@
 package epbs
 
 import (
-	"encoding/json"
 	"sync"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 // BuiltPayload represents an execution payload that we've built and can reveal.
+// Payload, BlobsBundle, and ExecutionRequests are stored typed; marshal to JSON only when submitting to beacon.
 type BuiltPayload struct {
-	Slot             phase0.Slot
-	BlockHash        phase0.Hash32
-	ParentBlockHash  phase0.Hash32
-	ParentBlockRoot  phase0.Root
-	ExecutionPayload json.RawMessage // Raw execution payload from engine API
-	BlobsBundle      json.RawMessage // Raw blobs bundle if present
-	BidValue         uint64
-	FeeRecipient     common.Address
-	Timestamp        uint64
-	PrevRandao       phase0.Root
-	GasLimit         uint64
+	Slot              phase0.Slot
+	BlockHash         phase0.Hash32
+	ParentBlockHash   phase0.Hash32
+	ParentBlockRoot   phase0.Root
+	ExecutionPayload  *engine.ExecutionPayload // Typed execution payload
+	BlobsBundle       *engine.BlobsBundle      // Typed blobs bundle if present
+	ExecutionRequests engine.ExecutionRequests // Typed execution requests (Electra/Fulu)
+	BidValue          uint64
+	FeeRecipient      common.Address
+	Timestamp         uint64
+	PrevRandao        phase0.Root
+	GasLimit          uint64
 }
 
 // PayloadStore stores built execution payloads for later reveal.

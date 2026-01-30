@@ -2,10 +2,7 @@ package builder
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -141,64 +138,33 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
 
-	// Get the built payload with all components (blobs, execution requests)
+	// Get the built payload with all components (blobs, execution requests) as typed values
 	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	// Parse block hash from the payload
-	blockHashCommon, err := engine.ParseBlockHashFromPayload(payloadResult.ExecutionPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse block hash from payload: %w", err)
-	}
-
+	payload := payloadResult.ExecutionPayload
 	var blockHash phase0.Hash32
-	copy(blockHash[:], blockHashCommon[:])
-
-	payloadFields, err := engine.ParsePayloadFields(payloadResult.ExecutionPayload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse payload fields: %w", err)
-	}
-
-	gasLimit, _ := strconv.ParseUint(strings.TrimPrefix(payloadFields.GasLimit, "0x"), 16, 64)
+	copy(blockHash[:], payload.BlockHash[:])
 
 	var blockValueGwei uint64
 	if payloadResult.BlockValue != nil {
 		blockValueGwei = payloadResult.BlockValue.Uint64()
 	}
 
-	// Convert blobs bundle to JSON if present
-	var blobsBundleJSON json.RawMessage
-	if payloadResult.BlobsBundle != nil {
-		blobsBundleJSON, err = json.Marshal(payloadResult.BlobsBundle)
-		if err != nil {
-			b.log.WithError(err).Warn("Failed to marshal blobs bundle")
-		}
-	}
-
-	// Parse transaction count from the payload
-	var txCount int
-	if payloadFields != nil {
-		// Parse the execution payload to get transaction details
-		var payloadData struct {
-			Transactions []json.RawMessage `json:"transactions"`
-		}
-		if err := json.Unmarshal(payloadResult.ExecutionPayload, &payloadData); err == nil {
-			txCount = len(payloadData.Transactions)
-		}
-	}
+	txCount := len(payload.Transactions)
 
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
 		ParentBlockHash:   attrs.ParentBlockHash,
 		BlockHash:         blockHash,
-		Payload:           payloadResult.ExecutionPayload,
-		BlobsBundle:       blobsBundleJSON,
+		Payload:           payload,
+		BlobsBundle:       payloadResult.BlobsBundle,
 		ExecutionRequests: payloadResult.ExecutionRequests,
 		Timestamp:         attrs.Timestamp,
-		GasLimit:          gasLimit,
+		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
 		FeeRecipient:      b.feeRecipient,
 		BlockValue:        blockValueGwei,
@@ -278,7 +244,7 @@ type BuildContext struct {
 func (b *PayloadBuilder) BuildPayloadWithContext(
 	ctx context.Context,
 	buildCtx *BuildContext,
-) (json.RawMessage, error) {
+) (*engine.ExecutionPayload, error) {
 	payloadID, err := b.engineClient.RequestPayloadBuild(
 		ctx,
 		buildCtx.HeadBlockHash,
