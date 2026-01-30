@@ -720,6 +720,10 @@ const docTemplate = `{
                 "lifecycle_enabled": {
                     "type": "boolean"
                 },
+                "payload_build_time": {
+                    "description": "The time given to the EL to build the payload after triggering the payload build via fcu (in ms)",
+                    "type": "integer"
+                },
                 "pprof": {
                     "type": "boolean"
                 },
@@ -768,7 +772,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "build_start_time": {
-                    "description": "BuildStartTime is milliseconds relative to slot start when we start building.\nThis delays payload building to allow more transactions in mempool.\nDefault 9000 (75% into a 12s slot). Set to 0 to build immediately on head event.",
+                    "description": "BuildStartTime is milliseconds relative to the proposal slot start when we\nstart building. Negative values mean before the slot starts (e.g. -3000 =\n3 seconds before slot start). Positive values mean after slot start.\nSet to 0 to build immediately when payload_attributes is received.\nDefault: -3000.",
                     "type": "integer"
                 },
                 "reveal_time": {
