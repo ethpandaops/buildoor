@@ -137,6 +137,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
+	b.log.Debug("Waiting for 2 seconds to let the payload build")
+	time.Sleep(2 * time.Second)
+
 	// Get the built payload with all components (blobs, execution requests)
 	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
 	if err != nil {
