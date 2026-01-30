@@ -8,7 +8,7 @@ import (
 
 const (
 	// DefaultCacheSize is the number of slots to keep in the cache.
-	DefaultCacheSize = 2
+	DefaultCacheSize = 1000
 )
 
 // PayloadCache stores built payloads for a limited number of slots.
