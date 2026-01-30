@@ -217,30 +217,8 @@ func (b *BlobsBundle) MarshalJSON() ([]byte, error) {
 	return json.Marshal(j)
 }
 
-// ExecutionRequests is the Electra/Fulu execution requests array (typed container, round-trips as JSON array).
-type ExecutionRequests []json.RawMessage
-
-// UnmarshalJSON implements json.Unmarshaler for ExecutionRequests.
-func (e *ExecutionRequests) UnmarshalJSON(data []byte) error {
-	if len(data) == 0 || string(data) == "null" {
-		*e = nil
-		return nil
-	}
-	var raw []json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*e = raw
-	return nil
-}
-
-// MarshalJSON implements json.Marshaler for ExecutionRequests.
-func (e ExecutionRequests) MarshalJSON() ([]byte, error) {
-	if e == nil {
-		return []byte("[]"), nil
-	}
-	return json.Marshal([]json.RawMessage(e))
-}
+// ExecutionRequests is the Electra/Fulu execution requests array from the Engine API.
+type ExecutionRequests []hexutil.Bytes
 
 // ExecutionPayloadEnvelope wraps an execution payload with additional metadata.
 type ExecutionPayloadEnvelope struct {
