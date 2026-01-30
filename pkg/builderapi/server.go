@@ -66,18 +66,19 @@ func (s *Server) handleBuilderStatus(w http.ResponseWriter, r *http.Request) {
 
 // PayloadBySlotResponse is the JSON response for GET /buildoor/v1/payloads/{slot}.
 type PayloadBySlotResponse struct {
-	Slot            uint64          `json:"slot"`
-	BlockHash       string          `json:"block_hash"`
-	ParentBlockHash string          `json:"parent_block_hash"`
-	ParentBlockRoot string          `json:"parent_block_root"`
-	Payload         json.RawMessage `json:"payload"`
-	BlobsBundle     json.RawMessage `json:"blobs_bundle,omitempty"`
-	BlockValue      string          `json:"block_value"` // wei as string
-	FeeRecipient    string          `json:"fee_recipient"`
-	GasLimit        uint64          `json:"gas_limit"`
-	Timestamp       uint64          `json:"timestamp"`
-	BuildSource     string          `json:"build_source"`
-	ReadyAt         time.Time       `json:"ready_at"`
+	Slot              uint64          `json:"slot"`
+	BlockHash         string          `json:"block_hash"`
+	ParentBlockHash   string          `json:"parent_block_hash"`
+	ParentBlockRoot   string          `json:"parent_block_root"`
+	Payload           json.RawMessage `json:"payload"`
+	BlobsBundle       json.RawMessage `json:"blobs_bundle,omitempty"`
+	ExecutionRequests json.RawMessage `json:"execution_requests,omitempty"`
+	BlockValue        string          `json:"block_value"` // wei as string
+	FeeRecipient      string          `json:"fee_recipient"`
+	GasLimit          uint64          `json:"gas_limit"`
+	Timestamp         uint64          `json:"timestamp"`
+	BuildSource       string          `json:"build_source"`
+	ReadyAt           time.Time       `json:"ready_at"`
 }
 
 // handleGetPayloadBySlot handles GET /buildoor/v1/payloads/{slot}.
@@ -110,18 +111,19 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := PayloadBySlotResponse{
-		Slot:            uint64(event.Slot),
-		BlockHash:       "0x" + hex.EncodeToString(event.BlockHash[:]),
-		ParentBlockHash: "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
-		ParentBlockRoot: "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
-		Payload:         event.Payload,
-		BlobsBundle:     event.BlobsBundle,
-		BlockValue:      fmt.Sprintf("%d", event.BlockValue),
-		FeeRecipient:    event.FeeRecipient.Hex(),
-		GasLimit:        event.GasLimit,
-		Timestamp:       event.Timestamp,
-		BuildSource:     event.BuildSource.String(),
-		ReadyAt:         event.ReadyAt,
+		Slot:              uint64(event.Slot),
+		BlockHash:         "0x" + hex.EncodeToString(event.BlockHash[:]),
+		ParentBlockHash:   "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+		ParentBlockRoot:   "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+		Payload:           event.Payload,
+		BlobsBundle:       event.BlobsBundle,
+		ExecutionRequests: event.ExecutionRequests,
+		BlockValue:        fmt.Sprintf("%d", event.BlockValue),
+		FeeRecipient:      event.FeeRecipient.Hex(),
+		GasLimit:          event.GasLimit,
+		Timestamp:         event.Timestamp,
+		BuildSource:       event.BuildSource.String(),
+		ReadyAt:           event.ReadyAt,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
