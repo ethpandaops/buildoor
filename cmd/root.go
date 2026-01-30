@@ -55,6 +55,8 @@ func init() {
 	rootCmd.PersistentFlags().String("api-token-key", defaults.APITokenKey, "HTTP API token key")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs", true, "Enable ePBS bidding/revealing")
+	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API (pre-ePBS)")
+	rootCmd.PersistentFlags().Int("builder-api-port", defaults.BuilderAPI.Port, "Builder API HTTP port")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -131,20 +133,24 @@ func loadConfigFile() {
 
 func initConfig() error {
 	cfg = &builder.Config{
-		BuilderPrivkey:   v.GetString("builder-privkey"),
-		CLClient:         v.GetString("cl-client"),
-		ELEngineAPI:      v.GetString("el-engine-api"),
-		ELJWTSecret:      v.GetString("el-jwt-secret"),
-		ELRPC:            v.GetString("el-rpc"),
-		WalletPrivkey:    v.GetString("wallet-privkey"),
-		APIPort:          v.GetInt("api-port"),
-		APIUserHeader:    v.GetString("api-user-header"),
-		APITokenKey:      v.GetString("api-token-key"),
-		LifecycleEnabled: v.GetBool("lifecycle"),
-		EPBSEnabled:      v.GetBool("epbs"),
-		DepositAmount:    v.GetUint64("deposit-amount"),
-		TopupThreshold:   v.GetUint64("topup-threshold"),
-		TopupAmount:      v.GetUint64("topup-amount"),
+		BuilderPrivkey:    v.GetString("builder-privkey"),
+		CLClient:          v.GetString("cl-client"),
+		ELEngineAPI:       v.GetString("el-engine-api"),
+		ELJWTSecret:       v.GetString("el-jwt-secret"),
+		ELRPC:             v.GetString("el-rpc"),
+		WalletPrivkey:     v.GetString("wallet-privkey"),
+		APIPort:           v.GetInt("api-port"),
+		APIUserHeader:     v.GetString("api-user-header"),
+		APITokenKey:       v.GetString("api-token-key"),
+		LifecycleEnabled:  v.GetBool("lifecycle"),
+		EPBSEnabled:       v.GetBool("epbs"),
+		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
+		BuilderAPI: builder.BuilderAPIConfig{
+			Port: v.GetInt("builder-api-port"),
+		},
+		DepositAmount:  v.GetUint64("deposit-amount"),
+		TopupThreshold: v.GetUint64("topup-threshold"),
+		TopupAmount:    v.GetUint64("topup-amount"),
 		Schedule: builder.ScheduleConfig{
 			Mode:      builder.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),

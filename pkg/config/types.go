@@ -3,26 +3,27 @@ package config
 
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
-	BuilderPrivkey      string         `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
-	CLClient            string         `yaml:"cl_client" json:"cl_client,omitempty"`
-	ELEngineAPI         string         `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
-	ELJWTSecret         string         `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
-	ELRPC               string         `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
-	WalletPrivkey       string         `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
-	APIPort             int            `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
-	APIUserHeader       string         `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
-	APITokenKey         string         `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
-	LifecycleEnabled    bool           `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
-	EPBSEnabled         bool           `yaml:"epbs_enabled" json:"epbs_enabled"`       // Enable ePBS bidding/revealing
-	DepositAmount       uint64         `yaml:"deposit_amount" json:"deposit_amount"`   // Gwei, default 10 ETH
-	TopupThreshold      uint64         `yaml:"topup_threshold" json:"topup_threshold"` // Gwei
-	TopupAmount         uint64         `yaml:"topup_amount" json:"topup_amount"`       // Gwei
-	Schedule            ScheduleConfig `yaml:"schedule" json:"schedule"`
-	EPBS                EPBSConfig     `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
-	Debug               bool           `yaml:"debug" json:"debug"`
-	Pprof               bool           `yaml:"pprof" json:"pprof"`
-	ValidateWithdrawals bool           `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
-	PayloadBuildTime    uint64         `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	BuilderPrivkey      string           `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	CLClient            string           `yaml:"cl_client" json:"cl_client,omitempty"`
+	ELEngineAPI         string           `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
+	ELJWTSecret         string           `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
+	ELRPC               string           `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	WalletPrivkey       string           `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
+	APIPort             int              `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
+	APIUserHeader       string           `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
+	APITokenKey         string           `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
+	LifecycleEnabled    bool             `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
+	EPBSEnabled         bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Enable ePBS bidding/revealing
+	BuilderAPIEnabled   bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Enable traditional Builder API (pre-ePBS)
+	BuilderAPI          BuilderAPIConfig `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
+	DepositAmount       uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
+	TopupThreshold      uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
+	TopupAmount         uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
+	Schedule            ScheduleConfig   `yaml:"schedule" json:"schedule"`
+	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	Debug               bool             `yaml:"debug" json:"debug"`
+	Pprof               bool             `yaml:"pprof" json:"pprof"`
+	ValidateWithdrawals bool             `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
 }
 
 // ScheduleConfig defines when the builder should build blocks.
@@ -44,6 +45,13 @@ const (
 	// ScheduleModeNextN builds for the next N slots then stops.
 	ScheduleModeNextN ScheduleMode = "next_n"
 )
+
+// BuilderAPIConfig defines configuration for the traditional Builder API (pre-ePBS).
+type BuilderAPIConfig struct {
+	// Port is the HTTP port for the Builder API server.
+	// Default: 9000.
+	Port int `yaml:"port" json:"port"`
+}
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
 type EPBSConfig struct {
