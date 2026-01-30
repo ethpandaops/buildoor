@@ -109,13 +109,23 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	marshalledPayload, err := event.Payload.MarshalJSON()
+	if err != nil {
+		return
+	}
+
+	marshalledBlobsBundle, err := event.BlobsBundle.MarshalJSON()
+	if err != nil {
+		return
+	}
+
 	resp := PayloadBySlotResponse{
 		Slot:            uint64(event.Slot),
 		BlockHash:       "0x" + hex.EncodeToString(event.BlockHash[:]),
 		ParentBlockHash: "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
 		ParentBlockRoot: "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
-		Payload:         event.Payload,
-		BlobsBundle:     event.BlobsBundle,
+		Payload:         marshalledPayload,
+		BlobsBundle:     marshalledBlobsBundle,
 		BlockValue:      fmt.Sprintf("%d", event.BlockValue),
 		FeeRecipient:    event.FeeRecipient.Hex(),
 		GasLimit:        event.GasLimit,
