@@ -24,6 +24,7 @@ type Config struct {
 	Debug               bool             `yaml:"debug" json:"debug"`
 	Pprof               bool             `yaml:"pprof" json:"pprof"`
 	ValidateWithdrawals bool             `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
+	PayloadBuildTime    uint64           `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 }
 
 // ScheduleConfig defines when the builder should build blocks.
