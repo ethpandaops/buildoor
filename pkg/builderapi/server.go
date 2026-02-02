@@ -113,29 +113,56 @@ func (s *Server) handleBuilderStatus(w http.ResponseWriter, r *http.Request) {
 // Accepts a JSON array of SignedValidatorRegistration, verifies each signature,
 // and stores valid registrations. Returns 200 on success, 400 on validation failure.
 func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v1/builder/validators")
+	defer func() {
+		if err := recover(); err != nil {
+			log.WithField("panic", err).Error("Panic in validator registration handler")
+			writeValidatorError(w, http.StatusInternalServerError, fmt.Sprintf("internal error: %v", err))
+		}
+	}()
+
+	log.WithFields(logrus.Fields{
+		"method":         r.Method,
+		"content_type":   r.Header.Get("Content-Type"),
+		"content_length": r.Header.Get("Content-Length"),
+	}).Debug("Validator registration request received")
+
 	if r.Header.Get("Content-Type") != "application/json" {
+		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("Rejected: Content-Type must be application/json")
 		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return
 	}
 
 	var regs []*apiv1.SignedValidatorRegistration
 	if err := json.NewDecoder(r.Body).Decode(&regs); err != nil {
+		log.WithError(err).Warn("Rejected: invalid JSON body")
 		writeValidatorError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 
-	for _, reg := range regs {
+	log.WithField("count", len(regs)).Debug("Decoded validator registrations")
+
+	for i, reg := range regs {
 		if reg == nil || reg.Message == nil {
+			log.WithFields(logrus.Fields{"index": i, "total": len(regs)}).Warn("Rejected: registration message missing")
 			writeValidatorError(w, http.StatusBadRequest, "registration message missing")
 			return
 		}
+		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
 		if !validators.VerifyRegistration(reg) {
-			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+hex.EncodeToString(reg.Message.Pubkey[:]))
+			log.WithFields(logrus.Fields{
+				"index":  i,
+				"total":  len(regs),
+				"pubkey": pubkeyHex,
+			}).Warn("Rejected: invalid signature for validator")
+			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
 			return
 		}
 		s.validatorsStore.Put(reg)
+		log.WithFields(logrus.Fields{"index": i, "pubkey": pubkeyHex}).Debug("Stored validator registration")
 	}
 
+	log.WithField("stored_count", len(regs)).Info("Validator registrations accepted")
 	w.WriteHeader(http.StatusOK)
 }
 
