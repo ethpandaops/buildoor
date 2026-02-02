@@ -137,6 +137,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
+	b.log.Infof("Allowing payload to build for: %dms", b.payloadBuildTime)
 	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
 
 	// Get the built payload with all components (blobs, execution requests) as typed values
