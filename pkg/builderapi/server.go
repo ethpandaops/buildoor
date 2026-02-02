@@ -282,6 +282,8 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		Version: "fulu",
 		Data:    signedBid,
 	}
+
+	s.log.Infof("Delivered header for slot %d, block hash %s, parent hash %s, pubkey %s", slotU64, "0x"+hex.EncodeToString(event.BlockHash[:]), "0x"+hex.EncodeToString(parentHash[:]), "0x"+hex.EncodeToString(pubkey[:]))
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "fulu")
 	w.WriteHeader(http.StatusOK)
@@ -338,6 +340,8 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	s.log.Infof("Unblinded Fulu block for slot %d, block hash %s", contents.SignedBlock.Message.Slot, "0x"+hex.EncodeToString(blockHash[:]))
+
 	if s.fuluPublisher != nil {
 		if err := s.fuluPublisher.SubmitFuluBlock(r.Context(), contents); err != nil {
 			s.log.WithError(err).Error("Failed to publish unblinded Fulu block")
@@ -345,6 +349,8 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 			return
 		}
 	}
+
+	s.log.Infof("Submitted unblinded Fulu block for slot %d, block hash %s", contents.SignedBlock.Message.Slot, "0x"+hex.EncodeToString(blockHash[:]))
 
 	w.WriteHeader(http.StatusAccepted)
 }
