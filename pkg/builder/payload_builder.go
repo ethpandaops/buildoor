@@ -90,6 +90,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
+
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
 	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
@@ -136,6 +137,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
+	b.log.Infof("Allowing payload to build for: %dms", b.payloadBuildTime)
 	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
 
 	// Get the built payload with all components (blobs, execution requests) as typed values

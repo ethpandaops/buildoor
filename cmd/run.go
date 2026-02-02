@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -169,6 +170,19 @@ and begins building blocks according to configuration.`,
 			if err != nil {
 				return fmt.Errorf("failed to initialize ePBS: %w", err)
 			}
+		}
+
+		// 8a. Start Builder API server (if enabled)
+		var builderAPISrv *builderapi.Server
+
+		if cfg.BuilderAPIEnabled {
+			logger.Info("Initializing Builder API server...")
+
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc)
+			if err := builderAPISrv.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start Builder API server: %w", err)
+			}
+			defer builderAPISrv.Stop() //nolint:errcheck // cleanup
 		}
 
 		// 9. Start API server (if configured)
