@@ -2,6 +2,8 @@ package builderapi
 
 import (
 	"bytes"
+	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,22 +11,35 @@ import (
 	"time"
 
 	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
+	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
+
+// mockPayloadCacheProvider provides a payload cache for tests without full builder deps.
+type mockPayloadCacheProvider struct {
+	cache *builder.PayloadCache
+}
+
+func (m *mockPayloadCacheProvider) GetPayloadCache() *builder.PayloadCache {
+	return m.cache
+}
 
 func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil)
+	srv := NewServer(cfg, log, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(validators.BuilderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -39,7 +54,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 func TestRegisterValidators_EmptyArray(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil)
+	srv := NewServer(cfg, log, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	req.Header.Set("Content-Type", "application/json")
@@ -54,7 +69,7 @@ func TestRegisterValidators_EmptyArray(t *testing.T) {
 func TestRegisterValidators_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil)
+	srv := NewServer(cfg, log, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -106,7 +121,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil)
+	srv := NewServer(cfg, log, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -124,7 +139,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 func TestRegisterValidators_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil)
+	srv := NewServer(cfg, log, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	// no Content-Type
@@ -133,4 +148,155 @@ func TestRegisterValidators_MissingContentType(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+}
+
+// TestGetHeader_NoPayload returns 204 when builderSvc is nil (no payload cache).
+func TestGetHeader_NoPayload(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	srv := NewServer(cfg, log, nil, blsSigner)
+
+	pk := blsSigner.PublicKey()
+	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+// TestGetHeader_InvalidSlot returns 400 for non-numeric slot when builder and signer are set.
+func TestGetHeader_InvalidSlot(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
+	srv := NewServer(cfg, log, mock, blsSigner)
+
+	pk := blsSigner.PublicKey()
+	url := "/eth/v1/builder/header/not_a_number/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestSubmitBlindedBlockV2_InvalidJSON returns 400 for invalid JSON body.
+func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	srv := NewServer(cfg, log, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// TestSubmitBlindedBlockV2_MissingContentType returns 415 when Content-Type is not application/json.
+func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	srv := NewServer(cfg, log, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("{}")))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+}
+
+// mockFuluPublisher records the last SubmitFuluBlock call for tests.
+type mockFuluPublisher struct {
+	lastContents *apiv1fulu.SignedBlockContents
+	lastErr      error
+}
+
+func (m *mockFuluPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1fulu.SignedBlockContents) error {
+	m.lastContents = contents
+	m.lastErr = nil
+	return nil
+}
+
+// TestSubmitBlindedBlockV2_NoMatchingPayload returns 400 when no payload in cache matches block_hash.
+func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
+	srv := NewServer(cfg, log, mock, nil)
+
+	// Minimal Fulu (Electra-shaped) blinded block body: message.body.execution_payload_header.block_hash that won't be in cache
+	body := `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"0x00","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xffff000000000000000000000000000000000000000000000000000000000000","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000","blob_gas_used":"0","excess_blob_gas":"0"}},"signature":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}`
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// blockHashFromBuilderSpecsFulu matches the execution_payload.block_hash in builder-specs examples/fulu/.
+var blockHashFromBuilderSpecsFulu = common.HexToHash("0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2")
+
+// logsBloom256Hex is 256 bytes (512 hex chars) for execution_payload_header.logs_bloom.
+const logsBloom256Hex = "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+// randaoReveal96Hex is 96 bytes (192 hex chars) for body.randao_reveal (BLS signature size).
+const randaoReveal96Hex = "0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+// TestSubmitBlindedBlockV2_Success_UnblindAndPublish returns 202 and calls the publisher with unblinded contents
+// when the cache has a matching payload (block_hash from builder-specs Fulu examples).
+func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{Port: 0}
+	log := logrus.New()
+	cache := builder.NewPayloadCache(10)
+	mockCache := &mockPayloadCacheProvider{cache: cache}
+	publisher := &mockFuluPublisher{}
+	srv := NewServer(cfg, log, mockCache, nil)
+	srv.SetFuluPublisher(publisher)
+
+	// Seed cache with a payload matching builder-specs Fulu example block_hash.
+	payload := &engine.ExecutionPayload{
+		ParentHash:    blockHashFromBuilderSpecsFulu,
+		FeeRecipient:  common.Address{},
+		StateRoot:     common.Hash{},
+		ReceiptsRoot:  common.Hash{},
+		BlockNumber:   1,
+		GasLimit:      1,
+		GasUsed:       1,
+		Timestamp:     1,
+		ExtraData:     nil,
+		BaseFeePerGas: nil,
+		BlockHash:     blockHashFromBuilderSpecsFulu,
+		Transactions:  nil,
+		Withdrawals:   nil,
+		BlobGasUsed:   0,
+		ExcessBlobGas: 0,
+	}
+	event := &builder.PayloadReadyEvent{
+		Slot:        1,
+		BlockHash:   phase0.Hash32(blockHashFromBuilderSpecsFulu),
+		Payload:     payload,
+		BlobsBundle: nil,
+	}
+	cache.Store(event)
+
+	// Blinded block JSON: Electra body with required arrays; block_hash matching builder-specs Fulu example.
+	body := `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"` + randaoReveal96Hex + `","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","proposer_slashings":[],"attester_slashings":[],"attestations":[],"deposits":[],"voluntary_exits":[],"sync_aggregate":{"sync_committee_bits":"0x","sync_committee_signature":"` + randaoReveal96Hex + `"},"execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"` + logsBloom256Hex + `","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000","blob_gas_used":"0","excess_blob_gas":"0"},"bls_to_execution_changes":[],"blob_kzg_commitments":[],"execution_requests":{"deposits":[],"withdrawals":[],"consolidations":[]}}},"signature":"` + randaoReveal96Hex + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
+	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
+	require.NotNil(t, publisher.lastContents.SignedBlock, "unblinded contents should have SignedBlock")
+	require.NotNil(t, publisher.lastContents.SignedBlock.Message, "SignedBlock should have Message")
+	assert.Equal(t, phase0.Slot(1), publisher.lastContents.SignedBlock.Message.Slot)
+	assert.Equal(t, blockHashFromBuilderSpecsFulu, common.Hash(publisher.lastContents.SignedBlock.Message.Body.ExecutionPayload.BlockHash), "unblinded block should have matching block hash")
 }

@@ -8,7 +8,9 @@ import (
 
 	eth2client "github.com/attestantio/go-eth2-client"
 	"github.com/attestantio/go-eth2-client/api"
+	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
 	"github.com/attestantio/go-eth2-client/http"
+	"github.com/attestantio/go-eth2-client/spec"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
@@ -238,6 +240,30 @@ func (c *Client) GetForkVersion(ctx context.Context) (phase0.Version, error) {
 // GetRawClient returns the underlying eth2client.Service for direct API access.
 func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
+}
+
+// SubmitProposal submits a full signed proposal (e.g. Fulu SignedBlockContents) to the beacon node.
+// Used by the builder API after unblinding a blinded block.
+func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpts) error {
+	submitter, ok := c.client.(eth2client.ProposalSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support proposal submission")
+	}
+	return submitter.SubmitProposal(ctx, opts)
+}
+
+// SubmitFuluBlock submits a Fulu SignedBlockContents (full unblinded block + blobs) to the beacon node.
+func (c *Client) SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error {
+	if contents == nil {
+		return fmt.Errorf("fulu block contents is nil")
+	}
+	return c.SubmitProposal(ctx, &api.SubmitProposalOpts{
+		Proposal: &api.VersionedSignedProposal{
+			Version: spec.DataVersionFulu,
+			Blinded: false,
+			Fulu:    contents,
+		},
+	})
 }
 
 // BlockInfo contains execution-relevant information from a beacon block.
