@@ -17,8 +17,9 @@ func VerifyRegistration(reg *apiv1.SignedValidatorRegistration) bool {
 }
 
 // VerifyRegistrationWithDomain verifies the BLS signature of a validator registration
-// using DOMAIN_APPLICATION_BUILDER. Tries (0,0), (genesisForkVersion, 0), and (forkVersion, genesisValidatorsRoot)
-// to match mev-boost-relay (genesis fork + zero root) and other client behaviors.
+// using DOMAIN_APPLICATION_BUILDER. Tries (0,0), (genesisForkVersion, 0) from the beacon
+// (mev-boost-relay style), then (forkVersion, genesisValidatorsRoot). Genesis fork version
+// is taken from the beacon so local devnets with their own fork versions work.
 func VerifyRegistrationWithDomain(reg *apiv1.SignedValidatorRegistration, genesisForkVersion, forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) bool {
 	if reg == nil || reg.Message == nil {
 		return false
@@ -42,7 +43,7 @@ func VerifyRegistrationWithDomain(reg *apiv1.SignedValidatorRegistration, genesi
 		return true
 	}
 
-	// 2) (genesisForkVersion, 0) — mev-boost-relay DomainBuilder: ComputeDomain(DomainTypeAppBuilder, genesisForkVersion, zeroRoot).
+	// 2) (genesisForkVersion, 0) — mev-boost-relay style; genesis fork from beacon (devnet-friendly).
 	if genesisForkVersion != zeroVersion {
 		domainRelay := signer.ComputeDomain(signer.DomainApplicationBuilder, genesisForkVersion, zeroRoot)
 		signingRootRelay := signer.ComputeSigningRoot(root, domainRelay)
