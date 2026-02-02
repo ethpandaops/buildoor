@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
@@ -23,7 +24,8 @@ type PayloadBuilder struct {
 	engineClient            *engine.Client
 	feeRecipient            common.Address
 	useProposerFeeRecipient bool
-	validatorStore          *validators.Store // optional: use fee recipient from validator registrations, fallback to attrs.SuggestedFeeRecipient
+	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations
+	validatorIndexCache     *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
 	payloadBuildTime        uint64
 	log                     logrus.FieldLogger
 
@@ -41,7 +43,7 @@ type activeBuild struct {
 
 // NewPayloadBuilder creates a new payload builder.
 // When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey), with fallback to attrs.SuggestedFeeRecipient.
-// When useProposerFeeRecipient is true (and no store), BuildPayloadFromAttributes uses attrs.SuggestedFeeRecipient.
+// validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
@@ -50,6 +52,7 @@ func NewPayloadBuilder(
 	log logrus.FieldLogger,
 	useProposerFeeRecipient bool,
 	validatorStore *validators.Store,
+	validatorIndexCache *chain.ValidatorIndexCache,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
 		clClient:                clClient,
@@ -57,6 +60,7 @@ func NewPayloadBuilder(
 		feeRecipient:            feeRecipient,
 		useProposerFeeRecipient: useProposerFeeRecipient,
 		validatorStore:          validatorStore,
+		validatorIndexCache:     validatorIndexCache,
 		payloadBuildTime:        payloadBuildTime,
 		log:                     log.WithField("component", "payload-builder"),
 	}
@@ -111,8 +115,16 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	feeRecipientForBuild := b.feeRecipient
 	if b.validatorStore != nil {
-		pubkey, err := b.clClient.GetValidatorPubkeyByIndex(buildCtx, "head", attrs.ProposerIndex)
-		if err == nil {
+		var pubkey phase0.BLSPubKey
+		var ok bool
+		if b.validatorIndexCache != nil {
+			pubkey, ok = b.validatorIndexCache.Get(attrs.ProposerIndex)
+		} else {
+			var err error
+			pubkey, err = b.clClient.GetValidatorPubkeyByIndex(buildCtx, "head", attrs.ProposerIndex)
+			ok = (err == nil)
+		}
+		if ok {
 			reg := b.validatorStore.Get(pubkey)
 			if reg != nil && reg.Message != nil {
 				feeRecipientForBuild = common.Address(reg.Message.FeeRecipient)

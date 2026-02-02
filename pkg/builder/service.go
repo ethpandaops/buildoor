@@ -32,7 +32,8 @@ type Service struct {
 	chainSvc               chain.Service
 	engineClient           *engine.Client
 	feeRecipient           common.Address
-	validatorStore         *validators.Store // optional: use fee recipient from validator registrations
+	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
+	validatorIndexCache    *chain.ValidatorIndexCache // optional: index→pubkey cache so we don't query beacon every build
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
@@ -59,6 +60,7 @@ type Service struct {
 
 // NewService creates a new builder service.
 // validatorStore is optional; when set, fee recipient is taken from the proposer's validator registration (fallback to attrs.SuggestedFeeRecipient).
+// validatorIndexCache is optional; when set, proposer index→pubkey is read from cache instead of querying beacon state every build.
 func NewService(
 	cfg *Config,
 	clClient *beacon.Client,
@@ -66,6 +68,7 @@ func NewService(
 	engineClient *engine.Client,
 	feeRecipient common.Address,
 	validatorStore *validators.Store,
+	validatorIndexCache *chain.ValidatorIndexCache,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "builder-service")
@@ -77,6 +80,7 @@ func NewService(
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		validatorStore:         validatorStore,
+		validatorIndexCache:    validatorIndexCache,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
 		stats:                  &BuilderStats{},
@@ -106,6 +110,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.log,
 		useProposerFeeRecipient,
 		s.validatorStore,
+		s.validatorIndexCache,
 	)
 
 	// Start event stream

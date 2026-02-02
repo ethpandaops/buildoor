@@ -422,6 +422,39 @@ func (c *Client) GetValidatorPubkeyByIndex(ctx context.Context, stateID string, 
 	return validators[index].PublicKey, nil
 }
 
+// GetValidatorIndexToPubkeyMap fetches the beacon state once and returns a map of validator index to pubkey.
+// Used to refresh an index→pubkey cache once per epoch instead of querying per payload build.
+func (c *Client) GetValidatorIndexToPubkeyMap(ctx context.Context, stateID string) (map[phase0.ValidatorIndex]phase0.BLSPubKey, error) {
+	provider, ok := c.client.(eth2client.BeaconStateProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support beacon state provider")
+	}
+
+	resp, err := provider.BeaconState(ctx, &api.BeaconStateOpts{
+		State: stateID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get beacon state: %w", err)
+	}
+
+	if resp.Data == nil {
+		return nil, fmt.Errorf("beacon state response is nil")
+	}
+
+	validators := getValidatorsFromState(resp.Data)
+	if validators == nil {
+		return nil, fmt.Errorf("beacon state has no validators")
+	}
+
+	out := make(map[phase0.ValidatorIndex]phase0.BLSPubKey, len(validators))
+	for i, v := range validators {
+		if v != nil {
+			out[phase0.ValidatorIndex(i)] = v.PublicKey
+		}
+	}
+	return out, nil
+}
+
 // getValidatorsFromState extracts the validator list from a versioned beacon state.
 func getValidatorsFromState(state *spec.VersionedBeaconState) []*phase0.Validator {
 	if state == nil {

@@ -156,12 +156,18 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		// Validator store is shared with Builder API when enabled (for fee recipient from registrations)
+		// Validator store and index cache when Builder API enabled (fee recipient from registrations; cache avoids beacon state lookup every build)
 		var validatorStore *validators.Store
+		var validatorIndexCache *chain.ValidatorIndexCache
 		if cfg.BuilderAPIEnabled {
 			validatorStore = validators.NewStore()
+			validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
+			if err := validatorIndexCache.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start validator index cache: %w", err)
+			}
+			defer validatorIndexCache.Stop()
 		}
-		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
+		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
