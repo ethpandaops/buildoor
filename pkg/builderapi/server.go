@@ -14,36 +14,45 @@ import (
 	"strconv"
 	"time"
 
+	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
 // Server implements the combined Builder API + Buildoor API HTTP server.
 type Server struct {
-	cfg        *config.BuilderAPIConfig
-	log        *logrus.Logger
-	server     *http.Server
-	router     *mux.Router
-	builderSvc *builder.Service // optional: for buildoor debug APIs (e.g. payload cache)
+	cfg             *config.BuilderAPIConfig
+	log             *logrus.Logger
+	server          *http.Server
+	router          *mux.Router
+	builderSvc      *builder.Service  // optional: for buildoor debug APIs (e.g. payload cache)
+	validatorsStore *validators.Store // in-memory validator registrations
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
 // endpoints (e.g. payload by slot) will be enabled.
 func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc *builder.Service) *Server {
 	s := &Server{
-		cfg:        cfg,
-		log:        log,
-		router:     mux.NewRouter(),
-		builderSvc: builderSvc,
+		cfg:             cfg,
+		log:             log,
+		router:          mux.NewRouter(),
+		builderSvc:      builderSvc,
+		validatorsStore: validators.NewStore(),
 	}
 
 	s.registerRoutes()
 
 	return s
+}
+
+// Handler returns the HTTP handler for tests.
+func (s *Server) Handler() http.Handler {
+	return s.router
 }
 
 // registerRoutes sets up Builder API and Buildoor API routes.
@@ -52,6 +61,7 @@ func (s *Server) registerRoutes() {
 	// https://github.com/ethereum/builder-specs
 	builderAPI := s.router.PathPrefix("/eth/v1/builder").Subrouter()
 	builderAPI.HandleFunc("/status", s.handleBuilderStatus).Methods(http.MethodGet)
+	builderAPI.HandleFunc("/validators", s.handleRegisterValidators).Methods(http.MethodPost)
 
 	// --- Buildoor API (debug / tooling) ---
 	buildoorAPI := s.router.PathPrefix("/buildoor/v1").Subrouter()
@@ -62,6 +72,42 @@ func (s *Server) registerRoutes() {
 // Returns 200 OK if the builder is ready to accept requests.
 func (s *Server) handleBuilderStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleRegisterValidators handles POST /eth/v1/builder/validators.
+// Accepts a JSON array of SignedValidatorRegistration, verifies each signature,
+// and stores valid registrations. Returns 200 on success, 400 on validation failure.
+func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+
+	var regs []*apiv1.SignedValidatorRegistration
+	if err := json.NewDecoder(r.Body).Decode(&regs); err != nil {
+		writeValidatorError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	for _, reg := range regs {
+		if reg == nil || reg.Message == nil {
+			writeValidatorError(w, http.StatusBadRequest, "registration message missing")
+			return
+		}
+		if !validators.VerifyRegistration(reg) {
+			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+hex.EncodeToString(reg.Message.Pubkey[:]))
+			return
+		}
+		s.validatorsStore.Put(reg)
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func writeValidatorError(w http.ResponseWriter, code int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"code": code, "message": message})
 }
 
 // PayloadBySlotResponse is the JSON response for GET /buildoor/v1/payloads/{slot}.

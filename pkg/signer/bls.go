@@ -22,6 +22,10 @@ var (
 
 	// DomainDeposit is the standard domain for deposit signatures.
 	DomainDeposit = phase0.DomainType{0x03, 0x00, 0x00, 0x00}
+
+	// DomainApplicationBuilder is the domain for builder API validator registration signatures.
+	// See https://github.com/ethereum/builder-specs
+	DomainApplicationBuilder = phase0.DomainType{0x01, 0x00, 0x00, 0x00}
 )
 
 // initBLS initializes the BLS library with BLS12-381 curve.
@@ -246,4 +250,20 @@ func (s *BLSSigner) SignVoluntaryExit(
 	domain := ComputeDomain(DomainVoluntaryExit, forkVersion, genesisValidatorsRoot)
 
 	return s.SignWithDomain(exitRoot, domain)
+}
+
+// VerifyBLSSignature verifies a BLS signature over a message with the given public key.
+// Returns true if the signature is valid.
+func VerifyBLSSignature(pubkey phase0.BLSPubKey, message []byte, signature phase0.BLSSignature) bool {
+	initBLS()
+
+	var pub bls.PublicKey
+	if err := pub.Deserialize(pubkey[:]); err != nil {
+		return false
+	}
+	var sig bls.Sign
+	if err := sig.Deserialize(signature[:]); err != nil {
+		return false
+	}
+	return sig.VerifyByte(&pub, message)
 }
