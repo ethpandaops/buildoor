@@ -111,6 +111,7 @@ func (s *Server) registerRoutes() {
 	// --- Buildoor API (debug / tooling) ---
 	buildoorAPI := s.router.PathPrefix("/buildoor/v1").Subrouter()
 	buildoorAPI.HandleFunc("/payloads/{slot}", s.handleGetPayloadBySlot).Methods(http.MethodGet)
+	buildoorAPI.HandleFunc("/validators", s.handleGetValidators).Methods(http.MethodGet)
 }
 
 // handleBuilderStatus handles GET /eth/v1/builder/status
@@ -269,6 +270,15 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// handleGetValidators handles GET /buildoor/v1/validators.
+// Returns the list of validator registrations stored from POST /eth/v1/builder/validators.
+func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
+	regs := s.validatorsStore.List()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"validators": regs})
 }
 
 // handleGetHeader handles GET /eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}.
