@@ -150,8 +150,6 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 		writeValidatorError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
-	// Log full request body for debugging (enable --debug to see this).
-	log.WithField("request_body_json", string(body)).Debug("Validator registration request body")
 
 	var regs []*apiv1.SignedValidatorRegistration
 	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&regs); err != nil {
@@ -284,7 +282,10 @@ func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
 // handleGetHeader handles GET /eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}.
 // Returns 200 with Fulu SignedBuilderBid, or 204 if no bid, or 400 on invalid params / unregistered proposer.
 func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v1/builder/header/...")
+
 	if s.builderSvc == nil || s.blsSigner == nil {
+		log.Warn("getHeader: returning 204 — builder service or BLS signer not available")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -294,14 +295,23 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	parentHashStr := vars["parent_hash"]
 	pubkeyStr := vars["pubkey"]
 
+	log = log.WithFields(logrus.Fields{
+		"slot":        slotStr,
+		"parent_hash": parentHashStr,
+		"pubkey":      pubkeyStr,
+	})
+	log.Debug("getHeader request received")
+
 	slotU64, err := strconv.ParseUint(slotStr, 10, 64)
 	if err != nil {
+		log.WithError(err).Warn("getHeader: invalid slot")
 		writeValidatorError(w, http.StatusBadRequest, "invalid slot: must be a number")
 		return
 	}
 
 	parentHashBytes, err := hex.DecodeString(trimHex(parentHashStr))
 	if err != nil || len(parentHashBytes) != 32 {
+		log.WithError(err).Warn("getHeader: invalid parent_hash")
 		writeValidatorError(w, http.StatusBadRequest, "invalid parent_hash: must be 32 bytes hex")
 		return
 	}
@@ -310,6 +320,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 
 	pubkeyBytes, err := hex.DecodeString(trimHex(pubkeyStr))
 	if err != nil || len(pubkeyBytes) != 48 {
+		log.WithError(err).Warn("getHeader: invalid pubkey")
 		writeValidatorError(w, http.StatusBadRequest, "invalid pubkey: must be 48 bytes hex")
 		return
 	}
@@ -317,13 +328,26 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	copy(pubkey[:], pubkeyBytes)
 
 	if s.validatorsStore.Get(pubkey) == nil {
+		log.WithField("pubkey_hex", "0x"+hex.EncodeToString(pubkey[:])).Info(
+			"getHeader: returning 204 — proposer not in validator store (no registration for this pubkey)")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
 	cache := s.builderSvc.GetPayloadCache()
 	event := cache.Get(phase0.Slot(slotU64))
-	if event == nil || event.ParentBlockHash != parentHash {
+	if event == nil {
+		log.WithField("slot", slotU64).Info(
+			"getHeader: returning 204 — no cached payload for slot")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if event.ParentBlockHash != parentHash {
+		log.WithFields(logrus.Fields{
+			"slot":                slotU64,
+			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+		}).Info("getHeader: returning 204 — cached payload parent hash does not match request")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -334,7 +358,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	}
 	signedBid, err := fulu.BuildSignedBuilderBid(event, pubkey, s.blsSigner, subsidyGwei)
 	if err != nil {
-		s.log.WithError(err).Warn("Failed to build Fulu SignedBuilderBid")
+		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")
 		return
 	}
@@ -344,7 +368,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		Data:    signedBid,
 	}
 
-	s.log.Infof("Delivered header for slot %d, block hash %s, parent hash %s, pubkey %s", slotU64, "0x"+hex.EncodeToString(event.BlockHash[:]), "0x"+hex.EncodeToString(parentHash[:]), "0x"+hex.EncodeToString(pubkey[:]))
+	log.WithFields(logrus.Fields{
+		"slot":        slotU64,
+		"block_hash":  "0x" + hex.EncodeToString(event.BlockHash[:]),
+		"parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
+	}).Infof("getHeader: delivered header for slot %d", slotU64)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "fulu")
 	w.WriteHeader(http.StatusOK)
@@ -361,57 +389,73 @@ func trimHex(s string) string {
 // handleSubmitBlindedBlockV2 handles POST /eth/v2/builder/blinded_blocks (Fulu SignedBlindedBeaconBlock).
 // Returns 202 Accepted on success, 400 on validation/match failure, 415 on wrong Content-Type.
 func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v2/builder/blinded_blocks")
+
 	if r.Header.Get("Content-Type") != "application/json" {
+		log.Warn("submitBlindedBlock: Content-Type must be application/json")
 		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return
 	}
 
 	if s.builderSvc == nil {
+		log.Warn("submitBlindedBlock: builder service not available")
 		writeValidatorError(w, http.StatusBadRequest, "builder not available")
 		return
 	}
 
 	var blinded apiv1electra.SignedBlindedBeaconBlock
 	if err := json.NewDecoder(r.Body).Decode(&blinded); err != nil {
+		log.WithError(err).Warn("submitBlindedBlock: invalid JSON body")
 		writeValidatorError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 
 	if blinded.Message == nil || blinded.Message.Body == nil ||
 		blinded.Message.Body.ExecutionPayloadHeader == nil {
+		log.Warn("submitBlindedBlock: blinded block missing message or execution_payload_header")
 		writeValidatorError(w, http.StatusBadRequest, "invalid blinded block: missing message or execution_payload_header")
 		return
 	}
 
 	blockHash := blinded.Message.Body.ExecutionPayloadHeader.BlockHash
+	slot := blinded.Message.Slot
+	log = log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"block_hash": "0x" + hex.EncodeToString(blockHash[:]),
+	})
+	log.Debug("submitBlindedBlock request received")
+
 	cache := s.builderSvc.GetPayloadCache()
 	event := cache.GetByBlockHash(blockHash)
 	if event == nil {
+		log.Info("submitBlindedBlock: no cached payload for block hash (payload may not have been built or already evicted)")
 		writeValidatorError(w, http.StatusBadRequest, "no matching payload for block hash")
 		return
 	}
 
 	contents, err := fulu.UnblindSignedBlindedBeaconBlock(&blinded, event)
 	if err != nil {
+		log.WithError(err).Warn("submitBlindedBlock: unblind failed")
 		writeValidatorError(w, http.StatusBadRequest, "unblind failed: "+err.Error())
 		return
 	}
 	if contents == nil {
+		log.Warn("submitBlindedBlock: unblind produced no contents")
 		writeValidatorError(w, http.StatusBadRequest, "unblind produced no contents")
 		return
 	}
 
-	s.log.Infof("Unblinded Fulu block for slot %d, block hash %s", contents.SignedBlock.Message.Slot, "0x"+hex.EncodeToString(blockHash[:]))
+	log.Infof("submitBlindedBlock: unblinded block for slot %d", slot)
 
 	if s.fuluPublisher != nil {
 		if err := s.fuluPublisher.SubmitFuluBlock(r.Context(), contents); err != nil {
-			s.log.WithError(err).Error("Failed to publish unblinded Fulu block")
+			log.WithError(err).Error("submitBlindedBlock: failed to publish unblinded block")
 			writeValidatorError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
 			return
 		}
 	}
 
-	s.log.Infof("Submitted unblinded Fulu block for slot %d, block hash %s", contents.SignedBlock.Message.Slot, "0x"+hex.EncodeToString(blockHash[:]))
+	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, "0x"+hex.EncodeToString(blockHash[:]))
 
 	w.WriteHeader(http.StatusAccepted)
 }
