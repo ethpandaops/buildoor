@@ -52,17 +52,18 @@ type Server struct {
 	validatorsStore       *validators.Store    // in-memory validator registrations
 	blsSigner             *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
 	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
-	forkVersion           phase0.Version       // chain fork version for validator registration verification (zero = use zero)
-	genesisValidatorsRoot phase0.Root          // chain genesis validators root for verification (zero = use zero)
+	genesisForkVersion    phase0.Version       // genesis fork version for builder domain (mev-boost-relay style)
+	forkVersion           phase0.Version       // current fork version for chain-specific verification
+	genesisValidatorsRoot phase0.Root          // genesis validators root for chain-specific verification
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
 // endpoints and Fulu getHeader/submitBlindedBlockV2 will be enabled. blsSigner may be nil;
 // if set, getHeader will sign builder bids. fuluPublisher may be set later via SetFuluPublisher.
 // validatorStore is optional; when provided it is shared with the builder service for fee recipient lookup.
-// forkVersion and genesisValidatorsRoot are used to verify validator registration signatures; when both are zero,
-// verification uses zero/zero (e.g. for tests). For mev-boost/mainnet, pass the chain's values from the beacon node.
-func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store, forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) *Server {
+// genesisForkVersion is used for DomainBuilder (genesis fork + zero root) like mev-boost-relay; forkVersion and
+// genesisValidatorsRoot are used for chain-specific verification. Pass chain values from the beacon node.
+func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store, genesisForkVersion, forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) *Server {
 	store := validatorStore
 	if store == nil {
 		store = validators.NewStore()
@@ -74,6 +75,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 		builderSvc:            builderSvc,
 		validatorsStore:       store,
 		blsSigner:             blsSigner,
+		genesisForkVersion:    genesisForkVersion,
 		forkVersion:           forkVersion,
 		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
@@ -166,13 +168,13 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		if !validators.VerifyRegistrationWithDomain(reg, s.forkVersion, s.genesisValidatorsRoot) {
+		if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
 			// Log first failing registration as JSON for debugging (copy and share).
 			rejJSON, _ := json.Marshal(reg)
 			log.WithFields(logrus.Fields{
-				"index":            i,
-				"total":            len(regs),
-				"pubkey":           pubkeyHex,
+				"index":             i,
+				"total":             len(regs),
+				"pubkey":            pubkeyHex,
 				"rejected_reg_json": string(rejJSON),
 			}).Warn("Rejected: invalid signature for validator")
 			// Full request body was logged at Debug level on receipt; enable --debug to capture it.
