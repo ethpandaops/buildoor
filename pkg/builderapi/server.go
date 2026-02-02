@@ -177,8 +177,6 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 				"pubkey":            pubkeyHex,
 				"rejected_reg_json": string(rejJSON),
 			}).Warn("Rejected: invalid signature for validator")
-			// Full request body was logged at Debug level on receipt; enable --debug to capture it.
-			log.WithField("full_request_body_json", string(body)).Info("Full validator registration request body (for debugging)")
 			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
 			return
 		}
