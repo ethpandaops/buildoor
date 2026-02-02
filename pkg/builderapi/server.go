@@ -6,10 +6,12 @@
 package builderapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -139,9 +141,18 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.WithError(err).Warn("Rejected: failed to read body")
+		writeValidatorError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	// Log full request body for debugging (enable --debug to see this).
+	log.WithField("request_body_json", string(body)).Debug("Validator registration request body")
+
 	var regs []*apiv1.SignedValidatorRegistration
-	if err := json.NewDecoder(r.Body).Decode(&regs); err != nil {
-		log.WithError(err).Warn("Rejected: invalid JSON body")
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&regs); err != nil {
+		log.WithError(err).WithField("request_body_json", string(body)).Warn("Rejected: invalid JSON body")
 		writeValidatorError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -156,11 +167,16 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
 		if !validators.VerifyRegistrationWithDomain(reg, s.forkVersion, s.genesisValidatorsRoot) {
+			// Log first failing registration as JSON for debugging (copy and share).
+			rejJSON, _ := json.Marshal(reg)
 			log.WithFields(logrus.Fields{
-				"index":  i,
-				"total":  len(regs),
-				"pubkey": pubkeyHex,
+				"index":            i,
+				"total":            len(regs),
+				"pubkey":           pubkeyHex,
+				"rejected_reg_json": string(rejJSON),
 			}).Warn("Rejected: invalid signature for validator")
+			// Full request body was logged at Debug level on receipt; enable --debug to capture it.
+			log.WithField("full_request_body_json", string(body)).Info("Full validator registration request body (for debugging)")
 			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
 			return
 		}
