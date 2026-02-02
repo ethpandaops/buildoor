@@ -82,6 +82,9 @@ func init() {
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
 
+	// Payload Build Time
+	rootCmd.PersistentFlags().Uint64("payload-build-time", defaults.PayloadBuildTime, "Time to allow the EL to build the payload after triggering the payload build via fcu (in ms)")
+	
 	// Bind all flags to viper
 	if err := v.BindPFlags(rootCmd.PersistentFlags()); err != nil {
 		logger.WithError(err).Fatal("Failed to bind flags")
@@ -167,6 +170,7 @@ func initConfig() error {
 			BidInterval:    v.GetInt64("epbs-bid-interval"),
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
+		PayloadBuildTime:    v.GetUint64("payload-build-time"),
 	}
 
 	return nil
