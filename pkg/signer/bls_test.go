@@ -92,19 +92,18 @@ func TestSigningRootComputation(t *testing.T) {
 	assert.NotEqual(t, emptyRoot, signingRoot, "signing root should not be empty")
 }
 
-// TestForkDataRootComputation verifies fork data root computation.
-func TestForkDataRootComputation(t *testing.T) {
-	// Test with zeros
+// TestComputeDomain verifies domain computation using SSZ ForkData (consensus spec).
+func TestComputeDomain(t *testing.T) {
 	forkVersion := phase0.Version{}
 	genesisRoot := phase0.Root{}
 
-	forkDataRoot := computeForkDataRoot(forkVersion, genesisRoot)
+	domain := ComputeDomain(DomainApplicationBuilder, forkVersion, genesisRoot)
 
 	t.Logf("Fork version: 0x%x", forkVersion[:])
 	t.Logf("Genesis validators root: 0x%x", genesisRoot[:])
-	t.Logf("Fork data root: 0x%x", forkDataRoot[:])
+	t.Logf("Domain: 0x%x", domain[:])
 
-	// Fork data root should be deterministic for same inputs
-	forkDataRoot2 := computeForkDataRoot(forkVersion, genesisRoot)
-	assert.Equal(t, forkDataRoot, forkDataRoot2, "fork data root should be deterministic")
+	// Domain should be deterministic for same inputs
+	domain2 := ComputeDomain(DomainApplicationBuilder, forkVersion, genesisRoot)
+	assert.Equal(t, domain, domain2, "domain should be deterministic")
 }

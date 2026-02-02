@@ -108,54 +108,43 @@ func (s *BLSSigner) SignWithDomain(root phase0.Root, domain phase0.Domain) (phas
 	return s.Sign(signingRoot[:])
 }
 
-// ComputeDomain computes a domain value for a given domain type and fork version.
+// ComputeDomain computes a domain value for a given domain type, fork version, and genesis validators root.
+// Uses consensus spec SSZ hash_tree_root(ForkData) so it matches beacon node / mev-boost signing.
 func ComputeDomain(
 	domainType phase0.DomainType,
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) phase0.Domain {
-	// Compute fork data root
-	forkDataRoot := computeForkDataRoot(forkVersion, genesisValidatorsRoot)
+	forkData := &phase0.ForkData{
+		CurrentVersion:        forkVersion,
+		GenesisValidatorsRoot: genesisValidatorsRoot,
+	}
+	forkDataRoot, err := forkData.HashTreeRoot()
+	if err != nil {
+		// Fallback to zero domain on error (should not happen)
+		var d phase0.Domain
+		return d
+	}
 
-	// Domain = domain_type + fork_data_root[:28]
+	// Domain = domain_type + fork_data_root[:28] per consensus spec
 	var domain phase0.Domain
-
 	copy(domain[:4], domainType[:])
 	copy(domain[4:], forkDataRoot[:28])
-
 	return domain
 }
 
-// computeForkDataRoot computes the fork data root from fork version and genesis validators root.
-func computeForkDataRoot(forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) phase0.Root {
-	// ForkData{current_version: forkVersion, genesis_validators_root: genesisValidatorsRoot}
-	// Hash tree root of ForkData
-	var forkData [64]byte
-
-	copy(forkData[:4], forkVersion[:])
-	copy(forkData[32:], genesisValidatorsRoot[:])
-
-	hash := sha256.Sum256(forkData[:])
-
-	var root phase0.Root
-	copy(root[:], hash[:])
-
-	return root
-}
-
 // ComputeSigningRoot computes the signing root from an object root and domain.
+// Uses consensus spec SSZ hash_tree_root(SigningData) so it matches beacon node / mev-boost signing.
 func ComputeSigningRoot(objectRoot phase0.Root, domain phase0.Domain) phase0.Root {
-	// SigningData{object_root: objectRoot, domain: domain}
-	var signingData [64]byte
-
-	copy(signingData[:32], objectRoot[:])
-	copy(signingData[32:], domain[:])
-
-	hash := sha256.Sum256(signingData[:])
-
-	var root phase0.Root
-	copy(root[:], hash[:])
-
+	signingData := &phase0.SigningData{
+		ObjectRoot: objectRoot,
+		Domain:     domain,
+	}
+	root, err := signingData.HashTreeRoot()
+	if err != nil {
+		var z phase0.Root
+		return z
+	}
 	return root
 }
 

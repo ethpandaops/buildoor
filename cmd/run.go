@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/spf13/cobra"
 
@@ -190,7 +191,16 @@ and begins building blocks according to configuration.`,
 		if cfg.BuilderAPIEnabled {
 			logger.Info("Initializing Builder API server...")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore)
+			var forkVersion phase0.Version
+			var genesisValidatorsRoot phase0.Root
+			if g := chainSvc.GetGenesis(); g != nil {
+				genesisValidatorsRoot = g.GenesisValidatorsRoot
+			}
+			if fv, err := chainSvc.GetForkVersion(ctx); err == nil {
+				forkVersion = fv
+			}
+
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)

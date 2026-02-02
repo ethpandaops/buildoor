@@ -42,32 +42,38 @@ type FuluBlockPublisher interface {
 
 // Server implements the combined Builder API + Buildoor API HTTP server.
 type Server struct {
-	cfg             *config.BuilderAPIConfig
-	log             *logrus.Logger
-	server          *http.Server
-	router          *mux.Router
-	builderSvc      PayloadCacheProvider // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
-	validatorsStore *validators.Store    // in-memory validator registrations
-	blsSigner       *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
-	fuluPublisher   FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
+	cfg                   *config.BuilderAPIConfig
+	log                   *logrus.Logger
+	server                *http.Server
+	router                *mux.Router
+	builderSvc            PayloadCacheProvider // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
+	validatorsStore       *validators.Store    // in-memory validator registrations
+	blsSigner             *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
+	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
+	forkVersion           phase0.Version       // chain fork version for validator registration verification (zero = use zero)
+	genesisValidatorsRoot phase0.Root          // chain genesis validators root for verification (zero = use zero)
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
 // endpoints and Fulu getHeader/submitBlindedBlockV2 will be enabled. blsSigner may be nil;
 // if set, getHeader will sign builder bids. fuluPublisher may be set later via SetFuluPublisher.
 // validatorStore is optional; when provided it is shared with the builder service for fee recipient lookup.
-func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store) *Server {
+// forkVersion and genesisValidatorsRoot are used to verify validator registration signatures; when both are zero,
+// verification uses zero/zero (e.g. for tests). For mev-boost/mainnet, pass the chain's values from the beacon node.
+func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store, forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) *Server {
 	store := validatorStore
 	if store == nil {
 		store = validators.NewStore()
 	}
 	s := &Server{
-		cfg:             cfg,
-		log:             log,
-		router:          mux.NewRouter(),
-		builderSvc:      builderSvc,
-		validatorsStore: store,
-		blsSigner:       blsSigner,
+		cfg:                   cfg,
+		log:                   log,
+		router:                mux.NewRouter(),
+		builderSvc:            builderSvc,
+		validatorsStore:       store,
+		blsSigner:             blsSigner,
+		forkVersion:           forkVersion,
+		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
 
 	s.registerRoutes()
@@ -149,7 +155,7 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		if !validators.VerifyRegistration(reg) {
+		if !validators.VerifyRegistrationWithDomain(reg, s.forkVersion, s.genesisValidatorsRoot) {
 			log.WithFields(logrus.Fields{
 				"index":  i,
 				"total":  len(regs),
