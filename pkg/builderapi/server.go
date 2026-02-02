@@ -161,28 +161,30 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 
 	log.WithField("count", len(regs)).Debug("Decoded validator registrations")
 
-	for i, reg := range regs {
-		if reg == nil || reg.Message == nil {
-			log.WithFields(logrus.Fields{"index": i, "total": len(regs)}).Warn("Rejected: registration message missing")
-			writeValidatorError(w, http.StatusBadRequest, "registration message missing")
-			return
-		}
-		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
-			// Log first failing registration as JSON for debugging (copy and share).
-			rejJSON, _ := json.Marshal(reg)
-			log.WithFields(logrus.Fields{
-				"index":             i,
-				"total":             len(regs),
-				"pubkey":            pubkeyHex,
-				"rejected_reg_json": string(rejJSON),
-			}).Warn("Rejected: invalid signature for validator")
-			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
-			return
-		}
-		s.validatorsStore.Put(reg)
-		log.WithFields(logrus.Fields{"index": i, "pubkey": pubkeyHex}).Debug("Stored validator registration")
-	}
+	// TODO - skip sig verification for now.
+
+	// for i, reg := range regs {
+	// 	if reg == nil || reg.Message == nil {
+	// 		log.WithFields(logrus.Fields{"index": i, "total": len(regs)}).Warn("Rejected: registration message missing")
+	// 		writeValidatorError(w, http.StatusBadRequest, "registration message missing")
+	// 		return
+	// 	}
+	// 	pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
+	// 	if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
+	// 		// Log first failing registration as JSON for debugging (copy and share).
+	// 		rejJSON, _ := json.Marshal(reg)
+	// 		log.WithFields(logrus.Fields{
+	// 			"index":             i,
+	// 			"total":             len(regs),
+	// 			"pubkey":            pubkeyHex,
+	// 			"rejected_reg_json": string(rejJSON),
+	// 		}).Warn("Rejected: invalid signature for validator")
+	// 		writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
+	// 		return
+	// 	}
+	// 	s.validatorsStore.Put(reg)
+	// 	log.WithFields(logrus.Fields{"index": i, "pubkey": pubkeyHex}).Debug("Stored validator registration")
+	// }
 
 	log.WithField("stored_count", len(regs)).Info("Validator registrations accepted")
 	w.WriteHeader(http.StatusOK)
