@@ -12,17 +12,20 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 // PayloadBuilder handles execution payload building via the Engine API.
 type PayloadBuilder struct {
-	clClient         *beacon.Client
-	engineClient     *engine.Client
-	feeRecipient     common.Address
-	payloadBuildTime uint64
-	log              logrus.FieldLogger
+	clClient                *beacon.Client
+	engineClient            *engine.Client
+	feeRecipient            common.Address
+	useProposerFeeRecipient bool
+	validatorStore          *validators.Store // optional: use fee recipient from validator registrations, fallback to attrs.SuggestedFeeRecipient
+	payloadBuildTime        uint64
+	log                     logrus.FieldLogger
 
 	// Active build tracking
 	activeBuild *activeBuild
@@ -37,19 +40,25 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
+// When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey), with fallback to attrs.SuggestedFeeRecipient.
+// When useProposerFeeRecipient is true (and no store), BuildPayloadFromAttributes uses attrs.SuggestedFeeRecipient.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
 	payloadBuildTime uint64,
 	log logrus.FieldLogger,
+	useProposerFeeRecipient bool,
+	validatorStore *validators.Store,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
-		clClient:         clClient,
-		engineClient:     engineClient,
-		feeRecipient:     feeRecipient,
-		payloadBuildTime: payloadBuildTime,
-		log:              log.WithField("component", "payload-builder"),
+		clClient:                clClient,
+		engineClient:            engineClient,
+		feeRecipient:            feeRecipient,
+		useProposerFeeRecipient: useProposerFeeRecipient,
+		validatorStore:          validatorStore,
+		payloadBuildTime:        payloadBuildTime,
+		log:                     log.WithField("component", "payload-builder"),
 	}
 }
 
@@ -90,7 +99,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
-
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
 	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
@@ -100,6 +108,23 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	// Convert withdrawals from payload_attributes to engine format
 	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
+
+	feeRecipientForBuild := b.feeRecipient
+	if b.validatorStore != nil {
+		pubkey, err := b.clClient.GetValidatorPubkeyByIndex(buildCtx, "head", attrs.ProposerIndex)
+		if err == nil {
+			reg := b.validatorStore.Get(pubkey)
+			if reg != nil && reg.Message != nil {
+				feeRecipientForBuild = common.Address(reg.Message.FeeRecipient)
+			} else {
+				feeRecipientForBuild = attrs.SuggestedFeeRecipient
+			}
+		} else {
+			feeRecipientForBuild = attrs.SuggestedFeeRecipient
+		}
+	} else if b.useProposerFeeRecipient {
+		feeRecipientForBuild = attrs.SuggestedFeeRecipient
+	}
 
 	b.log.WithFields(logrus.Fields{
 		"slot":             attrs.ProposalSlot,
@@ -117,7 +142,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		&engine.PayloadAttributes{
 			Timestamp:             attrs.Timestamp,
 			PrevRandao:            common.BytesToHash(attrs.PrevRandao[:]),
-			SuggestedFeeRecipient: b.feeRecipient, // Use builder's fee recipient
+			SuggestedFeeRecipient: feeRecipientForBuild,
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
 		},
@@ -168,7 +193,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		Timestamp:         attrs.Timestamp,
 		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
-		FeeRecipient:      b.feeRecipient,
+		FeeRecipient:      feeRecipientForBuild,
 		BlockValue:        blockValueGwei,
 		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),

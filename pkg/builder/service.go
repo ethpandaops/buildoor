@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -31,6 +32,7 @@ type Service struct {
 	chainSvc               chain.Service
 	engineClient           *engine.Client
 	feeRecipient           common.Address
+	validatorStore         *validators.Store // optional: use fee recipient from validator registrations
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
@@ -56,12 +58,14 @@ type Service struct {
 }
 
 // NewService creates a new builder service.
+// validatorStore is optional; when set, fee recipient is taken from the proposer's validator registration (fallback to attrs.SuggestedFeeRecipient).
 func NewService(
 	cfg *Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
+	validatorStore *validators.Store,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "builder-service")
@@ -72,6 +76,7 @@ func NewService(
 		chainSvc:               chainSvc,
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
+		validatorStore:         validatorStore,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
 		stats:                  &BuilderStats{},
@@ -92,12 +97,15 @@ func (s *Service) Start(ctx context.Context) error {
 	s.slotManager = NewSlotManager(s.cfg)
 
 	// Create payload builder
+	useProposerFeeRecipient := s.cfg.BuilderAPI.UseProposerFeeRecipient
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
 		s.feeRecipient,
 		s.cfg.PayloadBuildTime,
 		s.log,
+		useProposerFeeRecipient,
+		s.validatorStore,
 	)
 
 	// Start event stream

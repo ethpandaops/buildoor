@@ -18,10 +18,12 @@ type BidSigner interface {
 
 // BuildSignedBuilderBid builds a Fulu SignedBuilderBid from a PayloadReadyEvent and the proposer's pubkey,
 // and signs it with the builder's BLS key (DOMAIN_APPLICATION_BUILDER, zero fork version and genesis root).
+// subsidyGwei is added to the bid value so the proposer sees a higher bid (e.g. for testing).
 func BuildSignedBuilderBid(
 	event *builder.PayloadReadyEvent,
 	proposerPubkey phase0.BLSPubKey,
 	blsSigner BidSigner,
+	subsidyGwei uint64,
 ) (*SignedBuilderBid, error) {
 	if event == nil || event.Payload == nil {
 		return nil, nil
@@ -47,6 +49,9 @@ func BuildSignedBuilderBid(
 
 	value := new(uint256.Int)
 	value.SetUint64(event.BlockValue)
+	if subsidyGwei > 0 {
+		value.Add(value, new(uint256.Int).SetUint64(subsidyGwei))
+	}
 
 	bid := &BuilderBid{
 		Header:             header,

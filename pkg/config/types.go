@@ -52,6 +52,14 @@ type BuilderAPIConfig struct {
 	// Port is the HTTP port for the Builder API server.
 	// Default: 9000.
 	Port int `yaml:"port" json:"port"`
+
+	// UseProposerFeeRecipient, when true, builds payloads with the proposer's fee recipient
+	// (from payload_attributes) so block rewards go to the proposer. Useful with subsidy for testing.
+	UseProposerFeeRecipient bool `yaml:"use_proposer_fee_recipient" json:"use_proposer_fee_recipient"`
+
+	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
+	// Does not change the actual block; use with UseProposerFeeRecipient so proposer gets block reward.
+	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.

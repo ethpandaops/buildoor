@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -155,7 +156,12 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, logger)
+		// Validator store is shared with Builder API when enabled (for fee recipient from registrations)
+		var validatorStore *validators.Store
+		if cfg.BuilderAPIEnabled {
+			validatorStore = validators.NewStore()
+		}
+		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
@@ -178,7 +184,7 @@ and begins building blocks according to configuration.`,
 		if cfg.BuilderAPIEnabled {
 			logger.Info("Initializing Builder API server...")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore)
 			builderAPISrv.SetFuluPublisher(clClient)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)

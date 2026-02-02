@@ -39,7 +39,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(validators.BuilderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -54,7 +54,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 func TestRegisterValidators_EmptyArray(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	req.Header.Set("Content-Type", "application/json")
@@ -69,7 +69,7 @@ func TestRegisterValidators_EmptyArray(t *testing.T) {
 func TestRegisterValidators_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -121,7 +121,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -139,7 +139,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 func TestRegisterValidators_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	// no Content-Type
@@ -156,7 +156,7 @@ func TestGetHeader_NoPayload(t *testing.T) {
 	log := logrus.New()
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
-	srv := NewServer(cfg, log, nil, blsSigner)
+	srv := NewServer(cfg, log, nil, blsSigner, nil)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -173,7 +173,7 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	log := logrus.New()
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
-	srv := NewServer(cfg, log, mock, blsSigner)
+	srv := NewServer(cfg, log, mock, blsSigner, nil)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/not_a_number/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -184,11 +184,95 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestGetHeader_SubsidyInBidValue returns 200 with bid value = block_value + BlockValueSubsidyGwei.
+func TestGetHeader_SubsidyInBidValue(t *testing.T) {
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	pk := blsSigner.PublicKey()
+
+	// Create valid registration so getHeader does not return 204 for unregistered proposer
+	var feeRecipient bellatrix.ExecutionAddress
+	for i := range feeRecipient {
+		feeRecipient[i] = byte(i)
+	}
+	msg := &apiv1.ValidatorRegistration{
+		FeeRecipient: feeRecipient,
+		GasLimit:     30_000_000,
+		Timestamp:    time.Unix(100, 0),
+		Pubkey:       pk,
+	}
+	messageRoot, err := msg.HashTreeRoot()
+	require.NoError(t, err)
+	var root phase0.Root
+	copy(root[:], messageRoot[:])
+	domain := signer.ComputeDomain(signer.DomainApplicationBuilder, phase0.Version{}, phase0.Root{})
+	signingRoot := signer.ComputeSigningRoot(root, domain)
+	sig, err := blsSigner.Sign(signingRoot[:])
+	require.NoError(t, err)
+	reg := &apiv1.SignedValidatorRegistration{Message: msg, Signature: sig}
+	require.True(t, validators.VerifyRegistration(reg), "test registration must verify")
+	regs, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
+	require.NoError(t, err)
+
+	cfg := &config.BuilderAPIConfig{Port: 0, BlockValueSubsidyGwei: 1_000_000}
+	log := logrus.New()
+	cache := builder.NewPayloadCache(10)
+	parentHash := phase0.Hash32(common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"))
+	payload := &engine.ExecutionPayload{
+		ParentHash:    common.Hash(parentHash),
+		FeeRecipient:  common.Address{},
+		StateRoot:     common.Hash{},
+		ReceiptsRoot:  common.Hash{},
+		BlockNumber:   1,
+		GasLimit:      30_000_000,
+		GasUsed:       0,
+		Timestamp:     1,
+		BlockHash:     common.HexToHash("0xab00000000000000000000000000000000000000000000000000000000000000"),
+		Transactions:  nil,
+		Withdrawals:   nil,
+		BlobGasUsed:   0,
+		ExcessBlobGas: 0,
+	}
+	event := &builder.PayloadReadyEvent{
+		Slot:            1,
+		ParentBlockHash: parentHash,
+		BlockHash:       phase0.Hash32(payload.BlockHash),
+		Payload:         payload,
+		BlockValue:      500_000, // 0.0005 ETH in Gwei
+	}
+	cache.Store(event)
+	mock := &mockPayloadCacheProvider{cache: cache}
+	srv := NewServer(cfg, log, mock, blsSigner, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, "register validators")
+
+	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000001/0x" + hex.EncodeToString(pk[:])
+	req = httptest.NewRequest(http.MethodGet, url, nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "getHeader should return 200")
+	var resp struct {
+		Data struct {
+			Message struct {
+				Value string `json:"value"`
+			} `json:"message"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	// block_value 500_000 + subsidy 1_000_000 = 1_500_000
+	assert.Equal(t, "1500000", resp.Data.Message.Value, "bid value should be block_value + subsidy")
+}
+
 // TestSubmitBlindedBlockV2_InvalidJSON returns 400 for invalid JSON body.
 func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -202,7 +286,7 @@ func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil)
+	srv := NewServer(cfg, log, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("{}")))
 	rec := httptest.NewRecorder()
@@ -228,7 +312,7 @@ func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{Port: 0}
 	log := logrus.New()
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
-	srv := NewServer(cfg, log, mock, nil)
+	srv := NewServer(cfg, log, mock, nil, nil)
 
 	// Minimal Fulu (Electra-shaped) blinded block body: message.body.execution_payload_header.block_hash that won't be in cache
 	body := `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"0x00","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xffff000000000000000000000000000000000000000000000000000000000000","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000","blob_gas_used":"0","excess_blob_gas":"0"}},"signature":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}`
@@ -257,7 +341,7 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	cache := builder.NewPayloadCache(10)
 	mockCache := &mockPayloadCacheProvider{cache: cache}
 	publisher := &mockFuluPublisher{}
-	srv := NewServer(cfg, log, mockCache, nil)
+	srv := NewServer(cfg, log, mockCache, nil, nil)
 	srv.SetFuluPublisher(publisher)
 
 	// Seed cache with a payload matching builder-specs Fulu example block_hash.

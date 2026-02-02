@@ -55,13 +55,18 @@ type Server struct {
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
 // endpoints and Fulu getHeader/submitBlindedBlockV2 will be enabled. blsSigner may be nil;
 // if set, getHeader will sign builder bids. fuluPublisher may be set later via SetFuluPublisher.
-func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner) *Server {
+// validatorStore is optional; when provided it is shared with the builder service for fee recipient lookup.
+func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store) *Server {
+	store := validatorStore
+	if store == nil {
+		store = validators.NewStore()
+	}
 	s := &Server{
 		cfg:             cfg,
 		log:             log,
 		router:          mux.NewRouter(),
 		builderSvc:      builderSvc,
-		validatorsStore: validators.NewStore(),
+		validatorsStore: store,
 		blsSigner:       blsSigner,
 	}
 
@@ -262,7 +267,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	signedBid, err := fulu.BuildSignedBuilderBid(event, pubkey, s.blsSigner)
+	subsidyGwei := uint64(0)
+	if s.cfg != nil {
+		subsidyGwei = s.cfg.BlockValueSubsidyGwei
+	}
+	signedBid, err := fulu.BuildSignedBuilderBid(event, pubkey, s.blsSigner, subsidyGwei)
 	if err != nil {
 		s.log.WithError(err).Warn("Failed to build Fulu SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")
