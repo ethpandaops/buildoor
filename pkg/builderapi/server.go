@@ -455,6 +455,10 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 			writeValidatorError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
 			return
 		}
+	} else {
+		log.Warn("submitBlindedBlock: no publisher available")
+		writeValidatorError(w, http.StatusBadRequest, "no publisher available")
+		return
 	}
 
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, "0x"+hex.EncodeToString(blockHash[:]))
