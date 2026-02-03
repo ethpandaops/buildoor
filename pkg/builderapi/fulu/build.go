@@ -43,7 +43,7 @@ func BuildSignedBuilderBid(
 		}
 	}
 
-	var execRequests *electra.ExecutionRequests
+	execRequests := &electra.ExecutionRequests{}
 	// event.ExecutionRequests is engine.ExecutionRequests ([]hexutil.Bytes); we don't convert to electra.ExecutionRequests here.
 	// Use nil for now so the bid is valid. Full conversion would require parsing deposit/withdrawal/consolidation requests.
 

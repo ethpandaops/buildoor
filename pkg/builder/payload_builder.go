@@ -134,7 +134,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		} else {
 			feeRecipientForBuild = attrs.SuggestedFeeRecipient
 		}
-	} else if b.useProposerFeeRecipient {
+	} else {
 		feeRecipientForBuild = attrs.SuggestedFeeRecipient
 	}
 
