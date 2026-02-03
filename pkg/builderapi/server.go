@@ -350,6 +350,8 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Infof("getHeader: PayloadEvent gas limit is %d", event.GasLimit)
+
 	subsidyGwei := uint64(0)
 	if s.cfg != nil {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
@@ -371,6 +373,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		"block_hash":  "0x" + hex.EncodeToString(event.BlockHash[:]),
 		"parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
 		"value":       signedBid.Message.Value.String(),
+		"gas_limit":   signedBid.Message.Header.GasLimit,
 	}).Infof("getHeader: delivered header for slot %d", slotU64)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "fulu")
