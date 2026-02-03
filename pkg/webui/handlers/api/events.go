@@ -623,12 +623,16 @@ func (m *EventStreamManager) cleanupOldSlots(currentSlot phase0.Slot) {
 
 // SendInitialState sends the current state to a newly connected client.
 func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
-	// Send current config
+	// Send current config (only schedule and epbs for frontend compatibility)
 	cfg := m.builderSvc.GetConfig()
+	configData := map[string]any{
+		"schedule": cfg.Schedule,
+		"epbs":     cfg.EPBS,
+	}
 	ch <- &StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configData,
 	}
 
 	// Send current status
@@ -815,9 +819,13 @@ func (m *EventStreamManager) BroadcastReveal(slot uint64, success, skipped bool)
 // BroadcastConfigUpdate broadcasts a config update event.
 func (m *EventStreamManager) BroadcastConfigUpdate() {
 	cfg := m.builderSvc.GetConfig()
+	configData := map[string]any{
+		"schedule": cfg.Schedule,
+		"epbs":     cfg.EPBS,
+	}
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configData,
 	})
 }
