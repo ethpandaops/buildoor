@@ -6,15 +6,20 @@ export function useBuilderAPIStatus() {
   const [status, setStatus] = useState<BuilderAPIStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { getAuthHeaders } = useAuth();
+  const { getAuthHeader } = useAuth();
 
   useEffect(() => {
     const fetchStatus = async () => {
       try {
         setLoading(true);
         setError(null);
+        const headers: HeadersInit = {};
+        const token = getAuthHeader();
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
         const response = await fetch('/api/buildoor/builder-api-status', {
-          headers: getAuthHeaders(),
+          headers,
         });
 
         if (!response.ok) {
@@ -35,7 +40,7 @@ export function useBuilderAPIStatus() {
     // Refresh every 10 seconds
     const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
-  }, [getAuthHeaders]);
+  }, [getAuthHeader]);
 
   return { status, loading, error };
 }
