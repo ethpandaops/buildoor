@@ -22,12 +22,8 @@ temp/
 .hack/
 *.sh
 
-# Frontend dev (pre-built or not needed for builder binary)
+# Frontend dev (node_modules excluded, but source files needed for build)
 pkg/webui/node_modules
-pkg/webui/package-lock.json
-pkg/webui/src
-pkg/webui/tsconfig.json
-pkg/webui/webpack.config.js
 
 # Tests and coverage (smaller image; keep validators/testdata/ - it is embedded in code)
 *_test.go
