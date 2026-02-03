@@ -28,15 +28,18 @@ COPY pkg/webui/package.json pkg/webui/package-lock.json* pkg/webui/
 
 # Install frontend dependencies
 WORKDIR /app/pkg/webui
-RUN npm ci
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Copy remaining source (including frontend source files)
 WORKDIR /app
 COPY . .
 
-# Build frontend assets
+# Build frontend assets (fail on error)
 WORKDIR /app/pkg/webui
-RUN npm run build
+RUN npm run build || (echo "Frontend build failed!" && exit 1)
+
+# Verify frontend assets were created
+RUN ls -la static/js/bundle.js static/css/bundle.css || (echo "Frontend assets not found!" && exit 1)
 
 # Build Go binary with CGO and version ldflags (match Makefile)
 WORKDIR /app
@@ -45,7 +48,7 @@ ARG BUILDTIME
 RUN CGO_ENABLED=1 GOOS=linux go build -v \
     -ldflags="-s -w -X github.com/ethpandaops/buildoor/version.BuildVersion=${VERSION} -X github.com/ethpandaops/buildoor/version.BuildTime=${BUILDTIME:-unknown}" \
     -o /buildoor \
-    .
+    . || (echo "Go build failed!" && exit 1)
 
 # Runtime stage
 FROM debian:bookworm-slim
