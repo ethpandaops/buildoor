@@ -160,9 +160,10 @@ func (p *ExecutionPayload) MarshalJSON() ([]byte, error) {
 }
 
 // BlobsBundle contains the blob-related data for a payload (typed, with JSON marshal/unmarshal for API).
+// Commitments and Proofs are 48-byte KZG commitments/proofs, not 32-byte hashes.
 type BlobsBundle struct {
-	Commitments []common.Hash
-	Proofs      []common.Hash
+	Commitments [][]byte // KZG commitments are 48 bytes
+	Proofs      [][]byte // KZG proofs are 48 bytes
 	Blobs       [][]byte
 }
 
@@ -179,13 +180,27 @@ func (b *BlobsBundle) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &j); err != nil {
 		return err
 	}
-	b.Commitments = make([]common.Hash, len(j.Commitments))
+	b.Commitments = make([][]byte, len(j.Commitments))
 	for i, s := range j.Commitments {
-		b.Commitments[i] = common.HexToHash(s)
+		decoded, err := hexutil.Decode(s)
+		if err != nil {
+			return fmt.Errorf("commitment %d: %w", i, err)
+		}
+		if len(decoded) != 48 {
+			return fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(decoded))
+		}
+		b.Commitments[i] = decoded
 	}
-	b.Proofs = make([]common.Hash, len(j.Proofs))
+	b.Proofs = make([][]byte, len(j.Proofs))
 	for i, s := range j.Proofs {
-		b.Proofs[i] = common.HexToHash(s)
+		decoded, err := hexutil.Decode(s)
+		if err != nil {
+			return fmt.Errorf("proof %d: %w", i, err)
+		}
+		if len(decoded) != 48 {
+			return fmt.Errorf("proof %d: expected 48 bytes, got %d", i, len(decoded))
+		}
+		b.Proofs[i] = decoded
 	}
 	b.Blobs = make([][]byte, len(j.Blobs))
 	for i, s := range j.Blobs {
@@ -206,10 +221,10 @@ func (b *BlobsBundle) MarshalJSON() ([]byte, error) {
 		Blobs:       make([]string, len(b.Blobs)),
 	}
 	for i, c := range b.Commitments {
-		j.Commitments[i] = c.Hex()
+		j.Commitments[i] = hexutil.Bytes(c).String()
 	}
 	for i, pr := range b.Proofs {
-		j.Proofs[i] = pr.Hex()
+		j.Proofs[i] = hexutil.Bytes(pr).String()
 	}
 	for i, blob := range b.Blobs {
 		j.Blobs[i] = hexutil.Bytes(blob).String()
@@ -465,23 +480,31 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 	// Parse blobs bundle if present
 	if response.BlobsBundle != nil {
 		bundle := &BlobsBundle{
-			Commitments: make([]common.Hash, len(response.BlobsBundle.Commitments)),
-			Proofs:      make([]common.Hash, len(response.BlobsBundle.Proofs)),
+			Commitments: make([][]byte, len(response.BlobsBundle.Commitments)),
+			Proofs:      make([][]byte, len(response.BlobsBundle.Proofs)),
 			Blobs:       make([][]byte, len(response.BlobsBundle.Blobs)),
 		}
 
 		for i, commitment := range response.BlobsBundle.Commitments {
-			data, err := hex.DecodeString(strings.TrimPrefix(commitment, "0x"))
-			if err == nil && len(data) >= 32 {
-				copy(bundle.Commitments[i][:], data[:32])
+			data, err := hexutil.Decode(commitment)
+			if err != nil {
+				return nil, fmt.Errorf("commitment %d: %w", i, err)
 			}
+			if len(data) != 48 {
+				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(data))
+			}
+			bundle.Commitments[i] = data
 		}
 
 		for i, proof := range response.BlobsBundle.Proofs {
-			data, err := hex.DecodeString(strings.TrimPrefix(proof, "0x"))
-			if err == nil && len(data) >= 32 {
-				copy(bundle.Proofs[i][:], data[:32])
+			data, err := hexutil.Decode(proof)
+			if err != nil {
+				return nil, fmt.Errorf("proof %d: %w", i, err)
 			}
+			if len(data) != 48 {
+				return nil, fmt.Errorf("proof %d: expected 48 bytes, got %d", i, len(data))
+			}
+			bundle.Proofs[i] = data
 		}
 
 		for i, blob := range response.BlobsBundle.Blobs {
@@ -546,15 +569,29 @@ func (c *Client) GetPayloadRaw(
 	var blobsBundle *BlobsBundle
 	if response.BlobsBundle != nil {
 		blobsBundle = &BlobsBundle{
-			Commitments: make([]common.Hash, len(response.BlobsBundle.Commitments)),
-			Proofs:      make([]common.Hash, len(response.BlobsBundle.Proofs)),
+			Commitments: make([][]byte, len(response.BlobsBundle.Commitments)),
+			Proofs:      make([][]byte, len(response.BlobsBundle.Proofs)),
 			Blobs:       make([][]byte, len(response.BlobsBundle.Blobs)),
 		}
 		for i, s := range response.BlobsBundle.Commitments {
-			blobsBundle.Commitments[i] = common.HexToHash(s)
+			decoded, err := hexutil.Decode(s)
+			if err != nil {
+				return nil, fmt.Errorf("commitment %d: %w", i, err)
+			}
+			if len(decoded) != 48 {
+				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(decoded))
+			}
+			blobsBundle.Commitments[i] = decoded
 		}
 		for i, s := range response.BlobsBundle.Proofs {
-			blobsBundle.Proofs[i] = common.HexToHash(s)
+			decoded, err := hexutil.Decode(s)
+			if err != nil {
+				return nil, fmt.Errorf("proof %d: %w", i, err)
+			}
+			if len(decoded) != 48 {
+				return nil, fmt.Errorf("proof %d: expected 48 bytes, got %d", i, len(decoded))
+			}
+			blobsBundle.Proofs[i] = decoded
 		}
 		for i, s := range response.BlobsBundle.Blobs {
 			decoded, err := hexutil.Decode(s)

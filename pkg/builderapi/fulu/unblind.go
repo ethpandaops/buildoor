@@ -2,6 +2,8 @@
 package fulu
 
 import (
+	"fmt"
+
 	apiv1electra "github.com/attestantio/go-eth2-client/api/v1/electra"
 	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
 	"github.com/attestantio/go-eth2-client/spec/deneb"
@@ -47,7 +49,10 @@ func UnblindSignedBlindedBeaconBlock(
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
 		fullBody.BlobKZGCommitments = make([]deneb.KZGCommitment, len(event.BlobsBundle.Commitments))
 		for i, c := range event.BlobsBundle.Commitments {
-			copy(fullBody.BlobKZGCommitments[i][:], c[:])
+			if len(c) != 48 {
+				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(c))
+			}
+			copy(fullBody.BlobKZGCommitments[i][:], c)
 		}
 	}
 
@@ -64,19 +69,16 @@ func UnblindSignedBlindedBeaconBlock(
 		Signature: blinded.Signature,
 	}
 
-	// Build KZGProofs and Blobs from event.BlobsBundle (deneb.KZGProof is 48 bytes; engine may use 32-byte hashes).
+	// Build KZGProofs and Blobs from event.BlobsBundle (KZG proofs are 48 bytes).
 	var kzgProofs []deneb.KZGProof
 	var blobs []deneb.Blob
 	if event.BlobsBundle != nil {
 		kzgProofs = make([]deneb.KZGProof, len(event.BlobsBundle.Proofs))
 		for i, p := range event.BlobsBundle.Proofs {
-			copy(kzgProofs[i][:], p[:])
-			if len(p) < 48 {
-				// Pad to 48 bytes if engine stored 32-byte hash
-				for j := len(p); j < 48 && j < len(kzgProofs[i]); j++ {
-					kzgProofs[i][j] = 0
-				}
+			if len(p) != 48 {
+				return nil, fmt.Errorf("proof %d: expected 48 bytes, got %d", i, len(p))
 			}
+			copy(kzgProofs[i][:], p)
 		}
 		blobs = make([]deneb.Blob, len(event.BlobsBundle.Blobs))
 		for i, b := range event.BlobsBundle.Blobs {

@@ -2,6 +2,8 @@
 package fulu
 
 import (
+	"fmt"
+
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -39,9 +41,12 @@ func BuildSignedBuilderBid(
 
 	commitments := make([]deneb.KZGCommitment, 0)
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
-		for _, c := range event.BlobsBundle.Commitments {
+		for i, c := range event.BlobsBundle.Commitments {
+			if len(c) != 48 {
+				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(c))
+			}
 			var k deneb.KZGCommitment
-			copy(k[:], c[:])
+			copy(k[:], c)
 			commitments = append(commitments, k)
 		}
 	}
