@@ -372,6 +372,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		"slot":        slotU64,
 		"block_hash":  "0x" + hex.EncodeToString(event.BlockHash[:]),
 		"parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
+		"value":       signedBid.Message.Value.String(),
 	}).Infof("getHeader: delivered header for slot %d", slotU64)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "fulu")
