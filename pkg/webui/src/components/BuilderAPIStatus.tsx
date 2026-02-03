@@ -1,8 +1,8 @@
 import React from 'react';
-import type { BuilderAPIStatus } from '../types';
+import type { BuilderAPIStatus as BuilderAPIStatusType } from '../types';
 
 interface BuilderAPIStatusProps {
-  status: BuilderAPIStatus | null;
+  status: BuilderAPIStatusType | null;
   loading?: boolean;
 }
 
