@@ -2,6 +2,8 @@
 package fulu
 
 import (
+	"fmt"
+
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -17,11 +19,16 @@ type BidSigner interface {
 }
 
 // BuildSignedBuilderBid builds a Fulu SignedBuilderBid from a PayloadReadyEvent and the proposer's pubkey,
-// and signs it with the builder's BLS key (DOMAIN_APPLICATION_BUILDER, zero fork version and genesis root).
+// and signs it with the builder's BLS key using DOMAIN_APPLICATION_BUILDER with the provided genesis fork version
+// and genesis validators root (matches mev-boost-relay behavior).
+// subsidyGwei is added to the bid value so the proposer sees a higher bid (e.g. for testing).
 func BuildSignedBuilderBid(
 	event *builder.PayloadReadyEvent,
 	proposerPubkey phase0.BLSPubKey,
 	blsSigner BidSigner,
+	subsidyGwei uint64,
+	genesisForkVersion phase0.Version,
+	genesisValidatorsRoot phase0.Root,
 ) (*SignedBuilderBid, error) {
 	if event == nil || event.Payload == nil {
 		return nil, nil
@@ -34,19 +41,25 @@ func BuildSignedBuilderBid(
 
 	commitments := make([]deneb.KZGCommitment, 0)
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
-		for _, c := range event.BlobsBundle.Commitments {
+		for i, c := range event.BlobsBundle.Commitments {
+			if len(c) != 48 {
+				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(c))
+			}
 			var k deneb.KZGCommitment
-			copy(k[:], c[:])
+			copy(k[:], c)
 			commitments = append(commitments, k)
 		}
 	}
 
-	var execRequests *electra.ExecutionRequests
+	execRequests := &electra.ExecutionRequests{}
 	// event.ExecutionRequests is engine.ExecutionRequests ([]hexutil.Bytes); we don't convert to electra.ExecutionRequests here.
 	// Use nil for now so the bid is valid. Full conversion would require parsing deposit/withdrawal/consolidation requests.
 
 	value := new(uint256.Int)
 	value.SetUint64(event.BlockValue)
+	if subsidyGwei > 0 {
+		value.Add(value, new(uint256.Int).SetUint64(subsidyGwei))
+	}
 
 	bid := &BuilderBid{
 		Header:             header,
@@ -66,8 +79,8 @@ func BuildSignedBuilderBid(
 
 	domain := signer.ComputeDomain(
 		signer.DomainApplicationBuilder,
-		phase0.Version{},
-		phase0.Root{},
+		genesisForkVersion,
+		genesisValidatorsRoot,
 	)
 
 	sig, err := blsSigner.SignWithDomain(root, domain)

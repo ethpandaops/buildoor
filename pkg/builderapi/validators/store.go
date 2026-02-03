@@ -45,3 +45,14 @@ func (s *Store) Len() int {
 	defer s.mu.RUnlock()
 	return len(s.byPK)
 }
+
+// List returns a copy of all stored validator registrations (unordered).
+func (s *Store) List() []*apiv1.SignedValidatorRegistration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*apiv1.SignedValidatorRegistration, 0, len(s.byPK))
+	for _, reg := range s.byPK {
+		out = append(out, reg)
+	}
+	return out
+}

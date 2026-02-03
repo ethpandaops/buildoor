@@ -7,9 +7,11 @@ func DefaultConfig() *Config {
 		APIUserHeader:     "Cf-Access-Authenticated-User-Email",
 		APITokenKey:       "",
 		LifecycleEnabled:  false,
+		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{
-			Port: 9000, // Default Builder API port
+			Port:                  9000,       // Default Builder API port
+			BlockValueSubsidyGwei: 1000000000, // 1 ETH in Gwei
 		},
 		DepositAmount:  10000000000, // 10 ETH in Gwei
 		TopupThreshold: 1000000000,  // 1 ETH in Gwei
@@ -19,7 +21,7 @@ func DefaultConfig() *Config {
 			EveryNth: 1,
 		},
 		EPBS: EPBSConfig{
-			BuildStartTime: -2000,   // 2 seconds before slot start
+			BuildStartTime: -4000,   // 2 seconds before slot start
 			BidStartTime:   -1000,   // 1 second before slot start
 			BidEndTime:     1000,    // 1 second into slot
 			RevealTime:     6000,    // 6 seconds into slot
