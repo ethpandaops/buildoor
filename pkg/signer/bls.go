@@ -25,7 +25,7 @@ var (
 
 	// DomainApplicationBuilder is the domain for builder API validator registration signatures.
 	// See https://github.com/ethereum/builder-specs
-	DomainApplicationBuilder = phase0.DomainType{0x01, 0x00, 0x00, 0x00}
+	DomainApplicationBuilder = phase0.DomainType{0x00, 0x00, 0x00, 0x01}
 )
 
 // initBLS initializes the BLS library with BLS12-381 curve.
