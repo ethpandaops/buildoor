@@ -160,8 +160,6 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 
 	log.WithField("count", len(regs)).Debug("Decoded validator registrations")
 
-	// TODO - skip sig verification for now.
-
 	for i, reg := range regs {
 		if reg == nil || reg.Message == nil {
 			log.WithFields(logrus.Fields{"index": i, "total": len(regs)}).Warn("Rejected: registration message missing")
@@ -169,18 +167,18 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		// if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
-		// 	// Log first failing registration as JSON for debugging (copy and share).
-		// 	rejJSON, _ := json.Marshal(reg)
-		// 	log.WithFields(logrus.Fields{
-		// 		"index":             i,
-		// 		"total":             len(regs),
-		// 		"pubkey":            pubkeyHex,
-		// 		"rejected_reg_json": string(rejJSON),
-		// 	}).Warn("Rejected: invalid signature for validator")
-		// 	writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
-		// 	return
-		// }
+		if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
+			// Log first failing registration as JSON for debugging (copy and share).
+			rejJSON, _ := json.Marshal(reg)
+			log.WithFields(logrus.Fields{
+				"index":             i,
+				"total":             len(regs),
+				"pubkey":            pubkeyHex,
+				"rejected_reg_json": string(rejJSON),
+			}).Warn("Rejected: invalid signature for validator")
+			writeValidatorError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
+			return
+		}
 		s.validatorsStore.Put(reg)
 		log.WithFields(logrus.Fields{"index": i, "pubkey": pubkeyHex}).Debug("Stored validator registration")
 	}
@@ -356,7 +354,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
 	}
-	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei)
+	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.genesisForkVersion, s.genesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")

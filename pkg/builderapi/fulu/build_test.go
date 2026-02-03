@@ -27,7 +27,10 @@ func TestBuildSignedBuilderBid_NilEvent(t *testing.T) {
 	require.NoError(t, err)
 	pk := blsSigner.PublicKey()
 
-	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0)
+	var genesisForkVersion phase0.Version // zero version
+	var genesisValidatorsRoot phase0.Root // zero root
+
+	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0, genesisForkVersion, genesisValidatorsRoot)
 	require.NoError(t, err)
 	assert.Nil(t, bid)
 }
@@ -40,7 +43,10 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	blockValue := uint64(1_000_000) // 0.001 ETH in Gwei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0)
+	var genesisForkVersion phase0.Version // zero version
+	var genesisValidatorsRoot phase0.Root // zero root
+
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0, genesisForkVersion, genesisValidatorsRoot)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -58,7 +64,10 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	subsidy := uint64(1_000_000) // 0.001 ETH
 	event := minimalPayloadReadyEvent(t, blockValue)
 
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy)
+	var genesisForkVersion phase0.Version // zero version
+	var genesisValidatorsRoot phase0.Root // zero root
+
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy, genesisForkVersion, genesisValidatorsRoot)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
