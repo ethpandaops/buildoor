@@ -1,4 +1,26 @@
 definitions:
+  api.BuilderAPIStatusResponse:
+    properties:
+      block_value_subsidy_gwei:
+        type: integer
+      enabled:
+        type: boolean
+      port:
+        type: integer
+      use_proposer_fee_recipient:
+        type: boolean
+      validator_count:
+        type: integer
+    type: object
+  api.GetValidatorsResponse:
+    properties:
+      count:
+        type: integer
+      validators:
+        items:
+          $ref: '#/definitions/api.ValidatorRegistrationResponse'
+        type: array
+    type: object
   api.LifecycleStatusResponse:
     properties:
       balance_gwei:
@@ -88,9 +110,44 @@ definitions:
       next_n:
         type: integer
     type: object
+  api.ValidatorRegistrationResponse:
+    properties:
+      fee_recipient:
+        description: Execution address (hex, 0x-prefixed)
+        type: string
+      gas_limit:
+        description: Gas limit for the block
+        type: integer
+      pubkey:
+        description: BLS public key (hex, 0x-prefixed)
+        type: string
+      timestamp:
+        description: Unix timestamp of registration
+        type: integer
+    type: object
 info:
   contact: {}
 paths:
+  /api/buildoor/builder-api-status:
+    get:
+      description: Returns the status and configuration of the Builder API server.
+      operationId: getBuilderAPIStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.BuilderAPIStatusResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get Builder API status
+      tags:
+      - Buildoor
   /api/buildoor/validators:
     get:
       description: Returns the list of validators registered via the Builder API (fee
@@ -102,11 +159,7 @@ paths:
         "200":
           description: Success
           schema:
-            additionalProperties:
-              items:
-                type: object
-              type: array
-            type: object
+            $ref: '#/definitions/api.GetValidatorsResponse'
         "500":
           description: Server Error
           schema:

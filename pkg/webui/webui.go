@@ -68,6 +68,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/builder-api-status", apiHandler.GetBuilderAPIStatus).Methods(http.MethodGet)
 
 	// Lifecycle endpoints (if manager available)
 	apiRouter.HandleFunc("/lifecycle/status", apiHandler.GetLifecycleStatus).Methods(http.MethodGet)

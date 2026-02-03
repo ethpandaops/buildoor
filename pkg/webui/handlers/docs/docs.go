@@ -15,6 +15,36 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/buildoor/builder-api-status": {
+            "get": {
+                "description": "Returns the status and configuration of the Builder API server.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get Builder API status",
+                "operationId": "getBuilderAPIStatus",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderAPIStatusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/validators": {
             "get": {
                 "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
@@ -30,13 +60,7 @@ const docTemplate = `{
                     "200": {
                         "description": "Success",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object"
-                                }
-                            }
+                            "$ref": "#/definitions/api.GetValidatorsResponse"
                         }
                     },
                     "500": {
@@ -566,6 +590,40 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "api.BuilderAPIStatusResponse": {
+            "type": "object",
+            "properties": {
+                "block_value_subsidy_gwei": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "use_proposer_fee_recipient": {
+                    "type": "boolean"
+                },
+                "validator_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.GetValidatorsResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "validators": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ValidatorRegistrationResponse"
+                    }
+                }
+            }
+        },
         "api.LifecycleStatusResponse": {
             "type": "object",
             "properties": {
@@ -698,6 +756,27 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "next_n": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.ValidatorRegistrationResponse": {
+            "type": "object",
+            "properties": {
+                "fee_recipient": {
+                    "description": "Execution address (hex, 0x-prefixed)",
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "description": "Gas limit for the block",
+                    "type": "integer"
+                },
+                "pubkey": {
+                    "description": "BLS public key (hex, 0x-prefixed)",
+                    "type": "string"
+                },
+                "timestamp": {
+                    "description": "Unix timestamp of registration",
                     "type": "integer"
                 }
             }

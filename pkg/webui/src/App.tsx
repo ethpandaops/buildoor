@@ -1,11 +1,15 @@
 import React from 'react';
 import { useEventStream } from './hooks/useEventStream';
+import { useValidators } from './hooks/useValidators';
+import { useBuilderAPIStatus } from './hooks/useBuilderAPIStatus';
 import { SlotTimeline } from './components/SlotTimeline';
 import { Legend } from './components/Legend';
 import { EventLog } from './components/EventLog';
 import { Stats } from './components/Stats';
 import { ConfigPanel } from './components/ConfigPanel';
 import { BuilderInfo } from './components/BuilderInfo';
+import { BuilderAPIStatus } from './components/BuilderAPIStatus';
+import { ValidatorList } from './components/ValidatorList';
 
 export const App: React.FC = () => {
   const {
@@ -20,6 +24,9 @@ export const App: React.FC = () => {
     events,
     clearEvents
   } = useEventStream();
+
+  const { validators, loading: validatorsLoading } = useValidators();
+  const { status: builderAPIStatus, loading: builderAPIStatusLoading } = useBuilderAPIStatus();
 
   return (
     <div className="container-fluid mt-2 d-flex flex-column" style={{ height: 'calc(100vh - 80px)' }}>
@@ -55,6 +62,12 @@ export const App: React.FC = () => {
         <div className="col-lg-4">
           {/* Builder Info */}
           <BuilderInfo builderInfo={builderInfo} />
+
+          {/* Builder API Status */}
+          <BuilderAPIStatus status={builderAPIStatus} loading={builderAPIStatusLoading} />
+
+          {/* Validator List */}
+          <ValidatorList validators={validators} loading={validatorsLoading} />
 
           {/* Stats */}
           <Stats stats={stats} />

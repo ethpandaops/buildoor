@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
@@ -463,22 +464,101 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "exit initiated"})
 }
 
+// ValidatorRegistrationResponse represents a formatted validator registration for the API.
+type ValidatorRegistrationResponse struct {
+	Pubkey       string `json:"pubkey"`        // BLS public key (hex, 0x-prefixed)
+	FeeRecipient string `json:"fee_recipient"` // Execution address (hex, 0x-prefixed)
+	GasLimit     uint64 `json:"gas_limit"`     // Gas limit for the block
+	Timestamp    uint64 `json:"timestamp"`     // Unix timestamp of registration
+}
+
+// GetValidatorsResponse is the response for the validators endpoint.
+type GetValidatorsResponse struct {
+	Validators []ValidatorRegistrationResponse `json:"validators"`
+	Count      int                             `json:"count"`
+}
+
 // GetValidators godoc
 // @Id getValidators
 // @Summary List registered validators
 // @Tags Buildoor
 // @Description Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.
 // @Produce json
-// @Success 200 {object} map[string][]object "Success"
+// @Success 200 {object} GetValidatorsResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
 // @Router /api/buildoor/validators [get]
 func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 	if h.validatorStore == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"validators": []any{}})
+		writeJSON(w, http.StatusOK, GetValidatorsResponse{
+			Validators: []ValidatorRegistrationResponse{},
+			Count:      0,
+		})
 		return
 	}
 	regs := h.validatorStore.List()
-	writeJSON(w, http.StatusOK, map[string]any{"validators": regs})
+	validators := make([]ValidatorRegistrationResponse, 0, len(regs))
+	for _, reg := range regs {
+		if reg.Message == nil {
+			continue
+		}
+		validators = append(validators, ValidatorRegistrationResponse{
+			Pubkey:       "0x" + hex.EncodeToString(reg.Message.Pubkey[:]),
+			FeeRecipient: "0x" + hex.EncodeToString(reg.Message.FeeRecipient[:]),
+			GasLimit:     reg.Message.GasLimit,
+			Timestamp:    uint64(reg.Message.Timestamp.Unix()),
+		})
+	}
+	writeJSON(w, http.StatusOK, GetValidatorsResponse{
+		Validators: validators,
+		Count:      len(validators),
+	})
+}
+
+// BuilderAPIStatusResponse represents the Builder API status.
+type BuilderAPIStatusResponse struct {
+	Enabled                 bool   `json:"enabled"`
+	Port                    int    `json:"port"`
+	ValidatorCount          int    `json:"validator_count"`
+	UseProposerFeeRecipient bool   `json:"use_proposer_fee_recipient"`
+	BlockValueSubsidyGwei   uint64 `json:"block_value_subsidy_gwei"`
+}
+
+// GetBuilderAPIStatus godoc
+// @Id getBuilderAPIStatus
+// @Summary Get Builder API status
+// @Tags Buildoor
+// @Description Returns the status and configuration of the Builder API server.
+// @Produce json
+// @Success 200 {object} BuilderAPIStatusResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/buildoor/builder-api-status [get]
+func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request) {
+	enabled := h.validatorStore != nil
+	validatorCount := 0
+	if h.validatorStore != nil {
+		validatorCount = h.validatorStore.Len()
+	}
+
+	port := 0
+	useProposerFeeRecipient := false
+	blockValueSubsidyGwei := uint64(0)
+
+	if h.builderSvc != nil {
+		cfg := h.builderSvc.GetConfig()
+		if cfg != nil && cfg.BuilderAPIEnabled {
+			port = cfg.BuilderAPI.Port
+			useProposerFeeRecipient = cfg.BuilderAPI.UseProposerFeeRecipient
+			blockValueSubsidyGwei = cfg.BuilderAPI.BlockValueSubsidyGwei
+		}
+	}
+
+	writeJSON(w, http.StatusOK, BuilderAPIStatusResponse{
+		Enabled:                 enabled,
+		Port:                    port,
+		ValidatorCount:          validatorCount,
+		UseProposerFeeRecipient: useProposerFeeRecipient,
+		BlockValueSubsidyGwei:   blockValueSubsidyGwei,
+	})
 }
 
 // configToMap returns the config as a map with sensitive fields redacted.

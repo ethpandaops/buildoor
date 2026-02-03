@@ -177,3 +177,24 @@ export interface LogEvent {
   message: string;
   timestamp: number;
 }
+
+// Builder API types
+export interface ValidatorRegistration {
+  pubkey: string;
+  fee_recipient: string;
+  gas_limit: number;
+  timestamp: number;
+}
+
+export interface ValidatorsResponse {
+  validators: ValidatorRegistration[];
+  count: number;
+}
+
+export interface BuilderAPIStatus {
+  enabled: boolean;
+  port: number;
+  validator_count: number;
+  use_proposer_fee_recipient: boolean;
+  block_value_subsidy_gwei: number;
+}
