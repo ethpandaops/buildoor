@@ -7,9 +7,10 @@ func DefaultConfig() *Config {
 		APIUserHeader:     "Cf-Access-Authenticated-User-Email",
 		APITokenKey:       "",
 		LifecycleEnabled:  false,
+		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{
-			Port: 9000, // Default Builder API port
+			Port:                  9000,       // Default Builder API port
 			BlockValueSubsidyGwei: 1000000000, // 1 ETH in Gwei
 		},
 		DepositAmount:  10000000000, // 10 ETH in Gwei

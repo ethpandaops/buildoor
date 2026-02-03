@@ -54,7 +54,7 @@ func init() {
 	rootCmd.PersistentFlags().String("api-user-header", defaults.APIUserHeader, "HTTP API user header")
 	rootCmd.PersistentFlags().String("api-token-key", defaults.APITokenKey, "HTTP API token key")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
-	rootCmd.PersistentFlags().Bool("epbs", true, "Enable ePBS bidding/revealing")
+	rootCmd.PersistentFlags().Bool("epbs", false, "Enable ePBS bidding/revealing")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API (pre-ePBS)")
 	rootCmd.PersistentFlags().Int("builder-api-port", defaults.BuilderAPI.Port, "Builder API HTTP port")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
