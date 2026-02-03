@@ -15,6 +15,36 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/buildoor/builder-api-status": {
+            "get": {
+                "description": "Returns the current status of the Builder API including configuration and validator count.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get Builder API status",
+                "operationId": "getBuilderAPIStatus",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderAPIStatusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/validators": {
             "get": {
                 "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
@@ -30,13 +60,7 @@ const docTemplate = `{
                     "200": {
                         "description": "Success",
                         "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object"
-                                }
-                            }
+                            "$ref": "#/definitions/api.GetValidatorsResponse"
                         }
                     },
                     "500": {
@@ -566,6 +590,37 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "api.BuilderAPIStatusResponse": {
+            "type": "object",
+            "properties": {
+                "block_value_subsidy_gwei": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "port": {
+                    "type": "integer"
+                },
+                "use_proposer_fee_recipient": {
+                    "type": "boolean"
+                },
+                "validator_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.GetValidatorsResponse": {
+            "type": "object",
+            "properties": {
+                "validators": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ValidatorRegistrationResponse"
+                    }
+                }
+            }
+        },
         "api.LifecycleStatusResponse": {
             "type": "object",
             "properties": {
@@ -698,6 +753,28 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "next_n": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.ValidatorRegistrationResponse": {
+            "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
+            "type": "object",
+            "properties": {
+                "fee_recipient": {
+                    "description": "Hex-encoded Ethereum address",
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "description": "Gas limit for blocks",
+                    "type": "integer"
+                },
+                "pubkey": {
+                    "description": "Hex-encoded BLS public key",
+                    "type": "string"
+                },
+                "timestamp": {
+                    "description": "Unix timestamp",
                     "type": "integer"
                 }
             }
