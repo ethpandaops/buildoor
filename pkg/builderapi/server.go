@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
@@ -299,6 +300,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		"pubkey":      pubkeyStr,
 	})
 	log.Debug("getHeader request received")
+
+	// log all headers
+	for header, value := range r.Header {
+		log.WithField("header", header).Debug("value: " + strings.Join(value, ", "))
+	}
 
 	slotU64, err := strconv.ParseUint(slotStr, 10, 64)
 	if err != nil {
