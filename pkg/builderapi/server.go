@@ -49,6 +49,7 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string)
 	BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string)
 	BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string)
+	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei uint64)
 }
 
 // Server implements the combined Builder API + Buildoor API HTTP server.
@@ -62,6 +63,7 @@ type Server struct {
 	blsSigner             *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
 	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
 	eventBroadcaster      EventBroadcaster     // optional: for broadcasting API events to WebUI
+	bidsWonStore          *BidsWonStore        // in-memory store of successfully delivered blocks
 	genesisForkVersion    phase0.Version       // genesis fork version for builder domain (mev-boost-relay style)
 	forkVersion           phase0.Version       // current fork version for chain-specific verification
 	genesisValidatorsRoot phase0.Root          // genesis validators root for chain-specific verification
@@ -85,6 +87,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 		builderSvc:            builderSvc,
 		validatorsStore:       store,
 		blsSigner:             blsSigner,
+		bidsWonStore:          NewBidsWonStore(1000),
 		genesisForkVersion:    genesisForkVersion,
 		forkVersion:           forkVersion,
 		genesisValidatorsRoot: genesisValidatorsRoot,
@@ -103,6 +106,11 @@ func (s *Server) SetFuluPublisher(p FuluBlockPublisher) {
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.
 func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 	s.eventBroadcaster = b
+}
+
+// GetBidsWonStore returns the bids won store.
+func (s *Server) GetBidsWonStore() *BidsWonStore {
+	return s.bidsWonStore
 }
 
 // Handler returns the HTTP handler for tests.
@@ -502,6 +510,34 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	}
 
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
+
+	// Capture bid won data
+	if s.bidsWonStore != nil && event != nil && event.Payload != nil {
+		numTxs := len(event.Payload.Transactions)
+		numBlobs := 0
+		if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
+			numBlobs = len(event.BlobsBundle.Commitments)
+		}
+
+		valueETH := weiToETH(event.BlockValue)
+
+		entry := BidWonEntry{
+			Slot:            uint64(slot),
+			BlockHash:       blockHashHex,
+			NumTransactions: numTxs,
+			NumBlobs:        numBlobs,
+			ValueETH:        valueETH,
+			ValueWei:        event.BlockValue,
+			Timestamp:       time.Now().UnixMilli(),
+		}
+
+		s.bidsWonStore.Add(entry)
+
+		// Broadcast bid won event to WebUI
+		if s.eventBroadcaster != nil {
+			s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue)
+		}
+	}
 
 	// Broadcast submitBlindedBlock delivered event
 	if s.eventBroadcaster != nil {

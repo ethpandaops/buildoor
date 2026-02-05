@@ -240,7 +240,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

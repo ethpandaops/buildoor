@@ -281,6 +281,14 @@ export function useEventStream(): UseEventStreamResult {
           updateSlotState(data.slot, { submitBlindedDeliveredAt: data.delivered_at });
           break;
         }
+
+        case 'bid_won': {
+          // Event handled by BidsWonView component directly
+          // No need to store in main state, just log it
+          const data = event.data as { slot: number; block_hash: string; num_transactions: number; value_eth: string };
+          addEvent('bid_won', `Bid won for slot ${data.slot} (${data.num_transactions} txs, ${parseFloat(data.value_eth).toFixed(6)} ETH)`, event.timestamp);
+          break;
+        }
       }
     };
 

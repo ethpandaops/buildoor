@@ -205,3 +205,21 @@ export interface BuilderAPIStatus {
   use_proposer_fee_recipient: boolean;
   block_value_subsidy_gwei: number;
 }
+
+// Bids won types
+export interface BidWonEntry {
+  slot: number;
+  block_hash: string;
+  num_transactions: number;
+  num_blobs: number;
+  value_eth: string;
+  value_wei: number;
+  timestamp: number;
+}
+
+export interface BidsWonResponse {
+  bids_won: BidWonEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}

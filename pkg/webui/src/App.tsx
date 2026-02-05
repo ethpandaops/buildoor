@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useEventStream } from './hooks/useEventStream';
 import { useValidators } from './hooks/useValidators';
 import { useBuilderAPIStatus } from './hooks/useBuilderAPIStatus';
@@ -10,8 +10,12 @@ import { ConfigPanel } from './components/ConfigPanel';
 import { BuilderInfo } from './components/BuilderInfo';
 import { BuilderAPIStatus } from './components/BuilderAPIStatus';
 import { ValidatorList } from './components/ValidatorList';
+import { BidsWonView } from './components/BidsWonView';
+
+type ViewType = 'dashboard' | 'bids-won';
 
 export const App: React.FC = () => {
+  const [currentView, setCurrentView] = useState<ViewType>('dashboard');
   const {
     connected,
     config,
@@ -29,10 +33,33 @@ export const App: React.FC = () => {
   const { status: builderAPIStatus, loading: builderAPIStatusLoading } = useBuilderAPIStatus();
 
   return (
-    <div className="container-fluid mt-2 d-flex flex-column" style={{ height: 'calc(100vh - 80px)' }}>
-      <div className="row flex-grow-1" style={{ minHeight: 0 }}>
-        {/* Left column: Timeline visualization */}
-        <div className="col-lg-8 d-flex flex-column">
+    <div className="container-fluid mt-2">
+      {/* Navigation Tabs */}
+      <ul className="nav nav-tabs mb-3">
+        <li className="nav-item">
+          <button
+            className={`nav-link ${currentView === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setCurrentView('dashboard')}
+          >
+            Dashboard
+          </button>
+        </li>
+        <li className="nav-item">
+          <button
+            className={`nav-link ${currentView === 'bids-won' ? 'active' : ''}`}
+            onClick={() => setCurrentView('bids-won')}
+          >
+            Bids Won
+          </button>
+        </li>
+      </ul>
+
+      {/* Conditional View Rendering */}
+      {currentView === 'dashboard' ? (
+        <div className="d-flex flex-column" style={{ height: 'calc(100vh - 120px)' }}>
+          <div className="row flex-grow-1" style={{ minHeight: 0 }}>
+            {/* Left column: Timeline visualization */}
+            <div className="col-lg-8 d-flex flex-column">
           <div className="card mb-3">
             <div className="card-header d-flex justify-content-between align-items-center">
               <h5 className="mb-0">Slot Timeline</h5>
@@ -76,6 +103,10 @@ export const App: React.FC = () => {
           <ConfigPanel config={config} />
         </div>
       </div>
+    </div>
+      ) : (
+        <BidsWonView />
+      )}
     </div>
   );
 };

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
@@ -33,7 +34,7 @@ var (
 	templateEmbedFS embed.FS
 )
 
-func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store) *api.APIHandler {
+func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server) *api.APIHandler {
 	// init router
 	router := mux.NewRouter()
 
@@ -52,7 +53,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	router.HandleFunc("/", frontendHandler.Index).Methods("GET")
 
 	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore)
+	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)
@@ -68,6 +69,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)
 
 	// Lifecycle endpoints (if manager available)
 	apiRouter.HandleFunc("/lifecycle/status", apiHandler.GetLifecycleStatus).Methods(http.MethodGet)
