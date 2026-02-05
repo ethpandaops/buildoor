@@ -12,6 +12,7 @@ import (
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -191,48 +192,19 @@ and begins building blocks according to configuration.`,
 		if cfg.BuilderAPIEnabled {
 			logger.Info("Initializing Builder API server...")
 
-			// Parse genesis fork version from CLI (required for builder domain)
-			var genesisForkVersion phase0.Version
-			genesisForkVersionHex := v.GetString("genesis-fork-version")
-			if genesisForkVersionHex == "" {
-				// Fallback to beacon node genesis if not provided
-				if g := chainSvc.GetGenesis(); g != nil {
-					genesisForkVersion = g.GenesisForkVersion
-					logger.WithField("genesis_fork_version", fmt.Sprintf("0x%x", genesisForkVersion[:])).Info(
-						"Using genesis fork version from beacon node (consider using --genesis-fork-version flag)")
-				} else {
-					return fmt.Errorf("--genesis-fork-version is required when Builder API is enabled")
-				}
-			} else {
-				// Parse hex string to phase0.Version
-				genesisForkVersionHex = strings.TrimPrefix(genesisForkVersionHex, "0x")
-				forkVersionBytes, err := hex.DecodeString(genesisForkVersionHex)
-				if err != nil || len(forkVersionBytes) != 4 {
-					return fmt.Errorf("invalid --genesis-fork-version: must be 4 bytes hex (e.g., 0x00000000): %w", err)
-				}
-				copy(genesisForkVersion[:], forkVersionBytes)
-				logger.WithField("genesis_fork_version", fmt.Sprintf("0x%x", genesisForkVersion[:])).Info(
-					"Using genesis fork version from CLI")
+			// Get genesis parameters from beacon client
+			g := chainSvc.GetGenesis()
+			if g == nil {
+				return fmt.Errorf("failed to get genesis from beacon node")
 			}
 
-			// Parse genesis validators root from CLI (optional, defaults to zero for builder domain)
-			var genesisValidatorsRoot phase0.Root
-			genesisValidatorsRootHex := v.GetString("genesis-validators-root")
-			if genesisValidatorsRootHex == "" {
-				// Use zero root for builder domain (matches mev-boost behavior)
-				genesisValidatorsRoot = phase0.Root{}
-				logger.Info("Using zero genesis validators root for builder domain (mev-boost style)")
-			} else {
-				// Parse hex string to phase0.Root
-				genesisValidatorsRootHex = strings.TrimPrefix(genesisValidatorsRootHex, "0x")
-				rootBytes, err := hex.DecodeString(genesisValidatorsRootHex)
-				if err != nil || len(rootBytes) != 32 {
-					return fmt.Errorf("invalid --genesis-validators-root: must be 32 bytes hex: %w", err)
-				}
-				copy(genesisValidatorsRoot[:], rootBytes)
-				logger.WithField("genesis_validators_root", fmt.Sprintf("0x%x", genesisValidatorsRoot[:])).Info(
-					"Using genesis validators root from CLI")
-			}
+			genesisForkVersion := g.GenesisForkVersion
+			genesisValidatorsRoot := g.GenesisValidatorsRoot
+
+			logger.WithFields(logrus.Fields{
+				"genesis_fork_version":    fmt.Sprintf("0x%x", genesisForkVersion[:]),
+				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
+			}).Info("Using genesis parameters from beacon node")
 
 			// Get current fork version from chain service (for chain-specific verification)
 			var forkVersion phase0.Version

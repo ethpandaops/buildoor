@@ -59,7 +59,8 @@ type Service struct {
 }
 
 // NewService creates a new builder service.
-// validatorStore is optional; when set, fee recipient is taken from the proposer's validator registration (fallback to attrs.SuggestedFeeRecipient).
+// validatorStore is optional; when set, fee recipient is taken from the proposer's validator registration.
+// If no registration exists for a proposer, the build is skipped for that slot.
 // validatorIndexCache is optional; when set, proposer index→pubkey is read from cache instead of querying beacon state every build.
 func NewService(
 	cfg *Config,
@@ -260,6 +261,17 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		return
 	}
 
+	// Check if validator registration exists (only when validatorStore is configured)
+	if s.validatorStore != nil {
+		if !s.hasValidatorRegistration(event.ProposerIndex) {
+			s.log.WithFields(logrus.Fields{
+				"slot":           event.ProposalSlot,
+				"proposer_index": event.ProposerIndex,
+			}).Info("Skipping build: no validator registration found")
+			return
+		}
+	}
+
 	// Check if already scheduled/building/built for this slot
 	s.scheduledBuildMu.Lock()
 	if s.buildStartedSlots[event.ProposalSlot] {
@@ -270,6 +282,39 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	s.scheduledBuildMu.Unlock()
 
 	s.scheduleBuildForSlot(event.ProposalSlot)
+}
+
+// hasValidatorRegistration checks if a validator registration exists for the given proposer index.
+// Returns true if a registration exists, false otherwise.
+func (s *Service) hasValidatorRegistration(proposerIndex phase0.ValidatorIndex) bool {
+	// Get validator pubkey (from cache or beacon client)
+	var pubkey phase0.BLSPubKey
+	var ok bool
+
+	if s.validatorIndexCache != nil {
+		pubkey, ok = s.validatorIndexCache.Get(proposerIndex)
+	} else {
+		var err error
+		pubkey, err = s.clClient.GetValidatorPubkeyByIndex(s.ctx, "head", proposerIndex)
+		ok = (err == nil)
+	}
+
+	if !ok {
+		s.log.WithField("proposer_index", proposerIndex).Debug("Could not resolve proposer index to pubkey")
+		return false
+	}
+
+	// Check if registration exists
+	reg := s.validatorStore.Get(pubkey)
+	if reg == nil || reg.Message == nil {
+		s.log.WithFields(logrus.Fields{
+			"proposer_index": proposerIndex,
+			"pubkey":         fmt.Sprintf("%x", pubkey[:8]),
+		}).Debug("No validator registration found")
+		return false
+	}
+
+	return true
 }
 
 // scheduleBuildForSlot schedules payload building for the given slot.

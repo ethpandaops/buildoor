@@ -42,7 +42,8 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
-// When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey), with fallback to attrs.SuggestedFeeRecipient.
+// When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey).
+// If no registration is found, the build is skipped (checked before reaching this point).
 // validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
@@ -113,6 +114,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Convert withdrawals from payload_attributes to engine format
 	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
 
+	// Get fee recipient for build
+	// When validatorStore is configured, use the proposer's registered fee recipient.
+	// Otherwise, use the configured fee recipient.
 	feeRecipientForBuild := b.feeRecipient
 	if b.validatorStore != nil {
 		var pubkey phase0.BLSPubKey
@@ -128,14 +132,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			reg := b.validatorStore.Get(pubkey)
 			if reg != nil && reg.Message != nil {
 				feeRecipientForBuild = common.Address(reg.Message.FeeRecipient)
-			} else {
-				feeRecipientForBuild = attrs.SuggestedFeeRecipient
+				b.log.WithFields(logrus.Fields{
+					"proposer_index": attrs.ProposerIndex,
+					"pubkey":         fmt.Sprintf("%x", pubkey[:8]),
+					"fee_recipient":  feeRecipientForBuild.Hex(),
+				}).Debug("Using fee recipient from validator registration")
 			}
-		} else {
-			feeRecipientForBuild = attrs.SuggestedFeeRecipient
 		}
-	} else {
-		feeRecipientForBuild = attrs.SuggestedFeeRecipient
 	}
 
 	b.log.WithFields(logrus.Fields{

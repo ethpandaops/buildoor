@@ -85,11 +85,6 @@ func init() {
 	// Payload Build Time
 	rootCmd.PersistentFlags().Uint64("payload-build-time", defaults.PayloadBuildTime, "Time to allow the EL to build the payload after triggering the payload build via fcu (in ms)")
 
-	// Genesis flags (for builder signing domain)
-	rootCmd.PersistentFlags().String("genesis-fork-version", "", "Genesis fork version (hex, e.g., 0x00000000 for mainnet). Required for Builder API.")
-	rootCmd.PersistentFlags().Uint64("genesis-timestamp", 0, "Genesis timestamp (unix seconds). Optional, used for validation.")
-	rootCmd.PersistentFlags().String("genesis-validators-root", "", "Genesis validators root (hex, 32 bytes). Optional, defaults to zero root for builder domain.")
-
 	// Bind all flags to viper
 	if err := v.BindPFlags(rootCmd.PersistentFlags()); err != nil {
 		logger.WithError(err).Fatal("Failed to bind flags")
