@@ -199,7 +199,7 @@ and begins building blocks according to configuration.`,
 			}
 
 			genesisForkVersion := g.GenesisForkVersion
-			genesisValidatorsRoot := g.GenesisValidatorsRoot
+			genesisValidatorsRoot := phase0.Root{}
 
 			logger.WithFields(logrus.Fields{
 				"genesis_fork_version":    fmt.Sprintf("0x%x", genesisForkVersion[:]),
