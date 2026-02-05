@@ -420,8 +420,6 @@ func (c *Client) RequestPayloadBuild(
 		return PayloadID{}, fmt.Errorf("forkchoiceUpdated failed: %w", err)
 	}
 
-	c.log.Infof("The response of engine_fcu is %+v", response)
-
 	if response.PayloadStatus.Status != "VALID" && response.PayloadStatus.Status != "SYNCING" {
 		return PayloadID{}, fmt.Errorf("forkchoice status: %s", response.PayloadStatus.Status)
 	}
