@@ -1,4 +1,17 @@
 definitions:
+  api.BidsWonResponse:
+    properties:
+      bids_won:
+        items:
+          $ref: '#/definitions/builderapi.BidWonEntry'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   api.BuilderAPIStatusResponse:
     properties:
       block_value_subsidy_gwei:
@@ -125,9 +138,61 @@ definitions:
         description: Unix timestamp
         type: integer
     type: object
+  builderapi.BidWonEntry:
+    properties:
+      block_hash:
+        type: string
+      num_blobs:
+        type: integer
+      num_transactions:
+        type: integer
+      slot:
+        type: integer
+      timestamp:
+        description: Unix timestamp in milliseconds
+        type: integer
+      value_eth:
+        description: Formatted as ETH string for precision
+        type: string
+      value_wei:
+        description: Stored in wei for sorting
+        type: integer
+    type: object
 info:
   contact: {}
 paths:
+  /api/buildoor/bids-won:
+    get:
+      description: Returns a paginated list of bids won via Builder API with transaction
+        counts, blob counts, and values.
+      operationId: getBidsWon
+      parameters:
+      - default: 0
+        description: Offset for pagination
+        in: query
+        name: offset
+        type: integer
+      - default: 20
+        description: Limit for pagination (max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.BidsWonResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get bids won (successfully delivered blocks)
+      tags:
+      - Buildoor
   /api/buildoor/builder-api-status:
     get:
       description: Returns the current status of the Builder API including configuration

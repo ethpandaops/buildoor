@@ -512,35 +512,29 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
 
 	// Capture bid won data
-	if s.bidsWonStore != nil && event != nil && event.Payload != nil {
-		numTxs := len(event.Payload.Transactions)
-		numBlobs := 0
-		if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
-			numBlobs = len(event.BlobsBundle.Commitments)
-		}
-
-		valueETH := weiToETH(event.BlockValue)
-
-		entry := BidWonEntry{
-			Slot:            uint64(slot),
-			BlockHash:       blockHashHex,
-			NumTransactions: numTxs,
-			NumBlobs:        numBlobs,
-			ValueETH:        valueETH,
-			ValueWei:        event.BlockValue,
-			Timestamp:       time.Now().UnixMilli(),
-		}
-
-		s.bidsWonStore.Add(entry)
-
-		// Broadcast bid won event to WebUI
-		if s.eventBroadcaster != nil {
-			s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue)
-		}
+	numTxs := len(event.Payload.Transactions)
+	numBlobs := 0
+	if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
+		numBlobs = len(event.BlobsBundle.Commitments)
 	}
 
-	// Broadcast submitBlindedBlock delivered event
+	valueETH := weiToETH(event.BlockValue)
+
+	entry := BidWonEntry{
+		Slot:            uint64(slot),
+		BlockHash:       blockHashHex,
+		NumTransactions: numTxs,
+		NumBlobs:        numBlobs,
+		ValueETH:        valueETH,
+		ValueWei:        event.BlockValue,
+		Timestamp:       time.Now().UnixMilli(),
+	}
+
+	s.bidsWonStore.Add(entry)
+
+	// Broadcast bid won event to WebUI
 	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue)
 		s.eventBroadcaster.BroadcastBuilderAPISubmitBlindedDelivered(uint64(slot), blockHashHex)
 	}
 
