@@ -43,6 +43,14 @@ type FuluBlockPublisher interface {
 	SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error
 }
 
+// EventBroadcaster provides methods for broadcasting Builder API events to the WebUI.
+type EventBroadcaster interface {
+	BroadcastBuilderAPIGetHeaderReceived(slot uint64, parentHash, pubkey string)
+	BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string)
+	BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string)
+	BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string)
+}
+
 // Server implements the combined Builder API + Buildoor API HTTP server.
 type Server struct {
 	cfg                   *config.BuilderAPIConfig
@@ -53,6 +61,7 @@ type Server struct {
 	validatorsStore       *validators.Store    // in-memory validator registrations
 	blsSigner             *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
 	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
+	eventBroadcaster      EventBroadcaster     // optional: for broadcasting API events to WebUI
 	genesisForkVersion    phase0.Version       // genesis fork version for builder domain (mev-boost-relay style)
 	forkVersion           phase0.Version       // current fork version for chain-specific verification
 	genesisValidatorsRoot phase0.Root          // genesis validators root for chain-specific verification
@@ -89,6 +98,11 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 // SetFuluPublisher sets the optional publisher for unblinded Fulu blocks (e.g. beacon node client).
 func (s *Server) SetFuluPublisher(p FuluBlockPublisher) {
 	s.fuluPublisher = p
+}
+
+// SetEventBroadcaster sets the optional event broadcaster for WebUI events.
+func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
+	s.eventBroadcaster = b
 }
 
 // Handler returns the HTTP handler for tests.
@@ -313,6 +327,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Broadcast getHeader received event
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPIGetHeaderReceived(slotU64, parentHashStr, pubkeyStr)
+	}
+
 	parentHashBytes, err := hex.DecodeString(trimHex(parentHashStr))
 	if err != nil || len(parentHashBytes) != 32 {
 		log.WithError(err).Warn("getHeader: invalid parent_hash")
@@ -381,6 +400,13 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		"value":       signedBid.Message.Value.String(),
 		"gas_limit":   signedBid.Message.Header.GasLimit,
 	}).Infof("getHeader: delivered header for slot %d", slotU64)
+
+	// Broadcast getHeader delivered event
+	if s.eventBroadcaster != nil {
+		blockHashHex := "0x" + hex.EncodeToString(event.BlockHash[:])
+		s.eventBroadcaster.BroadcastBuilderAPIGetHeaderDelivered(slotU64, blockHashHex, signedBid.Message.Value.String())
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "fulu")
 	w.WriteHeader(http.StatusOK)
@@ -427,11 +453,17 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 
 	blockHash := blinded.Message.Body.ExecutionPayloadHeader.BlockHash
 	slot := blinded.Message.Slot
+	blockHashHex := "0x" + hex.EncodeToString(blockHash[:])
 	log = log.WithFields(logrus.Fields{
 		"slot":       slot,
-		"block_hash": "0x" + hex.EncodeToString(blockHash[:]),
+		"block_hash": blockHashHex,
 	})
 	log.Debug("submitBlindedBlock request received")
+
+	// Broadcast submitBlindedBlock received event
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPISubmitBlindedReceived(uint64(slot), blockHashHex)
+	}
 
 	cache := s.builderSvc.GetPayloadCache()
 	event := cache.GetByBlockHash(blockHash)
@@ -469,7 +501,12 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, "0x"+hex.EncodeToString(blockHash[:]))
+	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
+
+	// Broadcast submitBlindedBlock delivered event
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPISubmitBlindedDelivered(uint64(slot), blockHashHex)
+	}
 
 	w.WriteHeader(http.StatusAccepted)
 }

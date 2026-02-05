@@ -33,7 +33,7 @@ var (
 	templateEmbedFS embed.FS
 )
 
-func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store) {
+func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store) *api.APIHandler {
 	// init router
 	router := mux.NewRouter()
 
@@ -113,4 +113,6 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 			logrus.WithError(err).Fatal("Error serving frontend")
 		}
 	}()
+
+	return apiHandler
 }

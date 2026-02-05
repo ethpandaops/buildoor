@@ -169,6 +169,11 @@
   bottom: 4px;
 }
 
+.builder-api-events {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 /* Event dots */
 .event-dot {
   position: absolute;
@@ -230,6 +235,27 @@
 .reveal-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
+}
+
+/* Builder API event colors */
+.get-header-received {
+  background: #e83e8c;
+  border: 2px solid #c2185b;
+}
+
+.get-header-delivered {
+  background: #d63384;
+  border: 2px solid #a72661;
+}
+
+.submit-blinded-received {
+  background: #20c997;
+  border: 2px solid #199d76;
+}
+
+.submit-blinded-delivered {
+  background: #0dcaf0;
+  border: 2px solid #0aa2c0;
 }
 
 /* Event popover */

@@ -154,6 +154,13 @@ export interface SlotState {
   revealFailed?: boolean;
   revealSentAt?: number;
   headVotes?: HeadVoteDataPoint[];
+  getHeaderReceivedAt?: number;
+  getHeaderDeliveredAt?: number;
+  getHeaderBlockHash?: string;
+  getHeaderBlockValue?: string;
+  submitBlindedReceivedAt?: number;
+  submitBlindedDeliveredAt?: number;
+  submitBlindedBlockHash?: string;
 }
 
 export interface OurBid {

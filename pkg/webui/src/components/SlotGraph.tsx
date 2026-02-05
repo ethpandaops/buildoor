@@ -394,6 +394,75 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
         </div>
 
+        {/* Builder API events row */}
+        <div className="event-row builder-api-events">
+          {/* getHeader received */}
+          {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
+            'get-header-received',
+            state.getHeaderReceivedAt - slotStartTime,
+            {
+              title: 'getHeader Request',
+              items: [
+                { label: 'Time', value: `${state.getHeaderReceivedAt - slotStartTime}ms` }
+              ]
+            },
+            'get-header-rcvd'
+          )}
+
+          {/* getHeader delivered */}
+          {state.getHeaderDeliveredAt && genesisTime > 0 && renderEventDot(
+            'get-header-delivered',
+            state.getHeaderDeliveredAt - slotStartTime,
+            {
+              title: 'Header Delivered',
+              items: [
+                { label: 'Time', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                ...(state.getHeaderBlockValue ? [{
+                  label: 'Block Value',
+                  value: state.getHeaderBlockValue + ' wei'
+                }] : []),
+                ...(state.getHeaderBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.getHeaderBlockHash),
+                  copyValue: state.getHeaderBlockHash
+                }] : [])
+              ]
+            },
+            'get-header-dlvd'
+          )}
+
+          {/* submitBlindedBlock received */}
+          {state.submitBlindedReceivedAt && genesisTime > 0 && renderEventDot(
+            'submit-blinded-received',
+            state.submitBlindedReceivedAt - slotStartTime,
+            {
+              title: 'submitBlindedBlock Request',
+              items: [
+                { label: 'Time', value: `${state.submitBlindedReceivedAt - slotStartTime}ms` },
+                ...(state.submitBlindedBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.submitBlindedBlockHash),
+                  copyValue: state.submitBlindedBlockHash
+                }] : [])
+              ]
+            },
+            'submit-blinded-rcvd'
+          )}
+
+          {/* submitBlindedBlock delivered */}
+          {state.submitBlindedDeliveredAt && genesisTime > 0 && renderEventDot(
+            'submit-blinded-delivered',
+            state.submitBlindedDeliveredAt - slotStartTime,
+            {
+              title: 'Block Published',
+              items: [
+                { label: 'Time', value: `${state.submitBlindedDeliveredAt - slotStartTime}ms` }
+              ]
+            },
+            'submit-blinded-dlvd'
+          )}
+        </div>
+
         {/* Current time indicator - animated via requestAnimationFrame */}
         <CurrentTimeIndicator
           slotStartTime={slotStartTime}
