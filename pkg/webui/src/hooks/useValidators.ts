@@ -37,8 +37,8 @@ export function useValidators() {
     };
 
     fetchValidators();
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchValidators, 10000);
+    // Refresh every 6.5 minutes (slightly longer than 1 epoch to avoid unnecessary requests)
+    const interval = setInterval(fetchValidators, 390000);
     return () => clearInterval(interval);
   }, [getAuthHeader]);
 
