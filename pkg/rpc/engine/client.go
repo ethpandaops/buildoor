@@ -658,25 +658,6 @@ func (c *Client) GetBlockByHash(ctx context.Context, hash common.Hash) (*BlockRe
 	return &block, nil
 }
 
-// ParseBlockHashFromPayload extracts the block hash from a raw execution payload JSON.
-func ParseBlockHashFromPayload(payloadJSON json.RawMessage) (common.Hash, error) {
-	var payload struct {
-		BlockHash string `json:"blockHash"`
-	}
-
-	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
-		return common.Hash{}, fmt.Errorf("failed to unmarshal payload: %w", err)
-	}
-
-	if payload.BlockHash == "" {
-		return common.Hash{}, fmt.Errorf("blockHash not found in payload")
-	}
-
-	hash := common.HexToHash(payload.BlockHash)
-
-	return hash, nil
-}
-
 // ParsePayloadFields extracts key fields from a raw execution payload JSON.
 func ParsePayloadFields(payloadJSON json.RawMessage) (*ExecutionPayloadFields, error) {
 	var fields ExecutionPayloadFields
