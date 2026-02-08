@@ -103,6 +103,7 @@ func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.Signe
 }
 
 // computeExitDomain computes the domain for exit signing.
+/*
 func (s *ExitService) computeExitDomain(_ phase0.Epoch) (phase0.Domain, error) {
 	// Get fork version
 	forkVersion, err := s.chainSvc.GetForkVersion(context.Background())
@@ -120,3 +121,4 @@ func (s *ExitService) computeExitDomain(_ phase0.Epoch) (phase0.Domain, error) {
 
 	return domain, nil
 }
+*/

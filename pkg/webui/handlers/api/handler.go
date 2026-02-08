@@ -14,11 +14,11 @@ import (
 type APIHandler struct {
 	authHandler    *auth.AuthHandler
 	builderSvc     *builder.Service
-	epbsSvc        *epbs.Service        // May be nil
-	lifecycleMgr   *lifecycle.Manager   // May be nil
-	validatorStore *validators.Store    // May be nil (only set when Builder API enabled)
-	builderAPISvc  *builderapi.Server   // May be nil (only set when Builder API enabled)
-	eventStreamMgr *EventStreamManager  // May be nil
+	epbsSvc        *epbs.Service       // May be nil
+	lifecycleMgr   *lifecycle.Manager  // May be nil
+	validatorStore *validators.Store   // May be nil (only set when Builder API enabled)
+	builderAPISvc  *builderapi.Server  // May be nil (only set when Builder API enabled)
+	eventStreamMgr *EventStreamManager // May be nil
 }
 
 // NewAPIHandler creates a new API handler.

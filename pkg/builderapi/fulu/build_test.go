@@ -13,15 +13,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
-// mockBidSigner implements BidSigner for tests.
-type mockBidSigner struct {
-	signer *signer.BLSSigner
-}
-
-func (m *mockBidSigner) SignWithDomain(root phase0.Root, domain phase0.Domain) (phase0.BLSSignature, error) {
-	return m.signer.SignWithDomain(root, domain)
-}
-
 func TestBuildSignedBuilderBid_NilEvent(t *testing.T) {
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
