@@ -6,10 +6,6 @@
 *.swp
 .DS_Store
 
-# Build artifacts
-bin/
-buildoor
-
 # Config and logs (mount at runtime)
 config.yaml
 test-config.yaml
