@@ -174,6 +174,7 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
 	srv := NewServer(cfg, log, mock, blsSigner, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv.SetEnabled(true)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/not_a_number/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -243,6 +244,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	cache.Store(event)
 	mock := &mockPayloadCacheProvider{cache: cache}
 	srv := NewServer(cfg, log, mock, blsSigner, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))
 	req.Header.Set("Content-Type", "application/json")

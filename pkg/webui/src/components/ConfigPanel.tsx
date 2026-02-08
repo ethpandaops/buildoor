@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
-import type { Config, EPBSConfig, ScheduleConfig, ServiceStatus, Stats } from '../types';
+import type { Config, EPBSConfig, ServiceStatus, Stats } from '../types';
 
 interface ConfigPanelProps {
   config: Config | null;
@@ -12,9 +12,9 @@ type EPBSFormState = EPBSConfig;
 
 export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus, stats }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [editingTiming, setEditingTiming] = useState(false);
-  const [editingSchedule, setEditingSchedule] = useState(false);
+  const [toggling, setToggling] = useState(false);
 
   const [timingForm, setTimingForm] = useState<EPBSFormState>({
     build_start_time: 0,
@@ -26,26 +26,12 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
     bid_interval: 0,
   });
 
-  const [scheduleForm, setScheduleForm] = useState<ScheduleConfig>({
-    mode: 'all',
-    every_nth: 1,
-    next_n: 0,
-    start_slot: 0,
-  });
-
   // Sync timing form state when not editing
   useEffect(() => {
     if (!editingTiming && config?.epbs) {
       setTimingForm({ ...config.epbs });
     }
   }, [config, editingTiming]);
-
-  // Sync schedule form state when not editing
-  useEffect(() => {
-    if (!editingSchedule && config?.schedule) {
-      setScheduleForm(config.schedule);
-    }
-  }, [config, editingSchedule]);
 
   const handleTimingSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,37 +67,31 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
     }
   };
 
-  const handleScheduleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const canEdit = isLoggedIn;
+  const epbs = config?.epbs;
+  const isActive = serviceStatus?.epbs_enabled ?? false;
+  const isAvailable = serviceStatus?.epbs_available ?? false;
+
+  const handleToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     const authToken = getAuthHeader();
-    if (!authToken) {
-      alert('You must be logged in to update configuration');
-      return;
-    }
+    if (!authToken) return;
+    setToggling(true);
     try {
-      const response = await fetch('/api/config/schedule', {
+      await fetch('/api/services/toggle', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`,
         },
-        body: JSON.stringify(scheduleForm),
+        body: JSON.stringify({ epbs_enabled: !isActive }),
       });
-      const result = await response.json();
-      if (result.error) {
-        alert('Failed to update: ' + result.error);
-      } else {
-        setEditingSchedule(false);
-      }
     } catch (err) {
-      alert('Error: ' + err);
+      console.error('Failed to toggle ePBS:', err);
+    } finally {
+      setToggling(false);
     }
   };
-
-  const canEdit = isLoggedIn;
-  const epbs = config?.epbs;
-  const schedule = config?.schedule;
-  const isActive = serviceStatus?.epbs_enabled ?? false;
 
   return (
     <div className="card mb-3">
@@ -121,14 +101,34 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
         onClick={() => setCollapsed(!collapsed)}
       >
         <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} me-2`}></i>
-        <h5 className="mb-0 me-2">ePBS</h5>
-        <span className={`badge ${isActive ? 'bg-success' : 'bg-secondary'}`}>
-          {isActive ? 'Active' : 'Inactive'}
-        </span>
+        <h5 className="mb-0 me-2">ePBS Bidder</h5>
+        {!isAvailable ? (
+          <span className="badge bg-dark">Not Available</span>
+        ) : isActive ? (
+          <span className="badge bg-success">Active</span>
+        ) : (
+          <span className="badge bg-secondary">Inactive</span>
+        )}
+        {canEdit && (
+          <button
+            className={`btn btn-sm ms-auto ${isActive ? 'btn-outline-danger' : 'btn-outline-success'}`}
+            onClick={handleToggle}
+            disabled={toggling || !isAvailable}
+            title={!isAvailable ? 'ePBS not available (Gloas fork not scheduled)' : isActive ? 'Disable ePBS' : 'Enable ePBS'}
+          >
+            <i className={`fas ${isActive ? 'fa-pause' : 'fa-play'}`}></i>
+          </button>
+        )}
       </div>
 
       {!collapsed && (
         <div className="card-body">
+          {!isAvailable && (
+            <div className="alert alert-secondary small mb-2 py-1 px-2">
+              <i className="fas fa-info-circle me-1"></i>
+              ePBS is not available. The connected beacon node does not have the Gloas fork scheduled.
+            </div>
+          )}
           {/* Statistics Section */}
           <div className="section-header mb-2">Statistics</div>
           <div className="row g-2 mb-3">
@@ -174,7 +174,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
           </div>
 
           {!editingTiming ? (
-            <div className="row g-2 mb-3">
+            <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
                   <div className="config-item-label">Bid Start</div>
@@ -213,7 +213,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
               </div>
             </div>
           ) : (
-            <form onSubmit={handleTimingSave} className="mb-3">
+            <form onSubmit={handleTimingSave}>
               <div className="mb-2">
                 <label className="form-label">Bid Start Time (ms)</label>
                 <input
@@ -277,102 +277,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>
                 <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditingTiming(false)}>
-                  Cancel
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Schedule Section */}
-          <div className="d-flex justify-content-between align-items-center mb-2">
-            <div className="section-header">Schedule</div>
-            {!editingSchedule && (
-              <button
-                className="btn btn-sm btn-outline-primary"
-                onClick={() => setEditingSchedule(true)}
-                disabled={!canEdit}
-                title={!canEdit ? 'Login required to edit' : ''}
-              >
-                <i className="fas fa-pencil-alt"></i>
-              </button>
-            )}
-          </div>
-
-          {!editingSchedule ? (
-            <div className="row g-2">
-              <div className="col-6">
-                <div className="config-item">
-                  <div className="config-item-label">Mode</div>
-                  <div className="config-item-value">{schedule?.mode || 'all'}</div>
-                </div>
-              </div>
-              <div className="col-6">
-                <div className="config-item">
-                  <div className="config-item-label">Every Nth</div>
-                  <div className="config-item-value">{schedule?.every_nth || 1}</div>
-                </div>
-              </div>
-              <div className="col-6">
-                <div className="config-item">
-                  <div className="config-item-label">Next N</div>
-                  <div className="config-item-value">{schedule?.next_n || 0}</div>
-                </div>
-              </div>
-              <div className="col-6">
-                <div className="config-item">
-                  <div className="config-item-label">Start Slot</div>
-                  <div className="config-item-value">{schedule?.start_slot || 0}</div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <form onSubmit={handleScheduleSave}>
-              <div className="mb-2">
-                <label className="form-label">Mode</label>
-                <select
-                  className="form-select form-select-sm"
-                  value={scheduleForm.mode}
-                  onChange={(e) => setScheduleForm({ ...scheduleForm, mode: e.target.value })}
-                  required
-                >
-                  <option value="all">All</option>
-                  <option value="every_nth">Every Nth</option>
-                  <option value="next_n">Next N</option>
-                </select>
-              </div>
-              <div className="mb-2">
-                <label className="form-label">Every Nth</label>
-                <input
-                  type="number"
-                  className="form-control form-control-sm"
-                  value={scheduleForm.every_nth}
-                  onChange={(e) => setScheduleForm({ ...scheduleForm, every_nth: parseInt(e.target.value) || 1 })}
-                  min={1}
-                />
-              </div>
-              <div className="mb-2">
-                <label className="form-label">Next N</label>
-                <input
-                  type="number"
-                  className="form-control form-control-sm"
-                  value={scheduleForm.next_n}
-                  onChange={(e) => setScheduleForm({ ...scheduleForm, next_n: parseInt(e.target.value) || 0 })}
-                  min={0}
-                />
-              </div>
-              <div className="mb-2">
-                <label className="form-label">Start Slot</label>
-                <input
-                  type="number"
-                  className="form-control form-control-sm"
-                  value={scheduleForm.start_slot}
-                  onChange={(e) => setScheduleForm({ ...scheduleForm, start_slot: parseInt(e.target.value) || 0 })}
-                  min={0}
-                />
-              </div>
-              <div className="d-flex gap-2">
-                <button type="submit" className="btn btn-sm btn-primary">Save</button>
-                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditingSchedule(false)}>
                   Cancel
                 </button>
               </div>

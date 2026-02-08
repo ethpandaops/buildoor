@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"strings"
@@ -158,10 +159,12 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		// Validator store and index cache when Builder API enabled (fee recipient from registrations; cache avoids beacon state lookup every build)
+		// Validator store and index cache when Builder API is available (port > 0)
+		// (fee recipient from registrations; cache avoids beacon state lookup every build)
 		var validatorStore *validators.Store
 		var validatorIndexCache *chain.ValidatorIndexCache
-		if cfg.BuilderAPIEnabled {
+		builderAPIAvailable := cfg.BuilderAPI.Port > 0
+		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
 			validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
 			if err := validatorIndexCache.Start(ctx); err != nil {
@@ -174,22 +177,31 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
-		// 8. Initialize ePBS service (if enabled)
+		// 8. Initialize ePBS service (if Gloas fork is scheduled)
 		var epbsSvc *epbs.Service
+		epbsAvailable := chainSpec.GloasForkEpoch != nil && *chainSpec.GloasForkEpoch < math.MaxUint64
 
-		if cfg.EPBSEnabled {
+		if chainSpec.GloasForkEpoch != nil {
+			logger.WithField("gloas_fork_epoch", *chainSpec.GloasForkEpoch).Info("Gloas fork epoch detected")
+		} else {
+			logger.Info("Gloas fork epoch not found in chain spec, ePBS not available")
+		}
+
+		if epbsAvailable {
 			logger.Info("Initializing ePBS service...")
 
 			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize ePBS: %w", err)
 			}
+
+			epbsSvc.SetEnabled(cfg.EPBSEnabled)
 		}
 
-		// 8a. Start Builder API server (if enabled)
+		// 8a. Start Builder API server (if port configured)
 		var builderAPISrv *builderapi.Server
 
-		if cfg.BuilderAPIEnabled {
+		if builderAPIAvailable {
 			logger.Info("Initializing Builder API server...")
 
 			// Get genesis parameters from beacon client
@@ -214,6 +226,7 @@ and begins building blocks according to configuration.`,
 
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
+			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)
 			}

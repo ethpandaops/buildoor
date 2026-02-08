@@ -26,6 +26,7 @@ export const App: React.FC = () => {
     currentSlot,
     slotStates,
     slotConfigs,
+    slotServiceStatuses,
     events,
     clearEvents
   } = useEventStream();
@@ -63,57 +64,60 @@ export const App: React.FC = () => {
         </li>
       </ul>
 
-      {/* Conditional View Rendering */}
-      {currentView === 'dashboard' ? (
-        <div className="d-flex flex-column" style={{ height: 'calc(100vh - 120px)' }}>
-          <div className="row flex-grow-1" style={{ minHeight: 0 }}>
-            {/* Left column: Timeline visualization */}
-            <div className="col-lg-8 d-flex flex-column">
-              <div className="card mb-3">
-                <div className="card-header d-flex justify-content-between align-items-center">
-                  <h5 className="mb-0">Slot Timeline</h5>
-                  <div className="d-flex gap-2">
-                    <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
-                      {connected ? 'Connected' : 'Disconnected'}
-                    </span>
-                    <span className="badge bg-primary">Slot: {currentSlot || '--'}</span>
-                  </div>
-                </div>
-                <div className="card-body p-2">
-                  <SlotTimeline
-                    chainInfo={chainInfo}
-                    slotStates={slotStates}
-                    slotConfigs={slotConfigs}
-                    currentConfig={config}
-                    serviceStatus={serviceStatus}
-                  />
-                  <Legend />
+      {/* Dashboard - always mounted, hidden when not active */}
+      <div className={currentView === 'dashboard' ? 'd-flex flex-column' : 'd-none'} style={{ height: 'calc(100vh - 120px)' }}>
+        <div className="row flex-grow-1" style={{ minHeight: 0 }}>
+          {/* Left column: Timeline visualization */}
+          <div className="col-lg-8 d-flex flex-column">
+            <div className="card mb-3">
+              <div className="card-header d-flex justify-content-between align-items-center">
+                <h5 className="mb-0">Slot Timeline</h5>
+                <div className="d-flex gap-2">
+                  <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
+                    {connected ? 'Connected' : 'Disconnected'}
+                  </span>
+                  <span className="badge bg-primary">Slot: {currentSlot || '--'}</span>
                 </div>
               </div>
-
-              {/* Events Log */}
-              <EventLog events={events} onClear={clearEvents} />
+              <div className="card-body p-2">
+                <SlotTimeline
+                  chainInfo={chainInfo}
+                  slotStates={slotStates}
+                  slotConfigs={slotConfigs}
+                  slotServiceStatuses={slotServiceStatuses}
+                  currentConfig={config}
+                  serviceStatus={serviceStatus}
+                />
+                <Legend />
+              </div>
             </div>
 
-            {/* Right column: Builder Info, Config and Panels */}
-            <div className="col-lg-4">
-              {/* Builder Info */}
-              <BuilderInfo builderInfo={builderInfo} />
+            {/* Events Log */}
+            <EventLog events={events} onClear={clearEvents} />
+          </div>
 
-              {/* Builder Config Panel */}
-              <BuilderConfigPanel config={config} />
+          {/* Right column: Builder Info, Config and Panels */}
+          <div className="col-lg-4">
+            {/* Builder Info */}
+            <BuilderInfo builderInfo={builderInfo} />
 
-              {/* Builder API Config Panel */}
-              <BuilderAPIConfigPanel status={builderAPIStatus} loading={builderAPIStatusLoading} />
+            {/* Payload Builder */}
+            <BuilderConfigPanel config={config} />
 
-              {/* Config panels */}
-              <ConfigPanel config={config} serviceStatus={serviceStatus} stats={stats} />
-            </div>
+            {/* ePBS Bidder */}
+            <ConfigPanel config={config} serviceStatus={serviceStatus} stats={stats} />
+
+            {/* Builder API (Legacy) */}
+            <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
           </div>
         </div>
-      ) : currentView === 'validators' ? (
+      </div>
+
+      {/* Other views - mount/unmount as needed */}
+      {currentView === 'validators' && (
         <ValidatorList validators={validators} loading={validatorsLoading} fullPage={true} />
-      ) : (
+      )}
+      {currentView === 'bids-won' && (
         <BidsWonView />
       )}
     </div>

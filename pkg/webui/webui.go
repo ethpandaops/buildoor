@@ -70,6 +70,9 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	// Shared builder config endpoint (build start time, payload build delay)
 	apiRouter.HandleFunc("/config/builder", apiHandler.UpdateBuilderConfig).Methods(http.MethodPost)
 
+	// Service toggle endpoint (enable/disable ePBS and legacy builder)
+	apiRouter.HandleFunc("/services/toggle", apiHandler.ToggleServices).Methods(http.MethodPost)
+
 	// Builder API config endpoint
 	apiRouter.HandleFunc("/config/builder-api", apiHandler.UpdateBuilderAPIConfig).Methods(http.MethodPost)
 

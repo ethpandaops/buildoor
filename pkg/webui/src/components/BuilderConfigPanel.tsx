@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
-import type { Config } from '../types';
+import type { Config, ScheduleConfig } from '../types';
 
 interface BuilderConfigPanelProps {
   config: Config | null;
@@ -13,12 +13,20 @@ interface BuilderFormState {
 
 export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [editingSchedule, setEditingSchedule] = useState(false);
 
   const [form, setForm] = useState<BuilderFormState>({
     build_start_time: 0,
     payload_build_delay: 0,
+  });
+
+  const [scheduleForm, setScheduleForm] = useState<ScheduleConfig>({
+    mode: 'all',
+    every_nth: 1,
+    next_n: 0,
+    start_slot: 0,
   });
 
   // Get payload_build_time from the root-level config (sent by SSE)
@@ -37,6 +45,13 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
       });
     }
   }, [config, editing, payloadBuildDelay]);
+
+  // Sync schedule form state when not editing
+  useEffect(() => {
+    if (!editingSchedule && config?.schedule) {
+      setScheduleForm(config.schedule);
+    }
+  }, [config, editingSchedule]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,7 +80,35 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
     }
   };
 
+  const handleScheduleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const authToken = getAuthHeader();
+    if (!authToken) {
+      alert('You must be logged in to update configuration');
+      return;
+    }
+    try {
+      const response = await fetch('/api/config/schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify(scheduleForm),
+      });
+      const result = await response.json();
+      if (result.error) {
+        alert('Failed to update: ' + result.error);
+      } else {
+        setEditingSchedule(false);
+      }
+    } catch (err) {
+      alert('Error: ' + err);
+    }
+  };
+
   const canEdit = isLoggedIn;
+  const schedule = config?.schedule;
 
   return (
     <div className="card mb-3">
@@ -75,11 +118,12 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
         onClick={() => setCollapsed(!collapsed)}
       >
         <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} me-2`}></i>
-        <h5 className="mb-0 me-2">Builder</h5>
+        <h5 className="mb-0 me-2">Payload Builder</h5>
       </div>
 
       {!collapsed && (
         <div className="card-body">
+          {/* Build Config Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Build Config</div>
             {!editing && (
@@ -95,7 +139,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
           </div>
 
           {!editing ? (
-            <div className="row g-2">
+            <div className="row g-2 mb-3">
               <div className="col-6">
                 <div className="config-item">
                   <div className="config-item-label">Build Start</div>
@@ -110,7 +154,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
               </div>
             </div>
           ) : (
-            <form onSubmit={handleSave}>
+            <form onSubmit={handleSave} className="mb-3">
               <div className="mb-2">
                 <label className="form-label">Build Start Time (ms)</label>
                 <input
@@ -134,6 +178,102 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>
                 <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditing(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Schedule Section */}
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <div className="section-header">Schedule</div>
+            {!editingSchedule && (
+              <button
+                className="btn btn-sm btn-outline-primary"
+                onClick={() => setEditingSchedule(true)}
+                disabled={!canEdit}
+                title={!canEdit ? 'Login required to edit' : ''}
+              >
+                <i className="fas fa-pencil-alt"></i>
+              </button>
+            )}
+          </div>
+
+          {!editingSchedule ? (
+            <div className="row g-2">
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Mode</div>
+                  <div className="config-item-value">{schedule?.mode || 'all'}</div>
+                </div>
+              </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Every Nth</div>
+                  <div className="config-item-value">{schedule?.every_nth || 1}</div>
+                </div>
+              </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Next N</div>
+                  <div className="config-item-value">{schedule?.next_n || 0}</div>
+                </div>
+              </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Start Slot</div>
+                  <div className="config-item-value">{schedule?.start_slot || 0}</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleScheduleSave}>
+              <div className="mb-2">
+                <label className="form-label">Mode</label>
+                <select
+                  className="form-select form-select-sm"
+                  value={scheduleForm.mode}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, mode: e.target.value })}
+                  required
+                >
+                  <option value="all">All</option>
+                  <option value="every_nth">Every Nth</option>
+                  <option value="next_n">Next N</option>
+                </select>
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Every Nth</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={scheduleForm.every_nth}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, every_nth: parseInt(e.target.value) || 1 })}
+                  min={1}
+                />
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Next N</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={scheduleForm.next_n}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, next_n: parseInt(e.target.value) || 0 })}
+                  min={0}
+                />
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Start Slot</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={scheduleForm.start_slot}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, start_slot: parseInt(e.target.value) || 0 })}
+                  min={0}
+                />
+              </div>
+              <div className="d-flex gap-2">
+                <button type="submit" className="btn btn-sm btn-primary">Save</button>
+                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditingSchedule(false)}>
                   Cancel
                 </button>
               </div>

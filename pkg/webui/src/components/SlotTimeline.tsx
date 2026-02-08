@@ -6,6 +6,7 @@ interface SlotTimelineProps {
   chainInfo: ChainInfo | null;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
+  slotServiceStatuses: Record<number, ServiceStatus>;
   currentConfig: Config | null;
   serviceStatus: ServiceStatus | null;
 }
@@ -21,6 +22,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
   chainInfo,
   slotStates,
   slotConfigs,
+  slotServiceStatuses,
   currentConfig,
   serviceStatus
 }) => {
@@ -117,6 +119,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
           slot={slot}
           state={slotStates[slot] || { slot }}
           originalConfig={slotConfigs[slot] || null}
+          originalServiceStatus={slotServiceStatuses[slot] || null}
           currentConfig={currentConfig}
           chainInfo={chainInfo}
           currentDisplaySlot={displaySlot}

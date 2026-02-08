@@ -649,6 +649,49 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// ToggleServiceRequest is the request for toggling services.
+type ToggleServiceRequest struct {
+	EPBSEnabled   *bool `json:"epbs_enabled,omitempty"`
+	LegacyEnabled *bool `json:"legacy_enabled,omitempty"`
+}
+
+// ToggleServices toggles the enabled state of ePBS and/or legacy builder services.
+func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req ToggleServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.EPBSEnabled != nil && h.epbsSvc != nil {
+		h.epbsSvc.SetEnabled(*req.EPBSEnabled)
+	}
+
+	if req.LegacyEnabled != nil && h.builderAPISvc != nil {
+		h.builderAPISvc.SetEnabled(*req.LegacyEnabled)
+	}
+
+	// Broadcast updated status to all connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastServiceStatus()
+	}
+
+	// Return current status
+	status := ServiceStatusEvent{
+		EPBSAvailable:   h.epbsSvc != nil,
+		EPBSEnabled:     h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
+		LegacyAvailable: h.builderAPISvc != nil,
+		LegacyEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
 // BidsWonResponse is the response for GetBidsWon.
 type BidsWonResponse struct {
 	BidsWon []builderapi.BidWonEntry `json:"bids_won"`

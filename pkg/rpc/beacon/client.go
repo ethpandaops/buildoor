@@ -37,6 +37,7 @@ type ChainSpec struct {
 
 	// Fork epochs (nil if not configured)
 	ElectraForkEpoch *uint64
+	GloasForkEpoch   *uint64
 
 	// ePBS parameters
 	PtcSize uint64
@@ -172,6 +173,9 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 	// Parse fork epochs
 	if v, ok := spec["ELECTRA_FORK_EPOCH"].(uint64); ok {
 		cs.ElectraForkEpoch = &v
+	}
+	if v, ok := spec["GLOAS_FORK_EPOCH"].(uint64); ok {
+		cs.GloasForkEpoch = &v
 	}
 
 	// Parse ePBS parameters

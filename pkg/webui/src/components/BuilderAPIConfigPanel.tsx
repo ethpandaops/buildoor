@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import type { BuilderAPIStatus } from '../types';
+import type { BuilderAPIStatus, ServiceStatus } from '../types';
 import { useAuth } from '../hooks/useAuth';
 
 interface BuilderAPIConfigPanelProps {
   status: BuilderAPIStatus | null;
+  serviceStatus: ServiceStatus | null;
   loading?: boolean;
 }
 
@@ -12,15 +13,19 @@ function formatGwei(gwei: number): string {
   return gwei.toLocaleString() + ' Gwei';
 }
 
-export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ status, loading }) => {
-  const [collapsed, setCollapsed] = useState(false);
+export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ status, serviceStatus, loading }) => {
+  const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const [formData, setFormData] = useState({
     use_proposer_fee_recipient: false,
     block_value_subsidy_gwei: 0
   });
-  const { getAuthHeader } = useAuth();
+  const { getAuthHeader, isLoggedIn } = useAuth();
+
+  const isActive = serviceStatus?.legacy_enabled ?? false;
+  const isAvailable = serviceStatus?.legacy_available ?? false;
 
   const startEditing = () => {
     if (status) {
@@ -60,37 +65,68 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
     }
   };
 
-  if (!status && !loading) {
-    return null;
-  }
+  const handleToggle = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const token = getAuthHeader();
+    if (!token) return;
+    setToggling(true);
+    try {
+      await fetch('/api/services/toggle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ legacy_enabled: !isActive }),
+      });
+    } catch (err) {
+      console.error('Failed to toggle Builder API:', err);
+    } finally {
+      setToggling(false);
+    }
+  };
 
   return (
     <div className="card mb-3">
       <div
-        className="card-header d-flex justify-content-between align-items-center"
+        className="card-header d-flex align-items-center"
         style={{ cursor: 'pointer' }}
         onClick={() => setCollapsed(!collapsed)}
       >
-        <div className="d-flex align-items-center gap-2">
-          <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} small`}></i>
-          <h6 className="mb-0">Builder API</h6>
-        </div>
-        <div className="d-flex align-items-center gap-2">
-          {loading ? (
-            <span className="badge bg-secondary">Loading...</span>
-          ) : status?.enabled ? (
-            <span className="badge bg-success">Active</span>
-          ) : (
-            <span className="badge bg-secondary">Inactive</span>
-          )}
-        </div>
+        <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} me-2`}></i>
+        <h5 className="mb-0 me-2">Builder API (Legacy)</h5>
+        {loading ? (
+          <span className="badge bg-secondary">Loading...</span>
+        ) : !isAvailable ? (
+          <span className="badge bg-dark">Not Available</span>
+        ) : isActive ? (
+          <span className="badge bg-success">Active</span>
+        ) : (
+          <span className="badge bg-secondary">Inactive</span>
+        )}
+        {isLoggedIn && (
+          <button
+            className={`btn btn-sm ms-auto ${isActive ? 'btn-outline-danger' : 'btn-outline-success'}`}
+            onClick={handleToggle}
+            disabled={toggling || !isAvailable}
+            title={!isAvailable ? 'Builder API not available (no port configured)' : isActive ? 'Disable Builder API' : 'Enable Builder API'}
+          >
+            <i className={`fas ${isActive ? 'fa-pause' : 'fa-play'}`}></i>
+          </button>
+        )}
       </div>
       {!collapsed && (
-        <div className="card-body p-2">
+        <div className="card-body">
+          {!isAvailable && (
+            <div className="alert alert-secondary small mb-2 py-1 px-2">
+              <i className="fas fa-info-circle me-1"></i>
+              Builder API is not available. Set <code>--builder-api-port</code> to enable it.
+            </div>
+          )}
           {loading ? (
-            <div className="text-muted text-center small">Loading...</div>
+            <div className="text-muted text-center">Loading...</div>
           ) : !status ? (
-            <div className="text-muted text-center small">Status unavailable</div>
+            <div className="text-muted text-center">Status unavailable</div>
           ) : (
             <>
               {/* Info row */}
@@ -116,8 +152,8 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                 <>
                   <div className="d-flex justify-content-between align-items-center mb-1">
                     <div className="section-header">Configuration</div>
-                    <button className="btn btn-sm btn-outline-secondary" onClick={(e) => { e.stopPropagation(); startEditing(); }}>
-                      <i className="fas fa-edit"></i>
+                    <button className="btn btn-sm btn-outline-primary" onClick={(e) => { e.stopPropagation(); startEditing(); }}>
+                      <i className="fas fa-pencil-alt"></i>
                     </button>
                   </div>
                   <div className="row g-2">
@@ -153,13 +189,13 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                         checked={formData.use_proposer_fee_recipient}
                         onChange={(e) => setFormData({ ...formData, use_proposer_fee_recipient: e.target.checked })}
                       />
-                      <label className="form-check-label small" htmlFor="useProposerFeeRecipient">
+                      <label className="form-check-label" htmlFor="useProposerFeeRecipient">
                         Use Proposer Fee Recipient
                       </label>
                     </div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label small mb-0">Block Value Subsidy (Gwei)</label>
+                    <label className="form-label">Block Value Subsidy (Gwei)</label>
                     <input
                       type="number"
                       className="form-control form-control-sm"

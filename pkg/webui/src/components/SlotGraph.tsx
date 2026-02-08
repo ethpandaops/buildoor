@@ -11,6 +11,7 @@ interface SlotGraphProps {
   slot: number;
   state: SlotState;
   originalConfig: Config | null;
+  originalServiceStatus: ServiceStatus | null;
   currentConfig: Config | null;
   chainInfo: ChainInfo | null;
   currentDisplaySlot: number;
@@ -68,6 +69,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
   state,
   originalConfig,
+  originalServiceStatus,
   currentConfig,
   chainInfo,
   currentDisplaySlot,
@@ -75,38 +77,43 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
 }) => {
   const [popover, setPopover] = useState<PopoverState | null>(null);
 
-  // Capture config on FIRST RENDER - never change after that
+  // Capture config and service status on FIRST RENDER - never change after that
   const capturedConfigRef = useRef<Config | null>(null);
   if (capturedConfigRef.current === null) {
     capturedConfigRef.current = originalConfig || currentConfig;
+  }
+
+  const capturedServiceStatusRef = useRef<ServiceStatus | null>(null);
+  if (capturedServiceStatusRef.current === null) {
+    capturedServiceStatusRef.current = originalServiceStatus || serviceStatus;
   }
 
   const { slotStartTime, rangeStart, totalRange } = calculateSlotTiming(chainInfo, slot);
   const slotDuration = chainInfo?.seconds_per_slot || 12000;
   const genesisTime = chainInfo?.genesis_time || 0;
 
-  // Only use currentConfig for FUTURE slots, otherwise use captured config
+  // Only use current (live) values for FUTURE slots, otherwise use captured snapshots
   const isSlotInFuture = slot > currentDisplaySlot;
   const config = isSlotInFuture ? currentConfig : capturedConfigRef.current;
+  const effectiveServiceStatus = isSlotInFuture ? serviceStatus : capturedServiceStatusRef.current;
 
   const epbsConfig = config?.epbs;
   const isScheduled = state.scheduled !== undefined ? state.scheduled : isSlotScheduled(slot, config?.schedule);
 
-  // Dynamic row layout based on active services
-  const epbsActive = serviceStatus?.epbs_enabled ?? true;
-  const legacyActive = serviceStatus?.legacy_enabled ?? false;
+  // Dynamic row layout based on active services (frozen for past slots)
+  const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
+  const legacyActive = effectiveServiceStatus?.legacy_enabled ?? false;
 
-  let activeRows = 2; // chain + builder rows always present
-  if (epbsActive) activeRows++;
+  // Rows: chain (top) + second row (payload + ePBS events) + optional legacy row
+  let activeRows = 2; // chain + second row always present
   if (legacyActive) activeRows++;
 
   const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
 
-  // Row positions from bottom: legacy (if active) -> ePBS (if active) -> builder (always) -> chain (always on top)
+  // Row positions from bottom: legacy (if active) -> second row (payload + ePBS) -> chain (top)
   let rowIdx = 0;
   const legacyRowBottom = legacyActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
-  const epbsRowBottom = epbsActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
-  const builderRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
+  const secondRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
   // Slot label
@@ -203,7 +210,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
-                bottom: `${epbsRowBottom}px`,
+                bottom: `${secondRowBottom}px`,
                 height: `${ROW_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
@@ -220,7 +227,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             <div
               className={`reveal-marker ${!state.bidWon ? 'reveal-marker-disabled' : ''}`}
               style={{
-                bottom: `${epbsRowBottom}px`,
+                bottom: `${secondRowBottom}px`,
                 height: `${ROW_HEIGHT}px`,
                 left: `${revealX}%`
               }}
@@ -364,8 +371,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           })}
         </div>
 
-        {/* Builder events row (always visible) - build progress */}
-        <div className="event-row builder-events" style={{ bottom: `${builderRowBottom}px` }}>
+        {/* Second row: payload events + ePBS events (always visible) */}
+        <div className="event-row builder-events" style={{ bottom: `${secondRowBottom}px` }}>
           {/* Build delay line: from build_start_time to payload ready */}
           {epbsConfig && state.payloadCreatedAt && genesisTime > 0 && buildStartX < 100 && payloadCreatedX > 0 && (
             <div
@@ -406,51 +413,46 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             },
             'payload'
           )}
-        </div>
 
-        {/* ePBS builder events row */}
-        {epbsActive && (
-          <div className="event-row epbs-events" style={{ bottom: `${epbsRowBottom}px` }}>
-            {/* Our bids */}
-            {state.ourBids?.map((bid: OurBid, idx: number) => {
-              const bidMs = bid.time - slotStartTime;
-              const bidSuccess = bid.success !== false;
-              return renderEventDot(
-                bidSuccess ? 'bid-submitted' : 'bid-failed',
-                bidMs,
-                {
-                  title: `Our Bid #${idx + 1}`,
-                  items: [
-                    { label: 'Time', value: `${bidMs}ms` },
-                    { label: 'Bid Amount', value: formatGwei(bid.value) },
-                    ...(bid.blockHash ? [{
-                      label: 'Block Hash',
-                      value: truncateHash(bid.blockHash),
-                      copyValue: bid.blockHash
-                    }] : []),
-                    { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
-                    ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
-                  ]
-                },
-                `bid-${idx}`
-              );
-            })}
-
-            {/* Reveal */}
-            {state.revealSentAt && genesisTime > 0 && renderEventDot(
-              state.revealFailed ? 'reveal-failed' : 'reveal-sent',
-              state.revealSentAt - slotStartTime,
+          {/* ePBS: Our bids */}
+          {epbsActive && state.ourBids?.map((bid: OurBid, idx: number) => {
+            const bidMs = bid.time - slotStartTime;
+            const bidSuccess = bid.success !== false;
+            return renderEventDot(
+              bidSuccess ? 'bid-submitted' : 'bid-failed',
+              bidMs,
               {
-                title: 'Payload Reveal',
+                title: `Our Bid #${idx + 1}`,
                 items: [
-                  { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
-                  { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
+                  { label: 'Time', value: `${bidMs}ms` },
+                  { label: 'Bid Amount', value: formatGwei(bid.value) },
+                  ...(bid.blockHash ? [{
+                    label: 'Block Hash',
+                    value: truncateHash(bid.blockHash),
+                    copyValue: bid.blockHash
+                  }] : []),
+                  { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
+                  ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
                 ]
               },
-              'reveal'
-            )}
-          </div>
-        )}
+              `bid-${idx}`
+            );
+          })}
+
+          {/* ePBS: Reveal */}
+          {epbsActive && state.revealSentAt && genesisTime > 0 && renderEventDot(
+            state.revealFailed ? 'reveal-failed' : 'reveal-sent',
+            state.revealSentAt - slotStartTime,
+            {
+              title: 'Payload Reveal',
+              items: [
+                { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
+                { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
+              ]
+            },
+            'reveal'
+          )}
+        </div>
 
         {/* Builder API (legacy) events row */}
         {legacyActive && (
