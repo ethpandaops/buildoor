@@ -51,7 +51,7 @@ jobs:
           run_builds="true"
         fi
 
-        if [[ "$branch_name" == "master" ]] || [[ "$branch_name" =~ ^v[0-9] ]]; then
+        if [[ "$branch_name" == "main" ]] || [[ "$branch_name" =~ ^v[0-9] ]]; then
           echo "Invalid branch name! Skipping builds"
           run_builds="false"
         fi

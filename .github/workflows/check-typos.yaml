@@ -3,7 +3,7 @@ name: Check typos
 on:
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
   check-typos:
