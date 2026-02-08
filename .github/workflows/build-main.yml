@@ -120,7 +120,7 @@ jobs:
     # generate & upload release artifacts
     - name: "Generate release package: buildoor_snapshot_windows_amd64.zip"
       run: |
-        cd explorer_windows_amd64
+        cd buildoor_windows_amd64
         zip -r -q ../buildoor_snapshot_windows_amd64.zip .
     - name: "Upload snapshot release artifact: buildoor_snapshot_windows_amd64.zip"
       uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
@@ -134,7 +134,7 @@ jobs:
     
     - name: "Generate release package: buildoor_snapshot_linux_amd64.tar.gz"
       run: |
-        cd explorer_linux_amd64
+        cd buildoor_linux_amd64
         tar -czf ../buildoor_snapshot_linux_amd64.tar.gz .
     - name: "Upload snapshot release artifact: buildoor_snapshot_linux_amd64.tar.gz"
       uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
@@ -148,7 +148,7 @@ jobs:
     
     - name: "Generate release package: buildoor_snapshot_linux_arm64.tar.gz"
       run: |
-        cd explorer_linux_arm64
+        cd buildoor_linux_arm64
         tar -czf ../buildoor_snapshot_linux_arm64.tar.gz .
     - name: "Upload snapshot release artifact: buildoor_snapshot_linux_arm64.tar.gz"
       uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
@@ -162,7 +162,7 @@ jobs:
     
     - name: "Generate release package: buildoor_snapshot_darwin_amd64.tar.gz"
       run: |
-        cd explorer_darwin_amd64
+        cd buildoor_darwin_amd64
         tar -czf ../buildoor_snapshot_darwin_amd64.tar.gz .
     - name: "Upload snapshot release artifact: buildoor_snapshot_darwin_amd64.tar.gz"
       uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
@@ -176,7 +176,7 @@ jobs:
 
     - name: "Generate release package: buildoor_snapshot_darwin_arm64.tar.gz"
       run: |
-        cd explorer_darwin_arm64
+        cd buildoor_darwin_arm64
         tar -czf ../buildoor_snapshot_darwin_arm64.tar.gz .
     - name: "Upload snapshot release artifact: buildoor_snapshot_darwin_arm64.tar.gz"
       uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
