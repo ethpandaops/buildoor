@@ -246,6 +246,49 @@ export function useEventStream(): UseEventStreamResult {
           });
           break;
         }
+
+        case 'builder_api_get_header_received': {
+          const data = event.data as { slot: number; parent_hash: string; pubkey: string; received_at: number };
+          addEvent('builder_api', `getHeader request received for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { getHeaderReceivedAt: data.received_at });
+          break;
+        }
+
+        case 'builder_api_get_header_delivered': {
+          const data = event.data as { slot: number; block_hash: string; block_value: string; delivered_at: number };
+          addEvent('builder_api', `Header delivered for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, {
+            getHeaderDeliveredAt: data.delivered_at,
+            getHeaderBlockHash: data.block_hash,
+            getHeaderBlockValue: data.block_value
+          });
+          break;
+        }
+
+        case 'builder_api_submit_blinded_received': {
+          const data = event.data as { slot: number; block_hash: string; received_at: number };
+          addEvent('builder_api', `submitBlindedBlock request received for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, {
+            submitBlindedReceivedAt: data.received_at,
+            submitBlindedBlockHash: data.block_hash
+          });
+          break;
+        }
+
+        case 'builder_api_submit_blinded_delivered': {
+          const data = event.data as { slot: number; block_hash: string; delivered_at: number };
+          addEvent('builder_api', `Block published for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { submitBlindedDeliveredAt: data.delivered_at });
+          break;
+        }
+
+        case 'bid_won': {
+          // Event handled by BidsWonView component directly
+          // No need to store in main state, just log it
+          const data = event.data as { slot: number; block_hash: string; num_transactions: number; value_eth: string };
+          addEvent('bid_won', `Bid won for slot ${data.slot} (${data.num_transactions} txs, ${parseFloat(data.value_eth).toFixed(6)} ETH)`, event.timestamp);
+          break;
+        }
       }
     };
 

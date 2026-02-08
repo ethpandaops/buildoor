@@ -229,7 +229,7 @@ and begins building blocks according to configuration.`,
 			apiKeyRaw := sha256.Sum256(append([]byte("buildoor-api-key-"), decoded...))
 			apiKey := hex.EncodeToString(apiKeyRaw[:])
 
-			webui.StartHttpServer(&types.FrontendConfig{
+			apiHandler := webui.StartHttpServer(&types.FrontendConfig{
 				Port:     cfg.APIPort,
 				Host:     "0.0.0.0",
 				SiteName: "Buildoor",
@@ -240,7 +240,16 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv)
+
+			// Connect Builder API server to event stream (if both are enabled)
+			if builderAPISrv != nil && apiHandler != nil {
+				eventStreamMgr := apiHandler.GetEventStreamManager()
+				if eventStreamMgr != nil {
+					builderAPISrv.SetEventBroadcaster(eventStreamMgr)
+					logger.Info("Connected Builder API server to WebUI event stream")
+				}
+			}
 		}
 
 		// 10. Start lifecycle manager (if enabled)

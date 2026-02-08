@@ -161,12 +161,22 @@ npm run clean
    - Endpoints: registerValidator, getHeader, submitBlindedBlock
    - Supports Fulu fork's split header/payload model
    - Validator fee recipient management
+   - **Bids Won Store**: In-memory tracking of successfully delivered blocks
+     - Thread-safe circular buffer (1000 entries max, ~200KB memory)
+     - Stores: slot, block hash, transaction count, blob count, value (ETH/wei), timestamp
+     - Populated after successful block publication in `submitBlindedBlockV2`
+     - Pagination support via `/api/buildoor/bids-won` endpoint
 
 6. **WebUI** (`pkg/webui/`)
    - React/TypeScript dashboard
    - Real-time event stream via Server-Sent Events (SSE)
    - Visual slot timeline, bid tracking, validator registrations
    - Configuration updates via HTTP API
+   - **Bids Won View**: Paginated table of successfully delivered blocks
+     - Tab navigation: Dashboard / Bids Won
+     - Real-time updates when new blocks are delivered
+     - Click-to-copy block hashes, relative timestamps
+     - Shows: slot, block hash, # transactions, # blobs, value in ETH
 
 ### Event Flow
 
@@ -248,6 +258,8 @@ buildoor/
 ├── pkg/
 │   ├── builder/           # Core payload building logic
 │   ├── builderapi/        # Traditional Builder API server
+│   │   ├── bids_won.go    # BidsWonStore and BidWonEntry types
+│   │   └── ...
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
 │   ├── epbs/              # ePBS bidding and revealing
@@ -261,7 +273,19 @@ buildoor/
 │   ├── wallet/            # ECDSA wallet for transactions
 │   └── webui/             # HTTP server and React frontend
 │       ├── handlers/      # HTTP API handlers
+│       │   └── api/
+│       │       ├── api.go     # REST endpoints (includes GetBidsWon)
+│       │       └── events.go  # SSE event streaming (includes bid_won)
 │       ├── src/           # React TypeScript source
+│       │   ├── components/
+│       │   │   ├── BidsWonView.tsx      # Bids Won page container
+│       │   │   ├── BidsWonTable.tsx     # Table with pagination
+│       │   │   ├── Pagination.tsx       # Reusable pagination component
+│       │   │   └── ...
+│       │   ├── hooks/
+│       │   │   ├── useBidsWon.ts        # Data fetching for bids won
+│       │   │   └── useEventStream.ts    # SSE connection (handles bid_won)
+│       │   └── types.ts       # TypeScript interfaces (includes BidWonEntry)
 │       └── static/        # Bundled assets
 ├── contracts/             # Solidity contract ABIs
 ├── bin/                   # Build output
@@ -294,11 +318,38 @@ Frontend is a React/TypeScript app using Webpack:
 - Real-time updates via SSE at `/api/events`
 - Custom hook `useEventStream()` manages app state from events
 - Backend serves static files via `pkg/webui/static/`
+- **Navigation**: Simple conditional rendering without React Router (Dashboard / Bids Won tabs)
+- **Styling**: Bootstrap 5 CSS with custom components
 
 To make frontend changes:
 1. `cd pkg/webui && npm run dev` (watch mode)
 2. Backend serves from `static/` automatically
 3. Rebuild binary only if adding new API endpoints
+
+#### WebUI API Endpoints
+
+**Buildoor-specific endpoints:**
+- `GET /api/buildoor/validators` - List registered validators
+- `GET /api/buildoor/bids-won` - Paginated list of successfully delivered blocks
+  - Query params: `offset` (default: 0), `limit` (default: 20, max: 100)
+  - Returns: `{ bids_won: [], total: number, offset: number, limit: number }`
+- `GET /api/buildoor/builder-api-status` - Builder API configuration and validator count
+
+**Real-time events via SSE** (`/api/events`):
+- `bid_won` - Emitted when a block is successfully delivered via Builder API
+  - Data: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
+  - Auto-refreshes first page of Bids Won table
+  - Logged in event stream for debugging
+
+#### WebUI Components Pattern
+
+When adding new views:
+1. Create hooks in `src/hooks/` for data fetching (see `useBidsWon.ts`)
+2. Create components in `src/components/` (see `BidsWonView.tsx`, `BidsWonTable.tsx`)
+3. Add TypeScript types to `src/types.ts`
+4. Update `App.tsx` for navigation (use conditional rendering, not React Router)
+5. If adding backend endpoints, update `pkg/webui/handlers/api/api.go`
+6. If adding SSE events, update `pkg/webui/handlers/api/events.go`
 
 ### Testing Patterns
 
@@ -320,6 +371,65 @@ For Builder API mode, genesis parameters are automatically fetched from the beac
 - `GenesisForkVersion`: Retrieved from the beacon node's genesis endpoint
 - `GenesisValidatorsRoot`: Retrieved from the beacon node's genesis endpoint
 - These configure the Builder Domain for signature verification
+
+### Bids Won Feature (Builder API)
+
+The Bids Won feature tracks successfully delivered blocks via the Builder API, providing visibility into block production outcomes.
+
+**Backend Architecture:**
+- **BidsWonStore** (`pkg/builderapi/bids_won.go`):
+  - Thread-safe circular buffer with `sync.RWMutex`
+  - Fixed capacity: 1000 entries (oldest evicted on overflow)
+  - Memory footprint: ~200KB
+  - Stores newest first for efficient pagination
+  - Entry fields: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
+
+- **Integration Point** (`pkg/builderapi/server.go`):
+  - Data captured in `handleSubmitBlindedBlockV2` after successful `SubmitFuluBlock()`
+  - Extracts transaction count from `event.Payload.Transactions`
+  - Extracts blob count from `event.BlobsBundle.Commitments`
+  - Converts block value from wei to ETH using `weiToETH()` (18 decimal precision)
+  - Broadcasts `bid_won` event to WebUI for real-time updates
+
+- **REST API** (`pkg/webui/handlers/api/api.go`):
+  - Endpoint: `GET /api/buildoor/bids-won?offset=0&limit=20`
+  - Offset-based pagination (simpler than cursor for bounded dataset)
+  - Returns: `BidsWonResponse` with entries array, total count, offset, limit
+  - Gracefully handles nil builderAPISvc (returns empty array)
+
+**Frontend Architecture:**
+- **Navigation**: Tab-based UI in `App.tsx` (Dashboard / Bids Won)
+  - Uses `useState<ViewType>` for view switching
+  - Conditional rendering without React Router
+  - Preserves Dashboard state when switching views
+
+- **Data Flow**:
+  1. `useBidsWon` hook fetches paginated data on mount and when offset/limit changes
+  2. `BidsWonView` component subscribes to SSE `/api/events`
+  3. On `bid_won` event, auto-refreshes if on first page (offset === 0)
+  4. Other pages require manual navigation/refresh to avoid pagination disruption
+
+- **Components**:
+  - `BidsWonTable.tsx`: Responsive table with loading overlay, empty state
+  - `Pagination.tsx`: Bootstrap pagination with smart page number display (shows 5 pages max with ellipsis)
+  - Click-to-copy block hashes (truncated display: `0x1234...5678`)
+  - Relative time formatting: "Just now", "5m ago", "3h ago", or full timestamp
+
+**Key Design Decisions:**
+- **Memory Management**: Circular buffer prevents unbounded growth
+- **Pagination Strategy**: Offset-based (not cursor) suitable for 1000-entry cap
+- **Real-time Updates**: Only first page refreshes automatically to avoid offset confusion
+- **Thread Safety**: RWMutex allows concurrent reads during pagination
+- **Value Precision**: Store both wei (uint64 for sorting) and ETH string (for display)
+- **ePBS Compatibility**: Uses "Bids Won" terminology (not "Payloads Delivered")
+
+**Testing the Feature:**
+1. Enable Builder API: `--builder-api-enabled --builder-api-port 18550`
+2. Submit a blinded block via `POST /eth/v2/builder/blinded_blocks`
+3. Check backend logs for "Bid won" entry
+4. Open WebUI, click "Bids Won" tab
+5. Verify table shows: slot, block hash, transaction count, blob count, value
+6. Submit another block while on first page → should auto-refresh
 
 ## Common Issues
 

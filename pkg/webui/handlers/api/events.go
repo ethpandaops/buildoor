@@ -29,11 +29,16 @@ const (
 	EventTypeHeadReceived    EventType = "head_received"
 	EventTypeReveal          EventType = "reveal"
 	EventTypeBidEvent        EventType = "bid_event"
-	EventTypeStats           EventType = "stats"
-	EventTypeSlotState       EventType = "slot_state"
-	EventTypePayloadEnvelope EventType = "payload_envelope"
-	EventTypeBuilderInfo     EventType = "builder_info"
-	EventTypeHeadVotes       EventType = "head_votes"
+	EventTypeStats                      EventType = "stats"
+	EventTypeSlotState                  EventType = "slot_state"
+	EventTypePayloadEnvelope            EventType = "payload_envelope"
+	EventTypeBuilderInfo                EventType = "builder_info"
+	EventTypeHeadVotes                  EventType = "head_votes"
+	EventTypeBidWon                     EventType = "bid_won"
+	EventTypeBuilderAPIGetHeaderRcvd    EventType = "builder_api_get_header_received"
+	EventTypeBuilderAPIGetHeaderDlvd    EventType = "builder_api_get_header_delivered"
+	EventTypeBuilderAPISubmitBlindedRcvd EventType = "builder_api_submit_blinded_received"
+	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -139,6 +144,47 @@ type HeadVotesStreamEvent struct {
 	ParticipationETH uint64  `json:"participation_eth"`
 	TotalSlotETH     uint64  `json:"total_slot_eth"`
 	Timestamp        int64   `json:"timestamp"`
+}
+
+// BidWonStreamEvent is sent when a bid is won (block successfully delivered).
+type BidWonStreamEvent struct {
+	Slot            uint64 `json:"slot"`
+	BlockHash       string `json:"block_hash"`
+	NumTransactions int    `json:"num_transactions"`
+	NumBlobs        int    `json:"num_blobs"`
+	ValueETH        string `json:"value_eth"`
+	ValueWei        uint64 `json:"value_wei"`
+	Timestamp       int64  `json:"timestamp"`
+}
+
+// BuilderAPIGetHeaderReceivedEvent is sent when a getHeader request is received.
+type BuilderAPIGetHeaderReceivedEvent struct {
+	Slot       uint64 `json:"slot"`
+	ParentHash string `json:"parent_hash"`
+	Pubkey     string `json:"pubkey"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+// BuilderAPIGetHeaderDeliveredEvent is sent when a header is successfully delivered.
+type BuilderAPIGetHeaderDeliveredEvent struct {
+	Slot        uint64 `json:"slot"`
+	BlockHash   string `json:"block_hash"`
+	BlockValue  string `json:"block_value"`
+	DeliveredAt int64  `json:"delivered_at"`
+}
+
+// BuilderAPISubmitBlindedReceivedEvent is sent when a submitBlindedBlock request is received.
+type BuilderAPISubmitBlindedReceivedEvent struct {
+	Slot       uint64 `json:"slot"`
+	BlockHash  string `json:"block_hash"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+// BuilderAPISubmitBlindedDeliveredEvent is sent when a blinded block is successfully published.
+type BuilderAPISubmitBlindedDeliveredEvent struct {
+	Slot        uint64 `json:"slot"`
+	BlockHash   string `json:"block_hash"`
+	DeliveredAt int64  `json:"delivered_at"`
 }
 
 // EventStreamManager manages SSE connections and event broadcasting.
@@ -819,5 +865,81 @@ func (m *EventStreamManager) BroadcastConfigUpdate() {
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      cfg,
+	})
+}
+
+// BroadcastBuilderAPIGetHeaderReceived broadcasts when a getHeader request is received.
+func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderReceived(slot uint64, parentHash, pubkey string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPIGetHeaderRcvd,
+		Timestamp: now,
+		Data: BuilderAPIGetHeaderReceivedEvent{
+			Slot:       slot,
+			ParentHash: parentHash,
+			Pubkey:     pubkey,
+			ReceivedAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPIGetHeaderDelivered broadcasts when a header is successfully delivered.
+func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPIGetHeaderDlvd,
+		Timestamp: now,
+		Data: BuilderAPIGetHeaderDeliveredEvent{
+			Slot:        slot,
+			BlockHash:   blockHash,
+			BlockValue:  blockValue,
+			DeliveredAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPISubmitBlindedReceived broadcasts when a submitBlindedBlock request is received.
+func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPISubmitBlindedRcvd,
+		Timestamp: now,
+		Data: BuilderAPISubmitBlindedReceivedEvent{
+			Slot:       slot,
+			BlockHash:  blockHash,
+			ReceivedAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPISubmitBlindedDelivered broadcasts when a blinded block is successfully published.
+func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPISubmitBlindedDlvd,
+		Timestamp: now,
+		Data: BuilderAPISubmitBlindedDeliveredEvent{
+			Slot:        slot,
+			BlockHash:   blockHash,
+			DeliveredAt: now,
+		},
+	})
+}
+
+// BroadcastBidWon broadcasts a bid won event when a block is successfully delivered.
+func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei uint64) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBidWon,
+		Timestamp: now,
+		Data: BidWonStreamEvent{
+			Slot:            slot,
+			BlockHash:       blockHash,
+			NumTransactions: numTxs,
+			NumBlobs:        numBlobs,
+			ValueETH:        valueETH,
+			ValueWei:        valueWei,
+			Timestamp:       now,
+		},
 	})
 }

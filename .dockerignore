@@ -22,12 +22,8 @@ temp/
 .hack/
 *.sh
 
-# Frontend dev (pre-built or not needed for builder binary)
+# Frontend: exclude only node_modules (source and config needed for Docker build)
 pkg/webui/node_modules
-pkg/webui/package-lock.json
-pkg/webui/src
-pkg/webui/tsconfig.json
-pkg/webui/webpack.config.js
 
 # Tests and coverage (smaller image; keep validators/testdata/ - it is embedded in code)
 *_test.go

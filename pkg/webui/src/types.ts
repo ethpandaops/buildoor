@@ -154,6 +154,13 @@ export interface SlotState {
   revealFailed?: boolean;
   revealSentAt?: number;
   headVotes?: HeadVoteDataPoint[];
+  getHeaderReceivedAt?: number;
+  getHeaderDeliveredAt?: number;
+  getHeaderBlockHash?: string;
+  getHeaderBlockValue?: string;
+  submitBlindedReceivedAt?: number;
+  submitBlindedDeliveredAt?: number;
+  submitBlindedBlockHash?: string;
 }
 
 export interface OurBid {
@@ -176,4 +183,43 @@ export interface LogEvent {
   type: string;
   message: string;
   timestamp: number;
+}
+
+// Validator registration types
+export interface ValidatorRegistration {
+  pubkey: string;
+  fee_recipient: string;
+  gas_limit: number;
+  timestamp: number;
+}
+
+export interface ValidatorsResponse {
+  validators: ValidatorRegistration[];
+}
+
+// Builder API status types
+export interface BuilderAPIStatus {
+  enabled: boolean;
+  port: number;
+  validator_count: number;
+  use_proposer_fee_recipient: boolean;
+  block_value_subsidy_gwei: number;
+}
+
+// Bids won types
+export interface BidWonEntry {
+  slot: number;
+  block_hash: string;
+  num_transactions: number;
+  num_blobs: number;
+  value_eth: string;
+  value_wei: number;
+  timestamp: number;
+}
+
+export interface BidsWonResponse {
+  bids_won: BidWonEntry[];
+  total: number;
+  offset: number;
+  limit: number;
 }

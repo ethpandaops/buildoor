@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -472,13 +475,136 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string][]object "Success"
 // @Failure 500 {object} map[string]string "Server Error"
 // @Router /api/buildoor/validators [get]
+// ValidatorRegistrationResponse represents a formatted validator registration for the UI.
+type ValidatorRegistrationResponse struct {
+	Pubkey       string `json:"pubkey"`        // Hex-encoded BLS public key
+	FeeRecipient string `json:"fee_recipient"` // Hex-encoded Ethereum address
+	GasLimit     uint64 `json:"gas_limit"`     // Gas limit for blocks
+	Timestamp    uint64 `json:"timestamp"`     // Unix timestamp
+}
+
+// GetValidatorsResponse is the response for GetValidators.
+type GetValidatorsResponse struct {
+	Validators []ValidatorRegistrationResponse `json:"validators"`
+}
+
+// GetValidators godoc
+// @Id getValidators
+// @Summary List registered validators
+// @Tags Buildoor
+// @Description Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.
+// @Produce json
+// @Success 200 {object} GetValidatorsResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/buildoor/validators [get]
 func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 	if h.validatorStore == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"validators": []any{}})
+		writeJSON(w, http.StatusOK, GetValidatorsResponse{Validators: []ValidatorRegistrationResponse{}})
 		return
 	}
 	regs := h.validatorStore.List()
-	writeJSON(w, http.StatusOK, map[string]any{"validators": regs})
+	formatted := make([]ValidatorRegistrationResponse, 0, len(regs))
+	for _, reg := range regs {
+		if reg.Message == nil {
+			continue
+		}
+		formatted = append(formatted, ValidatorRegistrationResponse{
+			Pubkey:       fmt.Sprintf("%#x", reg.Message.Pubkey),
+			FeeRecipient: fmt.Sprintf("%#x", reg.Message.FeeRecipient),
+			GasLimit:     reg.Message.GasLimit,
+			Timestamp:    uint64(reg.Message.Timestamp.Unix()),
+		})
+	}
+	writeJSON(w, http.StatusOK, GetValidatorsResponse{Validators: formatted})
+}
+
+// BuilderAPIStatusResponse is the response for GetBuilderAPIStatus.
+type BuilderAPIStatusResponse struct {
+	Enabled                 bool   `json:"enabled"`
+	Port                    int    `json:"port"`
+	ValidatorCount          int    `json:"validator_count"`
+	UseProposerFeeRecipient bool   `json:"use_proposer_fee_recipient"`
+	BlockValueSubsidyGwei   uint64 `json:"block_value_subsidy_gwei"`
+}
+
+// GetBuilderAPIStatus godoc
+// @Id getBuilderAPIStatus
+// @Summary Get Builder API status
+// @Tags Buildoor
+// @Description Returns the current status of the Builder API including configuration and validator count.
+// @Produce json
+// @Success 200 {object} BuilderAPIStatusResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/buildoor/builder-api-status [get]
+func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request) {
+	cfg := h.builderSvc.GetConfig()
+	validatorCount := 0
+	if h.validatorStore != nil {
+		validatorCount = h.validatorStore.Len()
+	}
+
+	status := BuilderAPIStatusResponse{
+		Enabled:                 cfg.BuilderAPIEnabled,
+		Port:                    cfg.BuilderAPI.Port,
+		ValidatorCount:          validatorCount,
+		UseProposerFeeRecipient: cfg.BuilderAPI.UseProposerFeeRecipient,
+		BlockValueSubsidyGwei:   cfg.BuilderAPI.BlockValueSubsidyGwei,
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// BidsWonResponse is the response for GetBidsWon.
+type BidsWonResponse struct {
+	BidsWon []builderapi.BidWonEntry `json:"bids_won"`
+	Total   int                      `json:"total"`
+	Offset  int                      `json:"offset"`
+	Limit   int                      `json:"limit"`
+}
+
+// GetBidsWon godoc
+// @Id getBidsWon
+// @Summary Get bids won (successfully delivered blocks)
+// @Tags Buildoor
+// @Description Returns a paginated list of bids won via Builder API with transaction counts, blob counts, and values.
+// @Produce json
+// @Param offset query int false "Offset for pagination" default(0)
+// @Param limit query int false "Limit for pagination (max 100)" default(20)
+// @Success 200 {object} BidsWonResponse "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/buildoor/bids-won [get]
+func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
+	// Parse query params
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	// Defaults and validation
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	// Get data from store
+	var bidsWon []builderapi.BidWonEntry
+	var total int
+
+	if h.builderAPISvc != nil && h.builderAPISvc.GetBidsWonStore() != nil {
+		bidsWon, total = h.builderAPISvc.GetBidsWonStore().GetPage(offset, limit)
+	} else {
+		bidsWon = []builderapi.BidWonEntry{}
+		total = 0
+	}
+
+	// Build response
+	response := BidsWonResponse{
+		BidsWon: bidsWon,
+		Total:   total,
+		Offset:  offset,
+		Limit:   limit,
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
 
 // configToMap returns the config as a map with sensitive fields redacted.
