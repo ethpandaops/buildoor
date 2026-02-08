@@ -1,4 +1,4 @@
-# dora
+# buildoor
 BUILDTIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 VERSION := $(shell git rev-parse --short HEAD)
 
@@ -13,16 +13,23 @@ all: docs build
 test:
 	go test ./...
 
-build:
+build: ensure-ui
 	@echo version: $(VERSION)
 	env CGO_ENABLED=1 go build -v -o bin/ -ldflags="-s -w $(GOLDFLAGS)" .
+
+ensure-ui:
+	if [ ! -f pkg/webui/static/bundle/buildoor.js ]; then $(MAKE) build-ui; fi
+
+build-ui:
+	$(MAKE) -C pkg/webui install
+	$(MAKE) -C pkg/webui build
 
 docs:
 	go install github.com/swaggo/swag/cmd/swag@v1.16.3 && swag init -g handler.go -d pkg/webui/handlers/api --parseDependency -o pkg/webui/handlers/docs
 
 clean:
 	rm -f bin/*
-	$(MAKE) -C ui-package clean
+	$(MAKE) -C pkg/webui clean
 
 # Docker
 docker:

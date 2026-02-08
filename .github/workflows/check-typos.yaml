@@ -1,0 +1,17 @@
+name: Check typos
+
+on:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  check-typos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Check for typos
+        uses: crate-ci/typos@5c19779cb52ea50e151f5a10333ccd269227b5ae # v1.41.0
+        
