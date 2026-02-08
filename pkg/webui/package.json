@@ -5,7 +5,7 @@
   "scripts": {
     "build": "webpack --mode production",
     "dev": "webpack --mode development --watch",
-    "clean": "rm -rf static/js/bundle.* static/css/bundle.*"
+    "clean": "rm -rf static/bundle/*"
   },
   "dependencies": {
     "react": "^19.2.4",

@@ -42,20 +42,34 @@ type StatsResponse struct {
 
 // UpdateScheduleRequest is the request for updating schedule config.
 type UpdateScheduleRequest struct {
-	Mode     string `json:"mode"`
-	EveryNth uint64 `json:"every_nth,omitempty"`
-	NextN    uint64 `json:"next_n,omitempty"`
+	Mode      string  `json:"mode"`
+	EveryNth  uint64  `json:"every_nth,omitempty"`
+	NextN     uint64  `json:"next_n,omitempty"`
+	StartSlot *uint64 `json:"start_slot,omitempty"`
 }
 
 // UpdateEPBSRequest is the request for updating EPBS config.
 type UpdateEPBSRequest struct {
-	BuildStartTime *int64  `json:"build_start_time,omitempty"`
-	BidStartTime   *int64  `json:"bid_start_time,omitempty"`
-	BidEndTime     *int64  `json:"bid_end_time,omitempty"`
-	RevealTime     *int64  `json:"reveal_time,omitempty"`
-	BidMinAmount   *uint64 `json:"bid_min_amount,omitempty"`
-	BidIncrease    *uint64 `json:"bid_increase,omitempty"`
-	BidInterval    *int64  `json:"bid_interval,omitempty"`
+	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	BidStartTime      *int64  `json:"bid_start_time,omitempty"`
+	BidEndTime        *int64  `json:"bid_end_time,omitempty"`
+	RevealTime        *int64  `json:"reveal_time,omitempty"`
+	BidMinAmount      *uint64 `json:"bid_min_amount,omitempty"`
+	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
+	BidInterval       *int64  `json:"bid_interval,omitempty"`
+	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
+}
+
+// UpdateBuilderConfigRequest is the request for updating shared builder config.
+type UpdateBuilderConfigRequest struct {
+	BuildStartTime    *int64 `json:"build_start_time,omitempty"`
+	PayloadBuildDelay *int64 `json:"payload_build_delay,omitempty"`
+}
+
+// UpdateBuilderAPIConfigRequest is the request for updating Builder API config.
+type UpdateBuilderAPIConfigRequest struct {
+	UseProposerFeeRecipient *bool   `json:"use_proposer_fee_recipient,omitempty"`
+	BlockValueSubsidyGwei   *uint64 `json:"block_value_subsidy_gwei,omitempty"`
 }
 
 // LifecycleStatusResponse is the response for lifecycle status.
@@ -222,6 +236,10 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		cfg.Schedule.NextN = req.NextN
 	}
 
+	if req.StartSlot != nil {
+		cfg.Schedule.StartSlot = *req.StartSlot
+	}
+
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -291,6 +309,10 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	if req.BidInterval != nil {
 		cfg.EPBS.BidInterval = *req.BidInterval
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
 	}
 
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
@@ -551,6 +573,80 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 		BlockValueSubsidyGwei:   cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}
 	writeJSON(w, http.StatusOK, status)
+}
+
+// UpdateBuilderConfig updates the shared builder configuration (build start time, payload build delay).
+func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateBuilderConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.BuildStartTime != nil {
+		cfg.EPBS.BuildStartTime = *req.BuildStartTime
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// UpdateBuilderAPIConfig updates the Builder API configuration.
+func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateBuilderAPIConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.UseProposerFeeRecipient != nil {
+		cfg.BuilderAPI.UseProposerFeeRecipient = *req.UseProposerFeeRecipient
+	}
+
+	if req.BlockValueSubsidyGwei != nil {
+		cfg.BuilderAPI.BlockValueSubsidyGwei = *req.BlockValueSubsidyGwei
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
 // BidsWonResponse is the response for GetBidsWon.

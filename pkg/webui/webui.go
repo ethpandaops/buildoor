@@ -67,9 +67,16 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	apiRouter.HandleFunc("/config/schedule", apiHandler.UpdateSchedule).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/config/epbs", apiHandler.UpdateEPBS).Methods(http.MethodPost)
 
+	// Shared builder config endpoint (build start time, payload build delay)
+	apiRouter.HandleFunc("/config/builder", apiHandler.UpdateBuilderConfig).Methods(http.MethodPost)
+
+	// Builder API config endpoint
+	apiRouter.HandleFunc("/config/builder-api", apiHandler.UpdateBuilderAPIConfig).Methods(http.MethodPost)
+
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/builder-api-status", apiHandler.GetBuilderAPIStatus).Methods(http.MethodGet)
 
 	// Lifecycle endpoints (if manager available)
 	apiRouter.HandleFunc("/lifecycle/status", apiHandler.GetLifecycleStatus).Methods(http.MethodGet)

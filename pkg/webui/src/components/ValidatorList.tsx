@@ -4,6 +4,7 @@ import type { ValidatorRegistration } from '../types';
 interface ValidatorListProps {
   validators: ValidatorRegistration[];
   loading?: boolean;
+  fullPage?: boolean;
 }
 
 // Format address/pubkey for display (truncate middle)
@@ -19,7 +20,7 @@ function copyToClipboard(text: string) {
   });
 }
 
-export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loading }) => {
+export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loading, fullPage }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredValidators = useMemo(() => {
@@ -68,9 +69,9 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
             </div>
 
             {/* Validators table */}
-            <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+            <div style={{ maxHeight: fullPage ? 'calc(100vh - 250px)' : '400px', overflowY: 'auto' }}>
               <table className="table table-sm table-borderless mb-0">
-                <thead className="table-light sticky-top">
+                <thead className="sticky-top" style={{ background: 'var(--bs-body-bg)' }}>
                   <tr>
                     <th className="small">Pubkey</th>
                     <th className="small">Fee Recipient</th>

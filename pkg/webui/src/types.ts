@@ -40,6 +40,14 @@ export interface EPBSConfig {
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
+  payload_build_delay?: number;
+}
+
+export interface ServiceStatus {
+  epbs_available: boolean;
+  epbs_enabled: boolean;
+  legacy_available: boolean;
+  legacy_enabled: boolean;
 }
 
 export interface ChainInfo {

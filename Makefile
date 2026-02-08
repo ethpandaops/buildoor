@@ -50,6 +50,7 @@ devnet-run: devnet
 		--el-rpc "$${EXECUTION_API}" \
 		--wallet-privkey "04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59" \
 		--api-port 8082 \
+		--builder-api-port 9000 \
 		--log-level debug
 
 devnet-clean:
