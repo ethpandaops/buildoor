@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -14,6 +15,7 @@ type APIHandler struct {
 	builderSvc     *builder.Service
 	epbsSvc        *epbs.Service       // May be nil
 	lifecycleMgr   *lifecycle.Manager  // May be nil
+	validatorStore *validators.Store   // May be nil (only set when Builder API enabled)
 	eventStreamMgr *EventStreamManager // May be nil
 }
 
@@ -24,12 +26,14 @@ func NewAPIHandler(
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
+	validatorStore *validators.Store,
 ) *APIHandler {
 	h := &APIHandler{
-		authHandler:  authHandler,
-		builderSvc:   builderSvc,
-		epbsSvc:      epbsSvc,
-		lifecycleMgr: lifecycleMgr,
+		authHandler:    authHandler,
+		builderSvc:     builderSvc,
+		epbsSvc:        epbsSvc,
+		lifecycleMgr:   lifecycleMgr,
+		validatorStore: validatorStore,
 	}
 
 	// Create and start event stream manager

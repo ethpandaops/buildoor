@@ -24,6 +24,12 @@ clean:
 	rm -f bin/*
 	$(MAKE) -C ui-package clean
 
+# Docker
+docker:
+	docker build --build-arg VERSION="$(VERSION)" --build-arg BUILDTIME="$(BUILDTIME)" -t buildoor:$(VERSION) .
+docker-run: docker
+	docker run --rm -it buildoor:$(VERSION) run --help
+
 devnet:
 	.hack/devnet/run.sh
 

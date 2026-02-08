@@ -15,22 +15,59 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/buildoor/validators": {
+            "get": {
+                "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "List registered validators",
+                "operationId": "getValidators",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/config": {
             "get": {
-                "description": "Returns the current builder configuration including schedule and EPBS settings.",
+                "description": "Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Config"
                 ],
-                "summary": "Get current configuration",
+                "summary": "Get buildoor configuration",
                 "operationId": "getConfig",
                 "responses": {
                     "200": {
                         "description": "Success",
                         "schema": {
-                            "$ref": "#/definitions/builder.Config"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "500": {
@@ -664,181 +701,6 @@ const docTemplate = `{
                     "type": "integer"
                 }
             }
-        },
-        "builder.Config": {
-            "type": "object",
-            "properties": {
-                "api_port": {
-                    "description": "Optional, 0 = disabled",
-                    "type": "integer"
-                },
-                "api_token_key": {
-                    "description": "Optional: key to use for API token authentication",
-                    "type": "string"
-                },
-                "api_user_header": {
-                    "description": "Optional: header to use for authentication",
-                    "type": "string"
-                },
-                "builder_api": {
-                    "description": "Builder API configuration",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/config.BuilderAPIConfig"
-                        }
-                    ]
-                },
-                "builder_api_enabled": {
-                    "description": "Enable traditional Builder API (pre-ePBS)",
-                    "type": "boolean"
-                },
-                "builder_privkey": {
-                    "type": "string"
-                },
-                "cl_client": {
-                    "type": "string"
-                },
-                "debug": {
-                    "type": "boolean"
-                },
-                "deposit_amount": {
-                    "description": "Gwei, default 10 ETH",
-                    "type": "integer"
-                },
-                "el_engine_api": {
-                    "description": "Engine API URL (required for payload building)",
-                    "type": "string"
-                },
-                "el_jwt_secret": {
-                    "description": "Path to JWT secret file for engine API auth",
-                    "type": "string"
-                },
-                "el_rpc": {
-                    "description": "Optional: EL JSON-RPC for transactions (lifecycle only)",
-                    "type": "string"
-                },
-                "epbs": {
-                    "description": "Time-scheduled ePBS config",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/config.EPBSConfig"
-                        }
-                    ]
-                },
-                "epbs_enabled": {
-                    "description": "Enable ePBS bidding/revealing",
-                    "type": "boolean"
-                },
-                "lifecycle_enabled": {
-                    "type": "boolean"
-                },
-                "payload_build_time": {
-                    "description": "The time given to the EL to build the payload after triggering the payload build via fcu (in ms)",
-                    "type": "integer"
-                },
-                "pprof": {
-                    "type": "boolean"
-                },
-                "schedule": {
-                    "$ref": "#/definitions/config.ScheduleConfig"
-                },
-                "topup_amount": {
-                    "description": "Gwei",
-                    "type": "integer"
-                },
-                "topup_threshold": {
-                    "description": "Gwei",
-                    "type": "integer"
-                },
-                "validate_withdrawals": {
-                    "description": "Validate expected vs actual withdrawals",
-                    "type": "boolean"
-                },
-                "wallet_privkey": {
-                    "description": "Optional: only if lifecycle enabled",
-                    "type": "string"
-                }
-            }
-        },
-        "config.BuilderAPIConfig": {
-            "type": "object",
-            "properties": {
-                "port": {
-                    "description": "Port is the HTTP port for the Builder API server.\nDefault: 9000.",
-                    "type": "integer"
-                }
-            }
-        },
-        "config.EPBSConfig": {
-            "type": "object",
-            "properties": {
-                "bid_end_time": {
-                    "description": "BidEndTime is milliseconds relative to slot start for last bid.",
-                    "type": "integer"
-                },
-                "bid_increase": {
-                    "description": "BidIncrease is the amount to increase bid per subsequent bid in gwei.",
-                    "type": "integer"
-                },
-                "bid_interval": {
-                    "description": "BidInterval is milliseconds between bids. 0 means single bid.",
-                    "type": "integer"
-                },
-                "bid_min_amount": {
-                    "description": "BidMinAmount is the minimum bid amount in gwei.",
-                    "type": "integer"
-                },
-                "bid_start_time": {
-                    "description": "BidStartTime is milliseconds relative to slot start for first bid.\nCan be negative to bid before slot starts.",
-                    "type": "integer"
-                },
-                "build_start_time": {
-                    "description": "BuildStartTime is milliseconds relative to the proposal slot start when we\nstart building. Negative values mean before the slot starts (e.g. -3000 =\n3 seconds before slot start). Positive values mean after slot start.\nSet to 0 to build immediately when payload_attributes is received.\nDefault: -3000.",
-                    "type": "integer"
-                },
-                "reveal_time": {
-                    "description": "RevealTime is milliseconds relative to slot start for reveal.",
-                    "type": "integer"
-                }
-            }
-        },
-        "config.ScheduleConfig": {
-            "type": "object",
-            "properties": {
-                "every_nth": {
-                    "description": "For every_nth mode",
-                    "type": "integer"
-                },
-                "mode": {
-                    "description": "all, every_nth, next_n",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/config.ScheduleMode"
-                        }
-                    ]
-                },
-                "next_n": {
-                    "description": "For next_n mode",
-                    "type": "integer"
-                },
-                "start_slot": {
-                    "description": "Optional start slot",
-                    "type": "integer"
-                }
-            }
-        },
-        "config.ScheduleMode": {
-            "type": "string",
-            "enum": [
-                "all",
-                "every_nth",
-                "next_n"
-            ],
-            "x-enum-varnames": [
-                "ScheduleModeAll",
-                "ScheduleModeEveryN",
-                "ScheduleModeNextN"
-            ]
         }
     }
 }`

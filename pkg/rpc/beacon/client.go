@@ -8,7 +8,9 @@ import (
 
 	eth2client "github.com/attestantio/go-eth2-client"
 	"github.com/attestantio/go-eth2-client/api"
+	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
 	"github.com/attestantio/go-eth2-client/http"
+	"github.com/attestantio/go-eth2-client/spec"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
@@ -240,6 +242,30 @@ func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
 }
 
+// SubmitProposal submits a full signed proposal (e.g. Fulu SignedBlockContents) to the beacon node.
+// Used by the builder API after unblinding a blinded block.
+func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpts) error {
+	submitter, ok := c.client.(eth2client.ProposalSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support proposal submission")
+	}
+	return submitter.SubmitProposal(ctx, opts)
+}
+
+// SubmitFuluBlock submits a Fulu SignedBlockContents (full unblinded block + blobs) to the beacon node.
+func (c *Client) SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error {
+	if contents == nil {
+		return fmt.Errorf("fulu block contents is nil")
+	}
+	return c.SubmitProposal(ctx, &api.SubmitProposalOpts{
+		Proposal: &api.VersionedSignedProposal{
+			Version: spec.DataVersionFulu,
+			Blinded: false,
+			Fulu:    contents,
+		},
+	})
+}
+
 // BlockInfo contains execution-relevant information from a beacon block.
 type BlockInfo struct {
 	Slot               phase0.Slot
@@ -363,4 +389,110 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 		SafeExecutionBlockHash:      safeBlockHash,
 		FinalizedExecutionBlockHash: finalizedBlockHash,
 	}, nil
+}
+
+// GetValidatorPubkeyByIndex fetches the validator pubkey at the given index from the beacon state.
+// stateID is typically "head" or a slot/block root. Used to resolve proposer index to pubkey for fee recipient lookup.
+func (c *Client) GetValidatorPubkeyByIndex(ctx context.Context, stateID string, index phase0.ValidatorIndex) (phase0.BLSPubKey, error) {
+	provider, ok := c.client.(eth2client.BeaconStateProvider)
+	if !ok {
+		return phase0.BLSPubKey{}, fmt.Errorf("client does not support beacon state provider")
+	}
+
+	resp, err := provider.BeaconState(ctx, &api.BeaconStateOpts{
+		State: stateID,
+	})
+	if err != nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("failed to get beacon state: %w", err)
+	}
+
+	if resp.Data == nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("beacon state response is nil")
+	}
+
+	validators := getValidatorsFromState(resp.Data)
+	if validators == nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("beacon state has no validators")
+	}
+
+	if uint64(index) >= uint64(len(validators)) {
+		return phase0.BLSPubKey{}, fmt.Errorf("validator index %d out of range (len=%d)", index, len(validators))
+	}
+
+	return validators[index].PublicKey, nil
+}
+
+// GetValidatorIndexToPubkeyMap fetches the beacon state once and returns a map of validator index to pubkey.
+// Used to refresh an index→pubkey cache once per epoch instead of querying per payload build.
+func (c *Client) GetValidatorIndexToPubkeyMap(ctx context.Context, stateID string) (map[phase0.ValidatorIndex]phase0.BLSPubKey, error) {
+	provider, ok := c.client.(eth2client.BeaconStateProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support beacon state provider")
+	}
+
+	resp, err := provider.BeaconState(ctx, &api.BeaconStateOpts{
+		State: stateID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get beacon state: %w", err)
+	}
+
+	if resp.Data == nil {
+		return nil, fmt.Errorf("beacon state response is nil")
+	}
+
+	validators := getValidatorsFromState(resp.Data)
+	if validators == nil {
+		return nil, fmt.Errorf("beacon state has no validators")
+	}
+
+	out := make(map[phase0.ValidatorIndex]phase0.BLSPubKey, len(validators))
+	for i, v := range validators {
+		if v != nil {
+			out[phase0.ValidatorIndex(i)] = v.PublicKey
+		}
+	}
+	return out, nil
+}
+
+// getValidatorsFromState extracts the validator list from a versioned beacon state.
+func getValidatorsFromState(state *spec.VersionedBeaconState) []*phase0.Validator {
+	if state == nil {
+		return nil
+	}
+	switch state.Version {
+	case spec.DataVersionPhase0:
+		if state.Phase0 != nil {
+			return state.Phase0.Validators
+		}
+	case spec.DataVersionAltair:
+		if state.Altair != nil {
+			return state.Altair.Validators
+		}
+	case spec.DataVersionBellatrix:
+		if state.Bellatrix != nil {
+			return state.Bellatrix.Validators
+		}
+	case spec.DataVersionCapella:
+		if state.Capella != nil {
+			return state.Capella.Validators
+		}
+	case spec.DataVersionDeneb:
+		if state.Deneb != nil {
+			return state.Deneb.Validators
+		}
+	case spec.DataVersionElectra:
+		if state.Electra != nil {
+			return state.Electra.Validators
+		}
+	case spec.DataVersionFulu:
+		if state.Fulu != nil {
+			return state.Fulu.Validators
+		}
+	case spec.DataVersionGloas:
+		if state.Gloas != nil {
+			return state.Gloas.Validators
+		}
+	}
+	return nil
 }

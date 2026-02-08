@@ -166,16 +166,18 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 
 // GetConfig godoc
 // @Id getConfig
-// @Summary Get current configuration
+// @Summary Get buildoor configuration
 // @Tags Config
-// @Description Returns the current builder configuration including schedule and EPBS settings.
+// @Description Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.
 // @Produce json
-// @Success 200 {object} builder.Config "Success"
+// @Success 200 {object} map[string]interface{} "Success"
 // @Failure 500 {object} map[string]string "Server Error"
 // @Router /api/config [get]
 func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
-	writeJSON(w, http.StatusOK, cfg)
+	// Redact sensitive fields before returning
+	out := configToMap(cfg)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // UpdateSchedule godoc
@@ -459,6 +461,48 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "exit initiated"})
+}
+
+// GetValidators godoc
+// @Id getValidators
+// @Summary List registered validators
+// @Tags Buildoor
+// @Description Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.
+// @Produce json
+// @Success 200 {object} map[string][]object "Success"
+// @Failure 500 {object} map[string]string "Server Error"
+// @Router /api/buildoor/validators [get]
+func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
+	if h.validatorStore == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"validators": []any{}})
+		return
+	}
+	regs := h.validatorStore.List()
+	writeJSON(w, http.StatusOK, map[string]any{"validators": regs})
+}
+
+// configToMap returns the config as a map with sensitive fields redacted.
+func configToMap(cfg *builder.Config) map[string]any {
+	if cfg == nil {
+		return nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	redact := func(key string) {
+		if v, ok := m[key].(string); ok && v != "" {
+			m[key] = "***"
+		}
+	}
+	redact("builder_privkey")
+	redact("wallet_privkey")
+	redact("el_jwt_secret")
+	return m
 }
 
 // writeJSON writes a JSON response.

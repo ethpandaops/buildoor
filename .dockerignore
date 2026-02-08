@@ -1,0 +1,39 @@
+# Git and IDE
+.git
+.gitignore
+.vscode
+.cursor
+*.swp
+.DS_Store
+
+# Build artifacts
+bin/
+buildoor
+
+# Config and logs (mount at runtime)
+config.yaml
+test-config.yaml
+config-*.yaml
+log-*
+tmp-*
+temp/
+
+# Devnet and scripts (not needed in image)
+.hack/
+*.sh
+
+# Frontend dev (pre-built or not needed for builder binary)
+pkg/webui/node_modules
+pkg/webui/package-lock.json
+pkg/webui/src
+pkg/webui/tsconfig.json
+pkg/webui/webpack.config.js
+
+# Tests and coverage (smaller image; keep validators/testdata/ - it is embedded in code)
+*_test.go
+*.test
+coverage.out
+
+# Docs and misc
+*.md
+!README.md

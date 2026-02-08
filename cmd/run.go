@@ -10,11 +10,14 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -155,7 +158,18 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, logger)
+		// Validator store and index cache when Builder API enabled (fee recipient from registrations; cache avoids beacon state lookup every build)
+		var validatorStore *validators.Store
+		var validatorIndexCache *chain.ValidatorIndexCache
+		if cfg.BuilderAPIEnabled {
+			validatorStore = validators.NewStore()
+			validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
+			if err := validatorIndexCache.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start validator index cache: %w", err)
+			}
+			defer validatorIndexCache.Stop()
+		}
+		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
@@ -178,7 +192,28 @@ and begins building blocks according to configuration.`,
 		if cfg.BuilderAPIEnabled {
 			logger.Info("Initializing Builder API server...")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc)
+			// Get genesis parameters from beacon client
+			g := chainSvc.GetGenesis()
+			if g == nil {
+				return fmt.Errorf("failed to get genesis from beacon node")
+			}
+
+			genesisForkVersion := g.GenesisForkVersion
+			genesisValidatorsRoot := phase0.Root{}
+
+			logger.WithFields(logrus.Fields{
+				"genesis_fork_version":    fmt.Sprintf("0x%x", genesisForkVersion[:]),
+				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
+			}).Info("Using genesis parameters from beacon node")
+
+			// Get current fork version from chain service (for chain-specific verification)
+			var forkVersion phase0.Version
+			if fv, err := chainSvc.GetForkVersion(ctx); err == nil {
+				forkVersion = fv
+			}
+
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
+			builderAPISrv.SetFuluPublisher(clClient)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)
 			}
@@ -205,7 +240,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore)
 		}
 
 		// 10. Start lifecycle manager (if enabled)
