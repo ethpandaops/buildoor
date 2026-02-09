@@ -70,6 +70,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
   const epbs = config?.epbs;
   const isActive = serviceStatus?.epbs_enabled ?? false;
   const isAvailable = serviceStatus?.epbs_available ?? false;
+  const registrationState = serviceStatus?.epbs_registration_state ?? 'unknown';
+  const isRegistered = registrationState === 'registered';
 
   const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -103,8 +105,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
         <h5 className="mb-0 me-2">ePBS Bidder</h5>
         {!isAvailable ? (
           <span className="badge bg-dark">Not Available</span>
-        ) : isActive ? (
+        ) : isActive && isRegistered ? (
           <span className="badge bg-success">Active</span>
+        ) : isActive && !isRegistered ? (
+          <span className="badge bg-warning text-dark">Pending Registration</span>
         ) : (
           <span className="badge bg-secondary">Inactive</span>
         )}
@@ -126,6 +130,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
             <div className="alert alert-secondary small mb-2 py-1 px-2">
               <i className="fas fa-info-circle me-1"></i>
               ePBS is not available. The connected beacon node does not have the Gloas fork scheduled.
+            </div>
+          )}
+          {isAvailable && !isRegistered && registrationState === 'waiting_gloas' && (
+            <div className="alert alert-info small mb-2 py-1 px-2">
+              <i className="fas fa-clock me-1"></i>
+              Waiting for Gloas fork activation before builder registration.
+            </div>
+          )}
+          {isAvailable && !isRegistered && (registrationState === 'pending' || registrationState === 'unknown') && (
+            <div className="alert alert-warning small mb-2 py-1 px-2">
+              <i className="fas fa-spinner fa-spin me-1"></i>
+              Builder registration in progress. Bidding will start after registration completes.
             </div>
           )}
           {/* Timing Config Section */}
