@@ -1,4 +1,4 @@
-<img align="left" src="./.github/resources/buildoor.png" width="60">
+<img align="left" src="./.github/resources/buildoor.png" width="90">
 <h1>Buildoor: Ethereum PBS Testing Tool</h1>
 
 > **Work in Progress** - This project is under active development. APIs, configuration flags, and behavior may change without notice.
