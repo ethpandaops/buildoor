@@ -578,6 +578,7 @@ func (m *EventStreamManager) buildStatsResponse() StatsResponse {
 	stats := m.builderSvc.GetStats()
 	resp := StatsResponse{
 		SlotsBuilt:     stats.SlotsBuilt,
+		BlocksIncluded: stats.BlocksIncluded,
 		BidsSubmitted:  stats.BidsSubmitted,
 		BidsWon:        stats.BidsWon,
 		TotalPaid:      stats.TotalPaid,

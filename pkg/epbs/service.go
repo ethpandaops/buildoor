@@ -299,11 +299,6 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
-
-	// Update stats on builder service
-	if s.builderSvc != nil {
-		s.builderSvc.IncrementBlocksIncluded()
-	}
 }
 
 // GetBidTracker returns the bid tracker.

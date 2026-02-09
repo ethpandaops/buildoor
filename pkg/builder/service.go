@@ -56,6 +56,10 @@ type Service struct {
 	// Build tracking
 	scheduledBuildMu  sync.Mutex
 	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
+
+	// Payload inclusion tracking (deduplication between detection methods)
+	wonPayloadsMu sync.Mutex
+	wonPayloads   map[phase0.Hash32]phase0.Slot
 }
 
 // NewService creates a new builder service.
@@ -87,6 +91,7 @@ func NewService(
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		buildStartedSlots:      make(map[phase0.Slot]bool),
+		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
 	}
 
 	return s, nil
@@ -229,16 +234,37 @@ func (s *Service) run() {
 }
 
 // handleHeadEvent processes a head event (new block received).
-// With payload_attributes-based building, this is only used for logging.
-// Building is triggered by payload_attributes events, not head events.
+// Checks if the block's execution payload matches one of our built payloads.
 func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"head_slot": event.Slot,
 		"is_gloas":  s.chainSvc.IsGloas(),
 	}).Debug("Head event received")
 
-	// NOTE: We no longer trigger builds from head events.
-	// Building is now triggered by payload_attributes events from the beacon node.
+	go s.checkPayloadInclusion(event)
+}
+
+// checkPayloadInclusion fetches the block info and checks if its execution
+// payload hash matches any of our built payloads.
+func (s *Service) checkPayloadInclusion(event *beacon.HeadEvent) {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	blockInfo, err := s.clClient.GetBlockInfo(ctx, fmt.Sprintf("0x%x", event.Block[:]))
+	if err != nil {
+		s.log.WithError(err).WithField("slot", event.Slot).Debug(
+			"Failed to get block info for payload inclusion check",
+		)
+
+		return
+	}
+
+	payload := s.payloadCache.GetByBlockHash(blockInfo.ExecutionBlockHash)
+	if payload == nil {
+		return
+	}
+
+	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Slot)
 }
 
 // handlePayloadAttributesEvent processes a payload_attributes event.
@@ -252,6 +278,12 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		"timestamp":     event.Timestamp,
 		"withdrawals":   len(event.Withdrawals),
 	}).Info("Payload attributes event received")
+
+	// Check if the parent block hash matches one of our built payloads
+	// (this means our payload was included as the parent of this new block).
+	if payload := s.payloadCache.GetByBlockHash(event.ParentBlockHash); payload != nil {
+		s.markPayloadWon(event.ParentBlockHash, payload.Slot)
+	}
 
 	// Check if we should build for this slot
 	if !s.slotManager.ShouldBuildForSlot(event.ProposalSlot) {
@@ -391,7 +423,49 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 			}
 		}
 		s.scheduledBuildMu.Unlock()
+
+		// Cleanup old won payload tracking, keeping the 10 most recent.
+		const keepWonPayloads = 10
+		s.wonPayloadsMu.Lock()
+		for len(s.wonPayloads) > keepWonPayloads {
+			var oldestHash phase0.Hash32
+			var oldestSlot phase0.Slot
+			first := true
+
+			for hash, wonSlot := range s.wonPayloads {
+				if first || wonSlot < oldestSlot {
+					oldestHash = hash
+					oldestSlot = wonSlot
+					first = false
+				}
+			}
+
+			delete(s.wonPayloads, oldestHash)
+		}
+		s.wonPayloadsMu.Unlock()
 	}
+}
+
+// markPayloadWon records a payload as won (included on-chain), deduplicating
+// between the two detection methods (payload_attributes parent hash and head event).
+func (s *Service) markPayloadWon(blockHash phase0.Hash32, slot phase0.Slot) {
+	s.wonPayloadsMu.Lock()
+	if _, ok := s.wonPayloads[blockHash]; ok {
+		s.wonPayloadsMu.Unlock()
+		return
+	}
+
+	s.wonPayloads[blockHash] = slot
+	s.wonPayloadsMu.Unlock()
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"block_hash": fmt.Sprintf("%x", blockHash[:8]),
+	}).Info("Our payload was included on-chain")
+
+	s.incrementStat(func(stats *BuilderStats) {
+		stats.BlocksIncluded++
+	})
 }
 
 // incrementStat safely increments statistics.

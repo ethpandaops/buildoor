@@ -57,6 +57,7 @@ export interface ChainInfo {
 
 export interface Stats {
   slots_built: number;
+  blocks_included: number;
   bids_submitted: number;
   bids_won: number;
   total_paid: number;

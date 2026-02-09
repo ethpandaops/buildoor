@@ -44,7 +44,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ stats, serviceStatus }) 
             <div className="col-6">
               <div className="stat-item">
                 <span className="stat-item-label">Payloads Won</span>
-                <span className="stat-item-value">{stats?.bids_won || 0}</span>
+                <span className="stat-item-value">{stats?.blocks_included || 0}</span>
               </div>
             </div>
           </div>

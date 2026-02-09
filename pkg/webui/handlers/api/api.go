@@ -32,6 +32,7 @@ type StatusResponse struct {
 // StatsResponse is the response for the stats endpoint.
 type StatsResponse struct {
 	SlotsBuilt     uint64 `json:"slots_built"`
+	BlocksIncluded uint64 `json:"blocks_included"`
 	BidsSubmitted  uint64 `json:"bids_submitted"`
 	BidsWon        uint64 `json:"bids_won"`
 	TotalPaid      uint64 `json:"total_paid_gwei"`
@@ -174,6 +175,7 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 
 	resp := StatsResponse{
 		SlotsBuilt:     stats.SlotsBuilt,
+		BlocksIncluded: stats.BlocksIncluded,
 		BidsSubmitted:  stats.BidsSubmitted,
 		BidsWon:        stats.BidsWon,
 		TotalPaid:      stats.TotalPaid,
