@@ -1,8 +1,9 @@
 import React from 'react';
-import type { BuilderInfo as BuilderInfoType } from '../types';
+import type { BuilderInfo as BuilderInfoType, ServiceStatus } from '../types';
 
 interface BuilderInfoProps {
   builderInfo: BuilderInfoType | null;
+  serviceStatus: ServiceStatus | null;
 }
 
 // Format gwei to ETH with 4 decimals
@@ -24,7 +25,7 @@ function truncateHash(hash: string, chars: number = 8): string {
   return `${hash.substring(0, chars + 2)}...${hash.substring(hash.length - chars)}`;
 }
 
-export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo }) => {
+export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus }) => {
   if (!builderInfo) {
     return (
       <div className="card mb-3">
@@ -60,8 +61,12 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo }) => {
               <td className="text-end">
                 {builderInfo.is_registered ? (
                   <span className="badge bg-success">{builderInfo.builder_index}</span>
+                ) : serviceStatus?.epbs_registration_state === 'waiting_gloas' ? (
+                  <span className="badge bg-info">Awaiting Gloas</span>
+                ) : serviceStatus?.epbs_registration_state === 'pending' ? (
+                  <span className="badge bg-warning text-dark">Registering...</span>
                 ) : (
-                  <span className="badge bg-warning">Not Registered</span>
+                  <span className="badge bg-warning text-dark">Not Registered</span>
                 )}
               </td>
             </tr>

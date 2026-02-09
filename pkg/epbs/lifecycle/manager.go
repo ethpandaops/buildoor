@@ -1,10 +1,12 @@
-// Package lifecycle provides builder lifecycle management (deposit, balance, exit).
+// Package lifecycle provides builder lifecycle management (deposit, balance, exit)
+// as an ePBS sub-concern.
 package lifecycle
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -32,6 +34,9 @@ type Manager struct {
 	log          logrus.FieldLogger
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
+
+	registrationCallback func(index uint64)
+	registrationDone     atomic.Bool
 }
 
 // NewManager creates a new lifecycle manager.
@@ -70,11 +75,16 @@ func NewManager(
 	return m, nil
 }
 
-// Start starts the lifecycle manager.
+// SetRegistrationCallback sets the callback invoked when builder registration completes.
+func (m *Manager) SetRegistrationCallback(cb func(index uint64)) {
+	m.registrationCallback = cb
+}
+
+// Start starts the lifecycle manager with async registration and balance monitoring.
 func (m *Manager) Start(ctx context.Context) error {
 	m.wg.Add(1)
 
-	go m.runBalanceMonitor(ctx)
+	go m.runRegistrationAndMonitor(ctx)
 
 	m.log.Info("Lifecycle manager started")
 
@@ -105,6 +115,7 @@ func (m *Manager) GetWallet() *wallet.Wallet {
 }
 
 // EnsureBuilderRegistered checks if builder is registered and deposits if needed.
+// This is the synchronous version used by CLI commands (e.g. cmd/deposit.go).
 func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 	isRegistered, state, err := m.depositSvc.IsBuilderRegistered(ctx)
 	if err != nil {
@@ -120,6 +131,8 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 			"builder_index": state.Index,
 			"balance":       state.Balance,
 		}).Info("Builder already registered")
+
+		m.onRegistered(state.Index)
 
 		return nil
 	}
@@ -171,6 +184,9 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 		case <-timeoutCtx.Done():
 			return fmt.Errorf("timeout waiting for registration: %w", timeoutCtx.Err())
 
+		case <-m.stopCh:
+			return fmt.Errorf("lifecycle manager stopped")
+
 		case <-ticker.C:
 			// Refresh builders cache to pick up new registrations
 			if err := m.chainSvc.RefreshBuilders(ctx); err != nil {
@@ -192,6 +208,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 				m.stateMu.Unlock()
 
 				m.log.WithField("builder_index", info.Index).Info("Builder registered")
+				m.onRegistered(info.Index)
 
 				return nil
 			}
@@ -204,10 +221,92 @@ func (m *Manager) SetBidTracker(tracker *epbs.BidTracker) {
 	m.balanceSvc = NewBalanceService(m.cfg, m.clClient, m.depositSvc, tracker, m.log)
 }
 
-// runBalanceMonitor periodically checks and tops up balance.
-func (m *Manager) runBalanceMonitor(ctx context.Context) {
+// onRegistered marks registration as done and fires the callback.
+func (m *Manager) onRegistered(index uint64) {
+	m.registrationDone.Store(true)
+
+	if m.registrationCallback != nil {
+		m.registrationCallback(index)
+	}
+}
+
+// runRegistrationAndMonitor handles async registration then balance monitoring.
+func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 	defer m.wg.Done()
 
+	// Step 1: Wait for Gloas fork activation if not yet active
+	if !m.chainSvc.IsGloas() {
+		m.log.Info("Waiting for Gloas fork activation before builder registration")
+
+		if !m.waitForGloas(ctx) {
+			return // stopped or context cancelled
+		}
+
+		m.log.Info("Gloas fork activated, proceeding with registration")
+	}
+
+	// Step 2: Ensure builder is registered (with retries)
+	if !m.registrationDone.Load() {
+		m.ensureRegisteredWithRetry(ctx)
+	}
+
+	// Step 3: Run balance monitor
+	m.runBalanceMonitor(ctx)
+}
+
+// waitForGloas waits for the Gloas fork to activate by subscribing to epoch stats.
+func (m *Manager) waitForGloas(ctx context.Context) bool {
+	epochSub := m.chainSvc.SubscribeEpochStats()
+	defer epochSub.Unsubscribe()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-m.stopCh:
+			return false
+		case stats, ok := <-epochSub.Channel():
+			if !ok {
+				return false
+			}
+
+			if stats.IsGloas {
+				return true
+			}
+		}
+	}
+}
+
+// ensureRegisteredWithRetry attempts registration in a loop until success or stop.
+func (m *Manager) ensureRegisteredWithRetry(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		default:
+		}
+
+		err := m.EnsureBuilderRegistered(ctx)
+		if err == nil {
+			return
+		}
+
+		m.log.WithError(err).Warn("Builder registration attempt failed, retrying in 30s")
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case <-time.After(30 * time.Second):
+		}
+	}
+}
+
+// runBalanceMonitor periodically checks and tops up balance.
+func (m *Manager) runBalanceMonitor(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 

@@ -17,6 +17,30 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
+// Registration state constants for the ePBS service.
+const (
+	RegistrationStateUnknown      int32 = 0 // Not checked yet
+	RegistrationStatePending      int32 = 1 // Deposit submitted, waiting for inclusion
+	RegistrationStateRegistered   int32 = 2 // Builder registered, has valid index
+	RegistrationStateWaitingGloas int32 = 3 // Waiting for Gloas fork activation
+)
+
+// RegistrationStateName returns the string name for a registration state.
+func RegistrationStateName(state int32) string {
+	switch state {
+	case RegistrationStateUnknown:
+		return "unknown"
+	case RegistrationStatePending:
+		return "pending"
+	case RegistrationStateRegistered:
+		return "registered"
+	case RegistrationStateWaitingGloas:
+		return "waiting_gloas"
+	default:
+		return "unknown"
+	}
+}
+
 // BidSubmissionEvent represents a bid submission attempt (success or failure).
 type BidSubmissionEvent struct {
 	Slot      phase0.Slot
@@ -45,6 +69,7 @@ type Service struct {
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
 	builderSvc            *builder.Service
 	enabled               atomic.Bool
+	registrationState     atomic.Int32
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	log                   logrus.FieldLogger
@@ -117,13 +142,16 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 
 	// Load builder index from chain service
 	if !s.chainSvc.HasBuildersLoaded() {
-		s.log.Warn("No builders in beacon state (pre-Gloas), using index 0 for testing")
+		s.log.Info("No builders in beacon state (pre-Gloas), waiting for registration")
 		s.builderIndex = 0
+		s.registrationState.Store(RegistrationStateWaitingGloas)
 	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(s.builderPubkey); builderInfo == nil {
-		s.log.Warn("Builder not found in beacon state (not registered), using index 0 for testing")
+		s.log.Info("Builder not found in beacon state, waiting for registration")
 		s.builderIndex = 0
+		s.registrationState.Store(RegistrationStatePending)
 	} else {
 		s.builderIndex = builderInfo.Index
+		s.registrationState.Store(RegistrationStateRegistered)
 		s.log.WithFields(logrus.Fields{
 			"builder_index":  s.builderIndex,
 			"builder_pubkey": fmt.Sprintf("%x", s.builderPubkey[:8]),
@@ -217,7 +245,7 @@ func (s *Service) run() {
 			s.handleBidEvent(event)
 
 		case <-ticker.C:
-			if s.enabled.Load() {
+			if s.enabled.Load() && s.IsRegistered() {
 				s.scheduler.ProcessTick(s.ctx)
 			}
 		}
@@ -299,6 +327,38 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
+}
+
+// GetRegistrationState returns the current registration state.
+func (s *Service) GetRegistrationState() int32 {
+	return s.registrationState.Load()
+}
+
+// IsRegistered returns whether the builder is registered (has a valid index).
+func (s *Service) IsRegistered() bool {
+	return s.registrationState.Load() == RegistrationStateRegistered
+}
+
+// SetBuilderRegistered updates the builder index and marks registration as complete.
+// Called by the lifecycle manager's registration callback.
+func (s *Service) SetBuilderRegistered(index uint64) {
+	s.builderIndex = index
+
+	if s.bidCreator != nil {
+		s.bidCreator.SetBuilderIndex(index)
+	}
+
+	if s.revealHandler != nil {
+		s.revealHandler.SetBuilderIndex(index)
+	}
+
+	if s.bidTracker != nil {
+		s.bidTracker.SetBuilderIndex(index)
+	}
+
+	s.registrationState.Store(RegistrationStateRegistered)
+
+	s.log.WithField("builder_index", index).Info("Builder registration confirmed, ePBS bidding enabled")
 }
 
 // GetBidTracker returns the bid tracker.

@@ -21,7 +21,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -140,13 +140,6 @@ and begins building blocks according to configuration.`,
 			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
-			}
-
-			// Ensure builder is registered
-			logger.Info("Checking builder registration...")
-
-			if err := lifecycleMgr.EnsureBuilderRegistered(ctx); err != nil {
-				return fmt.Errorf("builder registration failed: %w", err)
 			}
 		}
 
@@ -270,6 +263,9 @@ and begins building blocks according to configuration.`,
 			// Connect bid tracker to lifecycle manager for balance tracking
 			if epbsSvc != nil {
 				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
+				lifecycleMgr.SetRegistrationCallback(func(index uint64) {
+					epbsSvc.SetBuilderRegistered(index)
+				})
 			}
 
 			if err := lifecycleMgr.Start(ctx); err != nil {
