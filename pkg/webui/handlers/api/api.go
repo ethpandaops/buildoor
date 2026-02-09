@@ -38,6 +38,10 @@ type StatsResponse struct {
 	RevealsSuccess uint64 `json:"reveals_success"`
 	RevealsFailed  uint64 `json:"reveals_failed"`
 	RevealsSkipped uint64 `json:"reveals_skipped"`
+	// Builder API stats
+	BuilderAPIHeadersRequested     uint64 `json:"builder_api_headers_requested"`
+	BuilderAPIBlocksPublished      uint64 `json:"builder_api_blocks_published"`
+	BuilderAPIRegisteredValidators int    `json:"builder_api_registered_validators"`
 }
 
 // UpdateScheduleRequest is the request for updating schedule config.
@@ -176,6 +180,13 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 		RevealsSuccess: stats.RevealsSuccess,
 		RevealsFailed:  stats.RevealsFailed,
 		RevealsSkipped: stats.RevealsSkipped,
+	}
+
+	if h.builderAPISvc != nil {
+		apiStats := h.builderAPISvc.GetRequestStats()
+		resp.BuilderAPIHeadersRequested = apiStats.HeadersRequested
+		resp.BuilderAPIBlocksPublished = apiStats.BlocksPublished
+		resp.BuilderAPIRegisteredValidators = apiStats.ValidatorCount
 	}
 
 	writeJSON(w, http.StatusOK, resp)

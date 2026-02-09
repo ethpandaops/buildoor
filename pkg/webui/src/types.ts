@@ -63,6 +63,9 @@ export interface Stats {
   reveals_success: number;
   reveals_failed: number;
   reveals_skipped: number;
+  builder_api_headers_requested: number;
+  builder_api_blocks_published: number;
+  builder_api_registered_validators: number;
 }
 
 export interface BuilderInfo {

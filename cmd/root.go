@@ -57,6 +57,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (requires --builder-api-port > 0)")
 	rootCmd.PersistentFlags().Int("builder-api-port", defaults.BuilderAPI.Port, "Builder API HTTP port")
+	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Block value subsidy added to bids in Gwei")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -149,7 +150,8 @@ func initConfig() error {
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
 		BuilderAPI: builder.BuilderAPIConfig{
-			Port: v.GetInt("builder-api-port"),
+			Port:                  v.GetInt("builder-api-port"),
+			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 		},
 		DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),

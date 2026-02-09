@@ -804,6 +804,9 @@ const docTemplate = `{
                 "build_start_time": {
                     "type": "integer"
                 },
+                "payload_build_delay": {
+                    "type": "integer"
+                },
                 "reveal_time": {
                     "type": "integer"
                 }
@@ -819,6 +822,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "next_n": {
+                    "type": "integer"
+                },
+                "start_slot": {
                     "type": "integer"
                 }
             }

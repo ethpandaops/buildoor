@@ -104,16 +104,18 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
   const legacyActive = effectiveServiceStatus?.legacy_enabled ?? false;
 
-  // Rows: chain (top) + second row (payload + ePBS events) + optional legacy row
-  let activeRows = 2; // chain + second row always present
-  if (legacyActive) activeRows++;
-
+  // Rows from top to bottom:
+  //   chain+payload (always) | ePBS (if active) | legacy (if active)
+  // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
+  const activeRows = 2 + (epbsActive && legacyActive ? 1 : 0);
   const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
 
-  // Row positions from bottom: legacy (if active) -> second row (payload + ePBS) -> chain (top)
+  // Row positions from bottom: legacy (if active) -> ePBS (if active) -> chain (top)
+  // When neither builder is active, an empty row sits below chain.
   let rowIdx = 0;
   const legacyRowBottom = legacyActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
-  const secondRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
+  const epbsRowBottom = epbsActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
+  if (!epbsActive && !legacyActive) rowIdx++; // empty second row
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
   // Slot label
@@ -185,7 +187,15 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
 
   return (
     <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
-      <div className="slot-graph-label">{slotLabel}</div>
+      <div className="slot-graph-label">
+        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>{slotLabel}</span>
+        {epbsActive && epbsRowBottom >= 0 && (
+          <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
+        )}
+        {legacyActive && legacyRowBottom >= 0 && (
+          <span className="slot-graph-row-label" style={{ bottom: `${legacyRowBottom}px`, height: `${ROW_HEIGHT}px` }}>Legacy</span>
+        )}
+      </div>
       <div className="slot-graph-area">
         <div className="slot-graph-bg">
           {/* Slot markers */}
@@ -206,11 +216,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           </div>
 
           {/* Bid window - spans ePBS row only */}
-          {epbsActive && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
+          {epbsActive && epbsRowBottom >= 0 && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
-                bottom: `${secondRowBottom}px`,
+                bottom: `${epbsRowBottom}px`,
                 height: `${ROW_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
@@ -223,11 +233,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
           {/* Reveal marker - spans ePBS row only */}
-          {epbsActive && epbsConfig && revealX >= 0 && revealX <= 100 && (
+          {epbsActive && epbsRowBottom >= 0 && epbsConfig && revealX >= 0 && revealX <= 100 && (
             <div
               className={`reveal-marker ${!state.bidWon ? 'reveal-marker-disabled' : ''}`}
               style={{
-                bottom: `${secondRowBottom}px`,
+                bottom: `${epbsRowBottom}px`,
                 height: `${ROW_HEIGHT}px`,
                 left: `${revealX}%`
               }}
@@ -305,8 +315,49 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           );
         })()}
 
-        {/* Chain events row (always on top) */}
+        {/* Chain + payload events row (always on top) */}
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
+          {/* Build delay line: from build_start_time to payload ready */}
+          {epbsConfig && state.payloadCreatedAt && genesisTime > 0 && buildStartX < 100 && payloadCreatedX > 0 && (
+            <div
+              className="build-delay-line"
+              style={{
+                left: `${Math.max(0, buildStartX)}%`,
+                width: `${Math.min(100, payloadCreatedX) - Math.max(0, buildStartX)}%`
+              }}
+              onClick={(e) => showPopover(e, {
+                title: 'Build Delay',
+                items: [
+                  { label: 'Build Start', value: `${epbsConfig.build_start_time}ms` },
+                  { label: 'Payload Ready', value: `${state.payloadCreatedAt! - slotStartTime}ms` },
+                  { label: 'Duration', value: `${(state.payloadCreatedAt! - slotStartTime) - epbsConfig.build_start_time}ms` }
+                ]
+              })}
+            />
+          )}
+
+          {/* Payload created */}
+          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+            'payload-created',
+            state.payloadCreatedAt - slotStartTime,
+            {
+              title: 'Payload Created',
+              items: [
+                { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                ...(state.payloadBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.payloadBlockHash),
+                  copyValue: state.payloadBlockHash
+                }] : []),
+                ...(state.payloadBlockValue ? [{
+                  label: 'Block Value',
+                  value: formatGwei(state.payloadBlockValue)
+                }] : [])
+              ]
+            },
+            'payload'
+          )}
+
           {/* Block received */}
           {state.blockReceivedAt && genesisTime > 0 && renderEventDot(
             'block-received',
@@ -371,88 +422,49 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           })}
         </div>
 
-        {/* Second row: payload events + ePBS events (always visible) */}
-        <div className="event-row builder-events" style={{ bottom: `${secondRowBottom}px` }}>
-          {/* Build delay line: from build_start_time to payload ready */}
-          {epbsConfig && state.payloadCreatedAt && genesisTime > 0 && buildStartX < 100 && payloadCreatedX > 0 && (
-            <div
-              className="build-delay-line"
-              style={{
-                left: `${Math.max(0, buildStartX)}%`,
-                width: `${Math.min(100, payloadCreatedX) - Math.max(0, buildStartX)}%`
-              }}
-              onClick={(e) => showPopover(e, {
-                title: 'Build Delay',
-                items: [
-                  { label: 'Build Start', value: `${epbsConfig.build_start_time}ms` },
-                  { label: 'Payload Ready', value: `${state.payloadCreatedAt! - slotStartTime}ms` },
-                  { label: 'Duration', value: `${(state.payloadCreatedAt! - slotStartTime) - epbsConfig.build_start_time}ms` }
-                ]
-              })}
-            />
-          )}
+        {/* ePBS events row */}
+        {epbsActive && epbsRowBottom >= 0 && (
+          <div className="event-row builder-events" style={{ bottom: `${epbsRowBottom}px` }}>
+            {/* Our bids */}
+            {state.ourBids?.map((bid: OurBid, idx: number) => {
+              const bidMs = bid.time - slotStartTime;
+              const bidSuccess = bid.success !== false;
+              return renderEventDot(
+                bidSuccess ? 'bid-submitted' : 'bid-failed',
+                bidMs,
+                {
+                  title: `Our Bid #${idx + 1}`,
+                  items: [
+                    { label: 'Time', value: `${bidMs}ms` },
+                    { label: 'Bid Amount', value: formatGwei(bid.value) },
+                    ...(bid.blockHash ? [{
+                      label: 'Block Hash',
+                      value: truncateHash(bid.blockHash),
+                      copyValue: bid.blockHash
+                    }] : []),
+                    { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
+                    ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
+                  ]
+                },
+                `bid-${idx}`
+              );
+            })}
 
-          {/* Payload created */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
-            'payload-created',
-            state.payloadCreatedAt - slotStartTime,
-            {
-              title: 'Payload Created',
-              items: [
-                { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
-                ...(state.payloadBlockHash ? [{
-                  label: 'Block Hash',
-                  value: truncateHash(state.payloadBlockHash),
-                  copyValue: state.payloadBlockHash
-                }] : []),
-                ...(state.payloadBlockValue ? [{
-                  label: 'Block Value',
-                  value: formatGwei(state.payloadBlockValue)
-                }] : [])
-              ]
-            },
-            'payload'
-          )}
-
-          {/* ePBS: Our bids */}
-          {epbsActive && state.ourBids?.map((bid: OurBid, idx: number) => {
-            const bidMs = bid.time - slotStartTime;
-            const bidSuccess = bid.success !== false;
-            return renderEventDot(
-              bidSuccess ? 'bid-submitted' : 'bid-failed',
-              bidMs,
+            {/* Reveal */}
+            {state.revealSentAt && genesisTime > 0 && renderEventDot(
+              state.revealFailed ? 'reveal-failed' : 'reveal-sent',
+              state.revealSentAt - slotStartTime,
               {
-                title: `Our Bid #${idx + 1}`,
+                title: 'Payload Reveal',
                 items: [
-                  { label: 'Time', value: `${bidMs}ms` },
-                  { label: 'Bid Amount', value: formatGwei(bid.value) },
-                  ...(bid.blockHash ? [{
-                    label: 'Block Hash',
-                    value: truncateHash(bid.blockHash),
-                    copyValue: bid.blockHash
-                  }] : []),
-                  { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
-                  ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
+                  { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
+                  { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
                 ]
               },
-              `bid-${idx}`
-            );
-          })}
-
-          {/* ePBS: Reveal */}
-          {epbsActive && state.revealSentAt && genesisTime > 0 && renderEventDot(
-            state.revealFailed ? 'reveal-failed' : 'reveal-sent',
-            state.revealSentAt - slotStartTime,
-            {
-              title: 'Payload Reveal',
-              items: [
-                { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
-                { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
-              ]
-            },
-            'reveal'
-          )}
-        </div>
+              'reveal'
+            )}
+          </div>
+        )}
 
         {/* Builder API (legacy) events row */}
         {legacyActive && (

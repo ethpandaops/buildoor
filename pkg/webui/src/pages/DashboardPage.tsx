@@ -8,6 +8,7 @@ import { ConfigPanel } from '../components/ConfigPanel';
 import { BuilderInfo } from '../components/BuilderInfo';
 import { BuilderConfigPanel } from '../components/BuilderConfigPanel';
 import { BuilderAPIConfigPanel } from '../components/BuilderAPIConfigPanel';
+import { StatsPanel } from '../components/StatsPanel';
 
 const DashboardPage: React.FC = () => {
   const {
@@ -64,11 +65,14 @@ const DashboardPage: React.FC = () => {
           {/* Builder Info */}
           <BuilderInfo builderInfo={builderInfo} />
 
+          {/* Statistics */}
+          <StatsPanel stats={stats} serviceStatus={serviceStatus} />
+
           {/* Payload Builder */}
           <BuilderConfigPanel config={config} />
 
           {/* ePBS Bidder */}
-          <ConfigPanel config={config} serviceStatus={serviceStatus} stats={stats} />
+          <ConfigPanel config={config} serviceStatus={serviceStatus} />
 
           {/* Builder API (Legacy) */}
           <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />

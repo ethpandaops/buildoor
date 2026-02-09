@@ -215,7 +215,7 @@ type EventStreamManager struct {
 	slotStatesMu sync.RWMutex
 
 	// Track last sent stats to avoid spam
-	lastStats   builder.BuilderStats
+	lastStats   StatsResponse
 	lastStatsMu sync.Mutex
 
 	// Track last sent builder info to avoid spam
@@ -574,14 +574,36 @@ func (m *EventStreamManager) broadcastSlotState(slot phase0.Slot) {
 	})
 }
 
-func (m *EventStreamManager) sendStats() {
+func (m *EventStreamManager) buildStatsResponse() StatsResponse {
 	stats := m.builderSvc.GetStats()
+	resp := StatsResponse{
+		SlotsBuilt:     stats.SlotsBuilt,
+		BidsSubmitted:  stats.BidsSubmitted,
+		BidsWon:        stats.BidsWon,
+		TotalPaid:      stats.TotalPaid,
+		RevealsSuccess: stats.RevealsSuccess,
+		RevealsFailed:  stats.RevealsFailed,
+		RevealsSkipped: stats.RevealsSkipped,
+	}
+
+	if m.builderAPISvc != nil {
+		apiStats := m.builderAPISvc.GetRequestStats()
+		resp.BuilderAPIHeadersRequested = apiStats.HeadersRequested
+		resp.BuilderAPIBlocksPublished = apiStats.BlocksPublished
+		resp.BuilderAPIRegisteredValidators = apiStats.ValidatorCount
+	}
+
+	return resp
+}
+
+func (m *EventStreamManager) sendStats() {
+	resp := m.buildStatsResponse()
 
 	// Only send if stats changed
 	m.lastStatsMu.Lock()
-	changed := stats != m.lastStats
+	changed := resp != m.lastStats
 	if changed {
-		m.lastStats = stats
+		m.lastStats = resp
 	}
 	m.lastStatsMu.Unlock()
 
@@ -592,15 +614,7 @@ func (m *EventStreamManager) sendStats() {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeStats,
 		Timestamp: time.Now().UnixMilli(),
-		Data: StatsResponse{
-			SlotsBuilt:     stats.SlotsBuilt,
-			BidsSubmitted:  stats.BidsSubmitted,
-			BidsWon:        stats.BidsWon,
-			TotalPaid:      stats.TotalPaid,
-			RevealsSuccess: stats.RevealsSuccess,
-			RevealsFailed:  stats.RevealsFailed,
-			RevealsSkipped: stats.RevealsSkipped,
-		},
+		Data:      resp,
 	})
 }
 
@@ -752,19 +766,10 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 	}
 
 	// Send current stats
-	stats := m.builderSvc.GetStats()
 	ch <- &StreamEvent{
 		Type:      EventTypeStats,
 		Timestamp: time.Now().UnixMilli(),
-		Data: StatsResponse{
-			SlotsBuilt:     stats.SlotsBuilt,
-			BidsSubmitted:  stats.BidsSubmitted,
-			BidsWon:        stats.BidsWon,
-			TotalPaid:      stats.TotalPaid,
-			RevealsSuccess: stats.RevealsSuccess,
-			RevealsFailed:  stats.RevealsFailed,
-			RevealsSkipped: stats.RevealsSkipped,
-		},
+		Data:      m.buildStatsResponse(),
 	}
 
 	// Send builder info

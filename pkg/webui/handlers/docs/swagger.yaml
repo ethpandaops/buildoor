@@ -109,6 +109,8 @@ definitions:
         type: integer
       build_start_time:
         type: integer
+      payload_build_delay:
+        type: integer
       reveal_time:
         type: integer
     type: object
@@ -119,6 +121,8 @@ definitions:
       mode:
         type: string
       next_n:
+        type: integer
+      start_slot:
         type: integer
     type: object
   api.ValidatorRegistrationResponse:

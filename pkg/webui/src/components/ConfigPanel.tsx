@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
-import type { Config, EPBSConfig, ServiceStatus, Stats } from '../types';
+import type { Config, EPBSConfig, ServiceStatus } from '../types';
 
 interface ConfigPanelProps {
   config: Config | null;
   serviceStatus: ServiceStatus | null;
-  stats: Stats | null;
 }
 
 type EPBSFormState = EPBSConfig;
 
-export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus, stats }) => {
+export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
   const [collapsed, setCollapsed] = useState(true);
   const [editingTiming, setEditingTiming] = useState(false);
@@ -129,35 +128,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus,
               ePBS is not available. The connected beacon node does not have the Gloas fork scheduled.
             </div>
           )}
-          {/* Statistics Section */}
-          <div className="section-header mb-2">Statistics</div>
-          <div className="row g-2 mb-3">
-            <div className="col-6">
-              <div className="stat-box">
-                <div className="stat-value">{stats?.slots_built || 0}</div>
-                <div className="stat-label">Slots Built</div>
-              </div>
-            </div>
-            <div className="col-6">
-              <div className="stat-box">
-                <div className="stat-value">{stats?.bids_submitted || 0}</div>
-                <div className="stat-label">Bids Submitted</div>
-              </div>
-            </div>
-            <div className="col-6">
-              <div className="stat-box">
-                <div className="stat-value">{stats?.bids_won || 0}</div>
-                <div className="stat-label">Bids Won</div>
-              </div>
-            </div>
-            <div className="col-6">
-              <div className="stat-box">
-                <div className="stat-value">{stats?.reveals_success || 0}</div>
-                <div className="stat-label">Reveals</div>
-              </div>
-            </div>
-          </div>
-
           {/* Timing Config Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Timing Config</div>
