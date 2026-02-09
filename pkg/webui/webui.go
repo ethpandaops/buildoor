@@ -15,42 +15,31 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
-	"github.com/ethpandaops/buildoor/pkg/webui/handlers/docs"
-	"github.com/ethpandaops/buildoor/pkg/webui/server"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
+	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/urfave/negroni"
 
 	_ "net/http/pprof"
+
+	_ "github.com/ethpandaops/buildoor/pkg/webui/handlers/docs"
 )
 
 var (
 	//go:embed static/*
 	staticEmbedFS embed.FS
-
-	//go:embed templates/*
-	templateEmbedFS embed.FS
 )
 
 func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server) *api.APIHandler {
 	// init router
 	router := mux.NewRouter()
 
-	frontend, err := server.NewFrontend(config, staticEmbedFS, templateEmbedFS)
-	if err != nil {
-		logrus.Fatalf("error initializing frontend: %v", err)
-	}
-
 	authHandler := auth.NewAuthHandler(config.AuthKey, config.UserHeader, config.TokenKey)
 	authRouter := router.PathPrefix("/auth").Subrouter()
 	authRouter.HandleFunc("/token", authHandler.GetToken).Methods(http.MethodGet)
 	authRouter.HandleFunc("/login", authHandler.GetLogin).Methods(http.MethodGet)
-
-	// register frontend routes
-	frontendHandler := handlers.NewFrontendHandler()
-	router.HandleFunc("/", frontendHandler.Index).Methods("GET")
 
 	// API routes
 	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc)
@@ -91,14 +80,20 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 
 	// swagger
-	router.PathPrefix("/docs/").Handler(docs.GetSwaggerHandler(logrus.StandardLogger()))
+	router.PathPrefix("/api/docs/").Handler(httpSwagger.Handler(func(c *httpSwagger.Config) {
+		c.Layout = httpSwagger.StandaloneLayout
+	}))
 
 	if config.Pprof {
 		// add pprof handler
 		router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 	}
 
-	router.PathPrefix("/").Handler(frontend)
+	spaHandler, err := handlers.NewSPAHandler(logrus.WithField("module", "web-spa"), staticEmbedFS)
+	if err != nil {
+		logrus.Fatalf("error initializing spa handler: %v", err)
+	}
+	router.PathPrefix("/").Handler(spaHandler)
 
 	n := negroni.New()
 	n.Use(negroni.NewRecovery())

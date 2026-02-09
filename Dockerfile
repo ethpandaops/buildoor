@@ -29,8 +29,8 @@ RUN go mod download
 
 COPY . .
 
-# Overlay frontend bundle from stage 1 (ensure-ui will skip npm)
-COPY --from=ui /app/pkg/webui/static/bundle/ pkg/webui/static/bundle/
+# Overlay frontend static assets from stage 1 (ensure-ui will skip npm)
+COPY --from=ui /app/pkg/webui/static/ pkg/webui/static/
 
 ARG VERSION=dev
 ARG BUILDTIME

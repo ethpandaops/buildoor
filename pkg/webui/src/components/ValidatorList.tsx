@@ -1,16 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import type { ValidatorRegistration } from '../types';
+import { Pagination } from './Pagination';
 
 interface ValidatorListProps {
   validators: ValidatorRegistration[];
   loading?: boolean;
   fullPage?: boolean;
-}
-
-// Format address/pubkey for display (truncate middle)
-function formatHex(value: string, startLen = 8, endLen = 6): string {
-  if (value.length <= startLen + endLen) return value;
-  return `${value.slice(0, startLen)}...${value.slice(-endLen)}`;
 }
 
 // Copy to clipboard helper
@@ -22,6 +17,8 @@ function copyToClipboard(text: string) {
 
 export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loading, fullPage }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [offset, setOffset] = useState(0);
+  const limit = 50;
 
   const filteredValidators = useMemo(() => {
     if (!searchTerm) return validators;
@@ -32,6 +29,25 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
         v.fee_recipient.toLowerCase().includes(term)
     );
   }, [validators, searchTerm]);
+
+  const total = filteredValidators.length;
+  const pagedValidators = useMemo(
+    () => filteredValidators.slice(offset, offset + limit),
+    [filteredValidators, offset, limit]
+  );
+
+  useEffect(() => {
+    setOffset(0);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (total === 0) {
+      if (offset !== 0) setOffset(0);
+      return;
+    }
+    const maxOffset = Math.floor((total - 1) / limit) * limit;
+    if (offset > maxOffset) setOffset(maxOffset);
+  }, [total, offset, limit]);
 
   if (loading) {
     return (
@@ -69,7 +85,7 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
             </div>
 
             {/* Validators table */}
-            <div style={{ maxHeight: fullPage ? 'calc(100vh - 250px)' : '400px', overflowY: 'auto' }}>
+            <div>
               <table className="table table-sm table-borderless mb-0">
                 <thead className="sticky-top" style={{ background: 'var(--bs-body-bg)' }}>
                   <tr>
@@ -80,33 +96,33 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredValidators.length === 0 ? (
+                  {pagedValidators.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="text-muted text-center small">
                         No validators match your search
                       </td>
                     </tr>
                   ) : (
-                    filteredValidators.map((validator, idx) => (
+                    pagedValidators.map((validator, idx) => (
                       <tr key={idx}>
                         <td className="small font-monospace">
                           <span
-                            className="text-primary"
+                            className="text-primary hash-copy-text"
                             style={{ cursor: 'pointer' }}
                             onClick={() => copyToClipboard(validator.pubkey)}
                             title="Click to copy"
                           >
-                            {formatHex(validator.pubkey)}
+                            {validator.pubkey}
                           </span>
                         </td>
                         <td className="small font-monospace">
                           <span
-                            className="text-info"
+                            className="text-info hash-copy-text"
                             style={{ cursor: 'pointer' }}
                             onClick={() => copyToClipboard(validator.fee_recipient)}
                             title="Click to copy"
                           >
-                            {formatHex(validator.fee_recipient)}
+                            {validator.fee_recipient}
                           </span>
                         </td>
                         <td className="small text-end">
@@ -121,6 +137,13 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
                 </tbody>
               </table>
             </div>
+
+            <Pagination
+              total={total}
+              offset={offset}
+              limit={limit}
+              onPageChange={setOffset}
+            />
           </>
         )}
       </div>

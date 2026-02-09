@@ -541,3 +541,180 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Bids Won table header + hash copy styling */
+.bids-won-header {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+.hash-copy-button,
+.hash-copy-text {
+  user-select: none;
+  word-break: break-all;
+}
+
+.hash-copy-button {
+  text-align: left;
+}
+
+.hash-copy-text {
+  display: inline-block;
+}
+
+/* Header nav buttons */
+.header-nav-button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.header-nav-button.nav-link {
+  padding: 0.5rem 0.75rem;
+}
+
+/* Swagger UI integration */
+.swagger-container .swagger-ui {
+  font-family: inherit;
+}
+
+.swagger-container .swagger-ui .topbar {
+  display: none;
+}
+
+.swagger-container .swagger-ui .scheme-container {
+  background: var(--bs-tertiary-bg);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui {
+  background: transparent;
+}
+
+.swagger-dark .swagger-ui,
+.swagger-dark .swagger-ui .info .title,
+.swagger-dark .swagger-ui .info p,
+.swagger-dark .swagger-ui .info li,
+.swagger-dark .swagger-ui .info a,
+.swagger-dark .swagger-ui .opblock-tag,
+.swagger-dark .swagger-ui .opblock .opblock-summary-path,
+.swagger-dark .swagger-ui .opblock .opblock-summary-description,
+.swagger-dark .swagger-ui .opblock-description-wrapper p,
+.swagger-dark .swagger-ui .model,
+.swagger-dark .swagger-ui .model-title,
+.swagger-dark .swagger-ui table thead tr td,
+.swagger-dark .swagger-ui table thead tr th,
+.swagger-dark .swagger-ui table tbody tr td,
+.swagger-dark .swagger-ui .parameter__name,
+.swagger-dark .swagger-ui .parameter__type,
+.swagger-dark .swagger-ui .response-col_status,
+.swagger-dark .swagger-ui .response-col_description,
+.swagger-dark .swagger-ui .responses-inner h4,
+.swagger-dark .swagger-ui .btn,
+.swagger-dark .swagger-ui select,
+.swagger-dark .swagger-ui input,
+.swagger-dark .swagger-ui textarea {
+  color: var(--bs-body-color) !important;
+}
+
+.swagger-dark .swagger-ui .opblock,
+.swagger-dark .swagger-ui .opblock-tag,
+.swagger-dark .swagger-ui .scheme-container,
+.swagger-dark .swagger-ui section.models,
+.swagger-dark .swagger-ui .model-box {
+  background: var(--bs-body-bg);
+  border-color: var(--bs-border-color);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui .opblock .opblock-section-header {
+  background: var(--bs-tertiary-bg);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui input[type=text],
+.swagger-dark .swagger-ui input[type=search],
+.swagger-dark .swagger-ui textarea,
+.swagger-dark .swagger-ui select {
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+}
+
+/* Layout spacing for fixed header */
+.app-main {
+  padding-top: 68px;
+}
+
+.brand-logo {
+  display: inline-block;
+  border-radius: 4px;
+  height: 50px;
+  width: auto;
+  margin-right: 10px;
+}
+
+/* Layout (moved from legacy static css) */
+body main {
+  min-height: calc(100vh - 180px) !important;
+}
+
+.header {
+  height: 60px;
+}
+
+.footer {
+  margin-top: 30px;
+  margin-bottom: 20px;
+}
+
+header.header-bar {
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: 1000;
+  height: 65px;
+  box-shadow: 0 0.5em 1.5em rgba(0, 0, 0, 0.1), 0 0.125em 0.5em rgba(0, 0, 0, 0.15);
+}
+
+header.header-bar .navbar-brand {
+  margin-right: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+header.header-bar .navbar {
+  padding: 8px;
+}
+
+@media (min-width: 992px) {
+  header .collapsed-info {
+    display: none;
+  }
+
+  header .navbar-collapse {
+    flex-grow: initial;
+  }
+}
+
+.colormode-icon {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+}
+
+nav .theme-selector .theme-navicon {
+  display: inline;
+  height: 40px;
+}
+
+@media (min-width: 1650px) {
+  .container,
+  .container-lg,
+  .container-md,
+  .container-sm,
+  .container-xl,
+  .container-xxl {
+    max-width: 1520px;
+  }
+}

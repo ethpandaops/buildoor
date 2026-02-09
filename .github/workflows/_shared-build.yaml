@@ -74,7 +74,7 @@ jobs:
     - name: "Upload artifact: webui-package"
       uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
       with:
-        path: ./pkg/webui/static/bundle/*
+        path: ./pkg/webui/static/*
         name: webui-package
 
   build_linux_amd64_binary:
@@ -102,7 +102,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
 
     # build binaries
     - name: Build linux amd64 binary
@@ -143,7 +143,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
 
     # build binaries
     - name: Build linux arm64 binary
@@ -184,7 +184,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
 
     # build binaries
     - name: Build windows binary
@@ -225,7 +225,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
 
     # build binaries
     - name: Build macos amd64 binary
@@ -266,7 +266,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
 
     # build binaries
     - name: Build macos arm64 binary
@@ -310,7 +310,7 @@ jobs:
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:
         name: webui-package
-        path: ./pkg/webui/static/bundle
+        path: ./pkg/webui/static
     - name: Download build artifacts
       uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
       with:

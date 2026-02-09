@@ -18,7 +18,7 @@ build: ensure-ui
 	env CGO_ENABLED=1 go build -v -o bin/ -ldflags="-s -w $(GOLDFLAGS)" .
 
 ensure-ui:
-	if [ ! -f pkg/webui/static/bundle/buildoor.js ]; then $(MAKE) build-ui; fi
+	if [ ! -f pkg/webui/static/index.html ]; then $(MAKE) build-ui; fi
 
 build-ui:
 	$(MAKE) -C pkg/webui install
