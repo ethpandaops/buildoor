@@ -11,6 +11,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -39,6 +40,7 @@ const (
 	EventTypeBuilderAPIGetHeaderDlvd     EventType = "builder_api_get_header_delivered"
 	EventTypeBuilderAPISubmitBlindedRcvd EventType = "builder_api_submit_blinded_received"
 	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
+	EventTypeServiceStatus               EventType = "service_status"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -157,6 +159,14 @@ type BidWonStreamEvent struct {
 	Timestamp       int64  `json:"timestamp"`
 }
 
+// ServiceStatusEvent indicates which services are available and enabled.
+type ServiceStatusEvent struct {
+	EPBSAvailable   bool `json:"epbs_available"`
+	EPBSEnabled     bool `json:"epbs_enabled"`
+	LegacyAvailable bool `json:"legacy_available"`
+	LegacyEnabled   bool `json:"legacy_enabled"`
+}
+
 // BuilderAPIGetHeaderReceivedEvent is sent when a getHeader request is received.
 type BuilderAPIGetHeaderReceivedEvent struct {
 	Slot       uint64 `json:"slot"`
@@ -189,27 +199,32 @@ type BuilderAPISubmitBlindedDeliveredEvent struct {
 
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
-	builderSvc   *builder.Service
-	epbsSvc      *epbs.Service      // Optional ePBS service for bid events
-	lifecycleMgr *lifecycle.Manager // Optional lifecycle manager for balance info
-	chainSvc     chain.Service      // Optional chain service for head vote tracking
-	clients      map[chan *StreamEvent]struct{}
-	mu           sync.RWMutex
-	ctx          context.Context
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
+	builderSvc    *builder.Service
+	epbsSvc       *epbs.Service      // Optional ePBS service for bid events
+	lifecycleMgr  *lifecycle.Manager // Optional lifecycle manager for balance info
+	chainSvc      chain.Service      // Optional chain service for head vote tracking
+	builderAPISvc *builderapi.Server // Optional Builder API server
+	clients       map[chan *StreamEvent]struct{}
+	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 
 	// Track slot states for UI
 	slotStates   map[phase0.Slot]*SlotStateEvent
 	slotStatesMu sync.RWMutex
 
 	// Track last sent stats to avoid spam
-	lastStats   builder.BuilderStats
+	lastStats   StatsResponse
 	lastStatsMu sync.Mutex
 
 	// Track last sent builder info to avoid spam
 	lastBuilderInfo   BuilderInfoEvent
 	lastBuilderInfoMu sync.Mutex
+
+	// Track last sent service status to avoid spam
+	lastServiceStatus   ServiceStatusEvent
+	lastServiceStatusMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
@@ -218,18 +233,20 @@ func NewEventStreamManager(
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
+	builderAPISvc *builderapi.Server,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &EventStreamManager{
-		builderSvc:   builderSvc,
-		epbsSvc:      epbsSvc,
-		lifecycleMgr: lifecycleMgr,
-		chainSvc:     chainSvc,
-		clients:      make(map[chan *StreamEvent]struct{}, 8),
-		ctx:          ctx,
-		cancel:       cancel,
-		slotStates:   make(map[phase0.Slot]*SlotStateEvent, 16),
+		builderSvc:    builderSvc,
+		epbsSvc:       epbsSvc,
+		lifecycleMgr:  lifecycleMgr,
+		chainSvc:      chainSvc,
+		builderAPISvc: builderAPISvc,
+		clients:       make(map[chan *StreamEvent]struct{}, 8),
+		ctx:           ctx,
+		cancel:        cancel,
+		slotStates:    make(map[phase0.Slot]*SlotStateEvent, 16),
 	}
 }
 
@@ -309,9 +326,10 @@ func (m *EventStreamManager) Start() {
 					lastSlot = currentSlot
 					m.handleSlotStart(currentSlot)
 				}
-				// Periodically send stats and builder info
+				// Periodically send stats, builder info, and service status
 				m.sendStats()
 				m.sendBuilderInfo()
+				m.sendServiceStatus()
 			}
 		}
 	}()
@@ -556,14 +574,37 @@ func (m *EventStreamManager) broadcastSlotState(slot phase0.Slot) {
 	})
 }
 
-func (m *EventStreamManager) sendStats() {
+func (m *EventStreamManager) buildStatsResponse() StatsResponse {
 	stats := m.builderSvc.GetStats()
+	resp := StatsResponse{
+		SlotsBuilt:     stats.SlotsBuilt,
+		BlocksIncluded: stats.BlocksIncluded,
+		BidsSubmitted:  stats.BidsSubmitted,
+		BidsWon:        stats.BidsWon,
+		TotalPaid:      stats.TotalPaid,
+		RevealsSuccess: stats.RevealsSuccess,
+		RevealsFailed:  stats.RevealsFailed,
+		RevealsSkipped: stats.RevealsSkipped,
+	}
+
+	if m.builderAPISvc != nil {
+		apiStats := m.builderAPISvc.GetRequestStats()
+		resp.BuilderAPIHeadersRequested = apiStats.HeadersRequested
+		resp.BuilderAPIBlocksPublished = apiStats.BlocksPublished
+		resp.BuilderAPIRegisteredValidators = apiStats.ValidatorCount
+	}
+
+	return resp
+}
+
+func (m *EventStreamManager) sendStats() {
+	resp := m.buildStatsResponse()
 
 	// Only send if stats changed
 	m.lastStatsMu.Lock()
-	changed := stats != m.lastStats
+	changed := resp != m.lastStats
 	if changed {
-		m.lastStats = stats
+		m.lastStats = resp
 	}
 	m.lastStatsMu.Unlock()
 
@@ -574,15 +615,7 @@ func (m *EventStreamManager) sendStats() {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeStats,
 		Timestamp: time.Now().UnixMilli(),
-		Data: StatsResponse{
-			SlotsBuilt:     stats.SlotsBuilt,
-			BidsSubmitted:  stats.BidsSubmitted,
-			BidsWon:        stats.BidsWon,
-			TotalPaid:      stats.TotalPaid,
-			RevealsSuccess: stats.RevealsSuccess,
-			RevealsFailed:  stats.RevealsFailed,
-			RevealsSkipped: stats.RevealsSkipped,
-		},
+		Data:      resp,
 	})
 }
 
@@ -654,6 +687,45 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	return info
 }
 
+func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
+	return ServiceStatusEvent{
+		EPBSAvailable:   m.epbsSvc != nil,
+		EPBSEnabled:     m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
+		LegacyAvailable: m.builderAPISvc != nil,
+		LegacyEnabled:   m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
+	}
+}
+
+func (m *EventStreamManager) sendServiceStatus() {
+	status := m.getServiceStatus()
+
+	m.lastServiceStatusMu.Lock()
+	changed := status != m.lastServiceStatus
+	if changed {
+		m.lastServiceStatus = status
+	}
+	m.lastServiceStatusMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeServiceStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      status,
+	})
+}
+
+// BroadcastServiceStatus broadcasts the current service status.
+func (m *EventStreamManager) BroadcastServiceStatus() {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeServiceStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.getServiceStatus(),
+	})
+}
+
 func (m *EventStreamManager) cleanupOldSlots(currentSlot phase0.Slot) {
 	m.slotStatesMu.Lock()
 	defer m.slotStatesMu.Unlock()
@@ -687,20 +759,18 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 		},
 	}
 
+	// Send service status
+	ch <- &StreamEvent{
+		Type:      EventTypeServiceStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.getServiceStatus(),
+	}
+
 	// Send current stats
-	stats := m.builderSvc.GetStats()
 	ch <- &StreamEvent{
 		Type:      EventTypeStats,
 		Timestamp: time.Now().UnixMilli(),
-		Data: StatsResponse{
-			SlotsBuilt:     stats.SlotsBuilt,
-			BidsSubmitted:  stats.BidsSubmitted,
-			BidsWon:        stats.BidsWon,
-			TotalPaid:      stats.TotalPaid,
-			RevealsSuccess: stats.RevealsSuccess,
-			RevealsFailed:  stats.RevealsFailed,
-			RevealsSkipped: stats.RevealsSkipped,
-		},
+		Data:      m.buildStatsResponse(),
 	}
 
 	// Send builder info

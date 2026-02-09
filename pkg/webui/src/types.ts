@@ -40,6 +40,14 @@ export interface EPBSConfig {
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
+  payload_build_delay?: number;
+}
+
+export interface ServiceStatus {
+  epbs_available: boolean;
+  epbs_enabled: boolean;
+  legacy_available: boolean;
+  legacy_enabled: boolean;
 }
 
 export interface ChainInfo {
@@ -49,12 +57,16 @@ export interface ChainInfo {
 
 export interface Stats {
   slots_built: number;
+  blocks_included: number;
   bids_submitted: number;
   bids_won: number;
   total_paid: number;
   reveals_success: number;
   reveals_failed: number;
   reveals_skipped: number;
+  builder_api_headers_requested: number;
+  builder_api_blocks_published: number;
+  builder_api_registered_validators: number;
 }
 
 export interface BuilderInfo {

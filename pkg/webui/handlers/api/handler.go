@@ -44,6 +44,7 @@ func NewAPIHandler(
 	if builderSvc != nil {
 		h.eventStreamMgr = NewEventStreamManager(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
+			builderAPISvc,
 		)
 		h.eventStreamMgr.Start()
 	}

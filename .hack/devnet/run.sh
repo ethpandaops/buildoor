@@ -17,6 +17,9 @@ else
   --image-download always \
   --enclave "$ENCLAVE_NAME" \
   --args-file "${config_file}"
+
+  # Stop buildoor instance within ethereum-package if running
+  kurtosis service stop "$ENCLAVE_NAME" buildoor > /dev/null || true
 fi
 
 # Get jwtsecret
@@ -34,14 +37,33 @@ EXECUTION_NODE=$(docker ps -aq -f "label=kurtosis_enclave_uuid=$ENCLAVE_UUID" \
               -f "label=com.kurtosistech.custom.ethereum-package.client-type=execution" | tac | head -n 1)
 
 # Get URLs from first node of each type
-BEACON_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "4000/tcp") 0).HostPort }}' $BEACON_NODE)"
+BEACON_PORT=$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "3500/tcp") 0).HostPort }}' $BEACON_NODE)
+if [ -z "$BEACON_PORT" ]; then
+  BEACON_PORT=$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "4000/tcp") 0).HostPort }}' $BEACON_NODE)
+fi
+BEACON_URL="127.0.0.1:$BEACON_PORT"
 ENGINE_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "8551/tcp") 0).HostPort }}' $EXECUTION_NODE)"
 EXECUTION_URL="127.0.0.1:$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "8545/tcp") 0).HostPort }}' $EXECUTION_NODE)"
+
+# Internal docker network URLs
+BEACON_IP=$(docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $BEACON_NODE)
+EXECUTION_IP=$(docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $EXECUTION_NODE)
+BEACON_INTERNAL_PORT=$(docker inspect --format='{{if (index .Config.ExposedPorts "3500/tcp")}}3500{{else}}4000{{end}}' $BEACON_NODE)
+BEACON_DOCKER_URL="${BEACON_IP}:${BEACON_INTERNAL_PORT}"
+ENGINE_DOCKER_URL="${EXECUTION_IP}:8551"
+EXECUTION_DOCKER_URL="${EXECUTION_IP}:8545"
 
 # Write config
 cat <<EOF > "${__dir}/generated-vars.env"
 BEACON_API=http://$BEACON_URL
 ENGINE_API=http://$ENGINE_URL
 EXECUTION_API=http://$EXECUTION_URL
+JWT_SECRET=${__dir}/generated-jwtsecret.txt
+EOF
+
+cat <<EOF > "${__dir}/generated-vars-docker.env"
+BEACON_API=http://$BEACON_DOCKER_URL
+ENGINE_API=http://$ENGINE_DOCKER_URL
+EXECUTION_API=http://$EXECUTION_DOCKER_URL
 JWT_SECRET=${__dir}/generated-jwtsecret.txt
 EOF

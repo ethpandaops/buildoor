@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { BuilderAPIStatus } from '../types';
 import { useAuth } from './useAuth';
 
@@ -7,12 +7,11 @@ export function useBuilderAPIStatus() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { getAuthHeader } = useAuth();
+  const initialFetchDone = useRef(false);
 
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        setLoading(true);
-        setError(null);
         const headers: HeadersInit = {};
         const token = getAuthHeader();
         if (token) {
@@ -28,11 +27,14 @@ export function useBuilderAPIStatus() {
 
         const data: BuilderAPIStatus = await response.json();
         setStatus(data);
+        setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
-        setStatus(null);
       } finally {
-        setLoading(false);
+        if (!initialFetchDone.current) {
+          initialFetchDone.current = true;
+          setLoading(false);
+        }
       }
     };
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -43,6 +44,7 @@ type Service struct {
 	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
 	builderSvc            *builder.Service
+	enabled               atomic.Bool
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	log                   logrus.FieldLogger
@@ -77,6 +79,16 @@ func NewService(
 	// after we have the chain spec and genesis info
 
 	return s, nil
+}
+
+// SetEnabled sets the enabled state of the ePBS service.
+func (s *Service) SetEnabled(enabled bool) {
+	s.enabled.Store(enabled)
+}
+
+// IsEnabled returns whether the ePBS service is enabled.
+func (s *Service) IsEnabled() bool {
+	return s.enabled.Load()
 }
 
 // SubscribeBidSubmissions subscribes to bid submission events.
@@ -205,7 +217,9 @@ func (s *Service) run() {
 			s.handleBidEvent(event)
 
 		case <-ticker.C:
-			s.scheduler.ProcessTick(s.ctx)
+			if s.enabled.Load() {
+				s.scheduler.ProcessTick(s.ctx)
+			}
 		}
 	}
 }
@@ -285,11 +299,6 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
-
-	// Update stats on builder service
-	if s.builderSvc != nil {
-		s.builderSvc.IncrementBlocksIncluded()
-	}
 }
 
 // GetBidTracker returns the bid tracker.

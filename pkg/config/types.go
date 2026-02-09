@@ -13,8 +13,8 @@ type Config struct {
 	APIUserHeader       string           `yaml:"api_user_header" json:"api_user_header"`         // Optional: header to use for authentication
 	APITokenKey         string           `yaml:"api_token_key" json:"api_token_key"`             // Optional: key to use for API token authentication
 	LifecycleEnabled    bool             `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
-	EPBSEnabled         bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Enable ePBS bidding/revealing
-	BuilderAPIEnabled   bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Enable traditional Builder API (pre-ePBS)
+	EPBSEnabled         bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
+	BuilderAPIEnabled   bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API (service available if port > 0)
 	BuilderAPI          BuilderAPIConfig `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
 	DepositAmount       uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
 	TopupThreshold      uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei

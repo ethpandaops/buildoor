@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ValidatorRegistration, ValidatorsResponse } from '../types';
 import { useAuth } from './useAuth';
 
@@ -7,12 +7,11 @@ export function useValidators() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { getAuthHeader } = useAuth();
+  const initialFetchDone = useRef(false);
 
   useEffect(() => {
     const fetchValidators = async () => {
       try {
-        setLoading(true);
-        setError(null);
         const headers: HeadersInit = {};
         const token = getAuthHeader();
         if (token) {
@@ -28,11 +27,14 @@ export function useValidators() {
 
         const data: ValidatorsResponse = await response.json();
         setValidators(data.validators || []);
+        setError(null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error');
-        setValidators([]);
       } finally {
-        setLoading(false);
+        if (!initialFetchDone.current) {
+          initialFetchDone.current = true;
+          setLoading(false);
+        }
       }
     };
 

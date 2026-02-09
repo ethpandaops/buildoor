@@ -1,16 +1,21 @@
 import React, { useState, useCallback, useRef } from 'react';
-import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint } from '../types';
+import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
 import { Popover, PopoverData } from './Popover';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
+
+const ROW_HEIGHT = 22;
+const ROW_PAD = 3;
 
 interface SlotGraphProps {
   slot: number;
   state: SlotState;
   originalConfig: Config | null;
+  originalServiceStatus: ServiceStatus | null;
   currentConfig: Config | null;
   chainInfo: ChainInfo | null;
   currentDisplaySlot: number;
+  serviceStatus: ServiceStatus | null;
 }
 
 interface PopoverState {
@@ -46,7 +51,7 @@ const buildHeadVotesPaths = (
   const startX = coords[0].x - HEAD_VOTES_EXTEND;
   const endX = coords[coords.length - 1].x + HEAD_VOTES_EXTEND;
 
-  // Line: horizontal extension left → data points → horizontal extension right
+  // Line: horizontal extension left -> data points -> horizontal extension right
   const parts = [
     `M ${startX} ${firstY}`,
     ...coords.map(c => `L ${c.x} ${c.y}`),
@@ -64,28 +69,54 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
   state,
   originalConfig,
+  originalServiceStatus,
   currentConfig,
   chainInfo,
-  currentDisplaySlot
+  currentDisplaySlot,
+  serviceStatus
 }) => {
   const [popover, setPopover] = useState<PopoverState | null>(null);
 
-  // Capture config on FIRST RENDER - never change after that
+  // Capture config and service status on FIRST RENDER - never change after that
   const capturedConfigRef = useRef<Config | null>(null);
   if (capturedConfigRef.current === null) {
     capturedConfigRef.current = originalConfig || currentConfig;
+  }
+
+  const capturedServiceStatusRef = useRef<ServiceStatus | null>(null);
+  if (capturedServiceStatusRef.current === null) {
+    capturedServiceStatusRef.current = originalServiceStatus || serviceStatus;
   }
 
   const { slotStartTime, rangeStart, totalRange } = calculateSlotTiming(chainInfo, slot);
   const slotDuration = chainInfo?.seconds_per_slot || 12000;
   const genesisTime = chainInfo?.genesis_time || 0;
 
-  // Only use currentConfig for FUTURE slots, otherwise use captured config
+  // Only use current (live) values for FUTURE slots, otherwise use captured snapshots
   const isSlotInFuture = slot > currentDisplaySlot;
   const config = isSlotInFuture ? currentConfig : capturedConfigRef.current;
+  const effectiveServiceStatus = isSlotInFuture ? serviceStatus : capturedServiceStatusRef.current;
 
   const epbsConfig = config?.epbs;
   const isScheduled = state.scheduled !== undefined ? state.scheduled : isSlotScheduled(slot, config?.schedule);
+
+  // Dynamic row layout based on active services (frozen for past slots)
+  const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
+  const legacyActive = effectiveServiceStatus?.legacy_enabled ?? false;
+
+  // Rows from top to bottom:
+  //   chain+payload (always) | ePBS (if active) | legacy (if active)
+  // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
+  const activeRows = 2 + (epbsActive && legacyActive ? 1 : 0);
+  const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+
+  // Row positions from bottom: legacy (if active) -> ePBS (if active) -> chain (top)
+  // When neither builder is active, an empty row sits below chain.
+  let rowIdx = 0;
+  const legacyRowBottom = legacyActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
+  const epbsRowBottom = epbsActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
+  if (!epbsActive && !legacyActive) rowIdx++; // empty second row
+  const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
   // Slot label
   let slotLabel = `Slot ${slot}`;
@@ -121,6 +152,12 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
   const revealX = epbsConfig ? calculatePosition(epbsConfig.reveal_time, rangeStart, totalRange) : 0;
 
+  // Build delay line: from build_start_time to payloadCreatedAt
+  const buildStartX = epbsConfig ? calculatePosition(epbsConfig.build_start_time, rangeStart, totalRange) : 0;
+  const payloadCreatedX = state.payloadCreatedAt
+    ? calculatePosition(state.payloadCreatedAt - slotStartTime, rangeStart, totalRange)
+    : 0;
+
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
     return hash.substring(0, len) + '...';
@@ -149,8 +186,16 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   };
 
   return (
-    <div className="slot-graph" onClick={closePopover}>
-      <div className="slot-graph-label">{slotLabel}</div>
+    <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
+      <div className="slot-graph-label">
+        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>{slotLabel}</span>
+        {epbsActive && epbsRowBottom >= 0 && (
+          <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
+        )}
+        {legacyActive && legacyRowBottom >= 0 && (
+          <span className="slot-graph-row-label" style={{ bottom: `${legacyRowBottom}px`, height: `${ROW_HEIGHT}px` }}>Legacy</span>
+        )}
+      </div>
       <div className="slot-graph-area">
         <div className="slot-graph-bg">
           {/* Slot markers */}
@@ -170,11 +215,13 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             <span className="marker-label">100%</span>
           </div>
 
-          {/* Bid window */}
-          {epbsConfig && bidStartX < 100 && bidEndX > 0 && (
+          {/* Bid window - spans ePBS row only */}
+          {epbsActive && epbsRowBottom >= 0 && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
+                bottom: `${epbsRowBottom}px`,
+                height: `${ROW_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
               }}
@@ -185,11 +232,15 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             </div>
           )}
 
-          {/* Reveal marker */}
-          {epbsConfig && revealX >= 0 && revealX <= 100 && (
+          {/* Reveal marker - spans ePBS row only */}
+          {epbsActive && epbsRowBottom >= 0 && epbsConfig && revealX >= 0 && revealX <= 100 && (
             <div
               className={`reveal-marker ${!state.bidWon ? 'reveal-marker-disabled' : ''}`}
-              style={{ left: `${revealX}%` }}
+              style={{
+                bottom: `${epbsRowBottom}px`,
+                height: `${ROW_HEIGHT}px`,
+                left: `${revealX}%`
+              }}
             >
               <span className="duty-label reveal-label">Reveal: {epbsConfig.reveal_time}ms</span>
             </div>
@@ -264,8 +315,49 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           );
         })()}
 
-        {/* Chain events row */}
-        <div className="event-row chain-events">
+        {/* Chain + payload events row (always on top) */}
+        <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
+          {/* Build delay line: from build_start_time to payload ready */}
+          {epbsConfig && state.payloadCreatedAt && genesisTime > 0 && buildStartX < 100 && payloadCreatedX > 0 && (
+            <div
+              className="build-delay-line"
+              style={{
+                left: `${Math.max(0, buildStartX)}%`,
+                width: `${Math.min(100, payloadCreatedX) - Math.max(0, buildStartX)}%`
+              }}
+              onClick={(e) => showPopover(e, {
+                title: 'Build Delay',
+                items: [
+                  { label: 'Build Start', value: `${epbsConfig.build_start_time}ms` },
+                  { label: 'Payload Ready', value: `${state.payloadCreatedAt! - slotStartTime}ms` },
+                  { label: 'Duration', value: `${(state.payloadCreatedAt! - slotStartTime) - epbsConfig.build_start_time}ms` }
+                ]
+              })}
+            />
+          )}
+
+          {/* Payload created */}
+          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+            'payload-created',
+            state.payloadCreatedAt - slotStartTime,
+            {
+              title: 'Payload Created',
+              items: [
+                { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                ...(state.payloadBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.payloadBlockHash),
+                  copyValue: state.payloadBlockHash
+                }] : []),
+                ...(state.payloadBlockValue ? [{
+                  label: 'Block Value',
+                  value: formatGwei(state.payloadBlockValue)
+                }] : [])
+              ]
+            },
+            'payload'
+          )}
+
           {/* Block received */}
           {state.blockReceivedAt && genesisTime > 0 && renderEventDot(
             'block-received',
@@ -330,138 +422,120 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           })}
         </div>
 
-        {/* Builder events row */}
-        <div className="event-row builder-events">
-          {/* Payload created */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
-            'payload-created',
-            state.payloadCreatedAt - slotStartTime,
-            {
-              title: 'Payload Created',
-              items: [
-                { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
-                ...(state.payloadBlockHash ? [{
-                  label: 'Block Hash',
-                  value: truncateHash(state.payloadBlockHash),
-                  copyValue: state.payloadBlockHash
-                }] : []),
-                ...(state.payloadBlockValue ? [{
-                  label: 'Block Value',
-                  value: formatGwei(state.payloadBlockValue)
-                }] : [])
-              ]
-            },
-            'payload'
-          )}
+        {/* ePBS events row */}
+        {epbsActive && epbsRowBottom >= 0 && (
+          <div className="event-row builder-events" style={{ bottom: `${epbsRowBottom}px` }}>
+            {/* Our bids */}
+            {state.ourBids?.map((bid: OurBid, idx: number) => {
+              const bidMs = bid.time - slotStartTime;
+              const bidSuccess = bid.success !== false;
+              return renderEventDot(
+                bidSuccess ? 'bid-submitted' : 'bid-failed',
+                bidMs,
+                {
+                  title: `Our Bid #${idx + 1}`,
+                  items: [
+                    { label: 'Time', value: `${bidMs}ms` },
+                    { label: 'Bid Amount', value: formatGwei(bid.value) },
+                    ...(bid.blockHash ? [{
+                      label: 'Block Hash',
+                      value: truncateHash(bid.blockHash),
+                      copyValue: bid.blockHash
+                    }] : []),
+                    { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
+                    ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
+                  ]
+                },
+                `bid-${idx}`
+              );
+            })}
 
-          {/* Our bids */}
-          {state.ourBids?.map((bid: OurBid, idx: number) => {
-            const bidMs = bid.time - slotStartTime;
-            const bidSuccess = bid.success !== false;
-            return renderEventDot(
-              bidSuccess ? 'bid-submitted' : 'bid-failed',
-              bidMs,
+            {/* Reveal */}
+            {state.revealSentAt && genesisTime > 0 && renderEventDot(
+              state.revealFailed ? 'reveal-failed' : 'reveal-sent',
+              state.revealSentAt - slotStartTime,
               {
-                title: `Our Bid #${idx + 1}`,
+                title: 'Payload Reveal',
                 items: [
-                  { label: 'Time', value: `${bidMs}ms` },
-                  { label: 'Bid Amount', value: formatGwei(bid.value) },
-                  ...(bid.blockHash ? [{
-                    label: 'Block Hash',
-                    value: truncateHash(bid.blockHash),
-                    copyValue: bid.blockHash
-                  }] : []),
-                  { label: 'Status', value: bidSuccess ? 'Success' : 'Failed' },
-                  ...(bid.error ? [{ label: 'Error', value: bid.error }] : [])
+                  { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
+                  { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
                 ]
               },
-              `bid-${idx}`
-            );
-          })}
+              'reveal'
+            )}
+          </div>
+        )}
 
-          {/* Reveal */}
-          {state.revealSentAt && genesisTime > 0 && renderEventDot(
-            state.revealFailed ? 'reveal-failed' : 'reveal-sent',
-            state.revealSentAt - slotStartTime,
-            {
-              title: 'Payload Reveal',
-              items: [
-                { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
-                { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
-              ]
-            },
-            'reveal'
-          )}
-        </div>
+        {/* Builder API (legacy) events row */}
+        {legacyActive && (
+          <div className="event-row builder-api-events" style={{ bottom: `${legacyRowBottom}px` }}>
+            {/* getHeader received */}
+            {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
+              'get-header-received',
+              state.getHeaderReceivedAt - slotStartTime,
+              {
+                title: 'getHeader Request',
+                items: [
+                  { label: 'Time', value: `${state.getHeaderReceivedAt - slotStartTime}ms` }
+                ]
+              },
+              'get-header-rcvd'
+            )}
 
-        {/* Builder API events row */}
-        <div className="event-row builder-api-events">
-          {/* getHeader received */}
-          {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
-            'get-header-received',
-            state.getHeaderReceivedAt - slotStartTime,
-            {
-              title: 'getHeader Request',
-              items: [
-                { label: 'Time', value: `${state.getHeaderReceivedAt - slotStartTime}ms` }
-              ]
-            },
-            'get-header-rcvd'
-          )}
+            {/* getHeader delivered */}
+            {state.getHeaderDeliveredAt && genesisTime > 0 && renderEventDot(
+              'get-header-delivered',
+              state.getHeaderDeliveredAt - slotStartTime,
+              {
+                title: 'Header Delivered',
+                items: [
+                  { label: 'Time', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                  ...(state.getHeaderBlockValue ? [{
+                    label: 'Block Value',
+                    value: state.getHeaderBlockValue + ' wei'
+                  }] : []),
+                  ...(state.getHeaderBlockHash ? [{
+                    label: 'Block Hash',
+                    value: truncateHash(state.getHeaderBlockHash),
+                    copyValue: state.getHeaderBlockHash
+                  }] : [])
+                ]
+              },
+              'get-header-dlvd'
+            )}
 
-          {/* getHeader delivered */}
-          {state.getHeaderDeliveredAt && genesisTime > 0 && renderEventDot(
-            'get-header-delivered',
-            state.getHeaderDeliveredAt - slotStartTime,
-            {
-              title: 'Header Delivered',
-              items: [
-                { label: 'Time', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
-                ...(state.getHeaderBlockValue ? [{
-                  label: 'Block Value',
-                  value: state.getHeaderBlockValue + ' wei'
-                }] : []),
-                ...(state.getHeaderBlockHash ? [{
-                  label: 'Block Hash',
-                  value: truncateHash(state.getHeaderBlockHash),
-                  copyValue: state.getHeaderBlockHash
-                }] : [])
-              ]
-            },
-            'get-header-dlvd'
-          )}
+            {/* submitBlindedBlock received */}
+            {state.submitBlindedReceivedAt && genesisTime > 0 && renderEventDot(
+              'submit-blinded-received',
+              state.submitBlindedReceivedAt - slotStartTime,
+              {
+                title: 'submitBlindedBlock Request',
+                items: [
+                  { label: 'Time', value: `${state.submitBlindedReceivedAt - slotStartTime}ms` },
+                  ...(state.submitBlindedBlockHash ? [{
+                    label: 'Block Hash',
+                    value: truncateHash(state.submitBlindedBlockHash),
+                    copyValue: state.submitBlindedBlockHash
+                  }] : [])
+                ]
+              },
+              'submit-blinded-rcvd'
+            )}
 
-          {/* submitBlindedBlock received */}
-          {state.submitBlindedReceivedAt && genesisTime > 0 && renderEventDot(
-            'submit-blinded-received',
-            state.submitBlindedReceivedAt - slotStartTime,
-            {
-              title: 'submitBlindedBlock Request',
-              items: [
-                { label: 'Time', value: `${state.submitBlindedReceivedAt - slotStartTime}ms` },
-                ...(state.submitBlindedBlockHash ? [{
-                  label: 'Block Hash',
-                  value: truncateHash(state.submitBlindedBlockHash),
-                  copyValue: state.submitBlindedBlockHash
-                }] : [])
-              ]
-            },
-            'submit-blinded-rcvd'
-          )}
-
-          {/* submitBlindedBlock delivered */}
-          {state.submitBlindedDeliveredAt && genesisTime > 0 && renderEventDot(
-            'submit-blinded-delivered',
-            state.submitBlindedDeliveredAt - slotStartTime,
-            {
-              title: 'Block Published',
-              items: [
-                { label: 'Time', value: `${state.submitBlindedDeliveredAt - slotStartTime}ms` }
-              ]
-            },
-            'submit-blinded-dlvd'
-          )}
-        </div>
+            {/* submitBlindedBlock delivered */}
+            {state.submitBlindedDeliveredAt && genesisTime > 0 && renderEventDot(
+              'submit-blinded-delivered',
+              state.submitBlindedDeliveredAt - slotStartTime,
+              {
+                title: 'Block Published',
+                items: [
+                  { label: 'Time', value: `${state.submitBlindedDeliveredAt - slotStartTime}ms` }
+                ]
+              },
+              'submit-blinded-dlvd'
+            )}
+          </div>
+        )}
 
         {/* Current time indicator - animated via requestAnimationFrame */}
         <CurrentTimeIndicator

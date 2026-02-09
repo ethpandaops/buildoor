@@ -520,10 +520,11 @@ func (c *Client) GetPayload(ctx context.Context, payloadID PayloadID) (*Executio
 
 // GetPayloadRawResult contains typed payload, blobs, and execution requests from engine_getPayload.
 type GetPayloadRawResult struct {
-	ExecutionPayload  *ExecutionPayload
-	BlockValue        *big.Int
-	BlobsBundle       *BlobsBundle
-	ExecutionRequests ExecutionRequests
+	ExecutionPayloadJSON json.RawMessage
+	ExecutionPayload     *ExecutionPayload
+	BlockValue           *big.Int
+	BlobsBundle          *BlobsBundle
+	ExecutionRequests    ExecutionRequests
 }
 
 // GetPayloadRaw retrieves a payload and returns typed ExecutionPayload, BlobsBundle, and ExecutionRequests.
@@ -608,10 +609,11 @@ func (c *Client) GetPayloadRaw(
 	}
 
 	return &GetPayloadRawResult{
-		ExecutionPayload:  &payload,
-		BlockValue:        blockValue,
-		BlobsBundle:       blobsBundle,
-		ExecutionRequests: execRequests,
+		ExecutionPayloadJSON: response.ExecutionPayload,
+		ExecutionPayload:     &payload,
+		BlockValue:           blockValue,
+		BlobsBundle:          blobsBundle,
+		ExecutionRequests:    execRequests,
 	}, nil
 }
 

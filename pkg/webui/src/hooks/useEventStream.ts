@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -7,9 +7,11 @@ interface UseEventStreamResult {
   chainInfo: ChainInfo | null;
   stats: Stats | null;
   builderInfo: BuilderInfo | null;
+  serviceStatus: ServiceStatus | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
+  slotServiceStatuses: Record<number, ServiceStatus>;
   events: LogEvent[];
   clearEvents: () => void;
 }
@@ -20,19 +22,23 @@ export function useEventStream(): UseEventStreamResult {
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [builderInfo, setBuilderInfo] = useState<BuilderInfo | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
+  const [slotServiceStatuses, setSlotServiceStatuses] = useState<Record<number, ServiceStatus>>({});
   const [events, setEvents] = useState<LogEvent[]>([]);
 
   // Use refs to access current values in event handlers without causing reconnection
   const configRef = useRef<Config | null>(null);
+  const serviceStatusRef = useRef<ServiceStatus | null>(null);
   const chainInfoRef = useRef<ChainInfo | null>(null);
   const currentSlotRef = useRef(0);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   // Keep refs in sync with state
   useEffect(() => { configRef.current = config; }, [config]);
+  useEffect(() => { serviceStatusRef.current = serviceStatus; }, [serviceStatus]);
   useEffect(() => { chainInfoRef.current = chainInfo; }, [chainInfo]);
   useEffect(() => { currentSlotRef.current = currentSlot; }, [currentSlot]);
 
@@ -105,14 +111,25 @@ export function useEventStream(): UseEventStreamResult {
           setBuilderInfo(event.data as BuilderInfo);
           break;
 
+        case 'service_status':
+          setServiceStatus(event.data as ServiceStatus);
+          break;
+
         case 'slot_start': {
           const data = event.data as { slot: number; slot_start_time: number };
           // Don't update currentSlot here - it's the "next" slot being prepared
-          // Store config snapshot for this slot
+          // Store config and service status snapshots for this slot
           setSlotConfigs(prev => {
             const currentConfig = configRef.current;
             if (currentConfig) {
               return { ...prev, [data.slot]: JSON.parse(JSON.stringify(currentConfig)) };
+            }
+            return prev;
+          });
+          setSlotServiceStatuses(prev => {
+            const currentSS = serviceStatusRef.current;
+            if (currentSS) {
+              return { ...prev, [data.slot]: { ...currentSS } };
             }
             return prev;
           });
@@ -339,9 +356,11 @@ export function useEventStream(): UseEventStreamResult {
     chainInfo,
     stats,
     builderInfo,
+    serviceStatus,
     currentSlot,
     slotStates,
     slotConfigs,
+    slotServiceStatuses,
     events,
     clearEvents
   };

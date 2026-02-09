@@ -5,11 +5,10 @@
   gap: 2px;
 }
 
-/* Individual slot graph */
+/* Individual slot graph - height set dynamically via inline style */
 .slot-graph {
   display: flex;
   align-items: stretch;
-  height: 50px;
   border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   overflow: hidden;
@@ -19,16 +18,33 @@
 .slot-graph-label {
   width: 90px;
   min-width: 90px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: relative;
   font-size: 10px;
   font-weight: bold;
   background: var(--bs-tertiary-bg);
   border-right: 1px solid var(--bs-border-color);
   color: var(--bs-secondary-color);
-  text-align: center;
+}
+
+.slot-graph-slot-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1.2;
+}
+
+.slot-graph-row-label {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--bs-secondary-color);
+  opacity: 0.7;
 }
 
 .slot-graph-area {
@@ -81,11 +97,9 @@
   opacity: 0.7;
 }
 
-/* Bid window background - lower half only */
+/* Bid window background - positioned dynamically */
 .bid-window-bg {
   position: absolute;
-  top: 50%;
-  bottom: 0;
   background: rgba(25, 135, 84, 0.15);
   border-left: 2px solid rgba(25, 135, 84, 0.6);
   border-right: 2px solid rgba(255, 193, 7, 0.6);
@@ -98,11 +112,9 @@
   border-right: 2px solid rgba(128, 128, 128, 0.3);
 }
 
-/* Reveal marker - lower half only */
+/* Reveal marker - positioned dynamically */
 .reveal-marker {
   position: absolute;
-  top: 50%;
-  bottom: 0;
   width: 2px;
   background: var(--bs-purple);
   opacity: 0.8;
@@ -141,6 +153,31 @@
   color: rgba(128, 128, 128, 0.6);
 }
 
+/* Submit window for legacy builder */
+.submit-window-bg {
+  position: absolute;
+  z-index: 2;
+  background: rgba(13, 110, 253, 0.12);
+  border-left: 2px solid rgba(13, 110, 253, 0.5);
+  border-right: 2px solid rgba(13, 110, 253, 0.5);
+  pointer-events: none;
+}
+
+.submit-window-bg.submit-window-disabled {
+  background: rgba(128, 128, 128, 0.08);
+  border-left: 2px solid rgba(128, 128, 128, 0.3);
+  border-right: 2px solid rgba(128, 128, 128, 0.3);
+}
+
+.submit-label {
+  left: 4px;
+  color: rgba(13, 110, 253, 0.9);
+}
+
+.submit-window-disabled .submit-label {
+  color: rgba(128, 128, 128, 0.6);
+}
+
 /* Head votes participation graph */
 .head-votes-graph {
   position: absolute;
@@ -152,26 +189,13 @@
   z-index: 10;
 }
 
-/* Event rows */
+/* Event rows - positioned dynamically via inline styles */
 .event-row {
   position: absolute;
   left: 0;
   right: 0;
-  height: 20px;
+  height: 22px;
   pointer-events: none;
-}
-
-.chain-events {
-  top: 4px;
-}
-
-.builder-events {
-  bottom: 4px;
-}
-
-.builder-api-events {
-  top: 50%;
-  transform: translateY(-50%);
 }
 
 /* Event dots */
@@ -183,7 +207,7 @@
   transform: translateX(-50%);
   cursor: pointer;
   z-index: 50;
-  top: 4px;
+  top: 5px;
   pointer-events: auto;
 }
 
@@ -237,6 +261,23 @@
   border: 2px solid #bd2130;
 }
 
+/* Build delay line - horizontal line from FCU to payload ready */
+.build-delay-line {
+  position: absolute;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8));
+  border-radius: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.build-delay-line:hover {
+  background: linear-gradient(90deg, rgba(23, 162, 184, 0.6), rgba(23, 162, 184, 1));
+  height: 5px;
+}
+
 /* Builder API event colors */
 .get-header-received {
   background: #e83e8c;
@@ -256,6 +297,17 @@
 .submit-blinded-delivered {
   background: #0dcaf0;
   border: 2px solid #0aa2c0;
+}
+
+/* Legacy builder event colors */
+.legacy-submitted {
+  background: #0d6efd;
+  border: 2px solid #0a58ca;
+}
+
+.legacy-failed {
+  background: #dc3545;
+  border: 2px solid #bd2130;
 }
 
 /* Event popover */
@@ -409,6 +461,8 @@
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
 .bg-head-votes { background: #00bcd4; }
+.bg-legacy-submitted { background: #0d6efd; }
+.bg-legacy-failed { background: #dc3545; }
 
 /* Events log */
 .events-log-container {
@@ -451,23 +505,52 @@
 .event-bid-seen { border-left: 3px solid var(--bs-secondary); }
 .event-envelope { border-left: 3px solid #20c997; }
 
-/* Stats */
-.stat-box {
-  text-align: center;
-  padding: 10px;
+/* Stats - compact horizontal layout */
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
   background: var(--bs-tertiary-bg);
   border-radius: 4px;
 }
 
-.stat-value {
-  font-size: 24px;
-  font-weight: bold;
+.stat-item-label {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
+}
+
+.stat-item-value {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--bs-primary);
 }
 
-.stat-label {
-  font-size: 12px;
+/* Config items (2-column settings display) */
+.config-item {
+  padding: 6px 10px;
+  background: var(--bs-tertiary-bg);
+  border-radius: 4px;
+}
+
+.config-item-label {
+  font-size: 11px;
   color: var(--bs-secondary-color);
+}
+
+.config-item-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--bs-body-color);
+}
+
+/* Section headers within panels */
+.section-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 /* User display in header */
@@ -476,4 +559,181 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Bids Won table header + hash copy styling */
+.bids-won-header {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+.hash-copy-button,
+.hash-copy-text {
+  user-select: none;
+  word-break: break-all;
+}
+
+.hash-copy-button {
+  text-align: left;
+}
+
+.hash-copy-text {
+  display: inline-block;
+}
+
+/* Header nav buttons */
+.header-nav-button {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.header-nav-button.nav-link {
+  padding: 0.5rem 0.75rem;
+}
+
+/* Swagger UI integration */
+.swagger-container .swagger-ui {
+  font-family: inherit;
+}
+
+.swagger-container .swagger-ui .topbar {
+  display: none;
+}
+
+.swagger-container .swagger-ui .scheme-container {
+  background: var(--bs-tertiary-bg);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui {
+  background: transparent;
+}
+
+.swagger-dark .swagger-ui,
+.swagger-dark .swagger-ui .info .title,
+.swagger-dark .swagger-ui .info p,
+.swagger-dark .swagger-ui .info li,
+.swagger-dark .swagger-ui .info a,
+.swagger-dark .swagger-ui .opblock-tag,
+.swagger-dark .swagger-ui .opblock .opblock-summary-path,
+.swagger-dark .swagger-ui .opblock .opblock-summary-description,
+.swagger-dark .swagger-ui .opblock-description-wrapper p,
+.swagger-dark .swagger-ui .model,
+.swagger-dark .swagger-ui .model-title,
+.swagger-dark .swagger-ui table thead tr td,
+.swagger-dark .swagger-ui table thead tr th,
+.swagger-dark .swagger-ui table tbody tr td,
+.swagger-dark .swagger-ui .parameter__name,
+.swagger-dark .swagger-ui .parameter__type,
+.swagger-dark .swagger-ui .response-col_status,
+.swagger-dark .swagger-ui .response-col_description,
+.swagger-dark .swagger-ui .responses-inner h4,
+.swagger-dark .swagger-ui .btn,
+.swagger-dark .swagger-ui select,
+.swagger-dark .swagger-ui input,
+.swagger-dark .swagger-ui textarea {
+  color: var(--bs-body-color) !important;
+}
+
+.swagger-dark .swagger-ui .opblock,
+.swagger-dark .swagger-ui .opblock-tag,
+.swagger-dark .swagger-ui .scheme-container,
+.swagger-dark .swagger-ui section.models,
+.swagger-dark .swagger-ui .model-box {
+  background: var(--bs-body-bg);
+  border-color: var(--bs-border-color);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui .opblock .opblock-section-header {
+  background: var(--bs-tertiary-bg);
+  box-shadow: none;
+}
+
+.swagger-dark .swagger-ui input[type=text],
+.swagger-dark .swagger-ui input[type=search],
+.swagger-dark .swagger-ui textarea,
+.swagger-dark .swagger-ui select {
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+}
+
+/* Layout spacing for fixed header */
+.app-main {
+  padding-top: 68px;
+}
+
+.brand-logo {
+  display: inline-block;
+  border-radius: 4px;
+  height: 50px;
+  width: auto;
+  margin-right: 10px;
+}
+
+/* Layout (moved from legacy static css) */
+body main {
+  min-height: calc(100vh - 180px) !important;
+}
+
+.header {
+  height: 60px;
+}
+
+.footer {
+  margin-top: 30px;
+  margin-bottom: 20px;
+}
+
+header.header-bar {
+  position: fixed;
+  top: 0;
+  width: 100%;
+  z-index: 1000;
+  height: 65px;
+  box-shadow: 0 0.5em 1.5em rgba(0, 0, 0, 0.1), 0 0.125em 0.5em rgba(0, 0, 0, 0.15);
+}
+
+header.header-bar .navbar-brand {
+  margin-right: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+header.header-bar .navbar {
+  padding: 8px;
+}
+
+@media (min-width: 992px) {
+  header .collapsed-info {
+    display: none;
+  }
+
+  header .navbar-collapse {
+    flex-grow: initial;
+  }
+}
+
+.colormode-icon {
+  width: 1em;
+  height: 1em;
+  fill: currentColor;
+}
+
+nav .theme-selector .theme-navicon {
+  display: inline;
+  height: 40px;
+}
+
+@media (min-width: 1650px) {
+  .container,
+  .container-lg,
+  .container-md,
+  .container-sm,
+  .container-xl,
+  .container-xxl {
+    max-width: 1520px;
+  }
 }

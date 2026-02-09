@@ -32,30 +32,49 @@ type StatusResponse struct {
 // StatsResponse is the response for the stats endpoint.
 type StatsResponse struct {
 	SlotsBuilt     uint64 `json:"slots_built"`
+	BlocksIncluded uint64 `json:"blocks_included"`
 	BidsSubmitted  uint64 `json:"bids_submitted"`
 	BidsWon        uint64 `json:"bids_won"`
 	TotalPaid      uint64 `json:"total_paid_gwei"`
 	RevealsSuccess uint64 `json:"reveals_success"`
 	RevealsFailed  uint64 `json:"reveals_failed"`
 	RevealsSkipped uint64 `json:"reveals_skipped"`
+	// Builder API stats
+	BuilderAPIHeadersRequested     uint64 `json:"builder_api_headers_requested"`
+	BuilderAPIBlocksPublished      uint64 `json:"builder_api_blocks_published"`
+	BuilderAPIRegisteredValidators int    `json:"builder_api_registered_validators"`
 }
 
 // UpdateScheduleRequest is the request for updating schedule config.
 type UpdateScheduleRequest struct {
-	Mode     string `json:"mode"`
-	EveryNth uint64 `json:"every_nth,omitempty"`
-	NextN    uint64 `json:"next_n,omitempty"`
+	Mode      string  `json:"mode"`
+	EveryNth  uint64  `json:"every_nth,omitempty"`
+	NextN     uint64  `json:"next_n,omitempty"`
+	StartSlot *uint64 `json:"start_slot,omitempty"`
 }
 
 // UpdateEPBSRequest is the request for updating EPBS config.
 type UpdateEPBSRequest struct {
-	BuildStartTime *int64  `json:"build_start_time,omitempty"`
-	BidStartTime   *int64  `json:"bid_start_time,omitempty"`
-	BidEndTime     *int64  `json:"bid_end_time,omitempty"`
-	RevealTime     *int64  `json:"reveal_time,omitempty"`
-	BidMinAmount   *uint64 `json:"bid_min_amount,omitempty"`
-	BidIncrease    *uint64 `json:"bid_increase,omitempty"`
-	BidInterval    *int64  `json:"bid_interval,omitempty"`
+	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	BidStartTime      *int64  `json:"bid_start_time,omitempty"`
+	BidEndTime        *int64  `json:"bid_end_time,omitempty"`
+	RevealTime        *int64  `json:"reveal_time,omitempty"`
+	BidMinAmount      *uint64 `json:"bid_min_amount,omitempty"`
+	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
+	BidInterval       *int64  `json:"bid_interval,omitempty"`
+	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
+}
+
+// UpdateBuilderConfigRequest is the request for updating shared builder config.
+type UpdateBuilderConfigRequest struct {
+	BuildStartTime    *int64 `json:"build_start_time,omitempty"`
+	PayloadBuildDelay *int64 `json:"payload_build_delay,omitempty"`
+}
+
+// UpdateBuilderAPIConfigRequest is the request for updating Builder API config.
+type UpdateBuilderAPIConfigRequest struct {
+	UseProposerFeeRecipient *bool   `json:"use_proposer_fee_recipient,omitempty"`
+	BlockValueSubsidyGwei   *uint64 `json:"block_value_subsidy_gwei,omitempty"`
 }
 
 // LifecycleStatusResponse is the response for lifecycle status.
@@ -156,12 +175,20 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 
 	resp := StatsResponse{
 		SlotsBuilt:     stats.SlotsBuilt,
+		BlocksIncluded: stats.BlocksIncluded,
 		BidsSubmitted:  stats.BidsSubmitted,
 		BidsWon:        stats.BidsWon,
 		TotalPaid:      stats.TotalPaid,
 		RevealsSuccess: stats.RevealsSuccess,
 		RevealsFailed:  stats.RevealsFailed,
 		RevealsSkipped: stats.RevealsSkipped,
+	}
+
+	if h.builderAPISvc != nil {
+		apiStats := h.builderAPISvc.GetRequestStats()
+		resp.BuilderAPIHeadersRequested = apiStats.HeadersRequested
+		resp.BuilderAPIBlocksPublished = apiStats.BlocksPublished
+		resp.BuilderAPIRegisteredValidators = apiStats.ValidatorCount
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -220,6 +247,10 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	if req.NextN > 0 {
 		cfg.Schedule.NextN = req.NextN
+	}
+
+	if req.StartSlot != nil {
+		cfg.Schedule.StartSlot = *req.StartSlot
 	}
 
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
@@ -291,6 +322,10 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	if req.BidInterval != nil {
 		cfg.EPBS.BidInterval = *req.BidInterval
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
 	}
 
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
@@ -549,6 +584,123 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 		ValidatorCount:          validatorCount,
 		UseProposerFeeRecipient: cfg.BuilderAPI.UseProposerFeeRecipient,
 		BlockValueSubsidyGwei:   cfg.BuilderAPI.BlockValueSubsidyGwei,
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// UpdateBuilderConfig updates the shared builder configuration (build start time, payload build delay).
+func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateBuilderConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.BuildStartTime != nil {
+		cfg.EPBS.BuildStartTime = *req.BuildStartTime
+	}
+
+	if req.PayloadBuildDelay != nil {
+		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// UpdateBuilderAPIConfig updates the Builder API configuration.
+func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateBuilderAPIConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.UseProposerFeeRecipient != nil {
+		cfg.BuilderAPI.UseProposerFeeRecipient = *req.UseProposerFeeRecipient
+	}
+
+	if req.BlockValueSubsidyGwei != nil {
+		cfg.BuilderAPI.BlockValueSubsidyGwei = *req.BlockValueSubsidyGwei
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// ToggleServiceRequest is the request for toggling services.
+type ToggleServiceRequest struct {
+	EPBSEnabled   *bool `json:"epbs_enabled,omitempty"`
+	LegacyEnabled *bool `json:"legacy_enabled,omitempty"`
+}
+
+// ToggleServices toggles the enabled state of ePBS and/or legacy builder services.
+func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req ToggleServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.EPBSEnabled != nil && h.epbsSvc != nil {
+		h.epbsSvc.SetEnabled(*req.EPBSEnabled)
+	}
+
+	if req.LegacyEnabled != nil && h.builderAPISvc != nil {
+		h.builderAPISvc.SetEnabled(*req.LegacyEnabled)
+	}
+
+	// Broadcast updated status to all connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastServiceStatus()
+	}
+
+	// Return current status
+	status := ServiceStatusEvent{
+		EPBSAvailable:   h.epbsSvc != nil,
+		EPBSEnabled:     h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
+		LegacyAvailable: h.builderAPISvc != nil,
+		LegacyEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
 	}
 	writeJSON(w, http.StatusOK, status)
 }

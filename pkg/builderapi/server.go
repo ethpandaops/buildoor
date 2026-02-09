@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
@@ -52,6 +53,13 @@ type EventBroadcaster interface {
 	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei uint64)
 }
 
+// RequestStats holds counters for Builder API requests.
+type RequestStats struct {
+	HeadersRequested uint64
+	BlocksPublished  uint64
+	ValidatorCount   int
+}
+
 // Server implements the combined Builder API + Buildoor API HTTP server.
 type Server struct {
 	cfg                   *config.BuilderAPIConfig
@@ -64,6 +72,9 @@ type Server struct {
 	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
 	eventBroadcaster      EventBroadcaster     // optional: for broadcasting API events to WebUI
 	bidsWonStore          *BidsWonStore        // in-memory store of successfully delivered blocks
+	enabled               atomic.Bool          // runtime toggle for enabling/disabling the builder API
+	headersRequested      atomic.Uint64        // count of getHeader requests received
+	blocksPublished       atomic.Uint64        // count of successfully published blocks
 	genesisForkVersion    phase0.Version       // genesis fork version for builder domain (mev-boost-relay style)
 	forkVersion           phase0.Version       // current fork version for chain-specific verification
 	genesisValidatorsRoot phase0.Root          // genesis validators root for chain-specific verification
@@ -98,6 +109,16 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 	return s
 }
 
+// SetEnabled sets the enabled state of the Builder API server.
+func (s *Server) SetEnabled(enabled bool) {
+	s.enabled.Store(enabled)
+}
+
+// IsEnabled returns whether the Builder API server is enabled.
+func (s *Server) IsEnabled() bool {
+	return s.enabled.Load()
+}
+
 // SetFuluPublisher sets the optional publisher for unblinded Fulu blocks (e.g. beacon node client).
 func (s *Server) SetFuluPublisher(p FuluBlockPublisher) {
 	s.fuluPublisher = p
@@ -111,6 +132,15 @@ func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 // GetBidsWonStore returns the bids won store.
 func (s *Server) GetBidsWonStore() *BidsWonStore {
 	return s.bidsWonStore
+}
+
+// GetRequestStats returns the current request counters.
+func (s *Server) GetRequestStats() RequestStats {
+	return RequestStats{
+		HeadersRequested: s.headersRequested.Load(),
+		BlocksPublished:  s.blocksPublished.Load(),
+		ValidatorCount:   s.validatorsStore.Len(),
+	}
 }
 
 // Handler returns the HTTP handler for tests.
@@ -305,8 +335,8 @@ func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	log := s.log.WithField("path", "/eth/v1/builder/header/...")
 
-	if s.builderSvc == nil || s.blsSigner == nil {
-		log.Warn("getHeader: returning 204 — builder service or BLS signer not available")
+	if s.builderSvc == nil || s.blsSigner == nil || !s.enabled.Load() {
+		log.Warn("getHeader: returning 204 — builder service or BLS signer not available or service disabled")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -334,6 +364,8 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		writeValidatorError(w, http.StatusBadRequest, "invalid slot: must be a number")
 		return
 	}
+
+	s.headersRequested.Add(1)
 
 	// Broadcast getHeader received event
 	if s.eventBroadcaster != nil {
@@ -508,6 +540,8 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 		writeValidatorError(w, http.StatusBadRequest, "no publisher available")
 		return
 	}
+
+	s.blocksPublished.Add(1)
 
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
 

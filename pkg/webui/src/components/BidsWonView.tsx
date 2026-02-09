@@ -4,7 +4,7 @@ import { useBidsWon } from '../hooks/useBidsWon';
 
 export const BidsWonView: React.FC = () => {
   const [offset, setOffset] = useState(0);
-  const limit = 20;
+  const limit = 50;
   const { bidsWon, total, loading, refetch } = useBidsWon(offset, limit);
 
   // Listen for real-time bid_won events
