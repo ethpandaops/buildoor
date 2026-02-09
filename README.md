@@ -21,7 +21,7 @@ The ePBS mode is designed for the Gloas fork, where proposer-builder separation 
 
 ePBS is automatically available when the connected beacon node has the Gloas fork epoch configured. Use `--epbs-enabled` to activate bidding/revealing at startup.
 
-### Legacy Builder API
+### Builder API
 
 The Builder API mode implements the traditional [MEV-Boost Builder API](https://github.com/ethereum/builder-specs) for pre-ePBS forks. In this mode, Buildoor:
 

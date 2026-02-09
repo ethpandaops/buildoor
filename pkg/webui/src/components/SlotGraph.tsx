@@ -102,20 +102,20 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
 
   // Dynamic row layout based on active services (frozen for past slots)
   const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
-  const legacyActive = effectiveServiceStatus?.legacy_enabled ?? false;
+  const builderApiActive = effectiveServiceStatus?.builder_api_enabled ?? false;
 
   // Rows from top to bottom:
-  //   chain+payload (always) | ePBS (if active) | legacy (if active)
+  //   chain+payload (always) | ePBS (if active) | Builder API (if active)
   // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
-  const activeRows = 2 + (epbsActive && legacyActive ? 1 : 0);
+  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
   const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
 
-  // Row positions from bottom: legacy (if active) -> ePBS (if active) -> chain (top)
+  // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
   let rowIdx = 0;
-  const legacyRowBottom = legacyActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
+  const builderApiRowBottom = builderApiActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
   const epbsRowBottom = epbsActive ? (rowIdx++) * ROW_HEIGHT + ROW_PAD : -1;
-  if (!epbsActive && !legacyActive) rowIdx++; // empty second row
+  if (!epbsActive && !builderApiActive) rowIdx++; // empty second row
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
   // Slot label
@@ -192,8 +192,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
         {epbsActive && epbsRowBottom >= 0 && (
           <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
         )}
-        {legacyActive && legacyRowBottom >= 0 && (
-          <span className="slot-graph-row-label" style={{ bottom: `${legacyRowBottom}px`, height: `${ROW_HEIGHT}px` }}>Legacy</span>
+        {builderApiActive && builderApiRowBottom >= 0 && (
+          <span className="slot-graph-row-label" style={{ bottom: `${builderApiRowBottom}px`, height: `${ROW_HEIGHT}px` }}>Builder API</span>
         )}
       </div>
       <div className="slot-graph-area">
@@ -466,9 +466,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           </div>
         )}
 
-        {/* Builder API (legacy) events row */}
-        {legacyActive && (
-          <div className="event-row builder-api-events" style={{ bottom: `${legacyRowBottom}px` }}>
+        {/* Builder API events row */}
+        {builderApiActive && (
+          <div className="event-row builder-api-events" style={{ bottom: `${builderApiRowBottom}px` }}>
             {/* getHeader received */}
             {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
               'get-header-received',
