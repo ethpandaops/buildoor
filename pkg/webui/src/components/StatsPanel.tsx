@@ -17,7 +17,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ stats, serviceStatus }) 
   const [collapsed, setCollapsed] = useState(false);
 
   const epbsAvailable = serviceStatus?.epbs_available ?? false;
-  const legacyAvailable = serviceStatus?.legacy_available ?? false;
+  const builderApiAvailable = serviceStatus?.builder_api_available ?? false;
 
   return (
     <div className="card mb-3">
@@ -83,7 +83,7 @@ export const StatsPanel: React.FC<StatsPanelProps> = ({ stats, serviceStatus }) 
           )}
 
           {/* Builder API */}
-          {legacyAvailable && (
+          {builderApiAvailable && (
             <>
               <div className="section-header mb-2">Builder API</div>
               <div className="row g-2">

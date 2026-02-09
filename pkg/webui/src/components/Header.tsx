@@ -2,6 +2,7 @@ import React from 'react';
 import { HeaderNav } from './HeaderNav';
 import { UserDisplay } from './UserDisplay';
 import { useTheme, type ThemeMode } from '../hooks/useTheme';
+import { setView } from '../stores/viewStore';
 import logo from '../assets/buildoor.png';
 
 const THEME_ICONS: Record<ThemeMode, string> = {
@@ -36,7 +37,7 @@ export const Header: React.FC = () => {
 
       <nav id="nav" className="main-navigation navbar navbar-expand-lg navbar-light">
         <div className="container-fluid d-flex">
-          <a className="navbar-brand col-10 col-lg-auto me-lg-3" href="/">
+          <a className="navbar-brand col-10 col-lg-auto me-lg-3" href="/" onClick={(e) => { e.preventDefault(); setView('dashboard'); }}>
             <div className="page-brand">
               <div className="page-brand-container d-flex align-items-center gap-2">
                 <img

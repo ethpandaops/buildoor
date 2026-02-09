@@ -664,11 +664,11 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 
 // ToggleServiceRequest is the request for toggling services.
 type ToggleServiceRequest struct {
-	EPBSEnabled   *bool `json:"epbs_enabled,omitempty"`
-	LegacyEnabled *bool `json:"legacy_enabled,omitempty"`
+	EPBSEnabled       *bool `json:"epbs_enabled,omitempty"`
+	BuilderAPIEnabled *bool `json:"builder_api_enabled,omitempty"`
 }
 
-// ToggleServices toggles the enabled state of ePBS and/or legacy builder services.
+// ToggleServices toggles the enabled state of ePBS and/or Builder API services.
 func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -686,8 +686,8 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		h.epbsSvc.SetEnabled(*req.EPBSEnabled)
 	}
 
-	if req.LegacyEnabled != nil && h.builderAPISvc != nil {
-		h.builderAPISvc.SetEnabled(*req.LegacyEnabled)
+	if req.BuilderAPIEnabled != nil && h.builderAPISvc != nil {
+		h.builderAPISvc.SetEnabled(*req.BuilderAPIEnabled)
 	}
 
 	// Broadcast updated status to all connected clients
@@ -697,10 +697,10 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 
 	// Return current status
 	status := ServiceStatusEvent{
-		EPBSAvailable:   h.epbsSvc != nil,
-		EPBSEnabled:     h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
-		LegacyAvailable: h.builderAPISvc != nil,
-		LegacyEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+		EPBSAvailable:       h.epbsSvc != nil,
+		EPBSEnabled:         h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
+		BuilderAPIAvailable: h.builderAPISvc != nil,
+		BuilderAPIEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
 	}
 	writeJSON(w, http.StatusOK, status)
 }

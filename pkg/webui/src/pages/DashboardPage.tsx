@@ -74,7 +74,7 @@ const DashboardPage: React.FC = () => {
           {/* ePBS Bidder */}
           <ConfigPanel config={config} serviceStatus={serviceStatus} />
 
-          {/* Builder API (Legacy) */}
+          {/* Builder API */}
           <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
         </div>
       </div>

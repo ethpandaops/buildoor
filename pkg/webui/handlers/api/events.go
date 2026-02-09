@@ -161,10 +161,10 @@ type BidWonStreamEvent struct {
 
 // ServiceStatusEvent indicates which services are available and enabled.
 type ServiceStatusEvent struct {
-	EPBSAvailable   bool `json:"epbs_available"`
-	EPBSEnabled     bool `json:"epbs_enabled"`
-	LegacyAvailable bool `json:"legacy_available"`
-	LegacyEnabled   bool `json:"legacy_enabled"`
+	EPBSAvailable       bool `json:"epbs_available"`
+	EPBSEnabled         bool `json:"epbs_enabled"`
+	BuilderAPIAvailable bool `json:"builder_api_available"`
+	BuilderAPIEnabled   bool `json:"builder_api_enabled"`
 }
 
 // BuilderAPIGetHeaderReceivedEvent is sent when a getHeader request is received.
@@ -689,10 +689,10 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 	return ServiceStatusEvent{
-		EPBSAvailable:   m.epbsSvc != nil,
-		EPBSEnabled:     m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
-		LegacyAvailable: m.builderAPISvc != nil,
-		LegacyEnabled:   m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
+		EPBSAvailable:       m.epbsSvc != nil,
+		EPBSEnabled:         m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
+		BuilderAPIAvailable: m.builderAPISvc != nil,
+		BuilderAPIEnabled:   m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
 	}
 }
 
