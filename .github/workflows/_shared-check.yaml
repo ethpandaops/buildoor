@@ -30,6 +30,11 @@ jobs:
           webui-npm-${{ runner.os }}-
           webui-npm-
 
+    # build UI package
+    - name: Build UI package
+      run: |
+        make build-ui
+
     - name: Verify dependencies
       run: go mod verify
 
@@ -51,10 +56,3 @@ jobs:
 
     - name: Run tests
       run: go test -race -vet=off ./...
-
-    
-    # build UI package
-    - name: Build UI package
-      run: |
-        make build-ui
-    
