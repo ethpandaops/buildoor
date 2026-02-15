@@ -24,8 +24,8 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
   });
   const { getAuthHeader, isLoggedIn } = useAuth();
 
-  const isActive = serviceStatus?.legacy_enabled ?? false;
-  const isAvailable = serviceStatus?.legacy_available ?? false;
+  const isActive = serviceStatus?.builder_api_enabled ?? false;
+  const isAvailable = serviceStatus?.builder_api_available ?? false;
 
   const startEditing = () => {
     if (status) {
@@ -77,7 +77,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ legacy_enabled: !isActive }),
+        body: JSON.stringify({ builder_api_enabled: !isActive }),
       });
     } catch (err) {
       console.error('Failed to toggle Builder API:', err);
@@ -94,7 +94,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
         onClick={() => setCollapsed(!collapsed)}
       >
         <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} me-2`}></i>
-        <h5 className="mb-0 me-2">Builder API (Legacy)</h5>
+        <h5 className="mb-0 me-2">Builder API</h5>
         {loading ? (
           <span className="badge bg-secondary">Loading...</span>
         ) : !isAvailable ? (

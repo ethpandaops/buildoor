@@ -46,8 +46,8 @@ export interface EPBSConfig {
 export interface ServiceStatus {
   epbs_available: boolean;
   epbs_enabled: boolean;
-  legacy_available: boolean;
-  legacy_enabled: boolean;
+  builder_api_available: boolean;
+  builder_api_enabled: boolean;
 }
 
 export interface ChainInfo {

@@ -153,7 +153,7 @@
   color: rgba(128, 128, 128, 0.6);
 }
 
-/* Submit window for legacy builder */
+/* Submit window for Builder API */
 .submit-window-bg {
   position: absolute;
   z-index: 2;
@@ -299,13 +299,13 @@
   border: 2px solid #0aa2c0;
 }
 
-/* Legacy builder event colors */
-.legacy-submitted {
+/* Builder API event colors */
+.builder-api-submitted {
   background: #0d6efd;
   border: 2px solid #0a58ca;
 }
 
-.legacy-failed {
+.builder-api-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
 }
@@ -461,8 +461,8 @@
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
 .bg-head-votes { background: #00bcd4; }
-.bg-legacy-submitted { background: #0d6efd; }
-.bg-legacy-failed { background: #dc3545; }
+.bg-builder-api-submitted { background: #0d6efd; }
+.bg-builder-api-failed { background: #dc3545; }
 
 /* Events log */
 .events-log-container {
@@ -673,7 +673,7 @@
   margin-right: 10px;
 }
 
-/* Layout (moved from legacy static css) */
+/* Layout */
 body main {
   min-height: calc(100vh - 180px) !important;
 }

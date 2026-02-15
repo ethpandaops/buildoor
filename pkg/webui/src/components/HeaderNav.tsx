@@ -1,5 +1,5 @@
 import React from 'react';
-import { setView, useView, type ViewType } from '../stores/viewStore';
+import { getViewPath, setView, useView, type ViewType } from '../stores/viewStore';
 
 const NAV_ITEMS: Array<{ view: ViewType; label: string }> = [
   { view: 'dashboard', label: 'Dashboard' },
@@ -15,13 +15,16 @@ export const HeaderNav: React.FC = () => {
     <>
       {NAV_ITEMS.map((item) => (
         <li key={item.view} className="nav-item px-2">
-          <button
-            type="button"
+          <a
+            href={getViewPath(item.view)}
             className={`nav-link header-nav-button ${currentView === item.view ? 'active' : ''}`}
-            onClick={() => setView(item.view)}
+            onClick={(e) => {
+              e.preventDefault();
+              setView(item.view);
+            }}
           >
             <span className="nav-text">{item.label}</span>
-          </button>
+          </a>
         </li>
       ))}
     </>
