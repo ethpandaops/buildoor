@@ -1,21 +1,15 @@
-participants_matrix:
-  el:
-    - el_type: geth
-
-  cl:
-    - cl_type: lighthouse
-    # - cl_type: prysm
-    # - cl_type: teku
-    # - cl_type: nimbus
-    # - cl_type: grandine
-    # - cl_type: lodestar
+participants:
+  - el_type: geth
+    cl_type: lighthouse
+    cl_extra_params: 
+      - --always-prepare-payload
 
 network_params:
   seconds_per_slot: 12
+  gloas_fork_epoch: 1000
+
+mev_type: buildoor
 
 additional_services:
   - dora
   - spamoor
-
-# mev_type: flashbots
-# snooper_enabled: true
