@@ -376,22 +376,22 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             'block'
           )}
 
-          {/* Payload envelope */}
-          {state.payloadEnvelopeAt && genesisTime > 0 && renderEventDot(
-            'payload-envelope',
-            state.payloadEnvelopeAt - slotStartTime,
+          {/* Payload available */}
+          {state.payloadAvailableAt && genesisTime > 0 && renderEventDot(
+            'payload-available',
+            state.payloadAvailableAt - slotStartTime,
             {
-              title: 'Payload Envelope',
+              title: 'Payload Available',
               items: [
-                { label: 'Time', value: `${state.payloadEnvelopeAt - slotStartTime}ms` },
-                ...(state.payloadEnvelopeBlockHash ? [{
+                { label: 'Time', value: `${state.payloadAvailableAt - slotStartTime}ms` },
+                ...(state.payloadAvailableBlockHash ? [{
                   label: 'Payload Hash',
-                  value: truncateHash(state.payloadEnvelopeBlockHash),
-                  copyValue: state.payloadEnvelopeBlockHash
+                  value: truncateHash(state.payloadAvailableBlockHash),
+                  copyValue: state.payloadAvailableBlockHash
                 }] : []),
-                ...(state.payloadEnvelopeBuilder !== undefined ? [{
+                ...(state.payloadAvailableBuilder !== undefined ? [{
                   label: 'Builder Index',
-                  value: String(state.payloadEnvelopeBuilder)
+                  value: String(state.payloadAvailableBuilder)
                 }] : [])
               ]
             },

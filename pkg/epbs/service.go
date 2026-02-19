@@ -254,13 +254,15 @@ func (s *Service) handleBidEvent(event *beacon.BidEvent) {
 	isOurs := event.BuilderIndex == s.builderIndex
 
 	bid := &ExecutionPayloadBid{
-		Slot:                   event.Slot,
-		ParentBlockHash:        event.ParentBlockHash,
-		ParentBlockRoot:        event.ParentBlockRoot,
-		BlockHash:              event.BlockHash,
-		BuilderIndex:           event.BuilderIndex,
-		Value:                  event.Value,
-		BlobKZGCommitmentsRoot: event.BlobKZGCommitmentsRoot,
+		Slot:             event.Slot,
+		ParentBlockHash:  event.ParentBlockHash,
+		ParentBlockRoot:  event.ParentBlockRoot,
+		BlockHash:        event.BlockHash,
+		FeeRecipient:     event.FeeRecipient,
+		GasLimit:         event.GasLimit,
+		BuilderIndex:     event.BuilderIndex,
+		Value:            event.Value,
+		ExecutionPayment: event.ExecutionPayment,
 	}
 
 	s.bidTracker.TrackBid(bid, isOurs)

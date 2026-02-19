@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
+	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
@@ -53,17 +54,24 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	// Build the execution payload bid
 	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:        payload.ParentBlockHash,
-		ParentBlockRoot:        payload.ParentBlockRoot,
-		BlockHash:              payload.BlockHash,
-		PrevRandao:             payload.PrevRandao,
-		FeeRecipient:           feeRecipient,
-		GasLimit:               payload.GasLimit,
-		BuilderIndex:           gloas.BuilderIndex(c.builderIndex),
-		Slot:                   payload.Slot,
-		Value:                  phase0.Gwei(bidValue),
-		ExecutionPayment:       phase0.Gwei(bidValue), // Same as value for now
-		BlobKZGCommitmentsRoot: phase0.Root{},         // Empty for no blobs
+		ParentBlockHash:    payload.ParentBlockHash,
+		ParentBlockRoot:    payload.ParentBlockRoot,
+		BlockHash:          payload.BlockHash,
+		PrevRandao:         payload.PrevRandao,
+		FeeRecipient:       feeRecipient,
+		GasLimit:           payload.GasLimit,
+		BuilderIndex:       gloas.BuilderIndex(c.builderIndex),
+		Slot:               payload.Slot,
+		Value:              phase0.Gwei(bidValue),
+		ExecutionPayment:   phase0.Gwei(bidValue), // Same as value for now
+		BlobKZGCommitments: []deneb.KZGCommitment{},
+	}
+
+	if payload.BlobsBundle != nil {
+		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
+		for i, c := range payload.BlobsBundle.Commitments {
+			copy(bid.BlobKZGCommitments[i][:], c)
+		}
 	}
 
 	// Sign the bid using proper domain

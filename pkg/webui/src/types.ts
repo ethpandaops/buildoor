@@ -122,7 +122,7 @@ export interface BidEvent {
   received_at: number;
 }
 
-export interface PayloadEnvelopeEvent {
+export interface PayloadAvailableEvent {
   slot: number;
   block_root: string;
   block_hash: string;
@@ -158,9 +158,9 @@ export interface SlotState {
   bidWon?: boolean;
   ourBids?: OurBid[];
   externalBids?: ExternalBid[];
-  payloadEnvelopeAt?: number;
-  payloadEnvelopeBlockHash?: string;
-  payloadEnvelopeBuilder?: number;
+  payloadAvailableAt?: number;
+  payloadAvailableBlockHash?: string;
+  payloadAvailableBuilder?: number;
   revealed?: boolean;
   revealSkipped?: boolean;
   revealFailed?: boolean;

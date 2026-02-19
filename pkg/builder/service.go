@@ -49,9 +49,8 @@ type Service struct {
 	// In Gloas, blocks don't contain execution payloads - they come separately.
 	// We need to track the last block that has a known payload.
 	lastKnownPayloadMu        sync.RWMutex
-	lastKnownPayloadBlockRoot phase0.Root   // Beacon block root with known payload
-	lastKnownPayloadBlockHash phase0.Hash32 // Execution block hash from that payload
-	lastKnownPayloadSlot      phase0.Slot   // Slot of the block with known payload
+	lastKnownPayloadBlockRoot phase0.Root // Beacon block root with known payload
+	lastKnownPayloadSlot      phase0.Slot // Slot of the block with known payload
 
 	// Build tracking
 	scheduledBuildMu  sync.Mutex
@@ -210,7 +209,7 @@ func (s *Service) run() {
 
 	headSub := s.clClient.Events().SubscribeHead()
 	payloadAttrSub := s.clClient.Events().SubscribePayloadAttributes()
-	payloadSub := s.clClient.Events().SubscribePayloadEnvelope()
+	payloadSub := s.clClient.Events().SubscribePayloadAvailable()
 
 	defer headSub.Unsubscribe()
 	defer payloadAttrSub.Unsubscribe()
@@ -228,7 +227,7 @@ func (s *Service) run() {
 			s.handlePayloadAttributesEvent(event)
 
 		case event := <-payloadSub.Channel():
-			s.handlePayloadEnvelopeEvent(event)
+			s.handlePayloadAvailableEvent(event)
 		}
 	}
 }
@@ -366,24 +365,22 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 	s.emitPayloadReady(slot, payloadEvent)
 }
 
-// handlePayloadEnvelopeEvent processes a payload envelope event (Gloas only).
-// This is called when a payload is revealed for a block.
+// handlePayloadAvailableEvent processes an execution_payload_available event (Gloas only).
+// This is called when the node verifies that a payload and blobs are available.
 // With payload_attributes-based building, we only track the last known payload here.
-func (s *Service) handlePayloadEnvelopeEvent(event *beacon.PayloadEnvelopeEvent) {
+func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEvent) {
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
 		"block_root": fmt.Sprintf("%x", event.BlockRoot[:8]),
-		"block_hash": fmt.Sprintf("%x", event.BlockHash[:8]),
-	}).Debug("Payload envelope event received")
+	}).Debug("Payload available event received")
 
 	// Update last known payload (for Gloas tracking)
 	s.lastKnownPayloadMu.Lock()
 	s.lastKnownPayloadBlockRoot = event.BlockRoot
-	s.lastKnownPayloadBlockHash = event.BlockHash
 	s.lastKnownPayloadSlot = event.Slot
 	s.lastKnownPayloadMu.Unlock()
 
-	// NOTE: We no longer build from payload envelope events.
+	// NOTE: We no longer build from payload available events.
 	// Building is now triggered by payload_attributes events.
 }
 

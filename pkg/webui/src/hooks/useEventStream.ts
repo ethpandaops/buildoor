@@ -230,13 +230,13 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
-        case 'payload_envelope': {
+        case 'payload_available': {
           const data = event.data as { slot: number; block_hash: string; builder_index: number; received_at: number };
-          addEvent('payload_envelope', `Payload envelope received for slot ${data.slot}`, event.timestamp);
+          addEvent('payload_available', `Payload available for slot ${data.slot}`, event.timestamp);
           updateSlotState(data.slot, {
-            payloadEnvelopeAt: data.received_at,
-            payloadEnvelopeBlockHash: data.block_hash,
-            payloadEnvelopeBuilder: data.builder_index
+            payloadAvailableAt: data.received_at,
+            payloadAvailableBlockHash: data.block_hash,
+            payloadAvailableBuilder: data.builder_index
           });
           break;
         }

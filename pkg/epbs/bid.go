@@ -8,16 +8,15 @@ import (
 
 // ExecutionPayloadBid represents a bid for an execution payload.
 type ExecutionPayloadBid struct {
-	ParentBlockHash        phase0.Hash32
-	ParentBlockRoot        phase0.Root
-	BlockHash              phase0.Hash32
-	FeeRecipient           [20]byte
-	GasLimit               uint64
-	BuilderIndex           uint64
-	Slot                   phase0.Slot
-	Value                  uint64 // Gwei
-	ExecutionPayment       uint64 // Gwei
-	BlobKZGCommitmentsRoot phase0.Root
+	ParentBlockHash  phase0.Hash32
+	ParentBlockRoot  phase0.Root
+	BlockHash        phase0.Hash32
+	FeeRecipient     [20]byte
+	GasLimit         uint64
+	BuilderIndex     uint64
+	Slot             phase0.Slot
+	Value            uint64 // Gwei
+	ExecutionPayment uint64 // Gwei
 }
 
 // TrackedBid represents a bid being tracked for competition analysis.

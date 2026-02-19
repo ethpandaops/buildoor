@@ -722,6 +722,19 @@ const docTemplate = `{
                 "bids_won": {
                     "type": "integer"
                 },
+                "blocks_included": {
+                    "type": "integer"
+                },
+                "builder_api_blocks_published": {
+                    "type": "integer"
+                },
+                "builder_api_headers_requested": {
+                    "description": "Builder API stats",
+                    "type": "integer"
+                },
+                "builder_api_registered_validators": {
+                    "type": "integer"
+                },
                 "reveals_failed": {
                     "type": "integer"
                 },

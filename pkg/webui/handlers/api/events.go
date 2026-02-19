@@ -32,7 +32,7 @@ const (
 	EventTypeBidEvent                    EventType = "bid_event"
 	EventTypeStats                       EventType = "stats"
 	EventTypeSlotState                   EventType = "slot_state"
-	EventTypePayloadEnvelope             EventType = "payload_envelope"
+	EventTypePayloadAvailable            EventType = "payload_available"
 	EventTypeBuilderInfo                 EventType = "builder_info"
 	EventTypeHeadVotes                   EventType = "head_votes"
 	EventTypeBidWon                      EventType = "bid_won"
@@ -114,8 +114,8 @@ type SlotStateEvent struct {
 	OurBid         uint64 `json:"our_bid"`
 }
 
-// PayloadEnvelopeStreamEvent is sent when a payload envelope is received.
-type PayloadEnvelopeStreamEvent struct {
+// PayloadAvailableStreamEvent is sent when a payload becomes available.
+type PayloadAvailableStreamEvent struct {
 	Slot         uint64 `json:"slot"`
 	BlockRoot    string `json:"block_root"`
 	BlockHash    string `json:"block_hash"`
@@ -258,7 +258,7 @@ func (m *EventStreamManager) Start() {
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
 	bidSub := m.builderSvc.GetCLClient().Events().SubscribeBids()
-	envelopeSub := m.builderSvc.GetCLClient().Events().SubscribePayloadEnvelope()
+	payloadAvailSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAvailable()
 
 	// Subscribe to bid submission events from ePBS service (if available)
 	var bidSubmitChan <-chan *epbs.BidSubmissionEvent
@@ -285,7 +285,7 @@ func (m *EventStreamManager) Start() {
 		defer payloadSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
-		defer envelopeSub.Unsubscribe()
+		defer payloadAvailSub.Unsubscribe()
 
 		// Slot tracking ticker
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -307,8 +307,8 @@ func (m *EventStreamManager) Start() {
 			case event := <-bidSub.Channel():
 				m.handleBidEvent(event)
 
-			case event := <-envelopeSub.Channel():
-				m.handlePayloadEnvelopeEvent(event)
+			case event := <-payloadAvailSub.Channel():
+				m.handlePayloadAvailableEvent(event)
 
 			case event, ok := <-bidSubmitChan:
 				if ok {
@@ -528,17 +528,30 @@ func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
 	m.broadcastSlotState(event.Slot)
 }
 
-func (m *EventStreamManager) handlePayloadEnvelopeEvent(event *beacon.PayloadEnvelopeEvent) {
+func (m *EventStreamManager) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEvent) {
+	// The execution_payload_available event only contains slot and block_root.
+	// Fetch the full envelope from the beacon API to get block_hash and builder_index.
+	blockRootHex := fmt.Sprintf("0x%x", event.BlockRoot[:])
+
+	streamEvent := PayloadAvailableStreamEvent{
+		Slot:       uint64(event.Slot),
+		BlockRoot:  blockRootHex,
+		ReceivedAt: event.ReceivedAt.UnixMilli(),
+	}
+
+	ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+	defer cancel()
+
+	envelope, err := m.builderSvc.GetCLClient().GetExecutionPayloadEnvelope(ctx, blockRootHex)
+	if err == nil {
+		streamEvent.BlockHash = fmt.Sprintf("0x%x", envelope.BlockHash[:])
+		streamEvent.BuilderIndex = envelope.BuilderIndex
+	}
+
 	m.Broadcast(&StreamEvent{
-		Type:      EventTypePayloadEnvelope,
+		Type:      EventTypePayloadAvailable,
 		Timestamp: time.Now().UnixMilli(),
-		Data: PayloadEnvelopeStreamEvent{
-			Slot:         uint64(event.Slot),
-			BlockRoot:    fmt.Sprintf("0x%x", event.BlockRoot[:]),
-			BlockHash:    fmt.Sprintf("0x%x", event.BlockHash[:]),
-			BuilderIndex: event.BuilderIndex,
-			ReceivedAt:   event.ReceivedAt.UnixMilli(),
-		},
+		Data:      streamEvent,
 	})
 }
 

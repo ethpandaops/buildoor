@@ -57,13 +57,12 @@ func (h *RevealHandler) SubmitReveal(
 
 	// Build the execution payload envelope
 	envelope := &gloas.ExecutionPayloadEnvelope{
-		Payload:            &execPayload,
-		ExecutionRequests:  nil, // No execution requests for now
-		BuilderIndex:       gloas.BuilderIndex(h.builderIndex),
-		BeaconBlockRoot:    blockRoot,
-		Slot:               payload.Slot,
-		BlobKZGCommitments: nil,           // No blobs for now
-		StateRoot:          phase0.Root{}, // Will be filled by beacon node
+		Payload:           &execPayload,
+		ExecutionRequests: nil, // No execution requests for now
+		BuilderIndex:      gloas.BuilderIndex(h.builderIndex),
+		BeaconBlockRoot:   blockRoot,
+		Slot:              payload.Slot,
+		StateRoot:         phase0.Root{}, // Will be filled by beacon node
 	}
 
 	// Sign the envelope

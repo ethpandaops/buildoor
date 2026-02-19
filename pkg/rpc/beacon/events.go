@@ -44,26 +44,27 @@ type headEventJSON struct {
 
 // BidEvent represents an execution payload bid event.
 type BidEvent struct {
-	Slot                   phase0.Slot
-	ParentBlockHash        phase0.Hash32
-	ParentBlockRoot        phase0.Root
-	BlockHash              phase0.Hash32
-	BuilderIndex           uint64
-	Value                  uint64
-	BlobKZGCommitmentsRoot phase0.Root
-	Signature              phase0.BLSSignature
-	ReceivedAt             time.Time
+	Slot               phase0.Slot
+	ParentBlockHash    phase0.Hash32
+	ParentBlockRoot    phase0.Root
+	BlockHash          phase0.Hash32
+	FeeRecipient       [20]byte
+	GasLimit           uint64
+	BuilderIndex       uint64
+	Value              uint64
+	ExecutionPayment   uint64
+	BlobKZGCommitments [][]byte
+	Signature          phase0.BLSSignature
+	ReceivedAt         time.Time
 }
 
-// PayloadEnvelopeEvent represents an execution payload envelope event (Gloas).
-// This is emitted when a payload is revealed for a block.
-type PayloadEnvelopeEvent struct {
-	Slot            phase0.Slot
-	BlockRoot       phase0.Root   // Beacon block root this payload belongs to
-	BlockHash       phase0.Hash32 // Execution block hash
-	BuilderIndex    uint64
-	ParentBlockHash phase0.Hash32 // Parent execution block hash
-	ReceivedAt      time.Time
+// PayloadAvailableEvent represents an execution_payload_available event (Gloas).
+// This is emitted when the node has verified that the execution payload and blobs
+// for a block are available and ready for payload attestation.
+type PayloadAvailableEvent struct {
+	Slot       phase0.Slot
+	BlockRoot  phase0.Root // Beacon block root this payload belongs to
+	ReceivedAt time.Time
 }
 
 // PayloadAttributesEvent represents a payload_attributes event from the beacon node.
@@ -128,25 +129,29 @@ type attestationEventJSON struct {
 	CommitteeBits string `json:"committee_bits,omitempty"`
 }
 
-// payloadEnvelopeEventJSON is used for JSON unmarshaling of payload envelope events.
-type payloadEnvelopeEventJSON struct {
-	Slot            string `json:"slot"`
-	BlockRoot       string `json:"beacon_block_root"`
-	BlockHash       string `json:"block_hash"`
-	BuilderIndex    string `json:"builder_index"`
-	ParentBlockHash string `json:"parent_hash"`
+// payloadAvailableEventJSON is used for JSON unmarshaling of execution_payload_available events.
+type payloadAvailableEventJSON struct {
+	Slot      string `json:"slot"`
+	BlockRoot string `json:"block_root"`
 }
 
 // bidEventJSON is used for JSON unmarshaling of bid events.
+// The beacon node sends bids in SignedExecutionPayloadBid format with a message/signature wrapper.
 type bidEventJSON struct {
-	Slot                   string `json:"slot"`
-	ParentBlockHash        string `json:"parent_block_hash"`
-	ParentBlockRoot        string `json:"parent_block_root"`
-	BlockHash              string `json:"block_hash"`
-	BuilderIndex           string `json:"builder_index"`
-	Value                  string `json:"value"`
-	BlobKZGCommitmentsRoot string `json:"blob_kzg_commitments_root"`
-	Signature              string `json:"signature"`
+	Message struct {
+		Slot               string   `json:"slot"`
+		ParentBlockHash    string   `json:"parent_block_hash"`
+		ParentBlockRoot    string   `json:"parent_block_root"`
+		BlockHash          string   `json:"block_hash"`
+		PrevRandao         string   `json:"prev_randao"`
+		FeeRecipient       string   `json:"fee_recipient"`
+		GasLimit           string   `json:"gas_limit"`
+		BuilderIndex       string   `json:"builder_index"`
+		Value              string   `json:"value"`
+		ExecutionPayment   string   `json:"execution_payment"`
+		BlobKZGCommitments []string `json:"blob_kzg_commitments"`
+	} `json:"message"`
+	Signature string `json:"signature"`
 }
 
 // EventStream manages SSE connections to the beacon node event stream.
@@ -154,7 +159,7 @@ type EventStream struct {
 	client                      *Client
 	headDispatcher              *utils.Dispatcher[*HeadEvent]
 	bidDispatcher               *utils.Dispatcher[*BidEvent]
-	payloadDispatcher           *utils.Dispatcher[*PayloadEnvelopeEvent]
+	payloadDispatcher           *utils.Dispatcher[*PayloadAvailableEvent]
 	payloadAttributesDispatcher *utils.Dispatcher[*PayloadAttributesEvent]
 	attestationDispatcher       *utils.Dispatcher[*AttestationEvent]
 	cancelFunc                  context.CancelFunc
@@ -175,7 +180,7 @@ func NewEventStream(client *Client) *EventStream {
 		client:                      client,
 		headDispatcher:              &utils.Dispatcher[*HeadEvent]{},
 		bidDispatcher:               &utils.Dispatcher[*BidEvent]{},
-		payloadDispatcher:           &utils.Dispatcher[*PayloadEnvelopeEvent]{},
+		payloadDispatcher:           &utils.Dispatcher[*PayloadAvailableEvent]{},
 		payloadAttributesDispatcher: &utils.Dispatcher[*PayloadAttributesEvent]{},
 		attestationDispatcher:       &utils.Dispatcher[*AttestationEvent]{},
 		payloadAttrCache:            make(map[phase0.Slot]*PayloadAttributesEvent, 4),
@@ -201,7 +206,7 @@ func (e *EventStream) Start(ctx context.Context) error {
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
-	go e.runTopicLoop(streamCtx, "execution_payload_envelope", 30*time.Second)
+	go e.runTopicLoop(streamCtx, "execution_payload_available", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "attestation", 5*time.Second)
 
 	return nil
@@ -231,8 +236,8 @@ func (e *EventStream) SubscribeBids() *utils.Subscription[*BidEvent] {
 	return e.bidDispatcher.Subscribe(64, false)
 }
 
-// SubscribePayloadEnvelope returns a subscription for payload envelope events.
-func (e *EventStream) SubscribePayloadEnvelope() *utils.Subscription[*PayloadEnvelopeEvent] {
+// SubscribePayloadAvailable returns a subscription for execution_payload_available events.
+func (e *EventStream) SubscribePayloadAvailable() *utils.Subscription[*PayloadAvailableEvent] {
 	return e.payloadDispatcher.Subscribe(16, false)
 }
 
@@ -416,16 +421,16 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		event.ReceivedAt = time.Now()
 		e.bidDispatcher.Fire(event)
 
-	case "execution_payload_envelope":
-		var raw payloadEnvelopeEventJSON
+	case "execution_payload_available":
+		var raw payloadAvailableEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
-			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse payload envelope event JSON")
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse payload available event JSON")
 			return
 		}
 
-		event, err := parsePayloadEnvelopeEvent(&raw)
+		event, err := parsePayloadAvailableEvent(&raw)
 		if err != nil {
-			e.client.log.WithError(err).WithField("data", data).Warn("Failed to convert payload envelope event")
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to convert payload available event")
 			return
 		}
 
@@ -518,39 +523,56 @@ func parseHeadEvent(raw *headEventJSON) (*HeadEvent, error) {
 
 // parseBidEvent converts a raw JSON bid event to the typed BidEvent.
 func parseBidEvent(raw *bidEventJSON) (*BidEvent, error) {
-	slot, err := strconv.ParseUint(raw.Slot, 10, 64)
+	msg := &raw.Message
+
+	slot, err := strconv.ParseUint(msg.Slot, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid slot: %w", err)
 	}
 
-	parentBlockHash, err := parseHash32(raw.ParentBlockHash)
+	parentBlockHash, err := parseHash32(msg.ParentBlockHash)
 	if err != nil {
 		return nil, fmt.Errorf("invalid parent_block_hash: %w", err)
 	}
 
-	parentBlockRoot, err := parseRoot(raw.ParentBlockRoot)
+	parentBlockRoot, err := parseRoot(msg.ParentBlockRoot)
 	if err != nil {
 		return nil, fmt.Errorf("invalid parent_block_root: %w", err)
 	}
 
-	blockHash, err := parseHash32(raw.BlockHash)
+	blockHash, err := parseHash32(msg.BlockHash)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block_hash: %w", err)
 	}
 
-	builderIndex, err := strconv.ParseUint(raw.BuilderIndex, 10, 64)
+	builderIndex, err := strconv.ParseUint(msg.BuilderIndex, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid builder_index: %w", err)
 	}
 
-	value, err := strconv.ParseUint(raw.Value, 10, 64)
+	value, err := strconv.ParseUint(msg.Value, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid value: %w", err)
 	}
 
-	blobRoot, err := parseRoot(raw.BlobKZGCommitmentsRoot)
-	if err != nil {
-		return nil, fmt.Errorf("invalid blob_kzg_commitments_root: %w", err)
+	executionPayment, _ := strconv.ParseUint(msg.ExecutionPayment, 10, 64)
+	gasLimit, _ := strconv.ParseUint(msg.GasLimit, 10, 64)
+
+	var feeRecipient [20]byte
+	frBytes := common.FromHex(msg.FeeRecipient)
+	if len(frBytes) >= 20 {
+		copy(feeRecipient[:], frBytes[:20])
+	}
+
+	// Parse blob KZG commitments from hex strings.
+	blobCommitments := make([][]byte, 0, len(msg.BlobKZGCommitments))
+	for _, commitmentHex := range msg.BlobKZGCommitments {
+		b, err := hex.DecodeString(strings.TrimPrefix(commitmentHex, "0x"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid blob_kzg_commitment: %w", err)
+		}
+
+		blobCommitments = append(blobCommitments, b)
 	}
 
 	signature, err := parseSignature(raw.Signature)
@@ -559,14 +581,17 @@ func parseBidEvent(raw *bidEventJSON) (*BidEvent, error) {
 	}
 
 	return &BidEvent{
-		Slot:                   phase0.Slot(slot),
-		ParentBlockHash:        parentBlockHash,
-		ParentBlockRoot:        parentBlockRoot,
-		BlockHash:              blockHash,
-		BuilderIndex:           builderIndex,
-		Value:                  value,
-		BlobKZGCommitmentsRoot: blobRoot,
-		Signature:              signature,
+		Slot:               phase0.Slot(slot),
+		ParentBlockHash:    parentBlockHash,
+		ParentBlockRoot:    parentBlockRoot,
+		BlockHash:          blockHash,
+		FeeRecipient:       feeRecipient,
+		GasLimit:           gasLimit,
+		BuilderIndex:       builderIndex,
+		Value:              value,
+		ExecutionPayment:   executionPayment,
+		BlobKZGCommitments: blobCommitments,
+		Signature:          signature,
 	}, nil
 }
 
@@ -630,8 +655,8 @@ func parseSignature(s string) (phase0.BLSSignature, error) {
 	return sig, nil
 }
 
-// parsePayloadEnvelopeEvent converts a raw JSON payload envelope event to typed event.
-func parsePayloadEnvelopeEvent(raw *payloadEnvelopeEventJSON) (*PayloadEnvelopeEvent, error) {
+// parsePayloadAvailableEvent converts a raw JSON execution_payload_available event to typed event.
+func parsePayloadAvailableEvent(raw *payloadAvailableEventJSON) (*PayloadAvailableEvent, error) {
 	slot, err := strconv.ParseUint(raw.Slot, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid slot: %w", err)
@@ -639,30 +664,12 @@ func parsePayloadEnvelopeEvent(raw *payloadEnvelopeEventJSON) (*PayloadEnvelopeE
 
 	blockRoot, err := parseRoot(raw.BlockRoot)
 	if err != nil {
-		return nil, fmt.Errorf("invalid beacon_block_root: %w", err)
+		return nil, fmt.Errorf("invalid block_root: %w", err)
 	}
 
-	blockHash, err := parseHash32(raw.BlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("invalid block_hash: %w", err)
-	}
-
-	builderIndex, err := strconv.ParseUint(raw.BuilderIndex, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid builder_index: %w", err)
-	}
-
-	parentBlockHash, err := parseHash32(raw.ParentBlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("invalid parent_hash: %w", err)
-	}
-
-	return &PayloadEnvelopeEvent{
-		Slot:            phase0.Slot(slot),
-		BlockRoot:       blockRoot,
-		BlockHash:       blockHash,
-		BuilderIndex:    builderIndex,
-		ParentBlockHash: parentBlockHash,
+	return &PayloadAvailableEvent{
+		Slot:      phase0.Slot(slot),
+		BlockRoot: blockRoot,
 	}, nil
 }
 
