@@ -169,12 +169,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 	firstSlot := phase0.Slot(uint64(epoch) * s.chainSpec.SlotsPerEpoch)
 
 	if len(proposerLookahead) > 0 {
-		stateEpoch := phase0.Epoch(uint64(stats.StateSlot) / s.chainSpec.SlotsPerEpoch)
-		offset := uint64(epoch-stateEpoch) * s.chainSpec.SlotsPerEpoch
-
-		if offset+s.chainSpec.SlotsPerEpoch <= uint64(len(proposerLookahead)) {
-			stats.ProposerDuties = proposerLookahead[offset : offset+s.chainSpec.SlotsPerEpoch]
-		}
+		stats.ProposerDuties = proposerLookahead[:s.chainSpec.SlotsPerEpoch]
 	}
 
 	// Compute attester duties
