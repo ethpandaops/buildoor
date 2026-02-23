@@ -3,7 +3,13 @@ package beacon
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	nethttp "net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	eth2client "github.com/attestantio/go-eth2-client"
@@ -102,111 +108,216 @@ func (c *Client) GetBaseURL() string {
 	return c.baseURL
 }
 
-// GetChainSpec fetches the chain specification from the beacon node.
+// GetChainSpec fetches the chain specification from the beacon node via direct HTTP.
+// This bypasses go-eth2-client's active check so it works before the node is fully ready.
 func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
-	provider, ok := c.client.(eth2client.SpecProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support spec provider")
-	}
-
-	resp, err := provider.Spec(ctx, &api.SpecOpts{})
+	specData, err := c.fetchSpecDirect(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get spec: %w", err)
 	}
 
-	spec := resp.Data
-
-	secondsPerSlot, ok := spec["SECONDS_PER_SLOT"].(time.Duration)
+	secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
 	if !ok {
-		return nil, fmt.Errorf("SECONDS_PER_SLOT not found or invalid type")
+		return nil, fmt.Errorf("SECONDS_PER_SLOT not found")
 	}
 
-	slotsPerEpoch, ok := spec["SLOTS_PER_EPOCH"].(uint64)
+	secondsPerSlot, err := strconv.ParseUint(secondsPerSlotStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
+	}
+
+	slotsPerEpochStr, ok := specData["SLOTS_PER_EPOCH"]
 	if !ok {
-		return nil, fmt.Errorf("SLOTS_PER_EPOCH not found or invalid type")
+		return nil, fmt.Errorf("SLOTS_PER_EPOCH not found")
+	}
+
+	slotsPerEpoch, err := strconv.ParseUint(slotsPerEpochStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SLOTS_PER_EPOCH: %w", err)
 	}
 
 	cs := &ChainSpec{
-		SecondsPerSlot: secondsPerSlot,
+		SecondsPerSlot: time.Duration(secondsPerSlot) * time.Second,
 		SlotsPerEpoch:  slotsPerEpoch,
 	}
 
 	// Parse duty calculation parameters (use defaults if not present)
-	if v, ok := spec["SHUFFLE_ROUND_COUNT"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "SHUFFLE_ROUND_COUNT"); err == nil {
 		cs.ShuffleRoundCount = v
 	}
 
-	if v, ok := spec["TARGET_COMMITTEE_SIZE"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "TARGET_COMMITTEE_SIZE"); err == nil {
 		cs.TargetCommitteeSize = v
 	}
 
-	if v, ok := spec["MAX_COMMITTEES_PER_SLOT"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "MAX_COMMITTEES_PER_SLOT"); err == nil {
 		cs.MaxCommitteesPerSlot = v
 	}
 
-	if v, ok := spec["MAX_EFFECTIVE_BALANCE"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "MAX_EFFECTIVE_BALANCE"); err == nil {
 		cs.MaxEffectiveBalance = v
 	}
 
-	if v, ok := spec["MAX_EFFECTIVE_BALANCE_ELECTRA"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "MAX_EFFECTIVE_BALANCE_ELECTRA"); err == nil {
 		cs.MaxEffectiveBalanceElectra = v
 	}
 
-	if v, ok := spec["EPOCHS_PER_HISTORICAL_VECTOR"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "EPOCHS_PER_HISTORICAL_VECTOR"); err == nil {
 		cs.EpochsPerHistoricalVector = v
 	}
 
-	if v, ok := spec["MIN_SEED_LOOKAHEAD"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "MIN_SEED_LOOKAHEAD"); err == nil {
 		cs.MinSeedLookahead = v
 	}
 
 	// Parse domain types
-	if v, ok := spec["DOMAIN_BEACON_PROPOSER"].(phase0.DomainType); ok {
+	if v, err := parseSpecDomainType(specData, "DOMAIN_BEACON_PROPOSER"); err == nil {
 		cs.DomainBeaconProposer = v
 	}
 
-	if v, ok := spec["DOMAIN_BEACON_ATTESTER"].(phase0.DomainType); ok {
+	if v, err := parseSpecDomainType(specData, "DOMAIN_BEACON_ATTESTER"); err == nil {
 		cs.DomainBeaconAttester = v
 	}
 
-	if v, ok := spec["DOMAIN_PTC_ATTESTER"].(phase0.DomainType); ok {
+	if v, err := parseSpecDomainType(specData, "DOMAIN_PTC_ATTESTER"); err == nil {
 		cs.DomainPtcAttester = v
 	}
 
 	// Parse fork epochs
-	if v, ok := spec["ELECTRA_FORK_EPOCH"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "ELECTRA_FORK_EPOCH"); err == nil {
 		cs.ElectraForkEpoch = &v
 	}
-	if v, ok := spec["GLOAS_FORK_EPOCH"].(uint64); ok {
+
+	if v, err := parseSpecUint64(specData, "GLOAS_FORK_EPOCH"); err == nil {
 		cs.GloasForkEpoch = &v
 	}
 
 	// Parse ePBS parameters
-	if v, ok := spec["PTC_SIZE"].(uint64); ok {
+	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
 		cs.PtcSize = v
 	}
 
 	return cs, nil
 }
 
-// GetGenesis fetches genesis information from the beacon node.
-func (c *Client) GetGenesis(ctx context.Context) (*Genesis, error) {
-	provider, ok := c.client.(eth2client.GenesisProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support genesis provider")
+// fetchSpecDirect fetches /eth/v1/config/spec via direct HTTP, bypassing go-eth2-client.
+func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, error) {
+	url := fmt.Sprintf("%s/eth/v1/config/spec", c.baseURL)
+
+	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	resp, err := provider.Genesis(ctx, &api.GenesisOpts{})
+	resp, err := (&nethttp.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != nethttp.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.Data, nil
+}
+
+// parseSpecUint64 parses a uint64 value from the spec data map.
+func parseSpecUint64(data map[string]string, key string) (uint64, error) {
+	s, ok := data[key]
+	if !ok {
+		return 0, fmt.Errorf("%s not found", key)
+	}
+
+	return strconv.ParseUint(s, 10, 64)
+}
+
+// parseSpecDomainType parses a 4-byte domain type from the spec data map (hex with 0x prefix).
+func parseSpecDomainType(data map[string]string, key string) (phase0.DomainType, error) {
+	s, ok := data[key]
+	if !ok {
+		return phase0.DomainType{}, fmt.Errorf("%s not found", key)
+	}
+
+	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+	if err != nil {
+		return phase0.DomainType{}, err
+	}
+
+	if len(b) != 4 {
+		return phase0.DomainType{}, fmt.Errorf("invalid domain type length: %d", len(b))
+	}
+
+	var dt phase0.DomainType
+	copy(dt[:], b)
+
+	return dt, nil
+}
+
+// GetGenesis fetches genesis information from the beacon node via direct HTTP.
+// This bypasses go-eth2-client's active check so it works before the node is fully ready.
+func (c *Client) GetGenesis(ctx context.Context) (*Genesis, error) {
+	url := fmt.Sprintf("%s/eth/v1/beacon/genesis", c.baseURL)
+
+	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := (&nethttp.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get genesis: %w", err)
 	}
+	defer resp.Body.Close()
 
-	genesis := resp.Data
+	if resp.StatusCode != nethttp.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get genesis: status %d: %s",
+			resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			GenesisTime           string `json:"genesis_time"`
+			GenesisValidatorsRoot string `json:"genesis_validators_root"`
+			GenesisForkVersion    string `json:"genesis_fork_version"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode genesis: %w", err)
+	}
+
+	genesisTimeSec, err := strconv.ParseInt(result.Data.GenesisTime, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid genesis_time: %w", err)
+	}
+
+	validatorsRoot, err := parseRoot(result.Data.GenesisValidatorsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid genesis_validators_root: %w", err)
+	}
+
+	forkVersionBytes, err := hex.DecodeString(
+		strings.TrimPrefix(result.Data.GenesisForkVersion, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid genesis_fork_version: %w", err)
+	}
+
+	var forkVersion phase0.Version
+	copy(forkVersion[:], forkVersionBytes)
 
 	return &Genesis{
-		GenesisTime:           genesis.GenesisTime,
-		GenesisValidatorsRoot: genesis.GenesisValidatorsRoot,
-		GenesisForkVersion:    genesis.GenesisForkVersion,
+		GenesisTime:           time.Unix(genesisTimeSec, 0),
+		GenesisValidatorsRoot: validatorsRoot,
+		GenesisForkVersion:    forkVersion,
 	}, nil
 }
 
