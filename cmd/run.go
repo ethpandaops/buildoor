@@ -58,28 +58,13 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("--el-jwt-secret is required")
 		}
 
-		// 1. Initialize CL client (retry until ready or context cancelled)
+		// 1. Initialize CL client
 		logger.Info("Connecting to consensus layer...")
 
-		var clClient *beacon.Client
-
-		for {
-			var err error
-
-			clClient, err = beacon.NewClient(ctx, cfg.CLClient, logger)
-			if err == nil {
-				break
-			}
-
-			logger.WithError(err).Warn("CL client not ready, retrying in 5s...")
-
-			select {
-			case <-ctx.Done():
-				return fmt.Errorf("failed to connect to CL: %w", ctx.Err())
-			case <-time.After(5 * time.Second):
-			}
+		clClient, err := beacon.NewClient(ctx, cfg.CLClient, logger)
+		if err != nil {
+			return fmt.Errorf("failed to connect to CL: %w", err)
 		}
-
 		defer clClient.Close()
 
 		// 2. Initialize Engine API client (always required for payload building)
@@ -131,16 +116,41 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 5. Initialize chain service (epoch-level state management)
-		logger.Info("Initializing chain service...")
+		// Retry fetching spec and genesis until the beacon node is ready.
+		logger.Info("Waiting for beacon node to serve chain spec and genesis...")
 
-		chainSpec, err := clClient.GetChainSpec(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get chain spec: %w", err)
+		var chainSpec *beacon.ChainSpec
+
+		for {
+			chainSpec, err = clClient.GetChainSpec(ctx)
+			if err == nil {
+				break
+			}
+
+			logger.WithError(err).Warn("Beacon node not ready, retrying in 5s...")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to get chain spec: %w", ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
 		}
 
-		genesis, err := clClient.GetGenesis(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get genesis: %w", err)
+		var genesis *beacon.Genesis
+
+		for {
+			genesis, err = clClient.GetGenesis(ctx)
+			if err == nil {
+				break
+			}
+
+			logger.WithError(err).Warn("Beacon node genesis not available, retrying in 5s...")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to get genesis: %w", ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
 		}
 
 		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)

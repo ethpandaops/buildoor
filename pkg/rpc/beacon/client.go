@@ -59,6 +59,8 @@ type Client struct {
 }
 
 // NewClient creates a new CL client connected to the specified beacon node.
+// The client allows delayed start so it can be created even when the beacon node
+// is not yet reachable; callers should retry API calls until the node is ready.
 func NewClient(ctx context.Context, baseURL string, log logrus.FieldLogger) (*Client, error) {
 	clientLog := log.WithField("component", "cl-client")
 
@@ -66,6 +68,7 @@ func NewClient(ctx context.Context, baseURL string, log logrus.FieldLogger) (*Cl
 		http.WithAddress(baseURL),
 		http.WithLogLevel(zerolog.WarnLevel),
 		http.WithTimeout(30*time.Second),
+		http.WithAllowDelayedStart(true),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
