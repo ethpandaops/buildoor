@@ -63,7 +63,7 @@ const DashboardPage: React.FC = () => {
         {/* Right column: Builder Info, Config and Panels */}
         <div className="col-lg-4">
           {/* Builder Info */}
-          <BuilderInfo builderInfo={builderInfo} />
+          <BuilderInfo builderInfo={builderInfo} serviceStatus={serviceStatus} />
 
           {/* Statistics */}
           <StatsPanel stats={stats} serviceStatus={serviceStatus} />
