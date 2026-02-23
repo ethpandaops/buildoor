@@ -9,7 +9,6 @@ import (
 	"github.com/attestantio/go-eth2-client/spec"
 	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	"github.com/sirupsen/logrus"
 )
 
 const farFutureEpoch = uint64(0xFFFFFFFFFFFFFFFF)
