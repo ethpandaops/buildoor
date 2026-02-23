@@ -221,13 +221,22 @@ func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, error)
 	}
 
 	var result struct {
-		Data map[string]string `json:"data"`
+		Data map[string]json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	return result.Data, nil
+	// Extract only string values, skip arrays and other complex types.
+	out := make(map[string]string, len(result.Data))
+	for k, v := range result.Data {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			out[k] = s
+		}
+	}
+
+	return out, nil
 }
 
 // parseSpecUint64 parses a uint64 value from the spec data map.

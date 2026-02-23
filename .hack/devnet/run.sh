@@ -26,17 +26,26 @@ fi
 kurtosis files inspect "$ENCLAVE_NAME" jwt_file jwtsecret | tail -n +1 > "${__dir}/generated-jwtsecret.txt"
 
 # Get node RPC URLs
+# NODE_INDEX selects which node pair to target (1-based, default: 1)
+NODE_INDEX="${NODE_INDEX:-1}"
 ENCLAVE_UUID=$(kurtosis enclave inspect "$ENCLAVE_NAME" --full-uuids | grep 'UUID:' | awk '{print $2}')
 
 BEACON_NODE=$(docker ps -aq -f "label=kurtosis_enclave_uuid=$ENCLAVE_UUID" \
               -f "label=com.kurtosistech.app-id=kurtosis" \
-              -f "label=com.kurtosistech.custom.ethereum-package.client-type=beacon" | tac | head -n 1)
+              -f "label=com.kurtosistech.custom.ethereum-package.client-type=beacon" | tac | sed -n "${NODE_INDEX}p")
 
 EXECUTION_NODE=$(docker ps -aq -f "label=kurtosis_enclave_uuid=$ENCLAVE_UUID" \
               -f "label=com.kurtosistech.app-id=kurtosis" \
-              -f "label=com.kurtosistech.custom.ethereum-package.client-type=execution" | tac | head -n 1)
+              -f "label=com.kurtosistech.custom.ethereum-package.client-type=execution" | tac | sed -n "${NODE_INDEX}p")
 
-# Get URLs from first node of each type
+if [ -z "$BEACON_NODE" ] || [ -z "$EXECUTION_NODE" ]; then
+  echo "Error: Node index $NODE_INDEX not found. Check available nodes with 'docker ps'."
+  exit 1
+fi
+
+echo "Using node index $NODE_INDEX (beacon: $(docker inspect --format='{{.Name}}' $BEACON_NODE), execution: $(docker inspect --format='{{.Name}}' $EXECUTION_NODE))"
+
+# Get URLs from selected node
 BEACON_PORT=$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "3500/tcp") 0).HostPort }}' $BEACON_NODE)
 if [ -z "$BEACON_PORT" ]; then
   BEACON_PORT=$(docker inspect --format='{{ (index (index .NetworkSettings.Ports "4000/tcp") 0).HostPort }}' $BEACON_NODE)

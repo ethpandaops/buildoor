@@ -37,8 +37,10 @@ docker:
 docker-run: docker
 	docker run --rm -it buildoor:$(VERSION) run --help
 
+NODE_INDEX ?= 1
+
 devnet:
-	.hack/devnet/run.sh
+	NODE_INDEX=$(NODE_INDEX) .hack/devnet/run.sh
 
 devnet-run: devnet
 	@. .hack/devnet/generated-vars.env && \
