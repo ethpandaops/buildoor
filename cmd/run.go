@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
@@ -57,13 +58,28 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("--el-jwt-secret is required")
 		}
 
-		// 1. Initialize CL client
+		// 1. Initialize CL client (retry until ready or context cancelled)
 		logger.Info("Connecting to consensus layer...")
 
-		clClient, err := beacon.NewClient(ctx, cfg.CLClient, logger)
-		if err != nil {
-			return fmt.Errorf("failed to connect to CL: %w", err)
+		var clClient *beacon.Client
+
+		for {
+			var err error
+
+			clClient, err = beacon.NewClient(ctx, cfg.CLClient, logger)
+			if err == nil {
+				break
+			}
+
+			logger.WithError(err).Warn("CL client not ready, retrying in 5s...")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to connect to CL: %w", ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
 		}
+
 		defer clClient.Close()
 
 		// 2. Initialize Engine API client (always required for payload building)
