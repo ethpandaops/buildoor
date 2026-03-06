@@ -2,7 +2,6 @@ package builder
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -187,23 +186,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	modifiedPayloadJSON, _, err := ModifyPayloadExtraData(
-		payloadResult.ExecutionPayloadJSON,
-		[]byte("buildoor/"),
-		parentBeaconRoot,
-		payloadResult.ExecutionRequests,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
-	}
-
-	var modifiedPayload engine.ExecutionPayload
-	if err := json.Unmarshal(modifiedPayloadJSON, &modifiedPayload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal modified payload: %w", err)
-	}
-
-	payload := &modifiedPayload
-	payloadResult.ExecutionPayload = payload
+	payload := payloadResult.ExecutionPayload
 	var blockHash phase0.Hash32
 	copy(blockHash[:], payload.BlockHash[:])
 
