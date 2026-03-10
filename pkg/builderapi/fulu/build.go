@@ -7,6 +7,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/deneb"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/holiman/uint256"
+	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -57,10 +58,11 @@ func BuildSignedBuilderBid(
 
 	value := new(uint256.Int)
 	value.SetUint64(event.BlockValue)
+	logrus.Infof("Value before Subsidy: %s", value.String())
 	if subsidyGwei > 0 {
 		value.Add(value, new(uint256.Int).SetUint64(subsidyGwei))
 	}
-
+	logrus.Infof("Value after Subsidy: %s", value.String())
 	bid := &BuilderBid{
 		Header:             header,
 		BlobKZGCommitments: commitments,
