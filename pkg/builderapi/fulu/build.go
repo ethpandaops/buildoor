@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/attestantio/go-eth2-client/spec/deneb"
-	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/holiman/uint256"
 
@@ -51,9 +50,10 @@ func BuildSignedBuilderBid(
 		}
 	}
 
-	execRequests := &electra.ExecutionRequests{}
-	// event.ExecutionRequests is engine.ExecutionRequests ([]hexutil.Bytes); we don't convert to electra.ExecutionRequests here.
-	// Use nil for now so the bid is valid. Full conversion would require parsing deposit/withdrawal/consolidation requests.
+	execRequests, err := ParseExecutionRequests(event.ExecutionRequests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse execution requests: %w", err)
+	}
 
 	value := new(uint256.Int)
 	value.SetUint64(event.BlockValue)
