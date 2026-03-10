@@ -415,12 +415,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Infof("getHeader: PayloadEvent gas limit is %d", event.GasLimit)
-
 	subsidyGwei := uint64(0)
 	if s.cfg != nil {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
 	}
+	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))
 	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.genesisForkVersion, s.genesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
