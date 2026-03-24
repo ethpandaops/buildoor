@@ -83,6 +83,10 @@ func init() {
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
 
+	// P2P flags
+	rootCmd.PersistentFlags().StringSlice("p2p-peer-addrs", nil, "Multiaddrs of beacon node P2P endpoints (e.g. /ip4/1.2.3.4/tcp/13000/p2p/16Uiu2...)")
+	rootCmd.PersistentFlags().Uint("p2p-port", 9500, "TCP port for the P2P host")
+
 	// Payload Build Time
 	rootCmd.PersistentFlags().Uint64("payload-build-time", defaults.PayloadBuildTime, "Time to allow the EL to build the payload after triggering the payload build via fcu (in ms)")
 

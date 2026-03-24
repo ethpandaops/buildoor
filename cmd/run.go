@@ -23,6 +23,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/p2p"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -320,6 +322,42 @@ and begins building blocks according to configuration.`,
 				return fmt.Errorf("failed to start ePBS: %w", err)
 			}
 			defer epbsSvc.Stop()
+		}
+
+		// 13. Start proposer preferences P2P listener (if peer addrs configured and Gloas active)
+		p2pPeerAddrs := v.GetStringSlice("p2p-peer-addrs")
+		if len(p2pPeerAddrs) > 0 && epbsAvailable {
+			logger.Info("Initializing P2P host for proposer preferences...")
+
+			// Ensure validator index cache is available (create if not already for Builder API).
+			if validatorIndexCache == nil {
+				validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
+				if err := validatorIndexCache.Start(ctx); err != nil {
+					return fmt.Errorf("failed to start validator index cache: %w", err)
+				}
+				defer validatorIndexCache.Stop()
+			}
+
+			p2pHost, err := p2p.NewHost(p2p.HostConfig{
+				ListenPort: v.GetUint("p2p-port"),
+				PeerAddrs:  p2pPeerAddrs,
+			}, logger)
+			if err != nil {
+				return fmt.Errorf("failed to create P2P host: %w", err)
+			}
+
+			if err := p2pHost.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start P2P host: %w", err)
+			}
+			defer p2pHost.Stop() //nolint:errcheck // cleanup
+
+			propPrefSvc := proposerpreferences.NewService(p2pHost, chainSvc, validatorIndexCache, clClient, logger)
+			if err := propPrefSvc.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start proposer preferences service: %w", err)
+			}
+			defer propPrefSvc.Stop()
+
+			logger.Info("Proposer preferences P2P listener started")
 		}
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")

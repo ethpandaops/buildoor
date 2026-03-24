@@ -37,9 +37,10 @@ type ChainSpec struct {
 	MinSeedLookahead           uint64
 
 	// Domain types
-	DomainBeaconProposer phase0.DomainType
-	DomainBeaconAttester phase0.DomainType
-	DomainPtcAttester    phase0.DomainType
+	DomainBeaconProposer      phase0.DomainType
+	DomainBeaconAttester      phase0.DomainType
+	DomainPtcAttester         phase0.DomainType
+	DomainProposerPreferences phase0.DomainType
 
 	// Fork epochs (nil if not configured)
 	ElectraForkEpoch *uint64
@@ -181,6 +182,10 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 
 	if v, err := parseSpecDomainType(specData, "DOMAIN_PTC_ATTESTER"); err == nil {
 		cs.DomainPtcAttester = v
+	}
+
+	if v, err := parseSpecDomainType(specData, "DOMAIN_PROPOSER_PREFERENCES"); err == nil {
+		cs.DomainProposerPreferences = v
 	}
 
 	// Parse fork epochs
