@@ -7,6 +7,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
@@ -14,11 +15,12 @@ import (
 type APIHandler struct {
 	authHandler    *auth.AuthHandler
 	builderSvc     *builder.Service
-	epbsSvc        *epbs.Service       // May be nil
-	lifecycleMgr   *lifecycle.Manager  // May be nil
-	validatorStore *validators.Store   // May be nil (only set when Builder API enabled)
-	builderAPISvc  *builderapi.Server  // May be nil (only set when Builder API enabled)
-	eventStreamMgr *EventStreamManager // May be nil
+	epbsSvc        *epbs.Service                  // May be nil
+	lifecycleMgr   *lifecycle.Manager             // May be nil
+	validatorStore *validators.Store              // May be nil (only set when Builder API enabled)
+	builderAPISvc  *builderapi.Server             // May be nil (only set when Builder API enabled)
+	propPrefSvc    *proposerpreferences.Service   // May be nil (only set when P2P peer addrs configured)
+	eventStreamMgr *EventStreamManager            // May be nil
 }
 
 // NewAPIHandler creates a new API handler.
@@ -30,6 +32,7 @@ func NewAPIHandler(
 	chainSvc chain.Service,
 	validatorStore *validators.Store,
 	builderAPISvc *builderapi.Server,
+	propPrefSvc *proposerpreferences.Service,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -38,6 +41,7 @@ func NewAPIHandler(
 		lifecycleMgr:   lifecycleMgr,
 		validatorStore: validatorStore,
 		builderAPISvc:  builderAPISvc,
+		propPrefSvc:    propPrefSvc,
 	}
 
 	// Create and start event stream manager
