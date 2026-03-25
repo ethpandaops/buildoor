@@ -189,16 +189,16 @@ and begins building blocks according to configuration.`,
 
 		// Validator store and index cache when Builder API is available (port > 0)
 		// (fee recipient from registrations; cache avoids beacon state lookup every build)
+		validatorIndexCache := chain.NewValidatorIndexCache(clClient, chainSvc, logger)
+		if err := validatorIndexCache.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start validator index cache: %w", err)
+		}
+		defer validatorIndexCache.Stop()
+
 		var validatorStore *validators.Store
-		var validatorIndexCache *chain.ValidatorIndexCache
 		builderAPIAvailable := cfg.BuilderAPI.Port > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
-			validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
-			if err := validatorIndexCache.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start validator index cache: %w", err)
-			}
-			defer validatorIndexCache.Stop()
 		}
 		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
@@ -261,6 +261,27 @@ and begins building blocks according to configuration.`,
 			defer builderAPISrv.Stop() //nolint:errcheck // cleanup
 		}
 
+		// Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
+		var propPrefSvc *proposerpreferences.Service
+
+		p2pPeerAddrs := v.GetStringSlice("p2p-peer-addrs")
+		if len(p2pPeerAddrs) > 0 && epbsAvailable {
+			p2pHost, err := p2p.NewHost(p2p.HostConfig{
+				ListenPort: v.GetUint("p2p-port"),
+				PeerAddrs:  p2pPeerAddrs,
+			}, logger)
+			if err != nil {
+				return fmt.Errorf("failed to create P2P host: %w", err)
+			}
+
+			if err := p2pHost.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start P2P host: %w", err)
+			}
+			defer p2pHost.Stop() //nolint:errcheck // cleanup
+
+			propPrefSvc = proposerpreferences.NewService(p2pHost, chainSvc, validatorIndexCache, clClient, logger)
+		}
+
 		// 9. Start API server (if configured)
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
@@ -281,7 +302,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
@@ -324,34 +345,8 @@ and begins building blocks according to configuration.`,
 			defer epbsSvc.Stop()
 		}
 
-		// 13. Start proposer preferences P2P listener (if peer addrs configured and Gloas active)
-		p2pPeerAddrs := v.GetStringSlice("p2p-peer-addrs")
-		if len(p2pPeerAddrs) > 0 && epbsAvailable {
-			logger.Info("Initializing P2P host for proposer preferences...")
-
-			// Ensure validator index cache is available (create if not already for Builder API).
-			if validatorIndexCache == nil {
-				validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
-				if err := validatorIndexCache.Start(ctx); err != nil {
-					return fmt.Errorf("failed to start validator index cache: %w", err)
-				}
-				defer validatorIndexCache.Stop()
-			}
-
-			p2pHost, err := p2p.NewHost(p2p.HostConfig{
-				ListenPort: v.GetUint("p2p-port"),
-				PeerAddrs:  p2pPeerAddrs,
-			}, logger)
-			if err != nil {
-				return fmt.Errorf("failed to create P2P host: %w", err)
-			}
-
-			if err := p2pHost.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start P2P host: %w", err)
-			}
-			defer p2pHost.Stop() //nolint:errcheck // cleanup
-
-			propPrefSvc := proposerpreferences.NewService(p2pHost, chainSvc, validatorIndexCache, clClient, logger)
+		// 13. Start proposer preferences service (if initialized)
+		if propPrefSvc != nil {
 			if err := propPrefSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start proposer preferences service: %w", err)
 			}

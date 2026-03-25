@@ -70,6 +70,19 @@ func (c *Cache) PruneBefore(slot phase0.Slot) {
 	}
 }
 
+// GetAll returns a copy of all cached proposer preferences.
+func (c *Cache) GetAll() map[phase0.Slot]*gloas.SignedProposerPreferences {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	result := make(map[phase0.Slot]*gloas.SignedProposerPreferences, len(c.preferences))
+	for k, v := range c.preferences {
+		result[k] = v
+	}
+
+	return result
+}
+
 // Clear removes all cached proposer preferences.
 func (c *Cache) Clear() {
 	c.mu.Lock()

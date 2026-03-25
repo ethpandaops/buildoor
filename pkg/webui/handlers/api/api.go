@@ -759,6 +759,53 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// ProposerPreferencesEntry represents a single cached proposer preference for the API response.
+type ProposerPreferencesEntry struct {
+	Slot           uint64 `json:"slot"`
+	ValidatorIndex uint64 `json:"validator_index"`
+	FeeRecipient   string `json:"fee_recipient"`
+	GasLimit       uint64 `json:"gas_limit"`
+}
+
+// ProposerPreferencesResponse is the response for GetProposerPreferences.
+type ProposerPreferencesResponse struct {
+	Preferences []ProposerPreferencesEntry `json:"preferences"`
+}
+
+// GetProposerPreferences godoc
+// @Id getProposerPreferences
+// @Summary Get cached proposer preferences
+// @Tags Buildoor
+// @Description Returns all proposer preferences currently in the cache, received via P2P gossip.
+// @Produce json
+// @Success 200 {object} ProposerPreferencesResponse "Success"
+// @Failure 404 {object} map[string]string "Proposer preferences not enabled"
+// @Router /api/buildoor/proposer-preferences [get]
+func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Request) {
+	if h.propPrefSvc == nil {
+		writeError(w, http.StatusNotFound, "proposer preferences service not enabled")
+		return
+	}
+
+	entries := h.propPrefSvc.GetCache().GetAll()
+	result := make([]ProposerPreferencesEntry, 0, len(entries))
+
+	for slot, pref := range entries {
+		if pref.Message == nil {
+			continue
+		}
+
+		result = append(result, ProposerPreferencesEntry{
+			Slot:           uint64(slot),
+			ValidatorIndex: uint64(pref.Message.ValidatorIndex),
+			FeeRecipient:   fmt.Sprintf("0x%x", pref.Message.FeeRecipient[:]),
+			GasLimit:       pref.Message.GasLimit,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ProposerPreferencesResponse{Preferences: result})
+}
+
 // configToMap returns the config as a map with sensitive fields redacted.
 func configToMap(cfg *builder.Config) map[string]any {
 	if cfg == nil {
