@@ -369,6 +369,48 @@ func (c *Client) GetForkVersion(ctx context.Context) (phase0.Version, error) {
 	return resp.Data.CurrentVersion, nil
 }
 
+// NodeIdentity holds the beacon node's P2P identity information.
+type NodeIdentity struct {
+	PeerID       string   `json:"peer_id"`
+	P2PAddresses []string `json:"p2p_addresses"`
+}
+
+// GetNodeIdentity fetches the beacon node's P2P identity via /eth/v1/node/identity.
+func (c *Client) GetNodeIdentity(ctx context.Context) (*NodeIdentity, error) {
+	url := fmt.Sprintf("%s/eth/v1/node/identity", c.baseURL)
+
+	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := (&nethttp.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get node identity: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != nethttp.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to get node identity: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Data struct {
+			PeerID       string   `json:"peer_id"`
+			P2PAddresses []string `json:"p2p_addresses"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode node identity: %w", err)
+	}
+
+	return &NodeIdentity{
+		PeerID:       result.Data.PeerID,
+		P2PAddresses: result.Data.P2PAddresses,
+	}, nil
+}
+
 // GetRawClient returns the underlying eth2client.Service for direct API access.
 func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
