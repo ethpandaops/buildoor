@@ -15,7 +15,7 @@ var (
 	DomainExecutionPayloadBidSigning = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
 
 	// DomainExecutionPayloadEnvelope is the domain for signing payload envelopes.
-	DomainExecutionPayloadEnvelope = phase0.DomainType{0x0C, 0x00, 0x00, 0x00}
+	DomainExecutionPayloadEnvelope = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
 )
 
 // Signer wraps the BLS signer for ePBS-specific signing operations.
