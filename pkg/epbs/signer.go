@@ -11,11 +11,8 @@ import (
 
 // Domain types for ePBS operations.
 var (
-	// DomainExecutionPayloadBidSigning is the domain for signing execution payload bids.
-	DomainExecutionPayloadBidSigning = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
-
-	// DomainExecutionPayloadEnvelope is the domain for signing payload envelopes.
-	DomainExecutionPayloadEnvelope = phase0.DomainType{0x0C, 0x00, 0x00, 0x00}
+	// DomainBeaconBuilder is the domain for signing execution payload bids and execution payload envelopes.
+	DomainBeaconBuilder = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
 )
 
 // Signer wraps the BLS signer for ePBS-specific signing operations.
@@ -47,7 +44,7 @@ func (s *Signer) SignExecutionPayloadBid(
 
 	// Compute domain for execution payload bid signing
 	// Using current fork version (empty for now, should be fetched from chain)
-	domain := signer.ComputeDomain(DomainExecutionPayloadBidSigning, phase0.Version{}, genesisValidatorsRoot)
+	domain := signer.ComputeDomain(DomainBeaconBuilder, phase0.Version{}, genesisValidatorsRoot)
 
 	return s.blsSigner.SignWithDomain(root, domain)
 }
@@ -68,7 +65,7 @@ func (s *Signer) SignExecutionPayloadEnvelope(
 	copy(root[:], envelopeRoot[:])
 
 	// Compute domain for execution payload envelope signing
-	domain := signer.ComputeDomain(DomainExecutionPayloadEnvelope, phase0.Version{}, genesisValidatorsRoot)
+	domain := signer.ComputeDomain(DomainBeaconBuilder, phase0.Version{}, genesisValidatorsRoot)
 
 	return s.blsSigner.SignWithDomain(root, domain)
 }
