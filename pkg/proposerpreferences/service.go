@@ -85,12 +85,23 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to compute fork digest: %w", err)
 	}
 
+	// Apply BPO (Blob Parameters Only) XOR if blob schedule is configured.
+	// Prysm modifies the fork digest for Fulu+ forks when blob parameters differ from defaults.
+	if len(chainSpec.BlobSchedule) > 0 {
+		bpo := chainSpec.BlobSchedule[0]
+		forkDigest = p2p.ApplyBPO(forkDigest, bpo.Epoch, bpo.MaxBlobsPerBlock)
+		s.log.WithFields(logrus.Fields{
+			"bpo_epoch":          bpo.Epoch,
+			"max_blobs_per_block": bpo.MaxBlobsPerBlock,
+		}).Debug("Applied BPO XOR to fork digest")
+	}
+
 	// Build the full topic name: /eth2/{digest}/proposer_preferences/ssz_snappy
 	topicName := p2p.BuildTopicName(forkDigest, GossipTopicName)
 
 	s.log.WithFields(logrus.Fields{
-		"topic":            topicName,
-		"fork_digest":      fmt.Sprintf("%x", forkDigest),
+		"topic":              topicName,
+		"fork_digest":        fmt.Sprintf("%x", forkDigest),
 		"gloas_fork_version": fmt.Sprintf("0x%x", gloasForkVersion[:]),
 	}).Info("Subscribing to proposer preferences gossip topic")
 

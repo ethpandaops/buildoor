@@ -47,8 +47,17 @@ type ChainSpec struct {
 	GloasForkEpoch   *uint64
 	GloasForkVersion *phase0.Version
 
+	// Blob schedule (BPO - Blob Parameters Only)
+	BlobSchedule []BlobScheduleEntry
+
 	// ePBS parameters
 	PtcSize uint64
+}
+
+// BlobScheduleEntry represents a single entry in the BLOB_SCHEDULE.
+type BlobScheduleEntry struct {
+	Epoch            uint64
+	MaxBlobsPerBlock uint64
 }
 
 // Genesis holds genesis information.
@@ -113,7 +122,7 @@ func (c *Client) GetBaseURL() string {
 // GetChainSpec fetches the chain specification from the beacon node via direct HTTP.
 // This bypasses go-eth2-client's active check so it works before the node is fully ready.
 func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
-	specData, err := c.fetchSpecDirect(ctx)
+	specData, rawData, err := c.fetchSpecDirect(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get spec: %w", err)
 	}
@@ -207,34 +216,53 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 		cs.PtcSize = v
 	}
 
+	// Parse blob schedule (BPO)
+	if raw, ok := rawData["BLOB_SCHEDULE"]; ok {
+		var entries []struct {
+			Epoch            string `json:"EPOCH"`
+			MaxBlobsPerBlock string `json:"MAX_BLOBS_PER_BLOCK"`
+		}
+		if err := json.Unmarshal(raw, &entries); err == nil {
+			for _, e := range entries {
+				epoch, _ := strconv.ParseUint(e.Epoch, 10, 64)
+				maxBlobs, _ := strconv.ParseUint(e.MaxBlobsPerBlock, 10, 64)
+				cs.BlobSchedule = append(cs.BlobSchedule, BlobScheduleEntry{
+					Epoch:            epoch,
+					MaxBlobsPerBlock: maxBlobs,
+				})
+			}
+		}
+	}
+
 	return cs, nil
 }
 
 // fetchSpecDirect fetches /eth/v1/config/spec via direct HTTP, bypassing go-eth2-client.
-func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, error) {
+// Returns both a string map (for simple values) and the raw JSON map (for complex values like BLOB_SCHEDULE).
+func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, map[string]json.RawMessage, error) {
 	url := fmt.Sprintf("%s/eth/v1/config/spec", c.baseURL)
 
 	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := (&nethttp.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
+		return nil, nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != nethttp.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+		return nil, nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result struct {
 		Data map[string]json.RawMessage `json:"data"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	// Extract only string values, skip arrays and other complex types.
@@ -246,7 +274,7 @@ func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, error)
 		}
 	}
 
-	return out, nil
+	return out, result.Data, nil
 }
 
 // parseSpecUint64 parses a uint64 value from the spec data map.
