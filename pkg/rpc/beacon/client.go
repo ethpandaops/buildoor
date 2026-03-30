@@ -42,9 +42,10 @@ type ChainSpec struct {
 	DomainPtcAttester         phase0.DomainType
 	DomainProposerPreferences phase0.DomainType
 
-	// Fork epochs (nil if not configured)
+	// Fork epochs and versions (nil if not configured)
 	ElectraForkEpoch *uint64
 	GloasForkEpoch   *uint64
+	GloasForkVersion *phase0.Version
 
 	// ePBS parameters
 	PtcSize uint64
@@ -197,6 +198,10 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 		cs.GloasForkEpoch = &v
 	}
 
+	if v, err := parseSpecForkVersion(specData, "GLOAS_FORK_VERSION"); err == nil {
+		cs.GloasForkVersion = &v
+	}
+
 	// Parse ePBS parameters
 	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
 		cs.PtcSize = v
@@ -252,6 +257,28 @@ func parseSpecUint64(data map[string]string, key string) (uint64, error) {
 	}
 
 	return strconv.ParseUint(s, 10, 64)
+}
+
+// parseSpecForkVersion parses a 4-byte fork version from the spec data map (hex with 0x prefix).
+func parseSpecForkVersion(data map[string]string, key string) (phase0.Version, error) {
+	s, ok := data[key]
+	if !ok {
+		return phase0.Version{}, fmt.Errorf("%s not found", key)
+	}
+
+	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+	if err != nil {
+		return phase0.Version{}, err
+	}
+
+	if len(b) != 4 {
+		return phase0.Version{}, fmt.Errorf("invalid fork version length: %d", len(b))
+	}
+
+	var v phase0.Version
+	copy(v[:], b)
+
+	return v, nil
 }
 
 // parseSpecDomainType parses a 4-byte domain type from the spec data map (hex with 0x prefix).
