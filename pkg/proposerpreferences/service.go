@@ -74,6 +74,11 @@ func (s *Service) Start(ctx context.Context) error {
 
 	gloasForkVersion := *chainSpec.GloasForkVersion
 
+	s.log.WithFields(logrus.Fields{
+		"gloas_fork_version":      fmt.Sprintf("0x%x", gloasForkVersion[:]),
+		"genesis_validators_root": fmt.Sprintf("0x%x", genesis.GenesisValidatorsRoot[:]),
+	}).Info("Computing fork digest for proposer preferences topic")
+
 	// Compute the fork digest using the Gloas fork version.
 	forkDigest, err := p2p.ComputeForkDigest(gloasForkVersion, genesis.GenesisValidatorsRoot)
 	if err != nil {
