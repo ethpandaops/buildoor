@@ -171,7 +171,11 @@ func (s *Service) handleMessage(data []byte, domain phase0.Domain) {
 	log := s.log.WithFields(logrus.Fields{
 		"slot":            slot,
 		"validator_index": validatorIndex,
+		"fee_recipient":   fmt.Sprintf("0x%x", signed.Message.FeeRecipient[:]),
+		"gas_limit":       signed.Message.GasLimit,
 	})
+
+	log.Info("Received proposer preferences from gossip")
 
 	// Skip if we already have preferences for this slot.
 	if s.cache.Has(slot) {
