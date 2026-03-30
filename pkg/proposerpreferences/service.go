@@ -67,14 +67,15 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("chain spec not available")
 	}
 
-	// Get the current fork version from the beacon node.
-	forkVersion, err := s.clClient.GetForkVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get fork version: %w", err)
+	// Use the Gloas fork version for the gossip topic fork digest.
+	if chainSpec.GloasForkVersion == nil {
+		return fmt.Errorf("Gloas fork version not available in chain spec")
 	}
 
-	// Compute the fork digest for topic name construction.
-	forkDigest, err := p2p.ComputeForkDigest(forkVersion, genesis.GenesisValidatorsRoot)
+	gloasForkVersion := *chainSpec.GloasForkVersion
+
+	// Compute the fork digest using the Gloas fork version.
+	forkDigest, err := p2p.ComputeForkDigest(gloasForkVersion, genesis.GenesisValidatorsRoot)
 	if err != nil {
 		return fmt.Errorf("failed to compute fork digest: %w", err)
 	}
@@ -83,8 +84,9 @@ func (s *Service) Start(ctx context.Context) error {
 	topicName := p2p.BuildTopicName(forkDigest, GossipTopicName)
 
 	s.log.WithFields(logrus.Fields{
-		"topic":       topicName,
-		"fork_digest": fmt.Sprintf("%x", forkDigest),
+		"topic":            topicName,
+		"fork_digest":      fmt.Sprintf("%x", forkDigest),
+		"gloas_fork_version": fmt.Sprintf("0x%x", gloasForkVersion[:]),
 	}).Info("Subscribing to proposer preferences gossip topic")
 
 	sub, err := s.p2pHost.Subscribe(topicName)
@@ -93,15 +95,14 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	// Precompute the domain for signature verification.
-	domain := signer.ComputeDomain(DomainProposerPreferences, forkVersion, genesis.GenesisValidatorsRoot)
+	domain := signer.ComputeDomain(DomainProposerPreferences, gloasForkVersion, genesis.GenesisValidatorsRoot)
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	s.cancelFunc = cancel
 
-	s.wg.Add(2)
+	s.wg.Add(1)
 
 	go s.processMessages(svcCtx, sub, domain)
-	go s.pruneOnHead(svcCtx, chainSpec.SlotsPerEpoch)
 
 	s.log.Info("Proposer preferences service started")
 
@@ -205,27 +206,3 @@ func (s *Service) handleMessage(data []byte, domain phase0.Domain) {
 	}
 }
 
-// pruneOnHead subscribes to head events and prunes old cache entries.
-func (s *Service) pruneOnHead(ctx context.Context, slotsPerEpoch uint64) {
-	defer s.wg.Done()
-
-	headSub := s.clClient.Events().SubscribeHead()
-	defer headSub.Unsubscribe()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event := <-headSub.Channel():
-			if event == nil {
-				continue
-			}
-
-			// Prune preferences older than 2 epochs.
-			pruneBuffer := phase0.Slot(2 * slotsPerEpoch)
-			if event.Slot > pruneBuffer {
-				s.cache.PruneBefore(event.Slot - pruneBuffer)
-			}
-		}
-	}
-}
