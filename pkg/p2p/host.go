@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2ptcp "github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	"github.com/multiformats/go-multiaddr"
@@ -61,6 +62,7 @@ func NewHost(cfg HostConfig, log logrus.FieldLogger) (*Host, error) {
 		libp2p.ListenAddrStrings(listenAddr),
 		libp2p.Transport(libp2ptcp.NewTCPTransport),
 		libp2p.Security(noise.ID, noise.New),
+		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
 		libp2p.Ping(false),
 	)
 	if err != nil {
