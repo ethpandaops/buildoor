@@ -2,8 +2,6 @@ package p2p
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
 
@@ -40,14 +38,9 @@ type Host struct {
 func NewHost(cfg HostConfig, log logrus.FieldLogger) (*Host, error) {
 	hostLog := log.WithField("component", "p2p")
 
-	ecdsaKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	privKey, _, err := crypto.GenerateSecp256k1Key(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate P2P key: %w", err)
-	}
-
-	privKey, _, err := crypto.ECDSAKeyPairFromKey(ecdsaKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to convert P2P key: %w", err)
 	}
 
 	listenPort := cfg.ListenPort
