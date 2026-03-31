@@ -30,26 +30,21 @@ func NewBeaconStatusProvider(client *beacon.Client, chainSpec *beacon.ChainSpec,
 }
 
 // GetChainStatus fetches the current chain status and builds a StatusV2 message.
-// The fork digest is computed as:
-//
-//	base = compute_fork_data_root(current_fork_version, genesis_validators_root)[:4]
-//	for each BlobSchedule entry with entry.Epoch <= current_epoch:
-//	    base = base XOR sha256(entry.Epoch_le64 || entry.MaxBlobsPerBlock_le64)[:4]
-//
-// This matches Prysm's params.ForkDigest(currentEpoch) computation.
+// The fork digest uses GloasForkVersion from the chain spec (same source as gossip
+// topic computation) rather than the beacon API's current_version, which may return
+// a different value on some devnets.
 func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessage, error) {
 	result, err := p.client.GetChainStatus(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beacon GetChainStatus: %w", err)
 	}
 
-	currentForkVersion, err := p.client.GetCurrentForkVersion(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get current fork version: %w", err)
+	if p.chainSpec.GloasForkVersion == nil {
+		return nil, fmt.Errorf("gloas fork version not available in chain spec")
 	}
 
 	forkDigest, err := ComputeForkDigestWithBPO(
-		currentForkVersion,
+		*p.chainSpec.GloasForkVersion,
 		p.genesis.GenesisValidatorsRoot,
 		p.chainSpec,
 	)

@@ -67,22 +67,22 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("chain spec not available")
 	}
 
-	// Fetch the current active fork version from the beacon node.
-	// Gossip topic fork digests must match the current fork, not a hardcoded future fork version.
-	currentForkVersion, err := s.clClient.GetCurrentForkVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current fork version: %w", err)
+	// Use GloasForkVersion from chain spec — same source as the status provider so both
+	// the gossip topic digest and the Status RPC digest are always consistent.
+	if chainSpec.GloasForkVersion == nil {
+		return fmt.Errorf("gloas fork version not available in chain spec")
 	}
 
+	gloasForkVersion := *chainSpec.GloasForkVersion
+
 	s.log.WithFields(logrus.Fields{
-		"current_fork_version":    fmt.Sprintf("0x%x", currentForkVersion[:]),
+		"gloas_fork_version":      fmt.Sprintf("0x%x", gloasForkVersion[:]),
 		"genesis_validators_root": fmt.Sprintf("0x%x", genesis.GenesisValidatorsRoot[:]),
 	}).Info("Computing fork digest for proposer preferences topic")
 
-	// Compute fork digest using the current fork version with all BPO XOR entries applied.
-	// All entries from BLOB_SCHEDULE are applied unconditionally (Prysm includes the full
-	// schedule in the digest regardless of activation epoch).
-	forkDigest, err := p2p.ComputeForkDigestWithBPO(currentForkVersion, genesis.GenesisValidatorsRoot, chainSpec)
+	// Compute fork digest: all BPO entries applied unconditionally (Prysm includes the full
+	// BLOB_SCHEDULE in the digest regardless of activation epoch).
+	forkDigest, err := p2p.ComputeForkDigestWithBPO(gloasForkVersion, genesis.GenesisValidatorsRoot, chainSpec)
 	if err != nil {
 		return fmt.Errorf("failed to compute fork digest: %w", err)
 	}
@@ -91,9 +91,9 @@ func (s *Service) Start(ctx context.Context) error {
 	topicName := p2p.BuildTopicName(forkDigest, GossipTopicName)
 
 	s.log.WithFields(logrus.Fields{
-		"topic":                topicName,
-		"fork_digest":          fmt.Sprintf("%x", forkDigest),
-		"current_fork_version": fmt.Sprintf("0x%x", currentForkVersion[:]),
+		"topic":              topicName,
+		"fork_digest":        fmt.Sprintf("%x", forkDigest),
+		"gloas_fork_version": fmt.Sprintf("0x%x", gloasForkVersion[:]),
 	}).Info("Subscribing to proposer preferences gossip topic")
 
 	sub, err := s.p2pHost.Subscribe(topicName)
@@ -101,11 +101,8 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to subscribe to proposer preferences topic: %w", err)
 	}
 
-	// Precompute the domain for signature verification.
-	// Proposer preferences is a Gloas feature, so the signing domain uses the Gloas fork version.
-	if chainSpec.GloasForkVersion == nil {
-		return fmt.Errorf("gloas fork version not available in chain spec")
-	}
+	// Precompute the domain for signature verification using the Gloas fork version.
+
 	domain := signer.ComputeDomain(DomainProposerPreferences, *chainSpec.GloasForkVersion, genesis.GenesisValidatorsRoot)
 
 	svcCtx, cancel := context.WithCancel(ctx)
