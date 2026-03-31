@@ -51,7 +51,6 @@ func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessa
 	forkDigest, err := ComputeForkDigestWithBPO(
 		currentForkVersion,
 		p.genesis.GenesisValidatorsRoot,
-		result.HeadSlot,
 		p.chainSpec,
 	)
 	if err != nil {
@@ -68,15 +67,14 @@ func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessa
 	}, nil
 }
 
-// ComputeForkDigestWithBPO computes the fork digest for the given head slot,
-// applying all BPO (Blob Parameters Only) XOR modifications from the blob schedule
-// whose activation epoch is at or before the current epoch.
-// This matches Prysm's params.ForkDigest(currentEpoch) computation and must be used
-// for BOTH Status RPC messages and gossip topic names to stay in sync with Prysm.
+// ComputeForkDigestWithBPO computes the fork digest, applying all BPO (Blob Parameters
+// Only) XOR modifications from the blob schedule unconditionally.
+// Prysm applies every entry in the BLOB_SCHEDULE to the fork digest regardless of
+// whether the entry's activation epoch has been reached, so we do the same here.
+// This must be used for BOTH Status RPC messages and gossip topic names.
 func ComputeForkDigestWithBPO(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
-	headSlot uint64,
 	chainSpec *beacon.ChainSpec,
 ) ([4]byte, error) {
 	forkData := &phase0.ForkData{
@@ -96,15 +94,10 @@ func ComputeForkDigestWithBPO(
 		return digest, nil
 	}
 
-	// Convert head slot to epoch.
-	currentEpoch := headSlot / chainSpec.SlotsPerEpoch
-
-	// Apply BPO XOR for every blob schedule entry whose epoch is at or before the current epoch.
-	// Entries must be applied in ascending epoch order to match Prysm's cumulative XOR.
+	// Apply BPO XOR for every blob schedule entry unconditionally.
+	// Prysm includes the full BLOB_SCHEDULE in the fork digest regardless of activation epoch.
 	for _, bpo := range chainSpec.BlobSchedule {
-		if bpo.Epoch <= currentEpoch {
-			digest = ApplyBPO(digest, bpo.Epoch, bpo.MaxBlobsPerBlock)
-		}
+		digest = ApplyBPO(digest, bpo.Epoch, bpo.MaxBlobsPerBlock)
 	}
 
 	return digest, nil
