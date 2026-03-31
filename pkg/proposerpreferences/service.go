@@ -7,110 +7,41 @@ import (
 
 	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/p2p"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
-// DomainProposerPreferences is the domain type for proposer preferences signatures.
-// See: https://github.com/ethereum/consensus-specs/tree/master/specs/gloas
-var DomainProposerPreferences = phase0.DomainType{0x0d, 0x00, 0x00, 0x00}
-
-// GossipTopicName is the gossip message name for proposer preferences.
-const GossipTopicName = "proposer_preferences"
-
-// Service listens to proposer preferences from the P2P gossip network,
-// validates signatures, and caches the latest preference per slot.
+// Service listens to proposer preferences from the beacon node's SSE event stream
+// and caches the latest preference per slot.
 type Service struct {
-	p2pHost        *p2p.Host
-	chainSvc       chain.Service
-	validatorCache *chain.ValidatorIndexCache
-	clClient       *beacon.Client
-	cache          *Cache
-	log            logrus.FieldLogger
+	clClient *beacon.Client
+	cache    *Cache
+	log      logrus.FieldLogger
 
 	cancelFunc context.CancelFunc
 	wg         sync.WaitGroup
 }
 
 // NewService creates a new proposer preferences service.
-func NewService(
-	p2pHost *p2p.Host,
-	chainSvc chain.Service,
-	validatorCache *chain.ValidatorIndexCache,
-	clClient *beacon.Client,
-	log logrus.FieldLogger,
-) *Service {
+func NewService(clClient *beacon.Client, log logrus.FieldLogger) *Service {
 	return &Service{
-		p2pHost:        p2pHost,
-		chainSvc:       chainSvc,
-		validatorCache: validatorCache,
-		clClient:       clClient,
-		cache:          NewCache(),
-		log:            log.WithField("component", "proposer-preferences"),
+		clClient: clClient,
+		cache:    NewCache(),
+		log:      log.WithField("component", "proposer-preferences"),
 	}
 }
 
-// Start subscribes to the proposer_preferences gossip topic and begins processing messages.
+// Start subscribes to the proposer_preferences SSE topic and begins processing events.
 func (s *Service) Start(ctx context.Context) error {
-	genesis := s.chainSvc.GetGenesis()
-	if genesis == nil {
-		return fmt.Errorf("genesis not available")
-	}
-
-	chainSpec := s.chainSvc.GetChainSpec()
-	if chainSpec == nil {
-		return fmt.Errorf("chain spec not available")
-	}
-
-	// Use GloasForkVersion from chain spec — same source as the status provider so both
-	// the gossip topic digest and the Status RPC digest are always consistent.
-	if chainSpec.GloasForkVersion == nil {
-		return fmt.Errorf("gloas fork version not available in chain spec")
-	}
-
-	gloasForkVersion := *chainSpec.GloasForkVersion
-
-	s.log.WithFields(logrus.Fields{
-		"gloas_fork_version":      fmt.Sprintf("0x%x", gloasForkVersion[:]),
-		"genesis_validators_root": fmt.Sprintf("0x%x", genesis.GenesisValidatorsRoot[:]),
-	}).Info("Computing fork digest for proposer preferences topic")
-
-	// Compute fork digest: all BPO entries applied unconditionally (Prysm includes the full
-	// BLOB_SCHEDULE in the digest regardless of activation epoch).
-	forkDigest, err := p2p.ComputeForkDigestWithBPO(gloasForkVersion, genesis.GenesisValidatorsRoot, chainSpec)
-	if err != nil {
-		return fmt.Errorf("failed to compute fork digest: %w", err)
-	}
-
-	// Build the full topic name: /eth2/{digest}/proposer_preferences/ssz_snappy
-	topicName := p2p.BuildTopicName(forkDigest, GossipTopicName)
-
-	s.log.WithFields(logrus.Fields{
-		"topic":              topicName,
-		"fork_digest":        fmt.Sprintf("%x", forkDigest),
-		"gloas_fork_version": fmt.Sprintf("0x%x", gloasForkVersion[:]),
-	}).Info("Subscribing to proposer preferences gossip topic")
-
-	sub, err := s.p2pHost.Subscribe(topicName)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to proposer preferences topic: %w", err)
-	}
-
-	// Precompute the domain for signature verification using the Gloas fork version.
-
-	domain := signer.ComputeDomain(DomainProposerPreferences, *chainSpec.GloasForkVersion, genesis.GenesisValidatorsRoot)
+	sub := s.clClient.Events().SubscribeProposerPreferences()
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	s.cancelFunc = cancel
 
 	s.wg.Add(1)
 
-	go s.processMessages(svcCtx, sub, domain)
+	go s.processEvents(svcCtx, sub)
 
 	s.log.Info("Proposer preferences service started")
 
@@ -137,40 +68,28 @@ func (s *Service) GetCache() *Cache {
 	return s.cache
 }
 
-// processMessages reads gossip messages, decodes, validates signatures, and caches them.
-func (s *Service) processMessages(ctx context.Context, sub *pubsub.Subscription, domain phase0.Domain) {
+// processEvents reads SSE proposer preference events and caches them.
+func (s *Service) processEvents(ctx context.Context, sub interface{ Channel() <-chan *gloas.SignedProposerPreferences; Unsubscribe() }) {
 	defer s.wg.Done()
+	defer sub.Unsubscribe()
 
 	for {
-		msg, err := sub.Next(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case signed, ok := <-sub.Channel():
+			if !ok {
 				return
 			}
 
-			s.log.WithError(err).Warn("Error receiving gossip message")
-
-			continue
+			s.handleEvent(signed)
 		}
-
-		if msg == nil || msg.Data == nil {
-			continue
-		}
-
-		s.handleMessage(msg.Data, domain)
 	}
 }
 
-// handleMessage decodes, validates, and caches a single proposer preferences message.
-func (s *Service) handleMessage(data []byte, domain phase0.Domain) {
-	var signed gloas.SignedProposerPreferences
-	if err := p2p.DecodeGossipMessage(data, &signed); err != nil {
-		s.log.WithError(err).Debug("Failed to decode proposer preferences message")
-		return
-	}
-
-	if signed.Message == nil {
-		s.log.Debug("Received proposer preferences with nil message")
+// handleEvent caches a received proposer preferences event.
+func (s *Service) handleEvent(signed *gloas.SignedProposerPreferences) {
+	if signed == nil || signed.Message == nil {
 		return
 	}
 
@@ -184,33 +103,14 @@ func (s *Service) handleMessage(data []byte, domain phase0.Domain) {
 		"gas_limit":       signed.Message.GasLimit,
 	})
 
-	log.Info("Received proposer preferences from gossip")
+	log.Info("Received proposer preferences from SSE")
 
-	// Skip if we already have preferences for this slot.
 	if s.cache.Has(slot) {
 		log.Debug("Already have proposer preferences for this slot, ignoring")
 		return
 	}
 
-	// Look up the validator's public key.
-	pubkey, ok := s.validatorCache.Get(validatorIndex)
-	if !ok {
-		log.Warn("Unknown validator index in proposer preferences, dropping")
-		return
-	}
-
-	// Verify the BLS signature.
-	if !VerifySignature(&signed, pubkey, domain) {
-		log.Warn("Invalid signature on proposer preferences, dropping")
-		return
-	}
-
-	// Cache the validated preferences.
-	if s.cache.Add(slot, &signed) {
-		log.WithFields(logrus.Fields{
-			"fee_recipient": fmt.Sprintf("0x%x", signed.Message.FeeRecipient[:]),
-			"gas_limit":     signed.Message.GasLimit,
-		}).Info("Received valid proposer preferences")
+	if s.cache.Add(slot, signed) {
+		log.Info("Cached proposer preferences")
 	}
 }
-

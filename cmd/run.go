@@ -23,7 +23,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
-	"github.com/ethpandaops/buildoor/pkg/p2p"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -265,34 +264,7 @@ and begins building blocks according to configuration.`,
 		var propPrefSvc *proposerpreferences.Service
 
 		if epbsAvailable {
-			logger.Info("Fetching beacon node P2P identity...")
-
-			identity, err := clClient.GetNodeIdentity(ctx)
-			if err != nil {
-				logger.WithError(err).Warn("Failed to fetch beacon node P2P identity, skipping proposer preferences P2P listener")
-			} else {
-				logger.WithFields(logrus.Fields{
-					"peer_id":       identity.PeerID,
-					"p2p_addresses": identity.P2PAddresses,
-				}).Info("Discovered beacon node P2P identity")
-
-				p2pHost, err := p2p.NewHost(p2p.HostConfig{
-					ListenPort: v.GetUint("p2p-port"),
-					PeerAddrs:  identity.P2PAddresses,
-				}, logger)
-				if err != nil {
-					return fmt.Errorf("failed to create P2P host: %w", err)
-				}
-
-				p2pHost.SetStatusProvider(p2p.NewBeaconStatusProvider(clClient, chainSpec, genesis))
-
-				if err := p2pHost.Start(ctx); err != nil {
-					return fmt.Errorf("failed to start P2P host: %w", err)
-				}
-				defer p2pHost.Stop() //nolint:errcheck // cleanup
-
-				propPrefSvc = proposerpreferences.NewService(p2pHost, chainSvc, validatorIndexCache, clClient, logger)
-			}
+			propPrefSvc = proposerpreferences.NewService(clClient, logger)
 		}
 
 		// 9. Start API server (if configured)
@@ -365,7 +337,7 @@ and begins building blocks according to configuration.`,
 			}
 			defer propPrefSvc.Stop()
 
-			logger.Info("Proposer preferences P2P listener started")
+			logger.Info("Proposer preferences SSE listener started")
 		}
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")

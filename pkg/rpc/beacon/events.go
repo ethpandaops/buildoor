@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/attestantio/go-eth2-client/spec/capella"
+	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
 
@@ -129,6 +130,13 @@ type attestationEventJSON struct {
 	CommitteeBits string `json:"committee_bits,omitempty"`
 }
 
+// proposerPreferencesEventJSON is used for JSON unmarshaling of proposer_preferences events.
+// Prysm wraps the SignedProposerPreferences in a versioned envelope.
+type proposerPreferencesEventJSON struct {
+	Version string                         `json:"version"`
+	Data    *gloas.SignedProposerPreferences `json:"data"`
+}
+
 // payloadAvailableEventJSON is used for JSON unmarshaling of execution_payload_available events.
 type payloadAvailableEventJSON struct {
 	Slot      string `json:"slot"`
@@ -156,16 +164,17 @@ type bidEventJSON struct {
 
 // EventStream manages SSE connections to the beacon node event stream.
 type EventStream struct {
-	client                      *Client
-	headDispatcher              *utils.Dispatcher[*HeadEvent]
-	bidDispatcher               *utils.Dispatcher[*BidEvent]
-	payloadDispatcher           *utils.Dispatcher[*PayloadAvailableEvent]
-	payloadAttributesDispatcher *utils.Dispatcher[*PayloadAttributesEvent]
-	attestationDispatcher       *utils.Dispatcher[*AttestationEvent]
-	cancelFunc                  context.CancelFunc
-	running                     bool
-	mu                          sync.Mutex
-	wg                          sync.WaitGroup
+	client                          *Client
+	headDispatcher                  *utils.Dispatcher[*HeadEvent]
+	bidDispatcher                   *utils.Dispatcher[*BidEvent]
+	payloadDispatcher               *utils.Dispatcher[*PayloadAvailableEvent]
+	payloadAttributesDispatcher     *utils.Dispatcher[*PayloadAttributesEvent]
+	attestationDispatcher           *utils.Dispatcher[*AttestationEvent]
+	proposerPreferencesDispatcher   *utils.Dispatcher[*gloas.SignedProposerPreferences]
+	cancelFunc                      context.CancelFunc
+	running                         bool
+	mu                              sync.Mutex
+	wg                              sync.WaitGroup
 
 	// Per-slot cache of latest payload_attributes events.
 	// Multiple events may arrive for the same slot (e.g. reorgs, updated attributes);
@@ -177,13 +186,14 @@ type EventStream struct {
 // NewEventStream creates a new event stream for the given client.
 func NewEventStream(client *Client) *EventStream {
 	return &EventStream{
-		client:                      client,
-		headDispatcher:              &utils.Dispatcher[*HeadEvent]{},
-		bidDispatcher:               &utils.Dispatcher[*BidEvent]{},
-		payloadDispatcher:           &utils.Dispatcher[*PayloadAvailableEvent]{},
-		payloadAttributesDispatcher: &utils.Dispatcher[*PayloadAttributesEvent]{},
-		attestationDispatcher:       &utils.Dispatcher[*AttestationEvent]{},
-		payloadAttrCache:            make(map[phase0.Slot]*PayloadAttributesEvent, 4),
+		client:                        client,
+		headDispatcher:                &utils.Dispatcher[*HeadEvent]{},
+		bidDispatcher:                 &utils.Dispatcher[*BidEvent]{},
+		payloadDispatcher:             &utils.Dispatcher[*PayloadAvailableEvent]{},
+		payloadAttributesDispatcher:   &utils.Dispatcher[*PayloadAttributesEvent]{},
+		attestationDispatcher:         &utils.Dispatcher[*AttestationEvent]{},
+		proposerPreferencesDispatcher: &utils.Dispatcher[*gloas.SignedProposerPreferences]{},
+		payloadAttrCache:              make(map[phase0.Slot]*PayloadAttributesEvent, 4),
 	}
 }
 
@@ -201,13 +211,14 @@ func (e *EventStream) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	// Start separate goroutines for each topic
-	e.wg.Add(5)
+	e.wg.Add(6)
 
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_available", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "attestation", 5*time.Second)
+	go e.runTopicLoop(streamCtx, "proposer_preferences", 5*time.Second)
 
 	return nil
 }
@@ -249,6 +260,11 @@ func (e *EventStream) SubscribePayloadAttributes() *utils.Subscription[*PayloadA
 // SubscribeAttestations returns a subscription for attestation events.
 func (e *EventStream) SubscribeAttestations() *utils.Subscription[*AttestationEvent] {
 	return e.attestationDispatcher.Subscribe(256, false)
+}
+
+// SubscribeProposerPreferences returns a subscription for proposer_preferences events.
+func (e *EventStream) SubscribeProposerPreferences() *utils.Subscription[*gloas.SignedProposerPreferences] {
+	return e.proposerPreferencesDispatcher.Subscribe(32, false)
 }
 
 // GetLatestPayloadAttributes returns the latest cached payload_attributes event
@@ -477,6 +493,25 @@ func (e *EventStream) handleEvent(eventType, data string) {
 
 		event.ReceivedAt = time.Now()
 		e.attestationDispatcher.Fire(event)
+
+	case "proposer_preferences":
+		var raw proposerPreferencesEventJSON
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse proposer_preferences event JSON")
+			return
+		}
+
+		if raw.Data == nil || raw.Data.Message == nil {
+			e.client.log.Warn("Received proposer_preferences event with nil data")
+			return
+		}
+
+		e.client.log.WithFields(map[string]interface{}{
+			"slot":            raw.Data.Message.ProposalSlot,
+			"validator_index": raw.Data.Message.ValidatorIndex,
+		}).Debug("Proposer preferences event received")
+
+		e.proposerPreferencesDispatcher.Fire(raw.Data)
 
 	default:
 		e.client.log.WithField("event_type", eventType).Debug("Unknown event type")
