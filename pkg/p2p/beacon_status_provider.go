@@ -48,7 +48,7 @@ func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessa
 		return nil, fmt.Errorf("get current fork version: %w", err)
 	}
 
-	forkDigest, err := computeForkDigestWithBPO(
+	forkDigest, err := ComputeForkDigestWithBPO(
 		currentForkVersion,
 		p.genesis.GenesisValidatorsRoot,
 		result.HeadSlot,
@@ -68,10 +68,12 @@ func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessa
 	}, nil
 }
 
-// computeForkDigestWithBPO computes the fork digest for the current epoch,
+// ComputeForkDigestWithBPO computes the fork digest for the given head slot,
 // applying all BPO (Blob Parameters Only) XOR modifications from the blob schedule
 // whose activation epoch is at or before the current epoch.
-func computeForkDigestWithBPO(
+// This matches Prysm's params.ForkDigest(currentEpoch) computation and must be used
+// for BOTH Status RPC messages and gossip topic names to stay in sync with Prysm.
+func ComputeForkDigestWithBPO(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 	headSlot uint64,
