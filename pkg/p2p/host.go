@@ -132,6 +132,7 @@ func (h *Host) Start(ctx context.Context) error {
 		// Prysm requires a status within 10 seconds (timeForStatus) or it disconnects us.
 		peerID := info.ID
 		go func() {
+			h.log.Info("Sending StatusV2 handshake to peer")
 			if err := h.sendStatus(ctx, peerID); err != nil {
 				h.log.WithError(err).WithField("peer", peerID.String()).Warn("Status handshake failed")
 			}
@@ -180,6 +181,14 @@ func (h *Host) sendStatus(ctx context.Context, peerID peer.ID) error {
 		return fmt.Errorf("get chain status: %w", err)
 	}
 
+	h.log.WithFields(logrus.Fields{
+		"peer":        peerID.String(),
+		"fork_digest": fmt.Sprintf("%x", ourStatus.ForkDigest),
+		"head_slot":   ourStatus.HeadSlot,
+		"finalized_epoch": ourStatus.FinalizedEpoch,
+		"earliest_available_slot": ourStatus.EarliestAvailableSlot,
+	}).Info("Sending StatusV2 handshake to peer after getting the status")
+
 	streamCtx, cancel := context.WithTimeout(ctx, statusStreamTimeout)
 	defer cancel()
 
@@ -202,16 +211,21 @@ func (h *Host) sendStatus(ctx context.Context, peerID peer.ID) error {
 		return fmt.Errorf("write status: %w", err)
 	}
 
+	h.log.WithField("peer", peerID.String()).Info("Wrote StatusV2 handshake to peer")
+
 	// Half-close our write side so the peer knows the request is complete.
 	if err := stream.CloseWrite(); err != nil {
 		return fmt.Errorf("close write: %w", err)
 	}
 
 	// Read the response: 1-byte result code + encoded StatusV2.
+	h.log.WithField("peer", peerID.String()).Info("Reading StatusV2 handshake response from peer")
 	respData, err := io.ReadAll(stream)
 	if err != nil {
 		return fmt.Errorf("read response: %w", err)
 	}
+
+	h.log.WithField("peer", peerID.String()).Info("Read StatusV2 handshake response from peer")
 
 	if len(respData) == 0 {
 		return fmt.Errorf("empty response from peer")
@@ -221,11 +235,14 @@ func (h *Host) sendStatus(ctx context.Context, peerID peer.ID) error {
 		return fmt.Errorf("peer returned error code 0x%02x", respData[0])
 	}
 
+	h.log.WithField("peer", peerID.String()).Info("Status handshake response code is 0x00")
+
 	if len(respData) < 2 {
 		h.log.WithField("peer", peerID.String()).Debug("Status handshake complete (no body in response)")
 		return nil
 	}
 
+	h.log.WithField("peer", peerID.String()).Info("Decoding StatusV2 handshake response from peer")
 	peerStatus, _, err := DecodeStatusMessage(respData[1:])
 	if err != nil {
 		// Non-fatal — we sent ours successfully; peer's response is informational only.
