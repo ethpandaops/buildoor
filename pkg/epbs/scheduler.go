@@ -153,7 +153,6 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	if s.chainSpec.GloasForkEpoch != nil {
 		currentEpoch := uint64(currentSlot) / s.chainSpec.SlotsPerEpoch
 		if currentEpoch < *s.chainSpec.GloasForkEpoch {
-			s.log.Info("ePBS is not enabled for this epoch, skipping")
 			return
 		}
 	}
