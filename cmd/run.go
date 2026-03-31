@@ -284,7 +284,7 @@ and begins building blocks according to configuration.`,
 					return fmt.Errorf("failed to create P2P host: %w", err)
 				}
 
-				p2pHost.SetStatusProvider(p2p.NewBeaconStatusProvider(clClient))
+				p2pHost.SetStatusProvider(p2p.NewBeaconStatusProvider(clClient, chainSpec, genesis))
 
 				if err := p2pHost.Start(ctx); err != nil {
 					return fmt.Errorf("failed to start P2P host: %w", err)
