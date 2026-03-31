@@ -2,6 +2,7 @@ package epbs
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -148,12 +149,21 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	currentSlot := phase0.Slot(elapsed / s.chainSpec.SecondsPerSlot)
 	msIntoSlot := (elapsed % s.chainSpec.SecondsPerSlot).Milliseconds()
 
+	// ePBS bids are only valid from the Gloas fork onwards.
+	if s.chainSpec.GloasForkEpoch != nil {
+		currentEpoch := uint64(currentSlot) / s.chainSpec.SlotsPerEpoch
+		if currentEpoch < *s.chainSpec.GloasForkEpoch {
+			s.log.Info("ePBS is not enabled for this epoch, skipping")
+			return
+		}
+	}
+
 	// Check slots that might need bidding (current and next due to negative start time)
 	s.checkSlotForBidding(ctx, currentSlot, now, msIntoSlot)
-	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
+	// s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
 
 	// Check for reveals
-	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
+	// s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
 }
 
 // checkSlotForBidding checks if we should bid for this slot.
@@ -208,6 +218,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	s.mu.Unlock()
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"bid_value":  bidValue,
+		"bid_count":  state.BidCount,
+		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+	}).Info("Creating and submitting bid")
 
 	// Submit bid
 	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)

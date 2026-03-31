@@ -67,6 +67,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 		BlobKZGCommitments: []deneb.KZGCommitment{},
 	}
 
+	c.log.Info("Created execution payload bid")
+
 	if payload.BlobsBundle != nil {
 		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
 		for i, c := range payload.BlobsBundle.Commitments {
@@ -74,6 +76,10 @@ func (c *BidCreator) CreateAndSubmitBid(
 		}
 	}
 
+	c.log.Info("Populated bid with blobs")
+
+
+	c.log.Info("Signing bid before submitting")
 	// Sign the bid using proper domain
 	signature, err := c.signer.SignExecutionPayloadBid(
 		bid,
@@ -82,6 +88,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 	if err != nil {
 		return fmt.Errorf("failed to sign bid: %w", err)
 	}
+
+	c.log.Info("Signed bid successfully!")
 
 	// Create signed bid
 	signedBid := &gloas.SignedExecutionPayloadBid{
@@ -104,7 +112,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 		"gas_limit":     payload.GasLimit,
 	})
 
-	logger.Debug("Submitting bid")
+	logger.Info("Submitting bid")
 
 	// Submit bid
 	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -34,6 +35,7 @@ type Service struct {
 	feeRecipient           common.Address
 	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
 	validatorIndexCache    *chain.ValidatorIndexCache // optional: index→pubkey cache so we don't query beacon every build
+	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
@@ -114,6 +116,8 @@ func (s *Service) Start(ctx context.Context) error {
 		useProposerFeeRecipient,
 		s.validatorStore,
 		s.validatorIndexCache,
+		s.propPrefCache,
+		s.chainSvc.IsGloas,
 	)
 
 	// Start event stream
@@ -190,6 +194,12 @@ func (s *Service) GetCLClient() *beacon.Client {
 // IsGloas returns whether we're on the Gloas fork.
 func (s *Service) IsGloas() bool {
 	return s.chainSvc.IsGloas()
+}
+
+// SetProposerPreferencesCache sets the proposer preferences cache used for Gloas+ builds.
+// Must be called before Start().
+func (s *Service) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
+	s.propPrefCache = cache
 }
 
 // SubscribePayloadReady subscribes to payload ready events.

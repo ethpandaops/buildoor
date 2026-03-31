@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
@@ -25,8 +26,10 @@ type PayloadBuilder struct {
 	engineClient            *engine.Client
 	feeRecipient            common.Address
 	useProposerFeeRecipient bool
-	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations
+	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
 	validatorIndexCache     *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
+	propPrefCache           *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
+	isGloas                 func() bool                // returns true when on the Gloas fork
 	payloadBuildTime        uint64
 	log                     logrus.FieldLogger
 
@@ -43,8 +46,8 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
-// When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey).
-// If no registration is found, the build is skipped (checked before reaching this point).
+// When validatorStore is set (pre-Gloas), fee recipient is taken from the proposer's validator registration.
+// When propPrefCache is set and isGloas returns true, fee recipient and gas limit come from proposer preferences instead.
 // validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
@@ -55,6 +58,8 @@ func NewPayloadBuilder(
 	useProposerFeeRecipient bool,
 	validatorStore *validators.Store,
 	validatorIndexCache *chain.ValidatorIndexCache,
+	propPrefCache *proposerpreferences.Cache,
+	isGloas func() bool,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
 		clClient:                clClient,
@@ -63,6 +68,8 @@ func NewPayloadBuilder(
 		useProposerFeeRecipient: useProposerFeeRecipient,
 		validatorStore:          validatorStore,
 		validatorIndexCache:     validatorIndexCache,
+		propPrefCache:           propPrefCache,
+		isGloas:                 isGloas,
 		payloadBuildTime:        payloadBuildTime,
 		log:                     log.WithField("component", "payload-builder"),
 	}
@@ -115,11 +122,29 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Convert withdrawals from payload_attributes to engine format
 	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
 
-	// Get fee recipient for build
-	// When validatorStore is configured, use the proposer's registered fee recipient.
-	// Otherwise, use the configured fee recipient.
+	// Get fee recipient for build.
+	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit from the proposer's signed preferences).
+	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
+	// Fallback:   use the builder's configured fee recipient.
 	feeRecipientForBuild := b.feeRecipient
-	if b.validatorStore != nil {
+
+	if b.isGloas != nil && b.isGloas() && b.propPrefCache != nil {
+		// Gloas: look up proposer preferences by proposal slot.
+		if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
+			feeRecipientForBuild = common.Address(prefs.Message.FeeRecipient)
+			b.log.WithFields(logrus.Fields{
+				"proposer_index": attrs.ProposerIndex,
+				"fee_recipient":  feeRecipientForBuild.Hex(),
+				"gas_limit":      prefs.Message.GasLimit,
+			}).Debug("Using fee recipient and gas limit from proposer preferences")
+		} else {
+			b.log.WithFields(logrus.Fields{
+				"slot":           attrs.ProposalSlot,
+				"proposer_index": attrs.ProposerIndex,
+			}).Warn("No proposer preferences found for slot, using default fee recipient")
+		}
+	} else if b.validatorStore != nil {
+		// Pre-Gloas: look up fee recipient from validator registrations.
 		var pubkey phase0.BLSPubKey
 		var ok bool
 		if b.validatorIndexCache != nil {

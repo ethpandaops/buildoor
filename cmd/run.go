@@ -265,6 +265,7 @@ and begins building blocks according to configuration.`,
 
 		if epbsAvailable {
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
+			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
 		// 9. Start API server (if configured)
