@@ -74,21 +74,15 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to get current fork version: %w", err)
 	}
 
-	// Get the current head slot so we know which BPO entries are active.
-	chainStatus, err := s.clClient.GetChainStatus(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get chain status for fork digest: %w", err)
-	}
-
 	s.log.WithFields(logrus.Fields{
 		"current_fork_version":    fmt.Sprintf("0x%x", currentForkVersion[:]),
 		"genesis_validators_root": fmt.Sprintf("0x%x", genesis.GenesisValidatorsRoot[:]),
-		"head_slot":               chainStatus.HeadSlot,
 	}).Info("Computing fork digest for proposer preferences topic")
 
-	// Compute fork digest using the current fork version with all active BPO XOR entries.
-	// This matches Prysm's params.ForkDigest(currentEpoch) used for all gossip topics.
-	forkDigest, err := p2p.ComputeForkDigestWithBPO(currentForkVersion, genesis.GenesisValidatorsRoot, chainStatus.HeadSlot, chainSpec)
+	// Compute fork digest using the current fork version with all BPO XOR entries applied.
+	// All entries from BLOB_SCHEDULE are applied unconditionally (Prysm includes the full
+	// schedule in the digest regardless of activation epoch).
+	forkDigest, err := p2p.ComputeForkDigestWithBPO(currentForkVersion, genesis.GenesisValidatorsRoot, chainSpec)
 	if err != nil {
 		return fmt.Errorf("failed to compute fork digest: %w", err)
 	}
