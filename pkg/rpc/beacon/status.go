@@ -14,21 +14,19 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
-// ChainStatusResult holds the data needed to populate a libp2p StatusV2 message.
+// ChainStatusResult holds the head and finality data needed to populate a libp2p StatusV2 message.
+// Fork digest computation is intentionally excluded here — callers that have access to the chain
+// spec (BPO schedule) are responsible for computing it and applying all cumulative BPO XORs.
 type ChainStatusResult struct {
-	ForkDigest            [4]byte
-	FinalizedRoot         phase0.Root
-	FinalizedEpoch        uint64
-	HeadRoot              phase0.Root
-	HeadSlot              uint64
-	// EarliestAvailableSlot is the earliest slot we can serve data for.
-	// As a builder (not a full archive node) we set this to 0.
-	EarliestAvailableSlot uint64
+	FinalizedRoot  phase0.Root
+	FinalizedEpoch uint64
+	HeadRoot       phase0.Root
+	HeadSlot       uint64
 }
 
-// GetChainStatus fetches the current chain status from the beacon node.
-// It queries the head block header, finality checkpoints, and current fork version
-// to build a StatusV2 message suitable for the Fulu/Gloas p2p Status RPC.
+// GetChainStatus fetches the current chain head and finality data from the beacon node.
+// It does NOT compute the fork digest — use GetCurrentForkVersion alongside the chain spec's
+// BlobSchedule to compute the correct BPO-modified fork digest for StatusV2 messages.
 func (c *Client) GetChainStatus(ctx context.Context) (*ChainStatusResult, error) {
 	head, err := c.getHeadBlockHeader(ctx)
 	if err != nil {
@@ -44,38 +42,18 @@ func (c *Client) GetChainStatus(ctx context.Context) (*ChainStatusResult, error)
 
 	c.log.WithField("finalized_epoch", finality.FinalizedEpoch).WithField("finalized_root", fmt.Sprintf("%x", finality.FinalizedRoot[:4])).Debug("Fetched finality checkpoints for chain status")
 
-	forkVersion, err := c.getCurrentForkVersion(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get current fork version: %w", err)
-	}
-
-	genesis, err := c.GetGenesis(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("get genesis: %w", err)
-	}
-
-	// ForkDigest = compute_fork_data_root(current_version, genesis_validators_root)[:4]
-	forkData := &phase0.ForkData{
-		CurrentVersion:        forkVersion,
-		GenesisValidatorsRoot: genesis.GenesisValidatorsRoot,
-	}
-
-	forkDataRoot, err := forkData.HashTreeRoot()
-	if err != nil {
-		return nil, fmt.Errorf("compute fork data root: %w", err)
-	}
-
-	var forkDigest [4]byte
-	copy(forkDigest[:], forkDataRoot[:4])
-
 	return &ChainStatusResult{
-		ForkDigest:            forkDigest,
-		FinalizedRoot:         finality.FinalizedRoot,
-		FinalizedEpoch:        finality.FinalizedEpoch,
-		HeadRoot:              head.Root,
-		HeadSlot:              head.Slot,
-		EarliestAvailableSlot: 0, // builder doesn't serve historical data
+		FinalizedRoot:  finality.FinalizedRoot,
+		FinalizedEpoch: finality.FinalizedEpoch,
+		HeadRoot:       head.Root,
+		HeadSlot:       head.Slot,
 	}, nil
+}
+
+// GetCurrentForkVersion fetches the current fork version from the beacon node's head state.
+// This reflects the currently active fork (e.g. Fulu or Gloas), not a future scheduled fork.
+func (c *Client) GetCurrentForkVersion(ctx context.Context) (phase0.Version, error) {
+	return c.getCurrentForkVersion(ctx)
 }
 
 type headBlockHeader struct {

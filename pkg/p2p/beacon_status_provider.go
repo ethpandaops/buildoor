@@ -4,33 +4,106 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/attestantio/go-eth2-client/spec/phase0"
+
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // BeaconStatusProvider implements StatusProvider by querying the beacon REST API.
+// It computes the fork digest with the full cumulative BPO XOR chain, matching
+// Prysm's params.ForkDigest(currentEpoch) behaviour.
 type BeaconStatusProvider struct {
-	client *beacon.Client
+	client    *beacon.Client
+	chainSpec *beacon.ChainSpec
+	genesis   *beacon.Genesis
 }
 
 // NewBeaconStatusProvider creates a StatusProvider backed by the given beacon client.
-func NewBeaconStatusProvider(client *beacon.Client) *BeaconStatusProvider {
-	return &BeaconStatusProvider{client: client}
+// chainSpec is used to apply the BPO XOR chain when computing the fork digest.
+// genesis provides the genesis validators root required for fork digest computation.
+func NewBeaconStatusProvider(client *beacon.Client, chainSpec *beacon.ChainSpec, genesis *beacon.Genesis) *BeaconStatusProvider {
+	return &BeaconStatusProvider{
+		client:    client,
+		chainSpec: chainSpec,
+		genesis:   genesis,
+	}
 }
 
-// GetChainStatus fetches the current chain status from the beacon node and converts
-// it into a StatusMessage for the StatusV2 RPC.
+// GetChainStatus fetches the current chain status and builds a StatusV2 message.
+// The fork digest is computed as:
+//
+//	base = compute_fork_data_root(current_fork_version, genesis_validators_root)[:4]
+//	for each BlobSchedule entry with entry.Epoch <= current_epoch:
+//	    base = base XOR sha256(entry.Epoch_le64 || entry.MaxBlobsPerBlock_le64)[:4]
+//
+// This matches Prysm's params.ForkDigest(currentEpoch) computation.
 func (p *BeaconStatusProvider) GetChainStatus(ctx context.Context) (*StatusMessage, error) {
 	result, err := p.client.GetChainStatus(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beacon GetChainStatus: %w", err)
 	}
 
+	currentForkVersion, err := p.client.GetCurrentForkVersion(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get current fork version: %w", err)
+	}
+
+	forkDigest, err := computeForkDigestWithBPO(
+		currentForkVersion,
+		p.genesis.GenesisValidatorsRoot,
+		result.HeadSlot,
+		p.chainSpec,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("compute fork digest: %w", err)
+	}
+
 	return &StatusMessage{
-		ForkDigest:            result.ForkDigest,
+		ForkDigest:            forkDigest,
 		FinalizedRoot:         [32]byte(result.FinalizedRoot),
 		FinalizedEpoch:        result.FinalizedEpoch,
 		HeadRoot:              [32]byte(result.HeadRoot),
 		HeadSlot:              result.HeadSlot,
-		EarliestAvailableSlot: result.EarliestAvailableSlot,
+		EarliestAvailableSlot: 0, // builder doesn't serve historical data
 	}, nil
+}
+
+// computeForkDigestWithBPO computes the fork digest for the current epoch,
+// applying all BPO (Blob Parameters Only) XOR modifications from the blob schedule
+// whose activation epoch is at or before the current epoch.
+func computeForkDigestWithBPO(
+	forkVersion phase0.Version,
+	genesisValidatorsRoot phase0.Root,
+	headSlot uint64,
+	chainSpec *beacon.ChainSpec,
+) ([4]byte, error) {
+	forkData := &phase0.ForkData{
+		CurrentVersion:        forkVersion,
+		GenesisValidatorsRoot: genesisValidatorsRoot,
+	}
+
+	forkDataRoot, err := forkData.HashTreeRoot()
+	if err != nil {
+		return [4]byte{}, fmt.Errorf("hash tree root: %w", err)
+	}
+
+	var digest [4]byte
+	copy(digest[:], forkDataRoot[:4])
+
+	if chainSpec == nil || len(chainSpec.BlobSchedule) == 0 {
+		return digest, nil
+	}
+
+	// Convert head slot to epoch.
+	currentEpoch := headSlot / chainSpec.SlotsPerEpoch
+
+	// Apply BPO XOR for every blob schedule entry whose epoch is at or before the current epoch.
+	// Entries must be applied in ascending epoch order to match Prysm's cumulative XOR.
+	for _, bpo := range chainSpec.BlobSchedule {
+		if bpo.Epoch <= currentEpoch {
+			digest = ApplyBPO(digest, bpo.Epoch, bpo.MaxBlobsPerBlock)
+		}
+	}
+
+	return digest, nil
 }
