@@ -67,42 +67,39 @@ func (s *Service) Start(ctx context.Context) error {
 		return fmt.Errorf("chain spec not available")
 	}
 
-	// Use the Gloas fork version for the gossip topic fork digest.
-	if chainSpec.GloasForkVersion == nil {
-		return fmt.Errorf("Gloas fork version not available in chain spec")
+	// Fetch the current active fork version from the beacon node.
+	// Gossip topic fork digests must match the current fork, not a hardcoded future fork version.
+	currentForkVersion, err := s.clClient.GetCurrentForkVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get current fork version: %w", err)
 	}
 
-	gloasForkVersion := *chainSpec.GloasForkVersion
+	// Get the current head slot so we know which BPO entries are active.
+	chainStatus, err := s.clClient.GetChainStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get chain status for fork digest: %w", err)
+	}
 
 	s.log.WithFields(logrus.Fields{
-		"gloas_fork_version":      fmt.Sprintf("0x%x", gloasForkVersion[:]),
+		"current_fork_version":    fmt.Sprintf("0x%x", currentForkVersion[:]),
 		"genesis_validators_root": fmt.Sprintf("0x%x", genesis.GenesisValidatorsRoot[:]),
+		"head_slot":               chainStatus.HeadSlot,
 	}).Info("Computing fork digest for proposer preferences topic")
 
-	// Compute the fork digest using the Gloas fork version.
-	forkDigest, err := p2p.ComputeForkDigest(gloasForkVersion, genesis.GenesisValidatorsRoot)
+	// Compute fork digest using the current fork version with all active BPO XOR entries.
+	// This matches Prysm's params.ForkDigest(currentEpoch) used for all gossip topics.
+	forkDigest, err := p2p.ComputeForkDigestWithBPO(currentForkVersion, genesis.GenesisValidatorsRoot, chainStatus.HeadSlot, chainSpec)
 	if err != nil {
 		return fmt.Errorf("failed to compute fork digest: %w", err)
-	}
-
-	// Apply BPO (Blob Parameters Only) XOR if blob schedule is configured.
-	// Prysm modifies the fork digest for Fulu+ forks when blob parameters differ from defaults.
-	if len(chainSpec.BlobSchedule) > 0 {
-		bpo := chainSpec.BlobSchedule[0]
-		forkDigest = p2p.ApplyBPO(forkDigest, bpo.Epoch, bpo.MaxBlobsPerBlock)
-		s.log.WithFields(logrus.Fields{
-			"bpo_epoch":          bpo.Epoch,
-			"max_blobs_per_block": bpo.MaxBlobsPerBlock,
-		}).Debug("Applied BPO XOR to fork digest")
 	}
 
 	// Build the full topic name: /eth2/{digest}/proposer_preferences/ssz_snappy
 	topicName := p2p.BuildTopicName(forkDigest, GossipTopicName)
 
 	s.log.WithFields(logrus.Fields{
-		"topic":              topicName,
-		"fork_digest":        fmt.Sprintf("%x", forkDigest),
-		"gloas_fork_version": fmt.Sprintf("0x%x", gloasForkVersion[:]),
+		"topic":                topicName,
+		"fork_digest":          fmt.Sprintf("%x", forkDigest),
+		"current_fork_version": fmt.Sprintf("0x%x", currentForkVersion[:]),
 	}).Info("Subscribing to proposer preferences gossip topic")
 
 	sub, err := s.p2pHost.Subscribe(topicName)
@@ -111,7 +108,11 @@ func (s *Service) Start(ctx context.Context) error {
 	}
 
 	// Precompute the domain for signature verification.
-	domain := signer.ComputeDomain(DomainProposerPreferences, gloasForkVersion, genesis.GenesisValidatorsRoot)
+	// Proposer preferences is a Gloas feature, so the signing domain uses the Gloas fork version.
+	if chainSpec.GloasForkVersion == nil {
+		return fmt.Errorf("gloas fork version not available in chain spec")
+	}
+	domain := signer.ComputeDomain(DomainProposerPreferences, *chainSpec.GloasForkVersion, genesis.GenesisValidatorsRoot)
 
 	svcCtx, cancel := context.WithCancel(ctx)
 	s.cancelFunc = cancel
