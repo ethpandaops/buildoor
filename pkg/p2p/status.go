@@ -1,8 +1,10 @@
 package p2p
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/golang/snappy"
 	"github.com/multiformats/go-varint"
@@ -60,27 +62,37 @@ func (s *StatusMessage) UnmarshalSSZ(buf []byte) error {
 }
 
 // EncodeStatusMessage serializes a StatusMessage in Prysm's ssz_snappy RPC wire format:
-// <uvarint length prefix of uncompressed SSZ size><snappy-compressed SSZ bytes>
+// <uvarint(uncompressed_size)><snappy-streaming-compressed SSZ bytes>
+//
+// Prysm's RPC encoder uses snappy.NewWriter (streaming/framed format), NOT snappy.Encode
+// (block format). The two are incompatible — using the wrong one causes registerRpcError.
 func EncodeStatusMessage(msg *StatusMessage) ([]byte, error) {
 	ssz, err := msg.MarshalSSZ()
 	if err != nil {
 		return nil, fmt.Errorf("marshal SSZ: %w", err)
 	}
 
-	compressed := snappy.Encode(nil, ssz)
+	var buf bytes.Buffer
 
-	lenPrefix := varint.ToUvarint(uint64(len(ssz)))
+	// Write varint-encoded uncompressed length first.
+	buf.Write(varint.ToUvarint(uint64(len(ssz))))
 
-	out := make([]byte, len(lenPrefix)+len(compressed))
-	copy(out, lenPrefix)
-	copy(out[len(lenPrefix):], compressed)
+	// Write snappy streaming format (matches Prysm's snappy.NewWriter / snappy.NewReader).
+	sw := snappy.NewBufferedWriter(&buf)
+	if _, err := sw.Write(ssz); err != nil {
+		return nil, fmt.Errorf("snappy write: %w", err)
+	}
 
-	return out, nil
+	if err := sw.Close(); err != nil {
+		return nil, fmt.Errorf("snappy close: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }
 
 // DecodeStatusMessage reads a StatusMessage from Prysm's ssz_snappy RPC wire format:
-// <uvarint length prefix><snappy-compressed SSZ bytes>
-// Returns the message and the number of bytes consumed.
+// <uvarint(uncompressed_size)><snappy-streaming-compressed SSZ bytes>
+// data must contain the full encoded payload (varint prefix + compressed body).
 func DecodeStatusMessage(data []byte) (*StatusMessage, int, error) {
 	ssZLen, n, err := varint.FromUvarint(data)
 	if err != nil {
@@ -91,11 +103,12 @@ func DecodeStatusMessage(data []byte) (*StatusMessage, int, error) {
 		return nil, 0, fmt.Errorf("unexpected SSZ length %d (expected %d)", ssZLen, statusV2SSZSize)
 	}
 
-	compressed := data[n:]
+	// Use snappy streaming reader (matches Prysm's snappy.NewReader).
+	sr := snappy.NewReader(bytes.NewReader(data[n:]))
 
-	decompressed, err := snappy.Decode(nil, compressed)
-	if err != nil {
-		return nil, 0, fmt.Errorf("snappy decode: %w", err)
+	decompressed := make([]byte, ssZLen)
+	if _, err := io.ReadFull(sr, decompressed); err != nil {
+		return nil, 0, fmt.Errorf("snappy read: %w", err)
 	}
 
 	msg := &StatusMessage{}
@@ -103,5 +116,5 @@ func DecodeStatusMessage(data []byte) (*StatusMessage, int, error) {
 		return nil, 0, fmt.Errorf("unmarshal SSZ: %w", err)
 	}
 
-	return msg, n + len(compressed), nil
+	return msg, len(data), nil
 }

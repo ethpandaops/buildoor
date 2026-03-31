@@ -35,10 +35,14 @@ func (c *Client) GetChainStatus(ctx context.Context) (*ChainStatusResult, error)
 		return nil, fmt.Errorf("get head block header: %w", err)
 	}
 
+	c.log.WithField("head_slot", head.Slot).WithField("head_root", fmt.Sprintf("%x", head.Root[:4])).Debug("Fetched head block header for chain status")
+
 	finality, err := c.getFinalityCheckpoints(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get finality checkpoints: %w", err)
 	}
+
+	c.log.WithField("finalized_epoch", finality.FinalizedEpoch).WithField("finalized_root", fmt.Sprintf("%x", finality.FinalizedRoot[:4])).Debug("Fetched finality checkpoints for chain status")
 
 	forkVersion, err := c.getCurrentForkVersion(ctx)
 	if err != nil {
