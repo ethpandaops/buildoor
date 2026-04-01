@@ -391,6 +391,12 @@ func (c *Client) RequestPayloadBuild(
 		FinalizedBlockHash: finalizedBlockHash,
 	}
 
+	c.log.WithFields(logrus.Fields{
+		"head_block_hash": headBlockHash.Hex(),
+		"safe_block_hash": safeBlockHash.Hex(),
+		"finalized_block_hash": finalizedBlockHash.Hex(),
+	}).Info("Forkchoice state being sent to forkchoiceUpdated")
+
 	// Convert payload attributes to engine API format
 	attrsMap := map[string]any{
 		"timestamp":             fmt.Sprintf("0x%x", attrs.Timestamp),
@@ -414,6 +420,10 @@ func (c *Client) RequestPayloadBuild(
 	if attrs.ParentBeaconBlockRoot != nil {
 		attrsMap["parentBeaconBlockRoot"] = attrs.ParentBeaconBlockRoot.Hex()
 	}
+
+	c.log.WithFields(logrus.Fields{
+		"attrs_map": attrsMap,
+	}).Info("Payload attributes map being sent to forkchoiceUpdated")
 
 	// log the payload attributes being sent
 	c.log.WithFields(logrus.Fields{
