@@ -216,6 +216,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
+	b.log.WithFields(logrus.Fields{
+		"payload_id": fmt.Sprintf("%x", payloadID[:]),
+		"parent_block_hash": fmt.Sprintf("%x", payloadResult.ExecutionPayload.ParentHash[:8]),
+		"parent_block_root": fmt.Sprintf("%x", *payloadResult.ExecutionPayload.ParentBeaconRoot),
+	}).Info("Payload received from engine client")
+
 	modifiedPayloadJSON, _, err := ModifyPayloadExtraData(
 		payloadResult.ExecutionPayloadJSON,
 		[]byte("buildoor/"),
@@ -230,6 +236,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	if err := json.Unmarshal(modifiedPayloadJSON, &modifiedPayload); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal modified payload: %w", err)
 	}
+
+	b.log.WithFields(logrus.Fields{
+		"payload_id": fmt.Sprintf("%x", payloadID[:]),
+		"parent_block_hash": fmt.Sprintf("%x", modifiedPayload.ParentHash[:8]),
+		"parent_block_root": fmt.Sprintf("%x", *modifiedPayload.ParentBeaconRoot),
+	}).Info("Modified payload")
 
 	payload := &modifiedPayload
 	payloadResult.ExecutionPayload = payload
@@ -248,7 +260,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   attrs.ParentBlockHash,
+		ParentBlockHash:   finalityInfo.HeadExecutionBlockHash,
 		BlockHash:         blockHash,
 		Payload:           payload,
 		BlobsBundle:       payloadResult.BlobsBundle,
@@ -270,7 +282,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,
-	}).Debug("Payload built from attributes")
+	}).Info("Payload built from attributes")
 
 	return event, nil
 }

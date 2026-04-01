@@ -113,12 +113,12 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
-		"slot":          payload.Slot,
-		"value":         bidValue,
-		"block_hash":    fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"builder_index": c.builderIndex,
-		"fee_recipient": payload.FeeRecipient.Hex(),
-		"gas_limit":     payload.GasLimit,
+		"slot":              payload.Slot,
+		"value":             bidValue,
+		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"builder_index":     c.builderIndex,
+		"fee_recipient":     payload.FeeRecipient.Hex(),
+		"gas_limit":         payload.GasLimit,
 		"parent_block_hash": fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
 		"parent_block_root": fmt.Sprintf("%x", payload.ParentBlockRoot[:8]),
 	})
