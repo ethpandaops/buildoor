@@ -415,6 +415,15 @@ func (c *Client) RequestPayloadBuild(
 		attrsMap["parentBeaconBlockRoot"] = attrs.ParentBeaconBlockRoot.Hex()
 	}
 
+	// log the payload attributes being sent
+	c.log.WithFields(logrus.Fields{
+		"timestamp": attrs.Timestamp,
+		"prev_randao": attrs.PrevRandao.Hex(),
+		"suggested_fee_recipient": attrs.SuggestedFeeRecipient.Hex(),
+		"withdrawals": len(attrs.Withdrawals),
+		"parent_beacon_block_root": attrs.ParentBeaconBlockRoot.Hex(),
+	}).Info("Payload attributes being sent to forkchoiceUpdated")
+
 	var response ForkchoiceUpdatedResponse
 	if err := c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap); err != nil {
 		return PayloadID{}, fmt.Errorf("forkchoiceUpdated failed: %w", err)
@@ -428,8 +437,6 @@ func (c *Client) RequestPayloadBuild(
 		"status": response.PayloadStatus.Status,
 		"latest_valid_hash": response.PayloadStatus.LatestValidHash,
 		"validation_error": response.PayloadStatus.ValidationError,
-		"payload_id": response.PayloadID,
-		"payload_id_hex": fmt.Sprintf("%x", response.PayloadID[:]),
 	}).Info("ForkchoiceUpdateResponse returned")
 
 	if response.PayloadID == nil {
