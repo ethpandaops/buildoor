@@ -407,6 +407,7 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 		"block_hash":  fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
 		"block_value": payloadEvent.BlockValue,
 		"source":      payloadEvent.BuildSource.String(),
+	    "parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
 	// Mark slot as built
