@@ -3,7 +3,7 @@ module github.com/ethpandaops/buildoor
 go 1.25.0
 
 // CRITICAL: Required for ePBS/Gloas types
-replace github.com/attestantio/go-eth2-client => github.com/pk910/go-eth2-client v0.0.0-20260219114320-6080c2df7e2f
+replace github.com/attestantio/go-eth2-client => github.com/pk910/go-eth2-client v0.0.0-20260401105128-4544cf21b737
 
 require (
 	github.com/attestantio/go-eth2-client v0.0.0-00010101000000-000000000000
@@ -12,7 +12,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/herumi/bls-eth-go-binary v1.37.0
 	github.com/holiman/uint256 v1.3.2
-	github.com/pk910/dynamic-ssz v1.2.1
+	github.com/pk910/dynamic-ssz v1.3.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.34.0
 	github.com/sirupsen/logrus v1.9.4
@@ -33,7 +33,7 @@ require (
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.20.0 // indirect
-	github.com/casbin/govaluate v1.8.0 // indirect
+	github.com/casbin/govaluate v1.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/consensys/gnark-crypto v0.18.0 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.4.0 // indirect
@@ -72,7 +72,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/olekukonko/tablewriter v0.0.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/pk910/hashtree-bindings v0.0.1 // indirect
+	github.com/pk910/hashtree-bindings v0.1.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
