@@ -265,7 +265,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
-		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
 		"block_value":       blockValueGwei,
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
