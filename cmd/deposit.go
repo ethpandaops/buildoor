@@ -110,7 +110,7 @@ var depositCmd = &cobra.Command{
 		logger.WithFields(map[string]any{
 			"pubkey":      fmt.Sprintf("%x", pubkey[:8]),
 			"amount_gwei": amount,
-		}).Info("Creating builder deposit")
+	 	}).Info("Creating builder deposit")
 
 		// Ensure builder is registered
 		if err := lifecycleMgr.EnsureBuilderRegistered(ctx); err != nil {
