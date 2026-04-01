@@ -112,11 +112,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
+
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
 	// TODO - bharath - the head block hash should be attrs.ParentBlockHash, i think there is an 
 	// issue in the way I implemented payload attributes for prysm
-	headBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
+	headBlockHash := common.BytesToHash(finalityInfo.HeadExecutionBlockHash[:])
 	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
 	finalizedBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
 	parentBeaconRoot := common.BytesToHash(attrs.ParentBeaconBlockRoot[:])
