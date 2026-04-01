@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -237,7 +238,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	var blockValueGwei uint64
 	if payloadResult.BlockValue != nil {
-		blockValueGwei = payloadResult.BlockValue.Uint64()
+		// BlockValue from engine API is in wei; convert to gwei for bid values.
+		gweiValue := new(big.Int).Div(payloadResult.BlockValue, big.NewInt(1_000_000_000))
+		blockValueGwei = gweiValue.Uint64()
 	}
 
 	txCount := len(payload.Transactions)

@@ -180,8 +180,8 @@ and begins building blocks according to configuration.`,
 		// 7. Initialize builder service (standalone block building)
 		logger.Info("Initializing builder service...")
 
-		// Get fee recipient from wallet or use zero address
-		var feeRecipient common.Address
+		// Get fee recipient from wallet or use default address
+		feeRecipient := common.HexToAddress("0x8943545177806ED17B9F23F0a21ee5948eCaa776")
 		if w != nil {
 			feeRecipient = w.Address()
 		}
