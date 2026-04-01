@@ -18,6 +18,7 @@ type RevealHandler struct {
 	signer       *Signer
 	clClient     *beacon.Client
 	genesis      *beacon.Genesis
+	chainSpec    *beacon.ChainSpec
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -27,6 +28,7 @@ func NewRevealHandler(
 	signer *Signer,
 	clClient *beacon.Client,
 	genesis *beacon.Genesis,
+	chainSpec *beacon.ChainSpec,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *RevealHandler {
@@ -34,6 +36,7 @@ func NewRevealHandler(
 		signer:       signer,
 		clClient:     clClient,
 		genesis:      genesis,
+		chainSpec:    chainSpec,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "reveal-handler"),
 	}
@@ -65,9 +68,15 @@ func (h *RevealHandler) SubmitReveal(
 		StateRoot:         phase0.Root{}, // Will be filled by beacon node
 	}
 
-	// Sign the envelope
+	// Sign the envelope with the current fork version.
+	var forkVersion phase0.Version
+	if h.chainSpec.GloasForkVersion != nil {
+		forkVersion = *h.chainSpec.GloasForkVersion
+	}
+
 	signature, err := h.signer.SignExecutionPayloadEnvelope(
 		envelope,
+		forkVersion,
 		h.genesis.GenesisValidatorsRoot,
 	)
 	if err != nil {

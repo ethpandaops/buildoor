@@ -20,6 +20,7 @@ type BidCreator struct {
 	signer       *Signer
 	clClient     *beacon.Client
 	genesis      *beacon.Genesis
+	chainSpec    *beacon.ChainSpec
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -29,6 +30,7 @@ func NewBidCreator(
 	signer *Signer,
 	clClient *beacon.Client,
 	genesis *beacon.Genesis,
+	chainSpec *beacon.ChainSpec,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *BidCreator {
@@ -36,6 +38,7 @@ func NewBidCreator(
 		signer:       signer,
 		clClient:     clClient,
 		genesis:      genesis,
+		chainSpec:    chainSpec,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "bid-creator"),
 	}
@@ -79,9 +82,16 @@ func (c *BidCreator) CreateAndSubmitBid(
 	c.log.Info("Populated bid with blobs")
 
 	c.log.Info("Signing bid before submitting")
-	// Sign the bid using proper domain
+	// Sign the bid using proper domain.
+	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
+	var forkVersion phase0.Version
+	if c.chainSpec.GloasForkVersion != nil {
+		forkVersion = *c.chainSpec.GloasForkVersion
+	}
+
 	signature, err := c.signer.SignExecutionPayloadBid(
 		bid,
+		forkVersion,
 		c.genesis.GenesisValidatorsRoot,
 	)
 	if err != nil {

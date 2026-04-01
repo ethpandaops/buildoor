@@ -136,6 +136,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.signer,
 		s.clClient,
 		genesis,
+		chainSpec,
 		s.builderIndex,
 		s.log,
 	)
@@ -143,6 +144,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.signer,
 		s.clClient,
 		genesis,
+		chainSpec,
 		s.builderIndex,
 		s.log,
 	)
