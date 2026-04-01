@@ -428,6 +428,8 @@ func (c *Client) RequestPayloadBuild(
 		"status": response.PayloadStatus.Status,
 		"latest_valid_hash": response.PayloadStatus.LatestValidHash,
 		"validation_error": response.PayloadStatus.ValidationError,
+		"payload_id": response.PayloadID,
+		"payload_id_hex": fmt.Sprintf("%x", response.PayloadID[:]),
 	}).Info("ForkchoiceUpdateResponse returned")
 
 	if response.PayloadID == nil {
