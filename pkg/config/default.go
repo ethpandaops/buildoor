@@ -21,7 +21,7 @@ func DefaultConfig() *Config {
 			EveryNth: 1,
 		},
 		EPBS: EPBSConfig{
-			BuildStartTime: -4000,   // 2 seconds before slot start
+			BuildStartTime: -4000,   // 4 seconds before slot start
 			BidStartTime:   -1000,   // 1 second before slot start
 			BidEndTime:     1000,    // 1 second into slot
 			RevealTime:     6000,    // 6 seconds into slot
