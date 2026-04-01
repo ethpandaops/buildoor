@@ -63,7 +63,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 		BuilderIndex:       gloas.BuilderIndex(c.builderIndex),
 		Slot:               payload.Slot,
 		Value:              phase0.Gwei(bidValue),
-		ExecutionPayment:   phase0.Gwei(bidValue), // Same as value for now
+		ExecutionPayment:   0, // Same as value for now
 		BlobKZGCommitments: []deneb.KZGCommitment{},
 	}
 
@@ -77,7 +77,6 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	c.log.Info("Populated bid with blobs")
-
 
 	c.log.Info("Signing bid before submitting")
 	// Sign the bid using proper domain
