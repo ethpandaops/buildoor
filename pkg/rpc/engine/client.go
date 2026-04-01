@@ -424,6 +424,12 @@ func (c *Client) RequestPayloadBuild(
 		return PayloadID{}, fmt.Errorf("forkchoice status: %s", response.PayloadStatus.Status)
 	}
 
+	c.log.WithFields(logrus.Fields{
+		"status": response.PayloadStatus.Status,
+		"latest_valid_hash": response.PayloadStatus.LatestValidHash,
+		"validation_error": response.PayloadStatus.ValidationError,
+	}).Info("ForkchoiceUpdateResponse returned")
+
 	if response.PayloadID == nil {
 		return PayloadID{}, fmt.Errorf("no payload ID returned")
 	}
