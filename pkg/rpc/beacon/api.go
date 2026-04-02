@@ -82,13 +82,8 @@ func (c *Client) GetExecutionPayloadBidTemplate(
 }
 
 // ConstructExecutionPayloadEnvelopeRequest is the request body for the construct endpoint.
+// Prysm expects a flat structure with beacon_block_root, execution_payload, and execution_requests.
 type ConstructExecutionPayloadEnvelopeRequest struct {
-	Version string                                        `json:"version"`
-	Data    ConstructExecutionPayloadEnvelopeRequestData  `json:"data"`
-}
-
-// ConstructExecutionPayloadEnvelopeRequestData holds the inner data for the construct request.
-type ConstructExecutionPayloadEnvelopeRequestData struct {
 	BeaconBlockRoot   string          `json:"beacon_block_root"`
 	ExecutionPayload  json.RawMessage `json:"execution_payload"`
 	ExecutionRequests json.RawMessage `json:"execution_requests"`
@@ -111,12 +106,9 @@ func (c *Client) ConstructExecutionPayloadEnvelope(
 	url := fmt.Sprintf("%s/eth/v1/builder/execution_payload_envelope", c.baseURL)
 
 	reqBody := ConstructExecutionPayloadEnvelopeRequest{
-		Version: "gloas",
-		Data: ConstructExecutionPayloadEnvelopeRequestData{
-			BeaconBlockRoot:   beaconBlockRoot,
-			ExecutionPayload:  executionPayload,
-			ExecutionRequests: executionRequests,
-		},
+		BeaconBlockRoot:   beaconBlockRoot,
+		ExecutionPayload:  executionPayload,
+		ExecutionRequests: executionRequests,
 	}
 
 	bodyJSON, err := json.Marshal(reqBody)
