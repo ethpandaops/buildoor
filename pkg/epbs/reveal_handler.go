@@ -53,8 +53,13 @@ func (h *RevealHandler) SubmitReveal(
 	payload *BuiltPayload,
 	blockRoot phase0.Root,
 ) error {
-	// Marshal execution payload to JSON for the construct request.
-	payloadJSON, err := json.Marshal(payload.ExecutionPayload)
+	// Convert engine payload to deneb format (beacon API spec: snake_case, decimal strings).
+	denebPayload, err := fulu.ExecutionPayloadFromEngine(payload.ExecutionPayload)
+	if err != nil {
+		return fmt.Errorf("failed to convert payload to deneb format: %w", err)
+	}
+
+	payloadJSON, err := json.Marshal(denebPayload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal execution payload: %w", err)
 	}
