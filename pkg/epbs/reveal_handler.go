@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/attestantio/go-eth2-client/spec/deneb"
+	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -43,39 +44,76 @@ func NewRevealHandler(
 }
 
 // SubmitReveal submits a payload reveal for the given slot.
+// It uses the two-step flow:
+//  1. Construct: POST /eth/v1/builder/execution_payload_envelope — beacon node derives state_root
+//  2. Sign the returned envelope
+//  3. Publish: POST /eth/v1/beacon/execution_payload_envelope — broadcast to the network
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
 	payload *BuiltPayload,
 	blockRoot phase0.Root,
 ) error {
-	// Marshal typed execution payload to JSON for beacon API (deneb.ExecutionPayload shape)
+	// Marshal execution payload to JSON for the construct request.
 	payloadJSON, err := json.Marshal(payload.ExecutionPayload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal execution payload: %w", err)
 	}
-	var execPayload deneb.ExecutionPayload
-	if err := json.Unmarshal(payloadJSON, &execPayload); err != nil {
-		return fmt.Errorf("failed to parse execution payload: %w", err)
+
+	// Parse raw execution requests into typed electra.ExecutionRequests for the construct request.
+	var execRequests *electra.ExecutionRequests
+	if len(payload.ExecutionRequests) > 0 {
+		execRequests, err = fulu.ParseExecutionRequests(payload.ExecutionRequests)
+		if err != nil {
+			return fmt.Errorf("failed to parse execution requests: %w", err)
+		}
+	} else {
+		execRequests = &electra.ExecutionRequests{}
 	}
 
-	// Build the execution payload envelope
-	envelope := &gloas.ExecutionPayloadEnvelope{
-		Payload:           &execPayload,
-		ExecutionRequests: nil, // No execution requests for now
-		BuilderIndex:      gloas.BuilderIndex(h.builderIndex),
-		BeaconBlockRoot:   blockRoot,
-		Slot:              payload.Slot,
-		StateRoot:         phase0.Root{}, // Will be filled by beacon node
+	execRequestsJSON, err := json.Marshal(execRequests)
+	if err != nil {
+		return fmt.Errorf("failed to marshal execution requests: %w", err)
 	}
 
-	// Sign the envelope with the current fork version.
+	beaconBlockRootHex := fmt.Sprintf("%#x", blockRoot)
+
+	h.log.WithFields(logrus.Fields{
+		"slot":              payload.Slot,
+		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"beacon_block_root": beaconBlockRootHex,
+	}).Info("Constructing execution payload envelope via beacon node")
+
+	// Step 1: Construct — beacon node fills in state_root, builder_index, slot.
+	envelopeJSON, err := h.clClient.ConstructExecutionPayloadEnvelope(
+		ctx,
+		beaconBlockRootHex,
+		payloadJSON,
+		execRequestsJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to construct envelope: %w", err)
+	}
+
+	// Unmarshal the returned envelope so we can sign it.
+	var envelope gloas.ExecutionPayloadEnvelope
+	if err := json.Unmarshal(envelopeJSON, &envelope); err != nil {
+		return fmt.Errorf("failed to unmarshal constructed envelope: %w", err)
+	}
+
+	h.log.WithFields(logrus.Fields{
+		"slot":          envelope.Slot,
+		"builder_index": envelope.BuilderIndex,
+		"state_root":    fmt.Sprintf("%#x", envelope.StateRoot),
+	}).Info("Envelope constructed by beacon node")
+
+	// Step 2: Sign the envelope.
 	var forkVersion phase0.Version
 	if h.chainSpec.GloasForkVersion != nil {
 		forkVersion = *h.chainSpec.GloasForkVersion
 	}
 
 	signature, err := h.signer.SignExecutionPayloadEnvelope(
-		envelope,
+		&envelope,
 		forkVersion,
 		h.genesis.GenesisValidatorsRoot,
 	)
@@ -83,19 +121,17 @@ func (h *RevealHandler) SubmitReveal(
 		return fmt.Errorf("failed to sign envelope: %w", err)
 	}
 
-	// Create signed envelope
 	signedEnvelope := &gloas.SignedExecutionPayloadEnvelope{
-		Message:   envelope,
+		Message:   &envelope,
 		Signature: signature,
 	}
 
-	// Marshal to JSON for submission
 	signedEnvelopeJSON, err := json.Marshal(signedEnvelope)
 	if err != nil {
 		return fmt.Errorf("failed to marshal signed envelope: %w", err)
 	}
 
-	// Submit envelope
+	// Step 3: Publish the signed envelope.
 	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}

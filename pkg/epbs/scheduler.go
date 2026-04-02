@@ -162,7 +162,7 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	// s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
 
 	// Check for reveals
-	// s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
+	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
 }
 
 // checkSlotForBidding checks if we should bid for this slot.
@@ -297,12 +297,22 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	blockRoot := state.IncludedInBlock
 	s.mu.Unlock()
 
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+	}).Info("Revealing payload")
+
 	// Get payload for reveal
 	payload := s.payloadStore.Get(slot)
 	if payload == nil {
 		s.log.WithField("slot", slot).Error("No payload found for reveal")
 		return
 	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"block_root": fmt.Sprintf("%x", blockRoot[:8]),
+		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+	}).Info("Submitting reveal")
 
 	err := s.revealHandler.SubmitReveal(ctx, payload, blockRoot)
 	if err != nil {

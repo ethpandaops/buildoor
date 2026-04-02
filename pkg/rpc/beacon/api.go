@@ -81,6 +81,78 @@ func (c *Client) GetExecutionPayloadBidTemplate(
 	return response.Data, nil
 }
 
+// ConstructExecutionPayloadEnvelopeRequest is the request body for the construct endpoint.
+type ConstructExecutionPayloadEnvelopeRequest struct {
+	Version string                                        `json:"version"`
+	Data    ConstructExecutionPayloadEnvelopeRequestData  `json:"data"`
+}
+
+// ConstructExecutionPayloadEnvelopeRequestData holds the inner data for the construct request.
+type ConstructExecutionPayloadEnvelopeRequestData struct {
+	BeaconBlockRoot   string          `json:"beacon_block_root"`
+	ExecutionPayload  json.RawMessage `json:"execution_payload"`
+	ExecutionRequests json.RawMessage `json:"execution_requests"`
+}
+
+// ConstructExecutionPayloadEnvelopeResponse is the response from the construct endpoint.
+type ConstructExecutionPayloadEnvelopeResponse struct {
+	Version string          `json:"version"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// ConstructExecutionPayloadEnvelope calls POST /eth/v1/builder/execution_payload_envelope
+// to have the beacon node derive the state_root and return a complete ExecutionPayloadEnvelope.
+func (c *Client) ConstructExecutionPayloadEnvelope(
+	ctx context.Context,
+	beaconBlockRoot string,
+	executionPayload json.RawMessage,
+	executionRequests json.RawMessage,
+) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/eth/v1/builder/execution_payload_envelope", c.baseURL)
+
+	reqBody := ConstructExecutionPayloadEnvelopeRequest{
+		Version: "gloas",
+		Data: ConstructExecutionPayloadEnvelopeRequestData{
+			BeaconBlockRoot:   beaconBlockRoot,
+			ExecutionPayload:  executionPayload,
+			ExecutionRequests: executionRequests,
+		},
+	}
+
+	bodyJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal construct request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "gloas")
+
+	httpClient := &http.Client{}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct envelope: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to construct envelope: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response ConstructExecutionPayloadEnvelopeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode construct response: %w", err)
+	}
+
+	return response.Data, nil
+}
+
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
 func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
@@ -91,6 +163,7 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "gloas")
 
 	httpClient := &http.Client{}
 
