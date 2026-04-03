@@ -136,8 +136,21 @@ func (h *RevealHandler) SubmitReveal(
 		return fmt.Errorf("failed to marshal signed envelope: %w", err)
 	}
 
-	// Step 3: Publish the signed envelope.
-	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON); err != nil {
+	// Step 3: Publish the signed envelope with blobs and cell proofs for data column broadcasting.
+	var blobs [][]byte
+	var cellProofs [][]byte
+
+	if payload.BlobsBundle != nil && len(payload.BlobsBundle.Blobs) > 0 {
+		blobs = payload.BlobsBundle.Blobs
+		cellProofs = payload.BlobsBundle.Proofs
+
+		h.log.WithFields(logrus.Fields{
+			"blob_count":       len(blobs),
+			"cell_proof_count": len(cellProofs),
+		}).Info("Including blobs and cell proofs with envelope publish")
+	}
+
+	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON, blobs, cellProofs); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
 

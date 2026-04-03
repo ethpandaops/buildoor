@@ -145,11 +145,53 @@ func (c *Client) ConstructExecutionPayloadEnvelope(
 	return response.Data, nil
 }
 
+// publishEnvelopeRequest embeds the signed envelope JSON fields and adds optional
+// blobs + cell_proofs for data column broadcasting (Prysm's PublishExecutionPayloadEnvelopeRequest).
+type publishEnvelopeRequest struct {
+	Message    json.RawMessage `json:"message"`
+	Signature  json.RawMessage `json:"signature"`
+	Blobs      []string        `json:"blobs,omitempty"`
+	CellProofs []string        `json:"cell_proofs,omitempty"`
+}
+
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
-func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage) error {
+// When blobs and cell proofs are provided, they are included so the beacon node
+// can compute and broadcast data column sidecars alongside the envelope.
+func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, cellProofs [][]byte) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(envelope))
+	// Unmarshal the signed envelope to extract message and signature fields,
+	// then re-marshal with blobs/cell_proofs at the same level.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(envelope, &raw); err != nil {
+		return fmt.Errorf("failed to parse signed envelope: %w", err)
+	}
+
+	reqBody := publishEnvelopeRequest{
+		Message:   raw["message"],
+		Signature: raw["signature"],
+	}
+
+	if len(blobs) > 0 {
+		reqBody.Blobs = make([]string, len(blobs))
+		for i, b := range blobs {
+			reqBody.Blobs[i] = fmt.Sprintf("0x%x", b)
+		}
+	}
+
+	if len(cellProofs) > 0 {
+		reqBody.CellProofs = make([]string, len(cellProofs))
+		for i, p := range cellProofs {
+			reqBody.CellProofs[i] = fmt.Sprintf("0x%x", p)
+		}
+	}
+
+	bodyJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal publish request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
