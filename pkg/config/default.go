@@ -24,7 +24,7 @@ func DefaultConfig() *Config {
 			BuildStartTime: -4000,   // 4 seconds before slot start
 			BidStartTime:   -1000,   // 1 second before slot start
 			BidEndTime:     1000,    // 1 second into slot
-			RevealTime:     6000,    // 6 seconds into slot
+			RevealTime:     0,    // 6 seconds into slot
 			BidMinAmount:   1000000, // 1M gwei = 0.001 ETH
 			BidIncrease:    100000,  // 100k gwei per subsequent bid
 			BidInterval:    250,     // 250ms between bids
