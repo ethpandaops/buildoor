@@ -223,6 +223,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		"bid_value":  bidValue,
 		"bid_count":  state.BidCount,
 		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
 	// Submit bid
@@ -299,6 +300,7 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 
 	s.log.WithFields(logrus.Fields{
 		"slot":       slot,
+		"ms_into_slot": msIntoSlot,
 	}).Info("Revealing payload")
 
 	// Get payload for reveal
@@ -312,6 +314,7 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 		"slot":       slot,
 		"block_root": fmt.Sprintf("%x", blockRoot[:8]),
 		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"ms_into_slot": msIntoSlot,
 	}).Info("Submitting reveal")
 
 	err := s.revealHandler.SubmitReveal(ctx, payload, blockRoot)
