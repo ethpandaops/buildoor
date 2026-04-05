@@ -38,10 +38,11 @@ func TimeToSlot(genesis *beacon.Genesis, spec *beacon.ChainSpec, t time.Time) ph
 
 // EpochStats holds cached statistics for an epoch computed from beacon state.
 type EpochStats struct {
-	Epoch     phase0.Epoch
-	StateSlot phase0.Slot
-	StateRoot phase0.Root
-	IsGloas   bool
+	Epoch          phase0.Epoch
+	FinalizedEpoch phase0.Epoch
+	StateSlot      phase0.Slot
+	StateRoot      phase0.Root
+	IsGloas        bool
 
 	// Validator data
 	ActiveValidators  uint64

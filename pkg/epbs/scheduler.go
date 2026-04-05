@@ -27,16 +27,17 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg           *builder.EPBSConfig
-	chainSpec     *beacon.ChainSpec
-	genesis       *beacon.Genesis
-	bidCreator    *BidCreator
-	revealHandler *RevealHandler
-	bidTracker    *BidTracker
-	payloadStore  *PayloadStore
-	payloadCache  *builder.PayloadCache
-	service       *Service // Reference to parent service for firing events
-	log           logrus.FieldLogger
+	cfg             *builder.EPBSConfig
+	chainSpec       *beacon.ChainSpec
+	genesis         *beacon.Genesis
+	bidCreator      *BidCreator
+	revealHandler   *RevealHandler
+	bidTracker      *BidTracker
+	payloadStore    *PayloadStore
+	payloadCache    *builder.PayloadCache
+	service         *Service // Reference to parent service for firing events
+	isBuilderActive func() bool
+	log             logrus.FieldLogger
 
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
@@ -54,20 +55,22 @@ func NewScheduler(
 	payloadStore *PayloadStore,
 	payloadCache *builder.PayloadCache,
 	service *Service,
+	isBuilderActive func() bool,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:           cfg,
-		chainSpec:     chainSpec,
-		genesis:       genesis,
-		bidCreator:    bidCreator,
-		revealHandler: revealHandler,
-		bidTracker:    bidTracker,
-		payloadStore:  payloadStore,
-		payloadCache:  payloadCache,
-		service:       service,
-		slotStates:    make(map[phase0.Slot]*SlotState),
-		log:           log.WithField("component", "scheduler"),
+		cfg:             cfg,
+		chainSpec:       chainSpec,
+		genesis:         genesis,
+		bidCreator:      bidCreator,
+		revealHandler:   revealHandler,
+		bidTracker:      bidTracker,
+		payloadStore:    payloadStore,
+		payloadCache:    payloadCache,
+		service:         service,
+		isBuilderActive: isBuilderActive,
+		slotStates:      make(map[phase0.Slot]*SlotState),
+		log:             log.WithField("component", "scheduler"),
 	}
 }
 
@@ -137,7 +140,7 @@ func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent, blockInfo *beacon.Block
 }
 
 // ProcessTick is called frequently to check if any bids or reveals are due.
-func (s *Scheduler) ProcessTick(ctx context.Context) {
+func (s *Scheduler) ProcessTick(ctx context.Context) {	
 	now := time.Now()
 
 	// Calculate current slot and position within slot
@@ -155,6 +158,13 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 		if currentEpoch < *s.chainSpec.GloasForkEpoch {
 			return
 		}
+	}
+
+	// Don't bid if the builder is not active on-chain.
+	if s.isBuilderActive != nil && !s.isBuilderActive() {
+		// Still check reveals — we may have bids from before deactivation.
+		s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
+		return
 	}
 
 	// Check slots that might need bidding (current and next due to negative start time)

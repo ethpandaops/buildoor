@@ -148,6 +148,16 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.builderIndex,
 		s.log,
 	)
+	// isBuilderActive checks that the builder's deposit is finalized and it hasn't exited.
+	isBuilderActive := func() bool {
+		info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+		if info == nil {
+			return false
+		}
+		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+		return info.DepositEpoch <= uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
+	}
+
 	s.scheduler = NewScheduler(
 		s.cfg,
 		chainSpec,
@@ -158,6 +168,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.payloadStore,
 		builderSvc.GetPayloadCache(),
 		s,
+		isBuilderActive,
 		s.log,
 	)
 
