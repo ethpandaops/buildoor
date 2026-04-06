@@ -155,7 +155,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 			return false
 		}
 		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
-		return info.DepositEpoch <= uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
+		return info.DepositEpoch < uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
 	}
 
 	s.scheduler = NewScheduler(
