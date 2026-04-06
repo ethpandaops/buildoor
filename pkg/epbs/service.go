@@ -155,6 +155,13 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 			return false
 		}
 		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+		s.log.WithFields(logrus.Fields{
+			"builder_index": info.Index,
+			"builder_pubkey": fmt.Sprintf("%x", s.builderPubkey[:8]),
+			"finalized_epoch": finalizedEpoch,
+			"deposit_epoch": info.DepositEpoch,
+			"withdrawable_epoch": info.WithdrawableEpoch,
+		}).Info("Builder active check")
 		return info.DepositEpoch <= uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
 	}
 
