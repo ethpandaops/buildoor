@@ -80,12 +80,11 @@ var exitCmd = &cobra.Command{
 		}
 
 		// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
-		capellaForkVersion := chainSvc.GetChainSpec().CapellaForkVersion
-		if capellaForkVersion == nil {
+		if chainSpec.CapellaForkVersion == nil {
 			return fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 		}
 
-		forkVersion := *capellaForkVersion
+		forkVersion := *chainSpec.CapellaForkVersion
 
 		logger.WithFields(map[string]any{
 			"builder_index": builderIndex,
