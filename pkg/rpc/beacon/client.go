@@ -43,9 +43,10 @@ type ChainSpec struct {
 	DomainProposerPreferences phase0.DomainType
 
 	// Fork epochs and versions (nil if not configured)
-	ElectraForkEpoch *uint64
-	GloasForkEpoch   *uint64
-	GloasForkVersion *phase0.Version
+	CapellaForkVersion *phase0.Version
+	ElectraForkEpoch   *uint64
+	GloasForkEpoch     *uint64
+	GloasForkVersion   *phase0.Version
 
 	// Blob schedule (BPO - Blob Parameters Only)
 	BlobSchedule []BlobScheduleEntry
@@ -196,6 +197,11 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 
 	if v, err := parseSpecDomainType(specData, "DOMAIN_PROPOSER_PREFERENCES"); err == nil {
 		cs.DomainProposerPreferences = v
+	}
+
+	// Parse fork versions
+	if v, err := parseSpecForkVersion(specData, "CAPELLA_FORK_VERSION"); err == nil {
+		cs.CapellaForkVersion = &v
 	}
 
 	// Parse fork epochs

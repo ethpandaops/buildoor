@@ -77,12 +77,13 @@ func (s *ExitService) buildExitMessage(builderIndex uint64, epoch phase0.Epoch) 
 
 // signExitMessage signs a voluntary exit message.
 func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.SignedVoluntaryExit, error) {
-	// Get fork version
-	forkVersion, err := s.chainSvc.GetForkVersion(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("failed to get fork version: %w", err)
+	// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
+	capellaForkVersion := s.chainSvc.GetChainSpec().CapellaForkVersion
+	if capellaForkVersion == nil {
+		return nil, fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 	}
 
+	forkVersion := *capellaForkVersion
 	genesis := s.chainSvc.GetGenesis()
 
 	// Sign the exit
@@ -102,23 +103,3 @@ func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.Signe
 	}, nil
 }
 
-// computeExitDomain computes the domain for exit signing.
-/*
-func (s *ExitService) computeExitDomain(_ phase0.Epoch) (phase0.Domain, error) {
-	// Get fork version
-	forkVersion, err := s.chainSvc.GetForkVersion(context.Background())
-	if err != nil {
-		return phase0.Domain{}, fmt.Errorf("failed to get fork version: %w", err)
-	}
-
-	genesis := s.chainSvc.GetGenesis()
-
-	domain := signer.ComputeDomain(
-		signer.DomainVoluntaryExit,
-		forkVersion,
-		genesis.GenesisValidatorsRoot,
-	)
-
-	return domain, nil
-}
-*/

@@ -79,11 +79,13 @@ var exitCmd = &cobra.Command{
 			return fmt.Errorf("failed to get current epoch: %w", err)
 		}
 
-		// Get fork version
-		forkVersion, err := chainSvc.GetForkVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get fork version: %w", err)
+		// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
+		capellaForkVersion := chainSvc.GetChainSpec().CapellaForkVersion
+		if capellaForkVersion == nil {
+			return fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 		}
+
+		forkVersion := *capellaForkVersion
 
 		logger.WithFields(map[string]any{
 			"builder_index": builderIndex,
