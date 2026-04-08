@@ -119,7 +119,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// TODO - bharath - the head block hash should be attrs.ParentBlockHash, i think there is an 
 	// issue in the way I implemented payload attributes for prysm
 	headBlockHash := common.BytesToHash(finalityInfo.HeadExecutionBlockHash[:])
-	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
+	safeBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
 	finalizedBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
 	parentBeaconRoot := common.BytesToHash(attrs.ParentBeaconBlockRoot[:])
 
