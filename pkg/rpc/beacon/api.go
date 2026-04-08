@@ -343,7 +343,7 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 
 	exitJSON, err := json.Marshal(exit)
 	if err != nil {
-		return fmt.Errorf("failed to marshal exit: %w", err)
+		return fmt.Errorf("failed to marshal the exit: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(exitJSON))
