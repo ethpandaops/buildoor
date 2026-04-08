@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/spf13/cobra"
 
@@ -105,7 +106,7 @@ var exitCmd = &cobra.Command{
 		exit := &phase0.SignedVoluntaryExit{
 			Message: &phase0.VoluntaryExit{
 				Epoch:          currentEpoch,
-				ValidatorIndex: phase0.ValidatorIndex(builderIndex | chain.BuilderIndexFlag),
+				ValidatorIndex: phase0.ValidatorIndex(gloas.BuilderIndex(builderIndex & ^chain.BuilderIndexFlag)),
 			},
 			Signature: signature,
 		}
