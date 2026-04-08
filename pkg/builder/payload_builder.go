@@ -183,6 +183,17 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
 	}).Debug("Building payload from attributes")
 
+	for i, w := range engineWithdrawals {
+		b.log.WithFields(logrus.Fields{
+			"slot":            attrs.ProposalSlot,
+			"index":           w.Index,
+			"validator_index": w.Validator,
+			"address":         w.Address.Hex(),
+			"amount":          w.Amount,
+			"position":        i,
+		}).Info("WITHDRAWALS-DEBUG: withdrawal sent to RequestPayloadBuild")
+	}
+
 	// Request payload build from the EL
 	payloadID, err := b.engineClient.RequestPayloadBuild(
 		buildCtx,
