@@ -126,6 +126,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Convert withdrawals from payload_attributes to engine format
 	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
 
+	b.log.WithFields(logrus.Fields{
+		"slot":             attrs.ProposalSlot,
+		"withdrawal_count": len(attrs.Withdrawals),
+	}).Info("WITHDRAWALS-DEBUG: withdrawals from payload_attributes")
+
 	// Get fee recipient for build.
 	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit from the proposer's signed preferences).
 	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
@@ -215,6 +220,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
+
+	b.log.WithFields(logrus.Fields{
+		"slot":             attrs.ProposalSlot,
+		"withdrawal_count": len(payloadResult.ExecutionPayload.Withdrawals),
+	}).Info("WITHDRAWALS-DEBUG: withdrawals in payload after GetPayloadRaw")
 
 	modifiedPayloadJSON, _, err := ModifyPayloadExtraData(
 		payloadResult.ExecutionPayloadJSON,

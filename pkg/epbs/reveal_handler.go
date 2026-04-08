@@ -88,6 +88,11 @@ func (h *RevealHandler) SubmitReveal(
 		"beacon_block_root": beaconBlockRootHex,
 	}).Info("Constructing execution payload envelope via beacon node")
 
+	h.log.WithFields(logrus.Fields{
+		"slot":             payload.Slot,
+		"withdrawal_count": len(denebPayload.Withdrawals),
+	}).Info("WITHDRAWALS-DEBUG: withdrawals in payload before construct envelope")
+
 	// Step 1: Construct — beacon node fills in state_root, builder_index, slot.
 	envelopeJSON, err := h.clClient.ConstructExecutionPayloadEnvelope(
 		ctx,
