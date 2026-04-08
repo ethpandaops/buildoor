@@ -91,10 +91,12 @@ var exitCmd = &cobra.Command{
 			"epoch":         currentEpoch,
 		}).Info("Creating voluntary exit")
 
+		builderIndexToUse := gloas.BuilderIndex(builderIndex | chain.BuilderIndexFlag)
+
 		// Sign voluntary exit
 		signature, err := blsSigner.SignVoluntaryExit(
 			currentEpoch,
-			phase0.ValidatorIndex(builderIndex),
+			phase0.ValidatorIndex(builderIndexToUse),
 			forkVersion,
 			genesis.GenesisValidatorsRoot,
 		)
@@ -106,7 +108,7 @@ var exitCmd = &cobra.Command{
 		exit := &phase0.SignedVoluntaryExit{
 			Message: &phase0.VoluntaryExit{
 				Epoch:          currentEpoch,
-				ValidatorIndex: phase0.ValidatorIndex(gloas.BuilderIndex(builderIndex | chain.BuilderIndexFlag)),
+				ValidatorIndex: phase0.ValidatorIndex(builderIndexToUse),
 			},
 			Signature: signature,
 		}
