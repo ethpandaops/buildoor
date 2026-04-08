@@ -339,6 +339,7 @@ func (c *Client) GetExecutionPayloadEnvelope(
 // SubmitVoluntaryExit submits a signed voluntary exit to the beacon node.
 func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVoluntaryExit) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/pool/voluntary_exits", c.baseURL)
+	c.log.Infof("Submitting exit to %s!", url)
 
 	exitJSON, err := json.Marshal(exit)
 	if err != nil {
@@ -365,6 +366,8 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 
 		return fmt.Errorf("failed to submit exit: status %d: %s", resp.StatusCode, string(body))
 	}
+
+	c.log.Info("Submitted exit!")
 
 	return nil
 }
