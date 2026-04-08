@@ -106,7 +106,7 @@ var exitCmd = &cobra.Command{
 		exit := &phase0.SignedVoluntaryExit{
 			Message: &phase0.VoluntaryExit{
 				Epoch:          currentEpoch,
-				ValidatorIndex: phase0.ValidatorIndex(gloas.BuilderIndex(builderIndex & ^chain.BuilderIndexFlag)),
+				ValidatorIndex: phase0.ValidatorIndex(gloas.BuilderIndex(builderIndex | chain.BuilderIndexFlag)),
 			},
 			Signature: signature,
 		}
