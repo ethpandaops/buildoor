@@ -17,6 +17,7 @@ type APIHandler struct {
 	builderSvc     *builder.Service
 	epbsSvc        *epbs.Service                // May be nil
 	lifecycleMgr   *lifecycle.Manager           // May be nil
+	chainSvc       chain.Service                // May be nil
 	validatorStore *validators.Store            // May be nil (only set when Builder API enabled)
 	builderAPISvc  *builderapi.Server           // May be nil (only set when Builder API enabled)
 	propPrefSvc    *proposerpreferences.Service // May be nil (only set when P2P peer addrs configured)
@@ -39,6 +40,7 @@ func NewAPIHandler(
 		builderSvc:     builderSvc,
 		epbsSvc:        epbsSvc,
 		lifecycleMgr:   lifecycleMgr,
+		chainSvc:       chainSvc,
 		validatorStore: validatorStore,
 		builderAPISvc:  builderAPISvc,
 		propPrefSvc:    propPrefSvc,

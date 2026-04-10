@@ -169,7 +169,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 	}
 
 	// Initialize components
-	s.bidTracker = NewBidTracker(s.builderIndex, s.log)
+	s.bidTracker = NewBidTracker(s.builderIndex, chainSpec, s.log)
 	s.bidCreator = NewBidCreator(
 		s.signer,
 		s.clClient,
@@ -269,9 +269,14 @@ func (s *Service) run() {
 		case event := <-bidSub.Channel():
 			s.handleBidEvent(event)
 
-		case _, ok := <-epochSub.Channel():
+		case epochStats, ok := <-epochSub.Channel():
 			if ok {
 				s.RefreshRegistrationState()
+
+				// Prune expired pending payments now that a new epoch has started
+				if s.bidTracker != nil {
+					s.bidTracker.PruneExpiredPayments(epochStats.Epoch)
+				}
 			}
 
 		case <-ticker.C:
@@ -355,10 +360,16 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
+		"bid_value":  payload.BidValue,
 	}).Info("Our payload was included in a beacon block!")
 
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
+
+	// Record pending payment obligation
+	if s.bidTracker != nil && payload.BidValue > 0 {
+		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
+	}
 }
 
 // GetRegistrationState returns the current registration state.

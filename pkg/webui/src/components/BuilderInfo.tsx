@@ -108,17 +108,17 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </td>
             </tr>
 
-            {/* Pending Payments */}
-            {builderInfo.pending_payments_gwei > 0 && (
-              <tr>
-                <td className="text-muted">Pending Payments:</td>
-                <td className="text-end text-warning">
-                  -{formatGwei(builderInfo.pending_payments_gwei)} ETH
-                </td>
-              </tr>
-            )}
+            {/* Pending Payments (always shown) */}
+            <tr>
+              <td className="text-muted">Pending Payments:</td>
+              <td className="text-end text-warning">
+                {builderInfo.pending_payments_gwei > 0
+                  ? `-${formatGwei(builderInfo.pending_payments_gwei)} ETH`
+                  : '0 ETH'}
+              </td>
+            </tr>
 
-            {/* Effective Balance */}
+            {/* Effective Balance (shown when pending payments reduce it) */}
             {builderInfo.pending_payments_gwei > 0 && (
               <tr>
                 <td className="text-muted">Effective Balance:</td>

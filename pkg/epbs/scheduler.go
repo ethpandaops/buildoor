@@ -140,7 +140,7 @@ func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent, blockInfo *beacon.Block
 }
 
 // ProcessTick is called frequently to check if any bids or reveals are due.
-func (s *Scheduler) ProcessTick(ctx context.Context) {	
+func (s *Scheduler) ProcessTick(ctx context.Context) {
 	now := time.Now()
 
 	// Calculate current slot and position within slot
@@ -229,10 +229,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"bid_value":  bidValue,
-		"bid_count":  state.BidCount,
-		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"slot":         slot,
+		"bid_value":    bidValue,
+		"bid_count":    state.BidCount,
+		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
@@ -309,7 +309,7 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
+		"slot":         slot,
 		"ms_into_slot": msIntoSlot,
 	}).Info("Revealing payload")
 
@@ -321,9 +321,9 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	}
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"block_root": fmt.Sprintf("%x", blockRoot[:8]),
-		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"slot":         slot,
+		"block_root":   fmt.Sprintf("%x", blockRoot[:8]),
+		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msIntoSlot,
 	}).Info("Submitting reveal")
 
@@ -336,6 +336,9 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	s.mu.Lock()
 	state.Revealed = true
 	s.mu.Unlock()
+
+	// Mark payment as revealed (immediate deduction from live balance)
+	s.bidTracker.MarkRevealed(slot)
 
 	s.log.WithField("slot", slot).Info("Reveal submitted")
 }

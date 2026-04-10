@@ -673,44 +673,48 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder pubkey and index from ePBS service
+	// Get builder pubkey, index, and pending payments from ePBS service
 	if m.epbsSvc != nil {
 		pubkey := m.epbsSvc.GetBuilderPubkey()
 		info.BuilderPubkey = pubkey.String()
 		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
+		info.IsRegistered = m.epbsSvc.IsRegistered()
 
 		// Get pending payments from bid tracker
 		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
 			info.PendingPayments = tracker.GetTotalPendingPayments()
 		}
-	}
 
-	// Get lifecycle info if available
-	if m.lifecycleMgr != nil {
-		info.LifecycleEnabled = true
-		state := m.lifecycleMgr.GetBuilderState()
-
-		if state != nil {
-			info.IsRegistered = state.IsRegistered
-			info.CLBalance = state.Balance
-			info.DepositEpoch = state.DepositEpoch
-			info.WithdrawableEpoch = state.WithdrawableEpoch
-
-			// Calculate effective balance
-			if info.CLBalance > info.PendingPayments {
-				info.EffectiveBalance = info.CLBalance - info.PendingPayments
+		// Get live balance from chain service (works even without lifecycle enabled)
+		if m.chainSvc != nil {
+			if builderInfo := m.chainSvc.GetBuilderByPubkey(pubkey); builderInfo != nil {
+				info.CLBalance = builderInfo.Balance
+				info.DepositEpoch = builderInfo.DepositEpoch
+				info.WithdrawableEpoch = builderInfo.WithdrawableEpoch
 			}
 		}
+	}
 
-		// Get wallet info
+	// Get pending deposit and wallet info from lifecycle manager (only when lifecycle is enabled)
+	if m.lifecycleMgr != nil {
+		info.LifecycleEnabled = true
+		info.PendingDeposit = m.lifecycleMgr.GetPendingDeposit()
+
+		// Pending deposits increase the live balance immediately (no delay)
+		info.CLBalance += info.PendingDeposit
+
 		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
 			info.WalletAddress = wallet.Address().Hex()
 
-			// Get wallet balance (async-safe, we just use cached value or fetch)
 			if balance, err := wallet.GetBalance(m.ctx); err == nil && balance != nil {
 				info.WalletBalance = balance.String()
 			}
 		}
+	}
+
+	// Calculate effective balance (live balance minus delayed pending payments)
+	if info.CLBalance > info.PendingPayments {
+		info.EffectiveBalance = info.CLBalance - info.PendingPayments
 	}
 
 	return info

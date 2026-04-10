@@ -118,40 +118,40 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		CurrentSlot: uint64(h.builderSvc.GetCurrentSlot()),
 	}
 
-	// Get builder index and pubkey from ePBS service if available
+	// Get builder identity and pending payments from ePBS service
 	if h.epbsSvc != nil {
 		resp.BuilderIndex = h.epbsSvc.GetBuilderIndex()
 		pubkey := h.epbsSvc.GetBuilderPubkey()
 		resp.BuilderPubkey = pubkey.String()
+		resp.IsRegistered = h.epbsSvc.IsRegistered()
 
 		// Get pending payments from bid tracker
 		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
 			resp.PendingPayments = tracker.GetTotalPendingPayments()
 		}
-	}
 
-	// Get lifecycle info if available
-	if h.lifecycleMgr != nil {
-		resp.LifecycleEnabled = true
-		state := h.lifecycleMgr.GetBuilderState()
-
-		if state != nil {
-			resp.IsRegistered = state.IsRegistered
-			resp.CLBalance = state.Balance
-			resp.DepositEpoch = state.DepositEpoch
-			resp.WithdrawableEpoch = state.WithdrawableEpoch
-
-			// Calculate effective balance
-			if resp.CLBalance > resp.PendingPayments {
-				resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
+		// Get live balance from chain service (works without lifecycle enabled)
+		if h.chainSvc != nil {
+			if builderInfo := h.chainSvc.GetBuilderByPubkey(pubkey); builderInfo != nil {
+				resp.CLBalance = builderInfo.Balance
+				resp.DepositEpoch = builderInfo.DepositEpoch
+				resp.WithdrawableEpoch = builderInfo.WithdrawableEpoch
 			}
 		}
+	}
 
-		// Get wallet info
+	// Calculate effective balance
+	if resp.CLBalance > resp.PendingPayments {
+		resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
+	}
+
+	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
+	if h.lifecycleMgr != nil {
+		resp.LifecycleEnabled = true
+
 		if wallet := h.lifecycleMgr.GetWallet(); wallet != nil {
 			resp.WalletAddress = wallet.Address().Hex()
 
-			// Get wallet balance
 			if balance, err := wallet.GetBalance(r.Context()); err == nil && balance != nil {
 				resp.WalletBalance = balance.String()
 			}

@@ -28,19 +28,20 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg          *builder.Config
-	clClient     *beacon.Client
-	chainSvc     chain.Service
-	signer       *signer.BLSSigner
-	wallet       *wallet.Wallet
-	builderState *builder.BuilderState
-	stateMu      sync.RWMutex
-	depositSvc   *DepositService
-	balanceSvc   *BalanceService
-	exitSvc      *ExitService
-	log          logrus.FieldLogger
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
+	cfg            *builder.Config
+	clClient       *beacon.Client
+	chainSvc       chain.Service
+	signer         *signer.BLSSigner
+	wallet         *wallet.Wallet
+	builderState   *builder.BuilderState
+	pendingDeposit uint64 // Gwei deposited since last state refresh (topups not yet in state)
+	stateMu        sync.RWMutex
+	depositSvc     *DepositService
+	balanceSvc     *BalanceService
+	exitSvc        *ExitService
+	log            logrus.FieldLogger
+	stopCh         chan struct{}
+	wg             sync.WaitGroup
 
 	registrationCallback func(index uint64)
 	registrationDone     atomic.Bool
@@ -136,6 +137,14 @@ func (m *Manager) GetBuilderState() *builder.BuilderState {
 // GetWallet returns the wallet instance.
 func (m *Manager) GetWallet() *wallet.Wallet {
 	return m.wallet
+}
+
+// GetPendingDeposit returns the amount deposited since the last state refresh.
+func (m *Manager) GetPendingDeposit() uint64 {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+
+	return m.pendingDeposit
 }
 
 // EnsureBuilderRegistered checks if builder is registered and deposits if needed.
@@ -382,6 +391,11 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 					m.log.WithError(err).Warn("Balance topup failed")
 					m.fireEvent("balance_topup", fmt.Sprintf("Balance topup failed: %v", err), "error")
 				} else {
+					// Track the pending deposit until the next state refresh includes it
+					m.stateMu.Lock()
+					m.pendingDeposit += amount
+					m.stateMu.Unlock()
+
 					m.fireEvent("balance_topup", fmt.Sprintf("Balance topped up by %d gwei", amount), "success")
 				}
 			}
@@ -407,5 +421,7 @@ func (m *Manager) refreshBuilderState() {
 		DepositEpoch:      info.DepositEpoch,
 		WithdrawableEpoch: info.WithdrawableEpoch,
 	}
+	// Reset pending deposit — the fresh state now includes any confirmed deposits
+	m.pendingDeposit = 0
 	m.stateMu.Unlock()
 }
