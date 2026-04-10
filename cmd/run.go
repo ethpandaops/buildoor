@@ -296,20 +296,14 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
-		// 10. Start lifecycle manager (if enabled)
-		if lifecycleMgr != nil {
-			// Connect bid tracker to lifecycle manager for balance tracking
-			if epbsSvc != nil {
-				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
-				lifecycleMgr.SetRegistrationCallback(func(index uint64) {
-					epbsSvc.SetBuilderRegistered(index)
-				})
-			}
-
-			if err := lifecycleMgr.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start lifecycle manager: %w", err)
-			}
-			defer lifecycleMgr.Stop()
+		// 10. Start lifecycle manager callbacks (if enabled)
+		if lifecycleMgr != nil && epbsSvc != nil {
+			lifecycleMgr.SetDepositPendingCallback(func() {
+				epbsSvc.SetRegistrationPending()
+			})
+			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
+				epbsSvc.SetBuilderRegistered(index)
+			})
 		}
 
 		// 11. Start builder service
@@ -330,7 +324,19 @@ and begins building blocks according to configuration.`,
 			defer epbsSvc.Stop()
 		}
 
-		// 13. Start proposer preferences service (if initialized)
+		// 13. Start lifecycle manager (after ePBS so bid tracker is available)
+		if lifecycleMgr != nil {
+			if epbsSvc != nil {
+				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
+			}
+
+			if err := lifecycleMgr.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start lifecycle manager: %w", err)
+			}
+			defer lifecycleMgr.Stop()
+		}
+
+		// 14. Start proposer preferences service (if initialized)
 		if propPrefSvc != nil {
 			if err := propPrefSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start proposer preferences service: %w", err)

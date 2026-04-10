@@ -772,6 +772,9 @@ func (m *EventStreamManager) emitRegistrationStateChange(from, to string) {
 	var logStatus string
 
 	switch to {
+	case "unregistered":
+		message = "Builder not registered on beacon chain"
+		logStatus = "info"
 	case "pending":
 		message = "Builder deposit submitted, waiting for beacon chain inclusion"
 		logStatus = "info"

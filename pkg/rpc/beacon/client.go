@@ -18,6 +18,7 @@ import (
 	"github.com/attestantio/go-eth2-client/http"
 	"github.com/attestantio/go-eth2-client/spec"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
 )
@@ -53,6 +54,9 @@ type ChainSpec struct {
 
 	// ePBS parameters
 	PtcSize uint64
+
+	// Deposit contract
+	DepositContractAddress *common.Address
 }
 
 // BlobScheduleEntry represents a single entry in the BLOB_SCHEDULE.
@@ -220,6 +224,12 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 	// Parse ePBS parameters
 	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
 		cs.PtcSize = v
+	}
+
+	// Parse deposit contract address
+	if addrStr, ok := specData["DEPOSIT_CONTRACT_ADDRESS"]; ok {
+		addr := common.HexToAddress(addrStr)
+		cs.DepositContractAddress = &addr
 	}
 
 	// Parse blob schedule (BPO)

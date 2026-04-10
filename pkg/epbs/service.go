@@ -26,6 +26,7 @@ const (
 	RegistrationStatePendingFinalization int32 = 4 // Builder in beacon state but deposit epoch not finalized
 	RegistrationStateExiting             int32 = 5 // Exit submitted, withdrawable epoch set but not reached
 	RegistrationStateExited              int32 = 6 // Withdrawable epoch passed, builder has exited
+	RegistrationStateUnregistered        int32 = 7 // Builder not in beacon state and no deposit in progress
 )
 
 // RegistrationStateName returns the string name for a registration state.
@@ -45,6 +46,8 @@ func RegistrationStateName(state int32) string {
 		return "exiting"
 	case RegistrationStateExited:
 		return "exited"
+	case RegistrationStateUnregistered:
+		return "unregistered"
 	default:
 		return "unknown"
 	}
@@ -155,9 +158,9 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.builderIndex = 0
 		s.registrationState.Store(RegistrationStateWaitingGloas)
 	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(s.builderPubkey); builderInfo == nil {
-		s.log.Info("Builder not found in beacon state, waiting for registration")
+		s.log.Info("Builder not found in beacon state")
 		s.builderIndex = 0
-		s.registrationState.Store(RegistrationStatePending)
+		s.registrationState.Store(RegistrationStateUnregistered)
 	} else {
 		s.builderIndex = builderInfo.Index
 		s.registrationState.Store(s.computeRegistrationState(builderInfo))
@@ -388,6 +391,13 @@ func (s *Service) IsActive() bool {
 	return state == RegistrationStateRegistered || state == RegistrationStatePendingFinalization
 }
 
+// SetRegistrationPending marks the builder as having a deposit in flight.
+// Called by the lifecycle manager when a deposit is submitted.
+func (s *Service) SetRegistrationPending() {
+	s.registrationState.Store(RegistrationStatePending)
+	s.log.Info("Builder deposit submitted, waiting for beacon chain inclusion")
+}
+
 // SetBuilderRegistered updates the builder index when the lifecycle manager detects registration.
 // It sets the appropriate state based on finalization status.
 // Called by the lifecycle manager's registration callback.
@@ -453,9 +463,10 @@ func (s *Service) RefreshRegistrationState() {
 
 	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
 	if info == nil {
-		// Builder not in state (yet or removed)
-		if currentState != RegistrationStatePending {
-			s.registrationState.Store(RegistrationStatePending)
+		// Builder not in state — keep current state if pending (deposit submitted),
+		// otherwise mark as unregistered
+		if currentState != RegistrationStatePending && currentState != RegistrationStateUnregistered {
+			s.registrationState.Store(RegistrationStateUnregistered)
 			s.log.Info("Builder no longer found in beacon state")
 		}
 

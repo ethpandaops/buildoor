@@ -60,7 +60,10 @@ func (s *BalanceService) GetEffectiveBalance(ctx context.Context) (uint64, error
 		return 0, err
 	}
 
-	pendingPayments := s.bidTracker.GetTotalPendingPayments()
+	var pendingPayments uint64
+	if s.bidTracker != nil {
+		pendingPayments = s.bidTracker.GetTotalPendingPayments()
+	}
 
 	if pendingPayments >= currentBalance {
 		return 0, nil

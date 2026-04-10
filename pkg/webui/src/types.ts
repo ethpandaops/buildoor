@@ -46,7 +46,7 @@ export interface EPBSConfig {
 export interface ServiceStatus {
   epbs_available: boolean;
   epbs_enabled: boolean;
-  epbs_registration_state: string; // "unknown" | "waiting_gloas" | "pending" | "pending_finalization" | "registered" | "exiting" | "exited"
+  epbs_registration_state: string; // "unknown" | "unregistered" | "waiting_gloas" | "pending" | "pending_finalization" | "registered" | "exiting" | "exited"
   builder_api_available: boolean;
   builder_api_enabled: boolean;
   lifecycle_available: boolean;

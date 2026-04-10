@@ -26,6 +26,27 @@ function truncateHash(hash: string, chars: number = 8): string {
   return `${hash.substring(0, chars + 2)}...${hash.substring(hash.length - chars)}`;
 }
 
+// CopyableHash renders a truncated hash/address that copies the full value on click.
+const CopyableHash: React.FC<{ value: string; chars?: number }> = ({ value, chars = 8 }) => {
+  const [copied, setCopied] = React.useState(false);
+  const handleClick = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <span
+      title={`${value}\nClick to copy`}
+      onClick={handleClick}
+      style={{ cursor: 'pointer' }}
+      className={copied ? 'text-success' : ''}
+    >
+      {copied ? 'Copied!' : truncateHash(value, chars)}
+    </span>
+  );
+};
+
 export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
   const [toggling, setToggling] = useState(false);
@@ -100,9 +121,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             <tr>
               <td className="text-muted">Pubkey:</td>
               <td className="text-end font-monospace small">
-                <span title={builderInfo.builder_pubkey}>
-                  {truncateHash(builderInfo.builder_pubkey, 8)}
-                </span>
+                <CopyableHash value={builderInfo.builder_pubkey} chars={8} />
               </td>
             </tr>
             <tr>
@@ -122,9 +141,11 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                     case 'waiting_gloas':
                       return <span className="badge bg-info">Awaiting Gloas</span>;
                     case 'pending':
-                      return <span className="badge bg-warning text-dark">Registering...</span>;
+                      return <span className="badge bg-warning text-dark"><i className="fas fa-spinner fa-spin me-1"></i>Registering...</span>;
+                    case 'unregistered':
+                      return <span className="badge bg-dark">Unregistered</span>;
                     default:
-                      return <span className="badge bg-warning text-dark">Not Registered</span>;
+                      return <span className="badge bg-dark">Unknown</span>;
                   }
                 })()}
               </td>
@@ -135,9 +156,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               <tr>
                 <td className="text-muted">Wallet:</td>
                 <td className="text-end font-monospace small">
-                  <span title={builderInfo.wallet_address}>
-                    {truncateHash(builderInfo.wallet_address, 6)}
-                  </span>
+                  <CopyableHash value={builderInfo.wallet_address} chars={6} />
                 </td>
               </tr>
             )}

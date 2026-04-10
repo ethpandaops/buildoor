@@ -43,10 +43,11 @@ type Manager struct {
 	stopCh         chan struct{}
 	wg             sync.WaitGroup
 
-	registrationCallback func(index uint64)
-	registrationDone     atomic.Bool
-	enabled              atomic.Bool
-	eventCallback        func(*LifecycleEvent)
+	registrationCallback   func(index uint64)
+	depositPendingCallback func()
+	registrationDone       atomic.Bool
+	enabled                atomic.Bool
+	eventCallback          func(*LifecycleEvent)
 }
 
 // NewManager creates a new lifecycle manager.
@@ -98,6 +99,11 @@ func (m *Manager) IsEnabled() bool {
 // SetRegistrationCallback sets the callback invoked when builder registration completes.
 func (m *Manager) SetRegistrationCallback(cb func(index uint64)) {
 	m.registrationCallback = cb
+}
+
+// SetDepositPendingCallback sets the callback invoked when a deposit is submitted.
+func (m *Manager) SetDepositPendingCallback(cb func()) {
+	m.depositPendingCallback = cb
 }
 
 // SetEventCallback sets the callback invoked when lifecycle events occur (for UI logging).
@@ -184,6 +190,10 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 
 	m.log.Info("Builder not registered, creating deposit")
 	m.fireEvent("deposit", fmt.Sprintf("Builder not registered, submitting deposit (%d gwei)", m.cfg.DepositAmount), "info")
+
+	if m.depositPendingCallback != nil {
+		m.depositPendingCallback()
+	}
 
 	if err := m.depositSvc.CreateDeposit(ctx, m.cfg.DepositAmount); err != nil {
 		m.fireEvent("deposit", fmt.Sprintf("Deposit failed: %v", err), "error")
