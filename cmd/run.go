@@ -91,15 +91,16 @@ and begins building blocks according to configuration.`,
 
 		var w *wallet.Wallet
 
-		if cfg.LifecycleEnabled {
-			if cfg.ELRPC == "" {
-				return fmt.Errorf("--el-rpc is required when lifecycle is enabled")
-			}
+		// Initialize RPC client and wallet when prerequisites are available.
+		// This makes lifecycle management available for on-the-fly toggling
+		// even when not enabled at startup via --lifecycle.
+		lifecycleAvailable := cfg.ELRPC != "" && cfg.WalletPrivkey != ""
 
-			if cfg.WalletPrivkey == "" {
-				return fmt.Errorf("--wallet-privkey is required when lifecycle is enabled")
-			}
+		if cfg.LifecycleEnabled && !lifecycleAvailable {
+			return fmt.Errorf("--el-rpc and --wallet-privkey are required when lifecycle is enabled")
+		}
 
+		if lifecycleAvailable {
 			logger.Info("Connecting to EL RPC for lifecycle management...")
 
 			rpcClient, err = execution.NewClient(ctx, cfg.ELRPC, logger)
@@ -160,14 +161,16 @@ and begins building blocks according to configuration.`,
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
-		// 6. Initialize lifecycle manager (if enabled)
+		// 6. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
 
-		if cfg.LifecycleEnabled {
+		if lifecycleAvailable {
 			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
 			}
+
+			lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
 		}
 
 		// 7. Initialize builder service (standalone block building)

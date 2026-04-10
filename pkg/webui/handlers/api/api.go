@@ -667,6 +667,7 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 type ToggleServiceRequest struct {
 	EPBSEnabled       *bool `json:"epbs_enabled,omitempty"`
 	BuilderAPIEnabled *bool `json:"builder_api_enabled,omitempty"`
+	LifecycleEnabled  *bool `json:"lifecycle_enabled,omitempty"`
 }
 
 // ToggleServices toggles the enabled state of ePBS and/or Builder API services.
@@ -691,6 +692,10 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		h.builderAPISvc.SetEnabled(*req.BuilderAPIEnabled)
 	}
 
+	if req.LifecycleEnabled != nil && h.lifecycleMgr != nil {
+		h.lifecycleMgr.SetEnabled(*req.LifecycleEnabled)
+	}
+
 	// Broadcast updated status to all connected clients
 	if h.eventStreamMgr != nil {
 		h.eventStreamMgr.BroadcastServiceStatus()
@@ -708,6 +713,8 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		EPBSRegistrationState: regState,
 		BuilderAPIAvailable:   h.builderAPISvc != nil,
 		BuilderAPIEnabled:     h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+		LifecycleAvailable:    h.lifecycleMgr != nil,
+		LifecycleEnabled:      h.lifecycleMgr != nil && h.lifecycleMgr.IsEnabled(),
 	}
 	writeJSON(w, http.StatusOK, status)
 }

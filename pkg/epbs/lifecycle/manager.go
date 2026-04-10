@@ -45,6 +45,7 @@ type Manager struct {
 
 	registrationCallback func(index uint64)
 	registrationDone     atomic.Bool
+	enabled              atomic.Bool
 	eventCallback        func(*LifecycleEvent)
 }
 
@@ -82,6 +83,16 @@ func NewManager(
 	m.exitSvc = NewExitService(clClient, chainSvc, blsSigner, managerLog)
 
 	return m, nil
+}
+
+// SetEnabled sets whether the lifecycle manager is actively managing the builder.
+func (m *Manager) SetEnabled(enabled bool) {
+	m.enabled.Store(enabled)
+}
+
+// IsEnabled returns whether the lifecycle manager is enabled.
+func (m *Manager) IsEnabled() bool {
+	return m.enabled.Load()
 }
 
 // SetRegistrationCallback sets the callback invoked when builder registration completes.
@@ -281,8 +292,14 @@ func (m *Manager) onRegistered(index uint64) {
 }
 
 // runRegistrationAndMonitor handles async registration then balance monitoring.
+// When disabled, it waits until re-enabled before proceeding.
 func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 	defer m.wg.Done()
+
+	// Wait until enabled before doing anything
+	if !m.waitForEnabled(ctx) {
+		return
+	}
 
 	// Step 1: Wait for Gloas fork activation if not yet active
 	if !m.chainSvc.IsGloas() {
@@ -302,8 +319,36 @@ func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 		m.ensureRegisteredWithRetry(ctx)
 	}
 
-	// Step 3: Run balance monitor
+	// Step 3: Run balance monitor (checks enabled flag each tick)
 	m.runBalanceMonitor(ctx)
+}
+
+// waitForEnabled waits until the manager is enabled or stopped.
+func (m *Manager) waitForEnabled(ctx context.Context) bool {
+	if m.enabled.Load() {
+		return true
+	}
+
+	m.log.Info("Lifecycle manager waiting to be enabled")
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-m.stopCh:
+			return false
+		case <-ticker.C:
+			if m.enabled.Load() {
+				m.log.Info("Lifecycle manager enabled")
+				m.fireEvent("state_change", "Lifecycle management enabled", "success")
+
+				return true
+			}
+		}
+	}
 }
 
 // waitForGloas waits for the Gloas fork to activate by subscribing to epoch stats.
@@ -370,10 +415,11 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			// Refresh builder state from chain service
+			// Always refresh builder state so the UI stays up to date
 			m.refreshBuilderState()
 
-			if m.balanceSvc == nil {
+			// Skip active lifecycle operations when disabled
+			if !m.enabled.Load() || m.balanceSvc == nil {
 				continue
 			}
 

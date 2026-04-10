@@ -167,6 +167,8 @@ type ServiceStatusEvent struct {
 	EPBSRegistrationState string `json:"epbs_registration_state"`
 	BuilderAPIAvailable   bool   `json:"builder_api_available"`
 	BuilderAPIEnabled     bool   `json:"builder_api_enabled"`
+	LifecycleAvailable    bool   `json:"lifecycle_available"`
+	LifecycleEnabled      bool   `json:"lifecycle_enabled"`
 }
 
 // LifecycleStreamEvent is sent when a lifecycle action occurs (deposit, topup, exit, state change).
@@ -732,6 +734,8 @@ func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 		EPBSRegistrationState: regState,
 		BuilderAPIAvailable:   m.builderAPISvc != nil,
 		BuilderAPIEnabled:     m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
+		LifecycleAvailable:    m.lifecycleMgr != nil,
+		LifecycleEnabled:      m.lifecycleMgr != nil && m.lifecycleMgr.IsEnabled(),
 	}
 }
 

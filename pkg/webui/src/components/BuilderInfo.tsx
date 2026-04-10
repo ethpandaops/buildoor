@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { useAuthContext } from '../context/AuthContext';
 import type { BuilderInfo as BuilderInfoType, ServiceStatus } from '../types';
 
 interface BuilderInfoProps {
@@ -26,6 +27,32 @@ function truncateHash(hash: string, chars: number = 8): string {
 }
 
 export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus }) => {
+  const { isLoggedIn, getAuthHeader } = useAuthContext();
+  const [toggling, setToggling] = useState(false);
+
+  const lifecycleAvailable = serviceStatus?.lifecycle_available ?? false;
+  const lifecycleEnabled = serviceStatus?.lifecycle_enabled ?? false;
+
+  const handleLifecycleToggle = async () => {
+    const authToken = getAuthHeader();
+    if (!authToken) return;
+    setToggling(true);
+    try {
+      await fetch('/api/services/toggle', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ lifecycle_enabled: !lifecycleEnabled }),
+      });
+    } catch (err) {
+      console.error('Failed to toggle lifecycle:', err);
+    } finally {
+      setToggling(false);
+    }
+  };
+
   if (!builderInfo) {
     return (
       <div className="card mb-3">
@@ -41,8 +68,30 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
 
   return (
     <div className="card mb-3">
-      <div className="card-header">
-        <h5 className="mb-0">Builder Info</h5>
+      <div className="card-header d-flex align-items-center">
+        <h5 className="mb-0 me-2">Builder Info</h5>
+        {lifecycleAvailable && (
+          <>
+            {lifecycleEnabled ? (
+              <span className="badge bg-success">Lifecycle Active</span>
+            ) : (
+              <span className="badge bg-secondary">Lifecycle Inactive</span>
+            )}
+            {isLoggedIn && (
+              <button
+                className={`btn btn-sm ms-auto ${lifecycleEnabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
+                onClick={handleLifecycleToggle}
+                disabled={toggling}
+                title={lifecycleEnabled ? 'Disable lifecycle management' : 'Enable lifecycle management'}
+              >
+                <i className={`fas ${lifecycleEnabled ? 'fa-pause' : 'fa-play'}`}></i>
+              </button>
+            )}
+          </>
+        )}
+        {!lifecycleAvailable && (
+          <span className="badge bg-dark">No Lifecycle</span>
+        )}
       </div>
       <div className="card-body p-2">
         <table className="table table-sm table-borderless mb-0">
