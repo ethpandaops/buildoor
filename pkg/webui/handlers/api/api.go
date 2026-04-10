@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
+	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -696,11 +697,17 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return current status
+	regState := "unknown"
+	if h.epbsSvc != nil {
+		regState = epbs.RegistrationStateName(h.epbsSvc.GetRegistrationState())
+	}
+
 	status := ServiceStatusEvent{
-		EPBSAvailable:       h.epbsSvc != nil,
-		EPBSEnabled:         h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
-		BuilderAPIAvailable: h.builderAPISvc != nil,
-		BuilderAPIEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+		EPBSAvailable:         h.epbsSvc != nil,
+		EPBSEnabled:           h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
+		EPBSRegistrationState: regState,
+		BuilderAPIAvailable:   h.builderAPISvc != nil,
+		BuilderAPIEnabled:     h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
 	}
 	writeJSON(w, http.StatusOK, status)
 }
