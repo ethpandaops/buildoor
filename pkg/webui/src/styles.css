@@ -504,6 +504,10 @@
 .event-reveal { border-left: 3px solid #6f42c1; }
 .event-bid-seen { border-left: 3px solid var(--bs-secondary); }
 .event-envelope { border-left: 3px solid #20c997; }
+.event-lifecycle { border-left: 3px solid #0dcaf0; }
+.event-lifecycle-success { border-left: 3px solid #198754; }
+.event-lifecycle-warning { border-left: 3px solid #ffc107; }
+.event-lifecycle-error { border-left: 3px solid #dc3545; }
 
 /* Stats - compact horizontal layout */
 .stat-item {

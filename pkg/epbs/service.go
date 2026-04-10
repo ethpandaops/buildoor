@@ -19,10 +19,13 @@ import (
 
 // Registration state constants for the ePBS service.
 const (
-	RegistrationStateUnknown      int32 = 0 // Not checked yet
-	RegistrationStatePending      int32 = 1 // Deposit submitted, waiting for inclusion
-	RegistrationStateRegistered   int32 = 2 // Builder registered, has valid index
-	RegistrationStateWaitingGloas int32 = 3 // Waiting for Gloas fork activation
+	RegistrationStateUnknown             int32 = 0 // Not checked yet
+	RegistrationStatePending             int32 = 1 // Deposit submitted, waiting for inclusion in beacon state
+	RegistrationStateRegistered          int32 = 2 // Builder registered and deposit epoch finalized
+	RegistrationStateWaitingGloas        int32 = 3 // Waiting for Gloas fork activation
+	RegistrationStatePendingFinalization int32 = 4 // Builder in beacon state but deposit epoch not finalized
+	RegistrationStateExiting             int32 = 5 // Exit submitted, withdrawable epoch set but not reached
+	RegistrationStateExited              int32 = 6 // Withdrawable epoch passed, builder has exited
 )
 
 // RegistrationStateName returns the string name for a registration state.
@@ -36,6 +39,12 @@ func RegistrationStateName(state int32) string {
 		return "registered"
 	case RegistrationStateWaitingGloas:
 		return "waiting_gloas"
+	case RegistrationStatePendingFinalization:
+		return "pending_finalization"
+	case RegistrationStateExiting:
+		return "exiting"
+	case RegistrationStateExited:
+		return "exited"
 	default:
 		return "unknown"
 	}
@@ -140,7 +149,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		return fmt.Errorf("builder service not initialized (missing chainspec or genesis)")
 	}
 
-	// Load builder index from chain service
+	// Load builder index from chain service and determine initial registration state
 	if !s.chainSvc.HasBuildersLoaded() {
 		s.log.Info("No builders in beacon state (pre-Gloas), waiting for registration")
 		s.builderIndex = 0
@@ -151,11 +160,12 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.registrationState.Store(RegistrationStatePending)
 	} else {
 		s.builderIndex = builderInfo.Index
-		s.registrationState.Store(RegistrationStateRegistered)
+		s.registrationState.Store(s.computeRegistrationState(builderInfo))
 		s.log.WithFields(logrus.Fields{
 			"builder_index":  s.builderIndex,
 			"builder_pubkey": fmt.Sprintf("%x", s.builderPubkey[:8]),
-		}).Info("Builder registered")
+			"state":          RegistrationStateName(s.registrationState.Load()),
+		}).Info("Builder found in beacon state")
 	}
 
 	// Initialize components
@@ -237,10 +247,12 @@ func (s *Service) run() {
 	payloadChan := s.payloadSubscription.Channel()
 	headSub := s.clClient.Events().SubscribeHead()
 	bidSub := s.clClient.Events().SubscribeBids()
+	epochSub := s.chainSvc.SubscribeEpochStats()
 	ticker := time.NewTicker(10 * time.Millisecond)
 
 	defer headSub.Unsubscribe()
 	defer bidSub.Unsubscribe()
+	defer epochSub.Unsubscribe()
 	defer ticker.Stop()
 
 	for {
@@ -256,6 +268,11 @@ func (s *Service) run() {
 
 		case event := <-bidSub.Channel():
 			s.handleBidEvent(event)
+
+		case _, ok := <-epochSub.Channel():
+			if ok {
+				s.RefreshRegistrationState()
+			}
 
 		case <-ticker.C:
 			if s.enabled.Load() && s.IsRegistered() {
@@ -349,12 +366,19 @@ func (s *Service) GetRegistrationState() int32 {
 	return s.registrationState.Load()
 }
 
-// IsRegistered returns whether the builder is registered (has a valid index).
+// IsRegistered returns whether the builder has a valid index and its deposit is finalized.
 func (s *Service) IsRegistered() bool {
 	return s.registrationState.Load() == RegistrationStateRegistered
 }
 
-// SetBuilderRegistered updates the builder index and marks registration as complete.
+// IsActive returns whether the builder can actively participate (registered or pending finalization).
+func (s *Service) IsActive() bool {
+	state := s.registrationState.Load()
+	return state == RegistrationStateRegistered || state == RegistrationStatePendingFinalization
+}
+
+// SetBuilderRegistered updates the builder index when the lifecycle manager detects registration.
+// It sets the appropriate state based on finalization status.
 // Called by the lifecycle manager's registration callback.
 func (s *Service) SetBuilderRegistered(index uint64) {
 	s.builderIndex = index
@@ -371,9 +395,70 @@ func (s *Service) SetBuilderRegistered(index uint64) {
 		s.bidTracker.SetBuilderIndex(index)
 	}
 
-	s.registrationState.Store(RegistrationStateRegistered)
+	// Determine the correct state based on finalization
+	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	if info != nil {
+		s.registrationState.Store(s.computeRegistrationState(info))
+	} else {
+		s.registrationState.Store(RegistrationStatePendingFinalization)
+	}
 
-	s.log.WithField("builder_index", index).Info("Builder registration confirmed, ePBS bidding enabled")
+	s.log.WithFields(logrus.Fields{
+		"builder_index": index,
+		"state":         RegistrationStateName(s.registrationState.Load()),
+	}).Info("Builder registration detected, updating state")
+}
+
+// computeRegistrationState determines the registration state from beacon chain builder info.
+func (s *Service) computeRegistrationState(info *chain.BuilderInfo) int32 {
+	if info.WithdrawableEpoch != chain.FarFutureEpoch {
+		// Exit has been initiated
+		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+		if info.WithdrawableEpoch <= uint64(finalizedEpoch) {
+			return RegistrationStateExited
+		}
+
+		return RegistrationStateExiting
+	}
+
+	// Check if deposit epoch is finalized
+	finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+	if info.DepositEpoch < uint64(finalizedEpoch) {
+		return RegistrationStateRegistered
+	}
+
+	return RegistrationStatePendingFinalization
+}
+
+// RefreshRegistrationState re-evaluates the registration state from the chain service.
+// Called periodically to detect state transitions (e.g. finalization, exit).
+func (s *Service) RefreshRegistrationState() {
+	currentState := s.registrationState.Load()
+
+	// States that don't need refresh
+	if currentState == RegistrationStateWaitingGloas || currentState == RegistrationStateUnknown {
+		return
+	}
+
+	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	if info == nil {
+		// Builder not in state (yet or removed)
+		if currentState != RegistrationStatePending {
+			s.registrationState.Store(RegistrationStatePending)
+			s.log.Info("Builder no longer found in beacon state")
+		}
+
+		return
+	}
+
+	newState := s.computeRegistrationState(info)
+	if newState != currentState {
+		s.registrationState.Store(newState)
+		s.log.WithFields(logrus.Fields{
+			"old_state": RegistrationStateName(currentState),
+			"new_state": RegistrationStateName(newState),
+		}).Info("Builder registration state changed")
+	}
 }
 
 // GetBidTracker returns the bid tracker.

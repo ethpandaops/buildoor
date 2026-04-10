@@ -306,6 +306,16 @@ export function useEventStream(): UseEventStreamResult {
           addEvent('bid_won', `Bid won for slot ${data.slot} (${data.num_transactions} txs, ${parseFloat(data.value_eth).toFixed(6)} ETH)`, event.timestamp);
           break;
         }
+
+        case 'lifecycle': {
+          const data = event.data as { action: string; message: string; status: string };
+          const eventType = data.status === 'error' ? 'lifecycle_error'
+            : data.status === 'warning' ? 'lifecycle_warning'
+            : data.status === 'success' ? 'lifecycle_success'
+            : 'lifecycle';
+          addEvent(eventType, data.message, event.timestamp);
+          break;
+        }
       }
     };
 

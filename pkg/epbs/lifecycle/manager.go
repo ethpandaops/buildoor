@@ -19,6 +19,13 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
+// LifecycleEvent represents a lifecycle action for UI logging.
+type LifecycleEvent struct {
+	Action  string // "deposit", "topup", "exit", "state_change", "waiting_gloas", "balance_topup"
+	Message string // Human-readable description
+	Status  string // "info", "success", "warning", "error"
+}
+
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
 	cfg          *builder.Config
@@ -37,6 +44,7 @@ type Manager struct {
 
 	registrationCallback func(index uint64)
 	registrationDone     atomic.Bool
+	eventCallback        func(*LifecycleEvent)
 }
 
 // NewManager creates a new lifecycle manager.
@@ -78,6 +86,22 @@ func NewManager(
 // SetRegistrationCallback sets the callback invoked when builder registration completes.
 func (m *Manager) SetRegistrationCallback(cb func(index uint64)) {
 	m.registrationCallback = cb
+}
+
+// SetEventCallback sets the callback invoked when lifecycle events occur (for UI logging).
+func (m *Manager) SetEventCallback(cb func(*LifecycleEvent)) {
+	m.eventCallback = cb
+}
+
+// fireEvent sends a lifecycle event to the UI if a callback is registered.
+func (m *Manager) fireEvent(action, message, status string) {
+	if m.eventCallback != nil {
+		m.eventCallback(&LifecycleEvent{
+			Action:  action,
+			Message: message,
+			Status:  status,
+		})
+	}
 }
 
 // Start starts the lifecycle manager with async registration and balance monitoring.
@@ -132,16 +156,22 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 			"balance":       state.Balance,
 		}).Info("Builder already registered")
 
+		m.fireEvent("state_change", fmt.Sprintf("Builder already registered (index: %d, balance: %d gwei)", state.Index, state.Balance), "info")
 		m.onRegistered(state.Index)
 
 		return nil
 	}
 
 	m.log.Info("Builder not registered, creating deposit")
+	m.fireEvent("deposit", fmt.Sprintf("Builder not registered, submitting deposit (%d gwei)", m.cfg.DepositAmount), "info")
 
 	if err := m.depositSvc.CreateDeposit(ctx, m.cfg.DepositAmount); err != nil {
+		m.fireEvent("deposit", fmt.Sprintf("Deposit failed: %v", err), "error")
+
 		return fmt.Errorf("failed to create deposit: %w", err)
 	}
+
+	m.fireEvent("deposit", "Deposit transaction confirmed, waiting for beacon chain inclusion", "success")
 
 	// Wait for registration
 	return m.WaitForRegistration(ctx, 5*time.Minute)
@@ -166,7 +196,17 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 		return fmt.Errorf("builder not registered")
 	}
 
-	return m.exitSvc.CreateVoluntaryExit(ctx, builderIndex)
+	m.fireEvent("exit", fmt.Sprintf("Submitting voluntary exit for builder index %d", builderIndex), "info")
+
+	if err := m.exitSvc.CreateVoluntaryExit(ctx, builderIndex); err != nil {
+		m.fireEvent("exit", fmt.Sprintf("Exit failed: %v", err), "error")
+
+		return err
+	}
+
+	m.fireEvent("exit", fmt.Sprintf("Voluntary exit submitted for builder index %d", builderIndex), "success")
+
+	return nil
 }
 
 // WaitForRegistration waits for the builder to be registered.
@@ -208,6 +248,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 				m.stateMu.Unlock()
 
 				m.log.WithField("builder_index", info.Index).Info("Builder registered")
+				m.fireEvent("state_change", fmt.Sprintf("Builder registered on beacon chain (index: %d, deposit epoch: %d)", info.Index, info.DepositEpoch), "success")
 				m.onRegistered(info.Index)
 
 				return nil
@@ -237,12 +278,14 @@ func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 	// Step 1: Wait for Gloas fork activation if not yet active
 	if !m.chainSvc.IsGloas() {
 		m.log.Info("Waiting for Gloas fork activation before builder registration")
+		m.fireEvent("waiting_gloas", "Waiting for Gloas fork activation before builder registration", "info")
 
 		if !m.waitForGloas(ctx) {
 			return // stopped or context cancelled
 		}
 
 		m.log.Info("Gloas fork activated, proceeding with registration")
+		m.fireEvent("state_change", "Gloas fork activated, proceeding with builder registration", "success")
 	}
 
 	// Step 2: Ensure builder is registered (with retries)
@@ -294,6 +337,7 @@ func (m *Manager) ensureRegisteredWithRetry(ctx context.Context) {
 		}
 
 		m.log.WithError(err).Warn("Builder registration attempt failed, retrying in 30s")
+		m.fireEvent("deposit", fmt.Sprintf("Registration attempt failed: %v, retrying in 30s", err), "warning")
 
 		select {
 		case <-ctx.Done():
@@ -305,7 +349,7 @@ func (m *Manager) ensureRegisteredWithRetry(ctx context.Context) {
 	}
 }
 
-// runBalanceMonitor periodically checks and tops up balance.
+// runBalanceMonitor periodically refreshes builder state and tops up balance.
 func (m *Manager) runBalanceMonitor(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -317,13 +361,51 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
+			// Refresh builder state from chain service
+			m.refreshBuilderState()
+
 			if m.balanceSvc == nil {
 				continue
 			}
 
-			if err := m.balanceSvc.CheckAndTopup(ctx); err != nil {
-				m.log.WithError(err).Warn("Balance check/topup failed")
+			needsTopup, amount, err := m.balanceSvc.NeedsTopup(ctx)
+			if err != nil {
+				m.log.WithError(err).Warn("Balance check failed")
+
+				continue
+			}
+
+			if needsTopup {
+				m.fireEvent("balance_topup", fmt.Sprintf("Balance below threshold, topping up %d gwei", amount), "info")
+
+				if err := m.balanceSvc.CheckAndTopup(ctx); err != nil {
+					m.log.WithError(err).Warn("Balance topup failed")
+					m.fireEvent("balance_topup", fmt.Sprintf("Balance topup failed: %v", err), "error")
+				} else {
+					m.fireEvent("balance_topup", fmt.Sprintf("Balance topped up by %d gwei", amount), "success")
+				}
 			}
 		}
 	}
+}
+
+// refreshBuilderState updates the cached builder state from the chain service.
+func (m *Manager) refreshBuilderState() {
+	pubkey := m.signer.PublicKey()
+	info := m.chainSvc.GetBuilderByPubkey(pubkey)
+
+	if info == nil {
+		return
+	}
+
+	m.stateMu.Lock()
+	m.builderState = &builder.BuilderState{
+		Pubkey:            pubkey[:],
+		Index:             info.Index,
+		IsRegistered:      true,
+		Balance:           info.Balance,
+		DepositEpoch:      info.DepositEpoch,
+		WithdrawableEpoch: info.WithdrawableEpoch,
+	}
+	m.stateMu.Unlock()
 }

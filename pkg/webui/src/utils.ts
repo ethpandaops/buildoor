@@ -41,7 +41,11 @@ export function getEventTypeClass(type: string): string {
     'head_received': 'event-head',
     'reveal': 'event-reveal',
     'bid_event': 'event-bid-seen',
-    'payload_available': 'event-envelope'
+    'payload_available': 'event-envelope',
+    'lifecycle': 'event-lifecycle',
+    'lifecycle_success': 'event-lifecycle-success',
+    'lifecycle_warning': 'event-lifecycle-warning',
+    'lifecycle_error': 'event-lifecycle-error'
   };
   return classes[type] || '';
 }

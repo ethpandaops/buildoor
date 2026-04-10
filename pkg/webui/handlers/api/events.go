@@ -41,6 +41,7 @@ const (
 	EventTypeBuilderAPISubmitBlindedRcvd EventType = "builder_api_submit_blinded_received"
 	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
+	EventTypeLifecycle                   EventType = "lifecycle"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -168,6 +169,13 @@ type ServiceStatusEvent struct {
 	BuilderAPIEnabled     bool   `json:"builder_api_enabled"`
 }
 
+// LifecycleStreamEvent is sent when a lifecycle action occurs (deposit, topup, exit, state change).
+type LifecycleStreamEvent struct {
+	Action  string `json:"action"`  // "deposit", "topup", "exit", "state_change", "waiting_gloas", "balance_topup"
+	Message string `json:"message"` // Human-readable description
+	Status  string `json:"status"`  // "info", "success", "warning", "error"
+}
+
 // BuilderAPIGetHeaderReceivedEvent is sent when a getHeader request is received.
 type BuilderAPIGetHeaderReceivedEvent struct {
 	Slot       uint64 `json:"slot"`
@@ -267,6 +275,13 @@ func (m *EventStreamManager) Start() {
 		bidSubmitSub := m.epbsSvc.SubscribeBidSubmissions(16)
 		bidSubmitChan = bidSubmitSub.Channel()
 		defer bidSubmitSub.Unsubscribe()
+	}
+
+	// Wire lifecycle event callback (if lifecycle manager available)
+	if m.lifecycleMgr != nil {
+		m.lifecycleMgr.SetEventCallback(func(event *lifecycle.LifecycleEvent) {
+			m.BroadcastLifecycle(event.Action, event.Message, event.Status)
+		})
 	}
 
 	// Subscribe to head vote updates (if chain service available)
@@ -721,6 +736,7 @@ func (m *EventStreamManager) sendServiceStatus() {
 
 	m.lastServiceStatusMu.Lock()
 	changed := status != m.lastServiceStatus
+	prevRegState := m.lastServiceStatus.EPBSRegistrationState
 	if changed {
 		m.lastServiceStatus = status
 	}
@@ -735,6 +751,43 @@ func (m *EventStreamManager) sendServiceStatus() {
 		Timestamp: time.Now().UnixMilli(),
 		Data:      status,
 	})
+
+	// Emit lifecycle log event when registration state changes
+	if prevRegState != "" && prevRegState != status.EPBSRegistrationState {
+		m.emitRegistrationStateChange(prevRegState, status.EPBSRegistrationState)
+	}
+}
+
+// emitRegistrationStateChange emits a lifecycle event when the ePBS registration state transitions.
+func (m *EventStreamManager) emitRegistrationStateChange(from, to string) {
+	var message string
+	var logStatus string
+
+	switch to {
+	case "pending":
+		message = "Builder deposit submitted, waiting for beacon chain inclusion"
+		logStatus = "info"
+	case "pending_finalization":
+		message = "Builder deposit included in beacon state, waiting for finalization"
+		logStatus = "info"
+	case "registered":
+		message = "Builder deposit finalized, builder is now active"
+		logStatus = "success"
+	case "exiting":
+		message = "Builder exit initiated, waiting for withdrawable epoch"
+		logStatus = "warning"
+	case "exited":
+		message = "Builder has exited"
+		logStatus = "warning"
+	case "waiting_gloas":
+		message = "Waiting for Gloas fork activation"
+		logStatus = "info"
+	default:
+		message = fmt.Sprintf("Registration state changed: %s -> %s", from, to)
+		logStatus = "info"
+	}
+
+	m.BroadcastLifecycle("state_change", message, logStatus)
 }
 
 // BroadcastServiceStatus broadcasts the current service status.
@@ -1030,6 +1083,19 @@ func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numT
 			ValueETH:        valueETH,
 			ValueWei:        valueWei,
 			Timestamp:       now,
+		},
+	})
+}
+
+// BroadcastLifecycle broadcasts a lifecycle event (deposit, exit, state change, etc.).
+func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLifecycle,
+		Timestamp: time.Now().UnixMilli(),
+		Data: LifecycleStreamEvent{
+			Action:  action,
+			Message: message,
+			Status:  status,
 		},
 	})
 }

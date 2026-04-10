@@ -59,15 +59,25 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             <tr>
               <td className="text-muted">Index:</td>
               <td className="text-end">
-                {builderInfo.is_registered ? (
-                  <span className="badge bg-success">{builderInfo.builder_index}</span>
-                ) : serviceStatus?.epbs_registration_state === 'waiting_gloas' ? (
-                  <span className="badge bg-info">Awaiting Gloas</span>
-                ) : serviceStatus?.epbs_registration_state === 'pending' ? (
-                  <span className="badge bg-warning text-dark">Registering...</span>
-                ) : (
-                  <span className="badge bg-warning text-dark">Not Registered</span>
-                )}
+                {(() => {
+                  const state = serviceStatus?.epbs_registration_state;
+                  switch (state) {
+                    case 'registered':
+                      return <span className="badge bg-success">{builderInfo.builder_index}</span>;
+                    case 'pending_finalization':
+                      return <span className="badge bg-info">#{builderInfo.builder_index} (Pending Finalization)</span>;
+                    case 'exiting':
+                      return <span className="badge bg-warning text-dark">#{builderInfo.builder_index} (Exiting)</span>;
+                    case 'exited':
+                      return <span className="badge bg-secondary">#{builderInfo.builder_index} (Exited)</span>;
+                    case 'waiting_gloas':
+                      return <span className="badge bg-info">Awaiting Gloas</span>;
+                    case 'pending':
+                      return <span className="badge bg-warning text-dark">Registering...</span>;
+                    default:
+                      return <span className="badge bg-warning text-dark">Not Registered</span>;
+                  }
+                })()}
               </td>
             </tr>
 
@@ -143,8 +153,8 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </tr>
             )}
 
-            {/* Epoch Info */}
-            {builderInfo.is_registered && (
+            {/* Epoch Info - show when builder has an index in beacon state */}
+            {builderInfo.builder_index > 0 && (
               <>
                 <tr>
                   <td colSpan={2}><hr className="my-1" /></td>
@@ -155,8 +165,8 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                 </tr>
                 {builderInfo.withdrawable_epoch > 0 && builderInfo.withdrawable_epoch < 18446744073709551615 && (
                   <tr>
-                    <td className="text-muted small">Withdrawable:</td>
-                    <td className="text-end small">Epoch {builderInfo.withdrawable_epoch}</td>
+                    <td className="text-muted small text-warning">Withdrawable:</td>
+                    <td className="text-end small text-warning">Epoch {builderInfo.withdrawable_epoch}</td>
                   </tr>
                 )}
               </>
