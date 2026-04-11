@@ -392,8 +392,8 @@ func (c *Client) RequestPayloadBuild(
 	}
 
 	c.log.WithFields(logrus.Fields{
-		"head_block_hash": headBlockHash.Hex(),
-		"safe_block_hash": safeBlockHash.Hex(),
+		"head_block_hash":      headBlockHash.Hex(),
+		"safe_block_hash":      safeBlockHash.Hex(),
 		"finalized_block_hash": finalizedBlockHash.Hex(),
 	}).Info("Forkchoice state being sent to forkchoiceUpdated")
 
@@ -427,10 +427,10 @@ func (c *Client) RequestPayloadBuild(
 
 	// log the payload attributes being sent
 	c.log.WithFields(logrus.Fields{
-		"timestamp": attrs.Timestamp,
-		"prev_randao": attrs.PrevRandao.Hex(),
-		"suggested_fee_recipient": attrs.SuggestedFeeRecipient.Hex(),
-		"withdrawals": len(attrs.Withdrawals),
+		"timestamp":                attrs.Timestamp,
+		"prev_randao":              attrs.PrevRandao.Hex(),
+		"suggested_fee_recipient":  attrs.SuggestedFeeRecipient.Hex(),
+		"withdrawals":              len(attrs.Withdrawals),
 		"parent_beacon_block_root": attrs.ParentBeaconBlockRoot.Hex(),
 	}).Info("Payload attributes being sent to forkchoiceUpdated")
 
@@ -444,9 +444,9 @@ func (c *Client) RequestPayloadBuild(
 	}
 
 	c.log.WithFields(logrus.Fields{
-		"status": response.PayloadStatus.Status,
+		"status":            response.PayloadStatus.Status,
 		"latest_valid_hash": response.PayloadStatus.LatestValidHash,
-		"validation_error": response.PayloadStatus.ValidationError,
+		"validation_error":  response.PayloadStatus.ValidationError,
 	}).Info("ForkchoiceUpdateResponse returned")
 
 	if response.PayloadID == nil {

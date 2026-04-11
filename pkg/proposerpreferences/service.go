@@ -69,7 +69,10 @@ func (s *Service) GetCache() *Cache {
 }
 
 // processEvents reads SSE proposer preference events and caches them.
-func (s *Service) processEvents(ctx context.Context, sub interface{ Channel() <-chan *gloas.SignedProposerPreferences; Unsubscribe() }) {
+func (s *Service) processEvents(ctx context.Context, sub interface {
+	Channel() <-chan *gloas.SignedProposerPreferences
+	Unsubscribe()
+}) {
 	defer s.wg.Done()
 	defer sub.Unsubscribe()
 

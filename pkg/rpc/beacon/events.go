@@ -133,7 +133,7 @@ type attestationEventJSON struct {
 // proposerPreferencesEventJSON is used for JSON unmarshaling of proposer_preferences events.
 // Prysm wraps the SignedProposerPreferences in a versioned envelope.
 type proposerPreferencesEventJSON struct {
-	Version string                         `json:"version"`
+	Version string                           `json:"version"`
 	Data    *gloas.SignedProposerPreferences `json:"data"`
 }
 
@@ -164,17 +164,17 @@ type bidEventJSON struct {
 
 // EventStream manages SSE connections to the beacon node event stream.
 type EventStream struct {
-	client                          *Client
-	headDispatcher                  *utils.Dispatcher[*HeadEvent]
-	bidDispatcher                   *utils.Dispatcher[*BidEvent]
-	payloadDispatcher               *utils.Dispatcher[*PayloadAvailableEvent]
-	payloadAttributesDispatcher     *utils.Dispatcher[*PayloadAttributesEvent]
-	attestationDispatcher           *utils.Dispatcher[*AttestationEvent]
-	proposerPreferencesDispatcher   *utils.Dispatcher[*gloas.SignedProposerPreferences]
-	cancelFunc                      context.CancelFunc
-	running                         bool
-	mu                              sync.Mutex
-	wg                              sync.WaitGroup
+	client                        *Client
+	headDispatcher                *utils.Dispatcher[*HeadEvent]
+	bidDispatcher                 *utils.Dispatcher[*BidEvent]
+	payloadDispatcher             *utils.Dispatcher[*PayloadAvailableEvent]
+	payloadAttributesDispatcher   *utils.Dispatcher[*PayloadAttributesEvent]
+	attestationDispatcher         *utils.Dispatcher[*AttestationEvent]
+	proposerPreferencesDispatcher *utils.Dispatcher[*gloas.SignedProposerPreferences]
+	cancelFunc                    context.CancelFunc
+	running                       bool
+	mu                            sync.Mutex
+	wg                            sync.WaitGroup
 
 	// Per-slot cache of latest payload_attributes events.
 	// Multiple events may arrive for the same slot (e.g. reorgs, updated attributes);

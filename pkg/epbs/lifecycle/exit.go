@@ -102,4 +102,3 @@ func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.Signe
 		Signature: signature,
 	}, nil
 }
-
