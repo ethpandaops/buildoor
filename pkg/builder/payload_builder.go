@@ -26,7 +26,7 @@ type PayloadBuilder struct {
 	clClient                *beacon.Client
 	engineClient            *engine.Client
 	feeRecipient            common.Address
-	useProposerFeeRecipient bool
+
 	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
 	validatorIndexCache     *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
 	propPrefCache           *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
@@ -56,23 +56,21 @@ func NewPayloadBuilder(
 	feeRecipient common.Address,
 	payloadBuildTime uint64,
 	log logrus.FieldLogger,
-	useProposerFeeRecipient bool,
 	validatorStore *validators.Store,
 	validatorIndexCache *chain.ValidatorIndexCache,
 	propPrefCache *proposerpreferences.Cache,
 	isGloas func() bool,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
-		clClient:                clClient,
-		engineClient:            engineClient,
-		feeRecipient:            feeRecipient,
-		useProposerFeeRecipient: useProposerFeeRecipient,
-		validatorStore:          validatorStore,
-		validatorIndexCache:     validatorIndexCache,
-		propPrefCache:           propPrefCache,
-		isGloas:                 isGloas,
-		payloadBuildTime:        payloadBuildTime,
-		log:                     log.WithField("component", "payload-builder"),
+		clClient:            clClient,
+		engineClient:        engineClient,
+		feeRecipient:        feeRecipient,
+		validatorStore:      validatorStore,
+		validatorIndexCache: validatorIndexCache,
+		propPrefCache:       propPrefCache,
+		isGloas:             isGloas,
+		payloadBuildTime:    payloadBuildTime,
+		log:                 log.WithField("component", "payload-builder"),
 	}
 }
 
@@ -128,16 +126,16 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	//             Fall back to SuggestedFeeRecipient from payload_attributes (always available from BN).
 	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
 	// Fallback:   use the builder's configured fee recipient.
-	feeRecipientForBuild := b.feeRecipient
+	proposerFeeRecipient := b.feeRecipient
 
 	if b.isGloas != nil && b.isGloas() {
 		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
-				feeRecipientForBuild = common.Address(prefs.Message.FeeRecipient)
+				proposerFeeRecipient = common.Address(prefs.Message.FeeRecipient)
 				b.log.WithFields(logrus.Fields{
 					"proposer_index": attrs.ProposerIndex,
-					"fee_recipient":  feeRecipientForBuild.Hex(),
+					"fee_recipient":  proposerFeeRecipient.Hex(),
 					"gas_limit":      prefs.Message.GasLimit,
 				}).Debug("Using fee recipient and gas limit from proposer preferences")
 			}
@@ -146,12 +144,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
 		// This ensures bids match the proposer's expected fee recipient even when preferences
 		// aren't received via SSE (e.g. same-node P2P broadcast doesn't loop back).
-		if feeRecipientForBuild == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
-			feeRecipientForBuild = attrs.SuggestedFeeRecipient
+		if proposerFeeRecipient == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
+			proposerFeeRecipient = attrs.SuggestedFeeRecipient
 			b.log.WithFields(logrus.Fields{
 				"slot":           attrs.ProposalSlot,
 				"proposer_index": attrs.ProposerIndex,
-				"fee_recipient":  feeRecipientForBuild.Hex(),
+				"fee_recipient":  proposerFeeRecipient.Hex(),
 			}).Debug("Using suggested fee recipient from payload_attributes")
 		}
 	} else if b.validatorStore != nil {
@@ -168,11 +166,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		if ok {
 			reg := b.validatorStore.Get(pubkey)
 			if reg != nil && reg.Message != nil {
-				feeRecipientForBuild = common.Address(reg.Message.FeeRecipient)
+				proposerFeeRecipient = common.Address(reg.Message.FeeRecipient)
 				b.log.WithFields(logrus.Fields{
 					"proposer_index": attrs.ProposerIndex,
 					"pubkey":         fmt.Sprintf("%x", pubkey[:8]),
-					"fee_recipient":  feeRecipientForBuild.Hex(),
+					"fee_recipient":  proposerFeeRecipient.Hex(),
 				}).Debug("Using fee recipient from validator registration")
 			}
 		}
@@ -194,7 +192,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		&engine.PayloadAttributes{
 			Timestamp:             attrs.Timestamp,
 			PrevRandao:            common.BytesToHash(attrs.PrevRandao[:]),
-			SuggestedFeeRecipient: feeRecipientForBuild,
+			SuggestedFeeRecipient: b.feeRecipient,
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
 		},
@@ -263,7 +261,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		Timestamp:         attrs.Timestamp,
 		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
-		FeeRecipient:      feeRecipientForBuild,
+		FeeRecipient:      proposerFeeRecipient,
 		BlockValue:        blockValueGwei,
 		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),

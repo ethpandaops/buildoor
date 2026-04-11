@@ -106,14 +106,12 @@ func (s *Service) Start(ctx context.Context) error {
 	s.slotManager = NewSlotManager(s.cfg)
 
 	// Create payload builder
-	useProposerFeeRecipient := s.cfg.BuilderAPI.UseProposerFeeRecipient
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
 		s.feeRecipient,
 		s.cfg.PayloadBuildTime,
 		s.log,
-		useProposerFeeRecipient,
 		s.validatorStore,
 		s.validatorIndexCache,
 		s.propPrefCache,

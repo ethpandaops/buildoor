@@ -92,16 +92,6 @@ export const BuilderAPIStatus: React.FC<BuilderAPIStatusProps> = ({ status, load
             {/* Configuration */}
             {status.enabled && (
               <>
-                <tr>
-                  <td className="text-muted small">Use Proposer Fee Recipient:</td>
-                  <td className="text-end small">
-                    {status.use_proposer_fee_recipient ? (
-                      <span className="badge bg-success">Yes</span>
-                    ) : (
-                      <span className="badge bg-secondary">No</span>
-                    )}
-                  </td>
-                </tr>
                 {status.block_value_subsidy_gwei > 0 && (
                   <tr>
                     <td className="text-muted small">Block Value Subsidy:</td>

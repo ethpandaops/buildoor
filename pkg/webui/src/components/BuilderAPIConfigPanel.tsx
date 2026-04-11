@@ -19,7 +19,6 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
   const [saving, setSaving] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [formData, setFormData] = useState({
-    use_proposer_fee_recipient: false,
     block_value_subsidy_gwei: 0
   });
   const { getAuthHeader, isLoggedIn } = useAuth();
@@ -30,7 +29,6 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
   const startEditing = () => {
     if (status) {
       setFormData({
-        use_proposer_fee_recipient: status.use_proposer_fee_recipient,
         block_value_subsidy_gwei: status.block_value_subsidy_gwei
       });
     }
@@ -159,18 +157,6 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                   <div className="row g-2">
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Proposer Fee Recipient</div>
-                        <div className="config-item-value">
-                          {status.use_proposer_fee_recipient ? (
-                            <span className="badge bg-success">Yes</span>
-                          ) : (
-                            <span className="badge bg-secondary">No</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="col-6">
-                      <div className="config-item">
                         <div className="config-item-label">Block Value Subsidy</div>
                         <div className="config-item-value">{formatGwei(status.block_value_subsidy_gwei)}</div>
                       </div>
@@ -180,20 +166,6 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
               ) : (
                 <>
                   <div className="section-header mb-1">Configuration</div>
-                  <div className="mb-2">
-                    <div className="form-check">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="useProposerFeeRecipient"
-                        checked={formData.use_proposer_fee_recipient}
-                        onChange={(e) => setFormData({ ...formData, use_proposer_fee_recipient: e.target.checked })}
-                      />
-                      <label className="form-check-label" htmlFor="useProposerFeeRecipient">
-                        Use Proposer Fee Recipient
-                      </label>
-                    </div>
-                  </div>
                   <div className="mb-2">
                     <label className="form-label">Block Value Subsidy (Gwei)</label>
                     <input
