@@ -42,6 +42,7 @@ const (
 	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeLifecycle                   EventType = "lifecycle"
+	EventTypeBidIncluded                 EventType = "bid_included"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -75,6 +76,7 @@ type BidSubmittedEvent struct {
 	Timestamp int64  `json:"timestamp"`
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // HeadReceivedEvent is sent when a head event is received.
@@ -135,7 +137,6 @@ type BuilderInfoEvent struct {
 	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
 	WalletAddress     string `json:"wallet_address,omitempty"`
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
-	PendingDeposit    uint64 `json:"pending_deposit_gwei,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
 }
@@ -279,6 +280,22 @@ func (m *EventStreamManager) Start() {
 		defer bidSubmitSub.Unsubscribe()
 	}
 
+	// Subscribe to reveal events from ePBS service (if available)
+	var revealChan <-chan *epbs.RevealEvent
+	if m.epbsSvc != nil {
+		revealSub := m.epbsSvc.SubscribeReveals(16)
+		revealChan = revealSub.Channel()
+		defer revealSub.Unsubscribe()
+	}
+
+	// Subscribe to bid included events from ePBS service (if available)
+	var bidIncludedChan <-chan *epbs.BidIncludedEvent
+	if m.epbsSvc != nil {
+		bidIncludedSub := m.epbsSvc.SubscribeBidIncluded(16)
+		bidIncludedChan = bidIncludedSub.Channel()
+		defer bidIncludedSub.Unsubscribe()
+	}
+
 	// Wire lifecycle event callback (if lifecycle manager available)
 	if m.lifecycleMgr != nil {
 		m.lifecycleMgr.SetEventCallback(func(event *lifecycle.LifecycleEvent) {
@@ -336,6 +353,24 @@ func (m *EventStreamManager) Start() {
 			case event, ok := <-headVoteChan:
 				if ok {
 					m.handleHeadVoteUpdate(event)
+				}
+
+			case event, ok := <-revealChan:
+				if ok {
+					m.BroadcastReveal(uint64(event.Slot), event.Success, event.Skipped)
+				}
+
+			case event, ok := <-bidIncludedChan:
+				if ok {
+					m.Broadcast(&StreamEvent{
+						Type:      EventTypeBidIncluded,
+						Timestamp: time.Now().UnixMilli(),
+						Data: map[string]any{
+							"slot":       uint64(event.Slot),
+							"block_hash": fmt.Sprintf("0x%x", event.BlockHash[:]),
+							"bid_value":  event.BidValue,
+						},
+					})
 				}
 
 			case <-ticker.C:
@@ -461,6 +496,7 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *epbs.BidSubmissionE
 			Timestamp: time.Now().UnixMilli(),
 			Success:   event.Success,
 			Error:     event.Error,
+			Warning:   event.Warning,
 		},
 	})
 
@@ -697,13 +733,22 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		}
 	}
 
-	// Get pending deposit and wallet info from lifecycle manager (only when lifecycle is enabled)
+	// Apply balance adjustment from bid tracker (topups add, revealed bids subtract)
+	if m.epbsSvc != nil {
+		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
+			adjustment := tracker.GetBalanceAdjustment()
+			adjusted := int64(info.CLBalance) + adjustment
+			if adjusted < 0 {
+				adjusted = 0
+			}
+
+			info.CLBalance = uint64(adjusted)
+		}
+	}
+
+	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
 	if m.lifecycleMgr != nil {
 		info.LifecycleEnabled = true
-		info.PendingDeposit = m.lifecycleMgr.GetPendingDeposit()
-
-		// Pending deposits increase the live balance immediately (no delay)
-		info.CLBalance += info.PendingDeposit
 
 		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
 			info.WalletAddress = wallet.Address().Hex()
@@ -714,7 +759,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		}
 	}
 
-	// Calculate effective balance (live balance minus delayed pending payments)
+	// Calculate effective balance (live balance minus unrevealed pending payments)
 	if info.CLBalance > info.PendingPayments {
 		info.EffectiveBalance = info.CLBalance - info.PendingPayments
 	}

@@ -53,23 +53,35 @@ func (s *BalanceService) GetCurrentBalance(ctx context.Context) (uint64, error) 
 	return state.Balance, nil
 }
 
-// GetEffectiveBalance returns the balance minus pending payments.
+// GetEffectiveBalance returns the live balance (chain state + adjustments) minus pending payments.
+// This is the true usable balance for determining whether a topup is needed.
 func (s *BalanceService) GetEffectiveBalance(ctx context.Context) (uint64, error) {
 	currentBalance, err := s.GetCurrentBalance(ctx)
 	if err != nil {
 		return 0, err
 	}
 
-	var pendingPayments uint64
-	if s.bidTracker != nil {
-		pendingPayments = s.bidTracker.GetTotalPendingPayments()
+	if s.bidTracker == nil {
+		return currentBalance, nil
 	}
 
-	if pendingPayments >= currentBalance {
+	// Apply local adjustments (topups add, revealed bids subtract)
+	adjustment := s.bidTracker.GetBalanceAdjustment()
+	liveBalance := int64(currentBalance) + adjustment
+
+	if liveBalance < 0 {
+		liveBalance = 0
+	}
+
+	// Subtract unrevealed pending payments
+	pending := s.bidTracker.GetTotalPendingPayments()
+	effective := uint64(liveBalance)
+
+	if pending >= effective {
 		return 0, nil
 	}
 
-	return currentBalance - pendingPayments, nil
+	return effective - pending, nil
 }
 
 // NeedsTopup checks if a top-up is needed and returns the required amount.

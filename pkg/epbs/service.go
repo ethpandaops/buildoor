@@ -60,7 +60,22 @@ type BidSubmissionEvent struct {
 	Value     uint64
 	BidCount  int
 	Success   bool
+	Warning   string // Non-fatal warning (e.g. "no proposer preferences")
 	Error     string
+}
+
+// RevealEvent represents a payload reveal (success or failure).
+type RevealEvent struct {
+	Slot    phase0.Slot
+	Success bool
+	Skipped bool
+}
+
+// BidIncludedEvent is fired when the beacon block includes our bid.
+type BidIncludedEvent struct {
+	Slot      phase0.Slot
+	BlockHash phase0.Hash32
+	BidValue  uint64
 }
 
 // Service is the main ePBS orchestrator that handles time-scheduled bidding and revealing.
@@ -79,6 +94,8 @@ type Service struct {
 	builderPubkey         phase0.BLSPubKey
 	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
+	revealDispatch        *utils.Dispatcher[*RevealEvent]
+	bidIncludedDispatch   *utils.Dispatcher[*BidIncludedEvent]
 	builderSvc            *builder.Service
 	enabled               atomic.Bool
 	registrationState     atomic.Int32
@@ -109,6 +126,8 @@ func NewService(
 		builderPubkey:         blsSigner.PublicKey(),
 		payloadStore:          NewPayloadStore(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
+		revealDispatch:        &utils.Dispatcher[*RevealEvent]{},
+		bidIncludedDispatch:   &utils.Dispatcher[*BidIncludedEvent]{},
 		log:                   serviceLog,
 	}
 
@@ -136,6 +155,21 @@ func (s *Service) SubscribeBidSubmissions(capacity int) *utils.Subscription[*Bid
 // FireBidSubmission fires a bid submission event.
 func (s *Service) FireBidSubmission(event *BidSubmissionEvent) {
 	s.bidSubmissionDispatch.Fire(event)
+}
+
+// SubscribeReveals subscribes to reveal events.
+func (s *Service) SubscribeReveals(capacity int) *utils.Subscription[*RevealEvent] {
+	return s.revealDispatch.Subscribe(capacity, false)
+}
+
+// FireReveal fires a reveal event.
+func (s *Service) FireReveal(event *RevealEvent) {
+	s.revealDispatch.Fire(event)
+}
+
+// SubscribeBidIncluded subscribes to bid included events.
+func (s *Service) SubscribeBidIncluded(capacity int) *utils.Subscription[*BidIncludedEvent] {
+	return s.bidIncludedDispatch.Subscribe(capacity, false)
 }
 
 // Start starts the ePBS service.
@@ -199,6 +233,16 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		return info.DepositEpoch < uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
 	}
 
+	// hasProposerPreferences checks whether we have cached preferences for a slot.
+	// Without them the BN's gossip validator will silently reject the bid.
+	hasProposerPreferences := func(slot phase0.Slot) bool {
+		cache := builderSvc.GetProposerPreferencesCache()
+		if cache == nil {
+			return false
+		}
+		return cache.Has(slot)
+	}
+
 	s.scheduler = NewScheduler(
 		s.cfg,
 		chainSpec,
@@ -210,6 +254,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		builderSvc.GetPayloadCache(),
 		s,
 		isBuilderActive,
+		hasProposerPreferences,
 		s.log,
 	)
 
@@ -373,6 +418,13 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 	if s.bidTracker != nil && payload.BidValue > 0 {
 		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
 	}
+
+	// Notify UI
+	s.bidIncludedDispatch.Fire(&BidIncludedEvent{
+		Slot:      payload.Slot,
+		BlockHash: blockInfo.ExecutionBlockHash,
+		BidValue:  payload.BidValue,
+	})
 }
 
 // GetRegistrationState returns the current registration state.

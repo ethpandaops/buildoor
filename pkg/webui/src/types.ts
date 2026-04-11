@@ -23,6 +23,9 @@ export interface StreamEvent {
 export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
+  deposit_amount: number;
+  topup_threshold: number;
+  topup_amount: number;
 }
 
 export interface ScheduleConfig {
@@ -82,7 +85,6 @@ export interface BuilderInfo {
   lifecycle_enabled: boolean;
   wallet_address?: string;
   wallet_balance_wei?: string;
-  pending_deposit_gwei?: number;
   deposit_epoch: number;
   withdrawable_epoch: number;
 }

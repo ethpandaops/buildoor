@@ -155,6 +155,18 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
+		// Apply slot-relative timing defaults now that we know the slot duration
+		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
+		cfg.ApplySlotDefaults(slotTimeMs)
+
+		logger.WithFields(logrus.Fields{
+			"slot_time_ms":       slotTimeMs,
+			"build_start_time":   cfg.EPBS.BuildStartTime,
+			"payload_build_time": cfg.PayloadBuildTime,
+			"bid_start_time":     cfg.EPBS.BidStartTime,
+			"bid_end_time":       cfg.EPBS.BidEndTime,
+		}).Info("Timing defaults applied")
+
 		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)

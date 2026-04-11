@@ -10,21 +10,27 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
-// PendingPayment records a payment obligation from a won bid.
+// PendingPayment records an unrevealed won bid that may be deducted later.
 type PendingPayment struct {
-	Slot     phase0.Slot
-	Epoch    phase0.Epoch
-	Value    uint64 // Gwei
-	Revealed bool   // True if we revealed the payload (immediate deduction from live balance)
+	Slot  phase0.Slot
+	Epoch phase0.Epoch
+	Value uint64 // Gwei
 }
 
-// BidTracker tracks bids for competition analysis and pending payment obligations.
+// BidTracker tracks bids for competition analysis and balance adjustments.
 type BidTracker struct {
 	slotBids      map[phase0.Slot]*SlotBids
 	ourBuilderIdx uint64
 	mu            sync.RWMutex
 
-	// Pending payments from won bids, keyed by slot for fast lookup.
+	// Balance adjustments since last chain state refresh.
+	// Positive = deposits/topups, negative = revealed bid payments.
+	// Reset to 0 when the chain state refreshes (epoch boundary).
+	balanceAdjustment int64
+	adjustmentMu      sync.Mutex
+
+	// Pending payments: unrevealed won bids, pending for 2 epochs.
+	// Only these count as "pending" in the UI and for topup checks.
 	pendingPayments map[phase0.Slot]*PendingPayment
 	pendingMu       sync.Mutex
 
@@ -105,9 +111,10 @@ func (t *BidTracker) GetOurBid(slot phase0.Slot) *TrackedBid {
 	return slotBids.OurBid
 }
 
-// RecordWonBid records a pending payment from a won bid.
-// Called when our payload is included in a beacon block.
-// The payment remains pending (delayed) until MarkRevealed is called or it expires after 2 epochs.
+// RecordWonBid records a won bid as a pending payment (unrevealed).
+// Called when our bid is included in a beacon block.
+// If we later reveal, call MarkRevealed to move it from pending to a balance deduction.
+// If we don't reveal, it stays pending for 2 epochs then expires.
 func (t *BidTracker) RecordWonBid(slot phase0.Slot, value uint64) {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
@@ -127,26 +134,58 @@ func (t *BidTracker) RecordWonBid(slot phase0.Slot, value uint64) {
 	}).Info("Recorded won bid as pending payment")
 }
 
-// MarkRevealed marks a won bid as revealed (immediate payment).
-// When revealed and confirmed by the next block, the payment is deducted
-// directly from the live balance. We remove it from pending since the
-// state refresh will reflect the deduction.
+// MarkRevealed moves a won bid from pending to an immediate balance deduction.
+// The payment is removed from pending and subtracted from the balance adjustment.
 func (t *BidTracker) MarkRevealed(slot phase0.Slot) {
 	t.pendingMu.Lock()
-	defer t.pendingMu.Unlock()
-
-	if p, ok := t.pendingPayments[slot]; ok {
-		p.Revealed = true
-
-		t.log.WithFields(logrus.Fields{
-			"slot":  slot,
-			"value": p.Value,
-		}).Info("Won bid marked as revealed (immediate payment)")
+	p, ok := t.pendingPayments[slot]
+	if !ok {
+		t.pendingMu.Unlock()
+		return
 	}
+
+	value := p.Value
+	delete(t.pendingPayments, slot)
+	t.pendingMu.Unlock()
+
+	// Deduct from live balance
+	t.adjustmentMu.Lock()
+	t.balanceAdjustment -= int64(value)
+	t.adjustmentMu.Unlock()
+
+	t.log.WithFields(logrus.Fields{
+		"slot":  slot,
+		"value": value,
+	}).Info("Revealed bid: deducted from live balance")
 }
 
-// GetTotalPendingPayments returns the sum of delayed (unrevealed) payment obligations.
-// Revealed payments are excluded since they are deducted directly from live balance.
+// AddDeposit adds a deposit/topup amount to the balance adjustment.
+// Topups take effect immediately (no finalization delay).
+func (t *BidTracker) AddDeposit(amount uint64) {
+	t.adjustmentMu.Lock()
+	t.balanceAdjustment += int64(amount)
+	t.adjustmentMu.Unlock()
+
+	t.log.WithField("amount", amount).Info("Deposit added to live balance")
+}
+
+// GetBalanceAdjustment returns the cumulative balance adjustment since last state refresh.
+func (t *BidTracker) GetBalanceAdjustment() int64 {
+	t.adjustmentMu.Lock()
+	defer t.adjustmentMu.Unlock()
+
+	return t.balanceAdjustment
+}
+
+// ResetBalanceAdjustment resets the adjustment to 0.
+// Called when the chain state refreshes and the balance is up to date.
+func (t *BidTracker) ResetBalanceAdjustment() {
+	t.adjustmentMu.Lock()
+	t.balanceAdjustment = 0
+	t.adjustmentMu.Unlock()
+}
+
+// GetTotalPendingPayments returns the sum of unrevealed won bid obligations.
 func (t *BidTracker) GetTotalPendingPayments() uint64 {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
@@ -154,29 +193,18 @@ func (t *BidTracker) GetTotalPendingPayments() uint64 {
 	var total uint64
 
 	for _, p := range t.pendingPayments {
-		if !p.Revealed {
-			total += p.Value
-		}
+		total += p.Value
 	}
 
 	return total
 }
 
 // PruneExpiredPayments removes pending payments older than 2 epochs.
-// Delayed payments are only relevant for the current and next epoch.
-// After that the beacon state reflects the actual deduction (or skip).
 func (t *BidTracker) PruneExpiredPayments(currentEpoch phase0.Epoch) {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
 
 	for slot, p := range t.pendingPayments {
-		// Revealed payments: remove immediately since state already reflects them
-		if p.Revealed {
-			delete(t.pendingPayments, slot)
-			continue
-		}
-
-		// Delayed payments: keep for current epoch and next epoch (2 epoch window)
 		if currentEpoch > p.Epoch+1 {
 			t.log.WithFields(logrus.Fields{
 				"slot":          slot,

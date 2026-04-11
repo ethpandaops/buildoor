@@ -28,20 +28,20 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg            *builder.Config
-	clClient       *beacon.Client
-	chainSvc       chain.Service
-	signer         *signer.BLSSigner
-	wallet         *wallet.Wallet
-	builderState   *builder.BuilderState
-	pendingDeposit uint64 // Gwei deposited since last state refresh (topups not yet in state)
-	stateMu        sync.RWMutex
-	depositSvc     *DepositService
-	balanceSvc     *BalanceService
-	exitSvc        *ExitService
-	log            logrus.FieldLogger
-	stopCh         chan struct{}
-	wg             sync.WaitGroup
+	cfg          *builder.Config
+	clClient     *beacon.Client
+	chainSvc     chain.Service
+	signer       *signer.BLSSigner
+	wallet       *wallet.Wallet
+	builderState *builder.BuilderState
+	stateMu      sync.RWMutex
+	depositSvc   *DepositService
+	balanceSvc   *BalanceService
+	bidTracker   *epbs.BidTracker
+	exitSvc      *ExitService
+	log          logrus.FieldLogger
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
 
 	registrationCallback   func(index uint64)
 	depositPendingCallback func()
@@ -154,14 +154,6 @@ func (m *Manager) GetBuilderState() *builder.BuilderState {
 // GetWallet returns the wallet instance.
 func (m *Manager) GetWallet() *wallet.Wallet {
 	return m.wallet
-}
-
-// GetPendingDeposit returns the amount deposited since the last state refresh.
-func (m *Manager) GetPendingDeposit() uint64 {
-	m.stateMu.RLock()
-	defer m.stateMu.RUnlock()
-
-	return m.pendingDeposit
 }
 
 // EnsureBuilderRegistered checks if builder is registered and deposits if needed.
@@ -287,9 +279,15 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 	}
 }
 
-// SetBidTracker sets the bid tracker for balance service.
+// SetBidTracker sets the bid tracker for balance service and stores it for direct access.
 func (m *Manager) SetBidTracker(tracker *epbs.BidTracker) {
+	m.bidTracker = tracker
 	m.balanceSvc = NewBalanceService(m.cfg, m.clClient, m.depositSvc, tracker, m.log)
+}
+
+// GetBidTracker returns the bid tracker.
+func (m *Manager) GetBidTracker() *epbs.BidTracker {
+	return m.bidTracker
 }
 
 // onRegistered marks registration as done and fires the callback.
@@ -447,10 +445,10 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 					m.log.WithError(err).Warn("Balance topup failed")
 					m.fireEvent("balance_topup", fmt.Sprintf("Balance topup failed: %v", err), "error")
 				} else {
-					// Track the pending deposit until the next state refresh includes it
-					m.stateMu.Lock()
-					m.pendingDeposit += amount
-					m.stateMu.Unlock()
+					// Immediately reflect the topup in the live balance (no finalization delay)
+					if tracker := m.GetBidTracker(); tracker != nil {
+						tracker.AddDeposit(amount)
+					}
 
 					m.fireEvent("balance_topup", fmt.Sprintf("Balance topped up by %d gwei", amount), "success")
 				}
@@ -477,7 +475,10 @@ func (m *Manager) refreshBuilderState() {
 		DepositEpoch:      info.DepositEpoch,
 		WithdrawableEpoch: info.WithdrawableEpoch,
 	}
-	// Reset pending deposit — the fresh state now includes any confirmed deposits
-	m.pendingDeposit = 0
 	m.stateMu.Unlock()
+
+	// Reset balance adjustment — fresh state includes deposits and deductions
+	if m.bidTracker != nil {
+		m.bidTracker.ResetBalanceAdjustment()
+	}
 }

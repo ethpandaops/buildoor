@@ -78,6 +78,12 @@ type UpdateBuilderAPIConfigRequest struct {
 	BlockValueSubsidyGwei   *uint64 `json:"block_value_subsidy_gwei,omitempty"`
 }
 
+// UpdateLifecycleConfigRequest is the request for updating lifecycle config.
+type UpdateLifecycleConfigRequest struct {
+	TopupThreshold *uint64 `json:"topup_threshold,omitempty"` // Gwei
+	TopupAmount    *uint64 `json:"topup_amount,omitempty"`    // Gwei
+}
+
 // LifecycleStatusResponse is the response for lifecycle status.
 type LifecycleStatusResponse struct {
 	IsRegistered      bool   `json:"is_registered"`
@@ -656,6 +662,42 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Broadcast config update to connected clients
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+// UpdateLifecycleConfig updates the lifecycle configuration (topup threshold/amount).
+func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateLifecycleConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.TopupThreshold != nil {
+		cfg.TopupThreshold = *req.TopupThreshold
+	}
+
+	if req.TopupAmount != nil {
+		cfg.TopupAmount = *req.TopupAmount
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	if h.eventStreamMgr != nil {
 		h.eventStreamMgr.BroadcastConfigUpdate()
 	}

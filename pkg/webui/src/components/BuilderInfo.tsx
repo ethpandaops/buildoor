@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useAuthContext } from '../context/AuthContext';
-import type { BuilderInfo as BuilderInfoType, ServiceStatus } from '../types';
+import type { BuilderInfo as BuilderInfoType, ServiceStatus, Config } from '../types';
 
 interface BuilderInfoProps {
   builderInfo: BuilderInfoType | null;
   serviceStatus: ServiceStatus | null;
+  config: Config | null;
 }
 
 // Format gwei to ETH with 4 decimals
@@ -47,12 +48,39 @@ const CopyableHash: React.FC<{ value: string; chars?: number }> = ({ value, char
   );
 };
 
-export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus }) => {
+export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus, config }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
   const [toggling, setToggling] = useState(false);
+  const [editingLifecycle, setEditingLifecycle] = useState(false);
+  const [lcThreshold, setLcThreshold] = useState('');
+  const [lcAmount, setLcAmount] = useState('');
 
   const lifecycleAvailable = serviceStatus?.lifecycle_available ?? false;
   const lifecycleEnabled = serviceStatus?.lifecycle_enabled ?? false;
+
+  const startEditingLifecycle = () => {
+    setLcThreshold(config ? String(config.topup_threshold / 1e9) : '');
+    setLcAmount(config ? String(config.topup_amount / 1e9) : '');
+    setEditingLifecycle(true);
+  };
+
+  const handleLifecycleSave = async () => {
+    const authToken = getAuthHeader();
+    if (!authToken) return;
+    try {
+      await fetch('/api/config/lifecycle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({
+          topup_threshold: Math.round(parseFloat(lcThreshold) * 1e9),
+          topup_amount: Math.round(parseFloat(lcAmount) * 1e9),
+        }),
+      });
+      setEditingLifecycle(false);
+    } catch (err) {
+      console.error('Failed to update lifecycle config:', err);
+    }
+  };
 
   const handleLifecycleToggle = async () => {
     const authToken = getAuthHeader();
@@ -211,16 +239,6 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </>
             )}
 
-            {/* Pending Deposit (if any) */}
-            {builderInfo.lifecycle_enabled && builderInfo.pending_deposit_gwei && builderInfo.pending_deposit_gwei > 0 && (
-              <tr>
-                <td className="text-muted">Pending Deposit:</td>
-                <td className="text-end text-info">
-                  +{formatGwei(builderInfo.pending_deposit_gwei)} ETH
-                </td>
-              </tr>
-            )}
-
             {/* Epoch Info - show when builder has an index in beacon state */}
             {builderInfo.builder_index > 0 && (
               <>
@@ -236,6 +254,72 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                     <td className="text-muted small text-warning">Withdrawable:</td>
                     <td className="text-end small text-warning">Epoch {builderInfo.withdrawable_epoch}</td>
                   </tr>
+                )}
+              </>
+            )}
+            {/* Lifecycle Config (if available) */}
+            {lifecycleAvailable && config && (
+              <>
+                <tr>
+                  <td colSpan={2}><hr className="my-1" /></td>
+                </tr>
+                {!editingLifecycle ? (
+                  <>
+                    <tr>
+                      <td className="text-muted small">Topup Threshold:</td>
+                      <td className="text-end small">
+                        {formatGwei(config.topup_threshold)} ETH
+                        {isLoggedIn && (
+                          <button
+                            className="btn btn-sm btn-outline-primary ms-1 py-0 px-1"
+                            style={{ fontSize: '10px', lineHeight: '14px' }}
+                            onClick={() => startEditingLifecycle()}
+                          >
+                            <i className="fas fa-pencil-alt"></i>
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small">Topup Amount:</td>
+                      <td className="text-end small">{formatGwei(config.topup_amount)} ETH</td>
+                    </tr>
+                  </>
+                ) : (
+                  <>
+                    <tr>
+                      <td className="text-muted small">Threshold (ETH):</td>
+                      <td className="text-end">
+                        <input
+                          type="number"
+                          step="0.1"
+                          className="form-control form-control-sm"
+                          style={{ fontSize: '11px' }}
+                          value={lcThreshold}
+                          onChange={(e) => setLcThreshold(e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small">Amount (ETH):</td>
+                      <td className="text-end">
+                        <input
+                          type="number"
+                          step="0.1"
+                          className="form-control form-control-sm"
+                          style={{ fontSize: '11px' }}
+                          value={lcAmount}
+                          onChange={(e) => setLcAmount(e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={2} className="text-end">
+                        <button className="btn btn-sm btn-primary me-1" onClick={handleLifecycleSave}>Save</button>
+                        <button className="btn btn-sm btn-secondary" onClick={() => setEditingLifecycle(false)}>Cancel</button>
+                      </td>
+                    </tr>
+                  </>
                 )}
               </>
             )}

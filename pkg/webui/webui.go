@@ -77,6 +77,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	apiRouter.HandleFunc("/lifecycle/deposit", apiHandler.PostDeposit).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/lifecycle/topup", apiHandler.PostTopup).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/lifecycle/exit", apiHandler.PostExit).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/config/lifecycle", apiHandler.UpdateLifecycleConfig).Methods(http.MethodPost)
 
 	// metrics endpoint
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")

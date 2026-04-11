@@ -113,10 +113,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
-
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
-	// TODO - bharath - the head block hash should be attrs.ParentBlockHash, i think there is an 
+	// TODO - bharath - the head block hash should be attrs.ParentBlockHash, i think there is an
 	// issue in the way I implemented payload attributes for prysm
 	headBlockHash := common.BytesToHash(finalityInfo.HeadExecutionBlockHash[:])
 	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
@@ -128,24 +127,34 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	// Get fee recipient for build.
 	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit from the proposer's signed preferences).
+	//             Fall back to SuggestedFeeRecipient from payload_attributes (always available from BN).
 	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
 	// Fallback:   use the builder's configured fee recipient.
 	feeRecipientForBuild := b.feeRecipient
 
-	if b.isGloas != nil && b.isGloas() && b.propPrefCache != nil {
-		// Gloas: look up proposer preferences by proposal slot.
-		if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
-			feeRecipientForBuild = common.Address(prefs.Message.FeeRecipient)
-			b.log.WithFields(logrus.Fields{
-				"proposer_index": attrs.ProposerIndex,
-				"fee_recipient":  feeRecipientForBuild.Hex(),
-				"gas_limit":      prefs.Message.GasLimit,
-			}).Debug("Using fee recipient and gas limit from proposer preferences")
-		} else {
+	if b.isGloas != nil && b.isGloas() {
+		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
+		if b.propPrefCache != nil {
+			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
+				feeRecipientForBuild = common.Address(prefs.Message.FeeRecipient)
+				b.log.WithFields(logrus.Fields{
+					"proposer_index": attrs.ProposerIndex,
+					"fee_recipient":  feeRecipientForBuild.Hex(),
+					"gas_limit":      prefs.Message.GasLimit,
+				}).Debug("Using fee recipient and gas limit from proposer preferences")
+			}
+		}
+
+		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
+		// This ensures bids match the proposer's expected fee recipient even when preferences
+		// aren't received via SSE (e.g. same-node P2P broadcast doesn't loop back).
+		if feeRecipientForBuild == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
+			feeRecipientForBuild = attrs.SuggestedFeeRecipient
 			b.log.WithFields(logrus.Fields{
 				"slot":           attrs.ProposalSlot,
 				"proposer_index": attrs.ProposerIndex,
-			}).Warn("No proposer preferences found for slot, using default fee recipient")
+				"fee_recipient":  feeRecipientForBuild.Hex(),
+			}).Debug("Using suggested fee recipient from payload_attributes")
 		}
 	} else if b.validatorStore != nil {
 		// Pre-Gloas: look up fee recipient from validator registrations.
@@ -230,7 +239,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	if err := json.Unmarshal(modifiedPayloadJSON, &modifiedPayload); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal modified payload: %w", err)
 	}
-	
+
 	payload := &modifiedPayload
 	payloadResult.ExecutionPayload = payload
 	var blockHash phase0.Hash32

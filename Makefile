@@ -54,6 +54,7 @@ devnet-run: devnet
 		--api-port 8082 \
 		--builder-api-port 9000 \
 		--lifecycle \
+		--epbs-enabled \
 		--log-level debug
 
 devnet-run-docker: devnet
