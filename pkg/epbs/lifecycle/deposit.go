@@ -15,9 +15,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
-// DepositContractAddress is the default builder deposit contract address.
-// This should be fetched from chain spec in production.
-var DepositContractAddress = common.HexToAddress("0x00000000219ab540356cbb839cbe05303d7705fa")
+// DefaultDepositContractAddress is the mainnet deposit contract address.
+// Overridden by the chain spec's DEPOSIT_CONTRACT_ADDRESS when available.
+var DefaultDepositContractAddress = common.HexToAddress("0x00000000219ab540356cbb839cbe05303d7705fa")
 
 // DepositService handles builder deposits and top-ups.
 type DepositService struct {
@@ -44,9 +44,15 @@ func NewDepositService(
 		return nil, fmt.Errorf("failed to sync wallet: %w", err)
 	}
 
-	// Initialize deposit contract
-	// TODO: Get actual deposit contract address from chain spec
-	contract, err := contracts.NewBuilderDepositContract(DepositContractAddress, w.GetRPCClient())
+	// Use deposit contract address from chain spec, fall back to mainnet default
+	depositAddr := DefaultDepositContractAddress
+	if spec := chainSvc.GetChainSpec(); spec != nil && spec.DepositContractAddress != nil {
+		depositAddr = *spec.DepositContractAddress
+	}
+
+	depositLog.WithField("deposit_contract", depositAddr.Hex()).Info("Using deposit contract")
+
+	contract, err := contracts.NewBuilderDepositContract(depositAddr, w.GetRPCClient())
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize deposit contract: %w", err)
 	}

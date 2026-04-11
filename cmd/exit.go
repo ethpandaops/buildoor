@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/attestantio/go-eth2-client/spec/gloas"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/spf13/cobra"
 
@@ -78,11 +79,12 @@ var exitCmd = &cobra.Command{
 			return fmt.Errorf("failed to get current epoch: %w", err)
 		}
 
-		// Get fork version
-		forkVersion, err := chainSvc.GetForkVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get fork version: %w", err)
+		// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
+		if chainSpec.CapellaForkVersion == nil {
+			return fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 		}
+
+		forkVersion := *chainSpec.CapellaForkVersion
 
 		logger.WithFields(map[string]any{
 			"builder_index": builderIndex,
@@ -90,10 +92,12 @@ var exitCmd = &cobra.Command{
 			"epoch":         currentEpoch,
 		}).Info("Creating voluntary exit")
 
+		builderIndexToUse := gloas.BuilderIndex(builderIndex | chain.BuilderIndexFlag)
+
 		// Sign voluntary exit
 		signature, err := blsSigner.SignVoluntaryExit(
 			currentEpoch,
-			phase0.ValidatorIndex(builderIndex),
+			phase0.ValidatorIndex(builderIndexToUse),
 			forkVersion,
 			genesis.GenesisValidatorsRoot,
 		)
@@ -105,7 +109,7 @@ var exitCmd = &cobra.Command{
 		exit := &phase0.SignedVoluntaryExit{
 			Message: &phase0.VoluntaryExit{
 				Epoch:          currentEpoch,
-				ValidatorIndex: phase0.ValidatorIndex(builderIndex),
+				ValidatorIndex: phase0.ValidatorIndex(builderIndexToUse),
 			},
 			Signature: signature,
 		}

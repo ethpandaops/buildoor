@@ -19,7 +19,7 @@ type ExecutionPayloadBidResponse struct {
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bid", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload/bid", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
 	if err != nil {
@@ -27,6 +27,7 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "gloas")
 
 	httpClient := &http.Client{}
 
@@ -80,16 +81,123 @@ func (c *Client) GetExecutionPayloadBidTemplate(
 	return response.Data, nil
 }
 
+// ConstructExecutionPayloadEnvelopeRequest is the request body for the construct endpoint.
+// Prysm expects a flat structure with beacon_block_root, execution_payload, and execution_requests.
+type ConstructExecutionPayloadEnvelopeRequest struct {
+	BeaconBlockRoot   string          `json:"beacon_block_root"`
+	ExecutionPayload  json.RawMessage `json:"execution_payload"`
+	ExecutionRequests json.RawMessage `json:"execution_requests"`
+}
+
+// ConstructExecutionPayloadEnvelopeResponse is the response from the construct endpoint.
+type ConstructExecutionPayloadEnvelopeResponse struct {
+	Version string          `json:"version"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// ConstructExecutionPayloadEnvelope calls POST /eth/v1/builder/execution_payload_envelope
+// to have the beacon node derive the state_root and return a complete ExecutionPayloadEnvelope.
+func (c *Client) ConstructExecutionPayloadEnvelope(
+	ctx context.Context,
+	beaconBlockRoot string,
+	executionPayload json.RawMessage,
+	executionRequests json.RawMessage,
+) (json.RawMessage, error) {
+	url := fmt.Sprintf("%s/eth/v1/builder/execution_payload_envelope", c.baseURL)
+
+	reqBody := ConstructExecutionPayloadEnvelopeRequest{
+		BeaconBlockRoot:   beaconBlockRoot,
+		ExecutionPayload:  executionPayload,
+		ExecutionRequests: executionRequests,
+	}
+
+	bodyJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal construct request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "gloas")
+
+	httpClient := &http.Client{}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to construct envelope: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to construct envelope: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var response ConstructExecutionPayloadEnvelopeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode construct response: %w", err)
+	}
+
+	return response.Data, nil
+}
+
+// publishEnvelopeRequest embeds the signed envelope JSON fields and adds optional
+// blobs + cell_proofs for data column broadcasting (Prysm's PublishExecutionPayloadEnvelopeRequest).
+type publishEnvelopeRequest struct {
+	Message    json.RawMessage `json:"message"`
+	Signature  json.RawMessage `json:"signature"`
+	Blobs      []string        `json:"blobs,omitempty"`
+	CellProofs []string        `json:"cell_proofs,omitempty"`
+}
+
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
-func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage) error {
+// When blobs and cell proofs are provided, they are included so the beacon node
+// can compute and broadcast data column sidecars alongside the envelope.
+func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, cellProofs [][]byte) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(envelope))
+	// Unmarshal the signed envelope to extract message and signature fields,
+	// then re-marshal with blobs/cell_proofs at the same level.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(envelope, &raw); err != nil {
+		return fmt.Errorf("failed to parse signed envelope: %w", err)
+	}
+
+	reqBody := publishEnvelopeRequest{
+		Message:   raw["message"],
+		Signature: raw["signature"],
+	}
+
+	if len(blobs) > 0 {
+		reqBody.Blobs = make([]string, len(blobs))
+		for i, b := range blobs {
+			reqBody.Blobs[i] = fmt.Sprintf("0x%x", b)
+		}
+	}
+
+	if len(cellProofs) > 0 {
+		reqBody.CellProofs = make([]string, len(cellProofs))
+		for i, p := range cellProofs {
+			reqBody.CellProofs[i] = fmt.Sprintf("0x%x", p)
+		}
+	}
+
+	bodyJSON, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal publish request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "gloas")
 
 	httpClient := &http.Client{}
 
@@ -234,7 +342,7 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 
 	exitJSON, err := json.Marshal(exit)
 	if err != nil {
-		return fmt.Errorf("failed to marshal exit: %w", err)
+		return fmt.Errorf("failed to marshal the exit: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(exitJSON))
@@ -257,6 +365,8 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 
 		return fmt.Errorf("failed to submit exit: status %d: %s", resp.StatusCode, string(body))
 	}
+
+	c.log.Info("Submitted exit!")
 
 	return nil
 }

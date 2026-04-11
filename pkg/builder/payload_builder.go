@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
@@ -25,8 +27,10 @@ type PayloadBuilder struct {
 	engineClient            *engine.Client
 	feeRecipient            common.Address
 	useProposerFeeRecipient bool
-	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations
+	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
 	validatorIndexCache     *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
+	propPrefCache           *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
+	isGloas                 func() bool                // returns true when on the Gloas fork
 	payloadBuildTime        uint64
 	log                     logrus.FieldLogger
 
@@ -43,8 +47,8 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
-// When validatorStore is set, fee recipient is taken from the proposer's validator registration (by resolving proposer index to pubkey).
-// If no registration is found, the build is skipped (checked before reaching this point).
+// When validatorStore is set (pre-Gloas), fee recipient is taken from the proposer's validator registration.
+// When propPrefCache is set and isGloas returns true, fee recipient and gas limit come from proposer preferences instead.
 // validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
@@ -55,6 +59,8 @@ func NewPayloadBuilder(
 	useProposerFeeRecipient bool,
 	validatorStore *validators.Store,
 	validatorIndexCache *chain.ValidatorIndexCache,
+	propPrefCache *proposerpreferences.Cache,
+	isGloas func() bool,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
 		clClient:                clClient,
@@ -63,6 +69,8 @@ func NewPayloadBuilder(
 		useProposerFeeRecipient: useProposerFeeRecipient,
 		validatorStore:          validatorStore,
 		validatorIndexCache:     validatorIndexCache,
+		propPrefCache:           propPrefCache,
+		isGloas:                 isGloas,
 		payloadBuildTime:        payloadBuildTime,
 		log:                     log.WithField("component", "payload-builder"),
 	}
@@ -107,7 +115,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	// Convert hashes for engine API
 	// parent_block_hash from payload_attributes is the execution layer parent
-	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
+	// TODO - bharath - the head block hash should be attrs.ParentBlockHash, i think there is an
+	// issue in the way I implemented payload attributes for prysm
+	headBlockHash := common.BytesToHash(finalityInfo.HeadExecutionBlockHash[:])
 	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
 	finalizedBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
 	parentBeaconRoot := common.BytesToHash(attrs.ParentBeaconBlockRoot[:])
@@ -115,11 +125,39 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Convert withdrawals from payload_attributes to engine format
 	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
 
-	// Get fee recipient for build
-	// When validatorStore is configured, use the proposer's registered fee recipient.
-	// Otherwise, use the configured fee recipient.
+	// Get fee recipient for build.
+	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit from the proposer's signed preferences).
+	//             Fall back to SuggestedFeeRecipient from payload_attributes (always available from BN).
+	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
+	// Fallback:   use the builder's configured fee recipient.
 	feeRecipientForBuild := b.feeRecipient
-	if b.validatorStore != nil {
+
+	if b.isGloas != nil && b.isGloas() {
+		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
+		if b.propPrefCache != nil {
+			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
+				feeRecipientForBuild = common.Address(prefs.Message.FeeRecipient)
+				b.log.WithFields(logrus.Fields{
+					"proposer_index": attrs.ProposerIndex,
+					"fee_recipient":  feeRecipientForBuild.Hex(),
+					"gas_limit":      prefs.Message.GasLimit,
+				}).Debug("Using fee recipient and gas limit from proposer preferences")
+			}
+		}
+
+		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
+		// This ensures bids match the proposer's expected fee recipient even when preferences
+		// aren't received via SSE (e.g. same-node P2P broadcast doesn't loop back).
+		if feeRecipientForBuild == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
+			feeRecipientForBuild = attrs.SuggestedFeeRecipient
+			b.log.WithFields(logrus.Fields{
+				"slot":           attrs.ProposalSlot,
+				"proposer_index": attrs.ProposerIndex,
+				"fee_recipient":  feeRecipientForBuild.Hex(),
+			}).Debug("Using suggested fee recipient from payload_attributes")
+		}
+	} else if b.validatorStore != nil {
+		// Pre-Gloas: look up fee recipient from validator registrations.
 		var pubkey phase0.BLSPubKey
 		var ok bool
 		if b.validatorIndexCache != nil {
@@ -209,7 +247,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	var blockValueGwei uint64
 	if payloadResult.BlockValue != nil {
-		blockValueGwei = payloadResult.BlockValue.Uint64()
+		// BlockValue from engine API is in wei; convert to gwei for bid values.
+		gweiValue := new(big.Int).Div(payloadResult.BlockValue, big.NewInt(1_000_000_000))
+		// bump up gweiValue by 0.5eth
+		gweiValue.Add(gweiValue, big.NewInt(500_000_000))
+		blockValueGwei = gweiValue.Uint64()
 	}
 
 	txCount := len(payload.Transactions)
@@ -217,7 +259,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   attrs.ParentBlockHash,
+		ParentBlockHash:   finalityInfo.HeadExecutionBlockHash,
 		BlockHash:         blockHash,
 		Payload:           payload,
 		BlobsBundle:       payloadResult.BlobsBundle,
@@ -234,12 +276,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
-		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
 		"block_value":       blockValueGwei,
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,
-	}).Debug("Payload built from attributes")
+	}).Info("Payload built from attributes")
 
 	return event, nil
 }

@@ -17,6 +17,42 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
+// Registration state constants for the ePBS service.
+const (
+	RegistrationStateUnknown             int32 = 0 // Not checked yet
+	RegistrationStatePending             int32 = 1 // Deposit submitted, waiting for inclusion in beacon state
+	RegistrationStateRegistered          int32 = 2 // Builder registered and deposit epoch finalized
+	RegistrationStateWaitingGloas        int32 = 3 // Waiting for Gloas fork activation
+	RegistrationStatePendingFinalization int32 = 4 // Builder in beacon state but deposit epoch not finalized
+	RegistrationStateExiting             int32 = 5 // Exit submitted, withdrawable epoch set but not reached
+	RegistrationStateExited              int32 = 6 // Withdrawable epoch passed, builder has exited
+	RegistrationStateUnregistered        int32 = 7 // Builder not in beacon state and no deposit in progress
+)
+
+// RegistrationStateName returns the string name for a registration state.
+func RegistrationStateName(state int32) string {
+	switch state {
+	case RegistrationStateUnknown:
+		return "unknown"
+	case RegistrationStatePending:
+		return "pending"
+	case RegistrationStateRegistered:
+		return "registered"
+	case RegistrationStateWaitingGloas:
+		return "waiting_gloas"
+	case RegistrationStatePendingFinalization:
+		return "pending_finalization"
+	case RegistrationStateExiting:
+		return "exiting"
+	case RegistrationStateExited:
+		return "exited"
+	case RegistrationStateUnregistered:
+		return "unregistered"
+	default:
+		return "unknown"
+	}
+}
+
 // BidSubmissionEvent represents a bid submission attempt (success or failure).
 type BidSubmissionEvent struct {
 	Slot      phase0.Slot
@@ -24,7 +60,22 @@ type BidSubmissionEvent struct {
 	Value     uint64
 	BidCount  int
 	Success   bool
+	Warning   string // Non-fatal warning (e.g. "no proposer preferences")
 	Error     string
+}
+
+// RevealEvent represents a payload reveal (success or failure).
+type RevealEvent struct {
+	Slot    phase0.Slot
+	Success bool
+	Skipped bool
+}
+
+// BidIncludedEvent is fired when the beacon block includes our bid.
+type BidIncludedEvent struct {
+	Slot      phase0.Slot
+	BlockHash phase0.Hash32
+	BidValue  uint64
 }
 
 // Service is the main ePBS orchestrator that handles time-scheduled bidding and revealing.
@@ -43,12 +94,22 @@ type Service struct {
 	builderPubkey         phase0.BLSPubKey
 	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
+	revealDispatch        *utils.Dispatcher[*RevealEvent]
+	bidIncludedDispatch   *utils.Dispatcher[*BidIncludedEvent]
 	builderSvc            *builder.Service
-	enabled               atomic.Bool
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	log                   logrus.FieldLogger
-	wg                    sync.WaitGroup
+
+	// Track our last included bid to check if the follow-up block uses our payload
+	lastIncludedSlot      phase0.Slot
+	lastIncludedBlockHash phase0.Hash32
+	lastIncludedBidValue  uint64
+	lastIncludedMu        sync.Mutex
+
+	enabled           atomic.Bool
+	registrationState atomic.Int32
+	ctx               context.Context
+	cancel            context.CancelFunc
+	log               logrus.FieldLogger
+	wg                sync.WaitGroup
 }
 
 // NewService creates a new ePBS service.
@@ -72,6 +133,8 @@ func NewService(
 		builderPubkey:         blsSigner.PublicKey(),
 		payloadStore:          NewPayloadStore(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
+		revealDispatch:        &utils.Dispatcher[*RevealEvent]{},
+		bidIncludedDispatch:   &utils.Dispatcher[*BidIncludedEvent]{},
 		log:                   serviceLog,
 	}
 
@@ -101,6 +164,21 @@ func (s *Service) FireBidSubmission(event *BidSubmissionEvent) {
 	s.bidSubmissionDispatch.Fire(event)
 }
 
+// SubscribeReveals subscribes to reveal events.
+func (s *Service) SubscribeReveals(capacity int) *utils.Subscription[*RevealEvent] {
+	return s.revealDispatch.Subscribe(capacity, false)
+}
+
+// FireReveal fires a reveal event.
+func (s *Service) FireReveal(event *RevealEvent) {
+	s.revealDispatch.Fire(event)
+}
+
+// SubscribeBidIncluded subscribes to bid included events.
+func (s *Service) SubscribeBidIncluded(capacity int) *utils.Subscription[*BidIncludedEvent] {
+	return s.bidIncludedDispatch.Subscribe(capacity, false)
+}
+
 // Start starts the ePBS service.
 // It subscribes to the builder service's payload ready events.
 func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error {
@@ -115,27 +193,32 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		return fmt.Errorf("builder service not initialized (missing chainspec or genesis)")
 	}
 
-	// Load builder index from chain service
+	// Load builder index from chain service and determine initial registration state
 	if !s.chainSvc.HasBuildersLoaded() {
-		s.log.Warn("No builders in beacon state (pre-Gloas), using index 0 for testing")
+		s.log.Info("No builders in beacon state (pre-Gloas), waiting for registration")
 		s.builderIndex = 0
+		s.registrationState.Store(RegistrationStateWaitingGloas)
 	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(s.builderPubkey); builderInfo == nil {
-		s.log.Warn("Builder not found in beacon state (not registered), using index 0 for testing")
+		s.log.Info("Builder not found in beacon state")
 		s.builderIndex = 0
+		s.registrationState.Store(RegistrationStateUnregistered)
 	} else {
 		s.builderIndex = builderInfo.Index
+		s.registrationState.Store(s.computeRegistrationState(builderInfo))
 		s.log.WithFields(logrus.Fields{
 			"builder_index":  s.builderIndex,
 			"builder_pubkey": fmt.Sprintf("%x", s.builderPubkey[:8]),
-		}).Info("Builder registered")
+			"state":          RegistrationStateName(s.registrationState.Load()),
+		}).Info("Builder found in beacon state")
 	}
 
 	// Initialize components
-	s.bidTracker = NewBidTracker(s.builderIndex, s.log)
+	s.bidTracker = NewBidTracker(s.builderIndex, chainSpec, s.log)
 	s.bidCreator = NewBidCreator(
 		s.signer,
 		s.clClient,
 		genesis,
+		chainSpec,
 		s.builderIndex,
 		s.log,
 	)
@@ -143,9 +226,30 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.signer,
 		s.clClient,
 		genesis,
+		chainSpec,
 		s.builderIndex,
 		s.log,
 	)
+	// isBuilderActive checks that the builder's deposit is finalized and it hasn't exited.
+	isBuilderActive := func() bool {
+		info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+		if info == nil {
+			return false
+		}
+		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+		return info.DepositEpoch < uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
+	}
+
+	// hasProposerPreferences checks whether we have cached preferences for a slot.
+	// Without them the BN's gossip validator will silently reject the bid.
+	hasProposerPreferences := func(slot phase0.Slot) bool {
+		cache := builderSvc.GetProposerPreferencesCache()
+		if cache == nil {
+			return false
+		}
+		return cache.Has(slot)
+	}
+
 	s.scheduler = NewScheduler(
 		s.cfg,
 		chainSpec,
@@ -156,6 +260,8 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.payloadStore,
 		builderSvc.GetPayloadCache(),
 		s,
+		isBuilderActive,
+		hasProposerPreferences,
 		s.log,
 	)
 
@@ -196,10 +302,12 @@ func (s *Service) run() {
 	payloadChan := s.payloadSubscription.Channel()
 	headSub := s.clClient.Events().SubscribeHead()
 	bidSub := s.clClient.Events().SubscribeBids()
+	epochSub := s.chainSvc.SubscribeEpochStats()
 	ticker := time.NewTicker(10 * time.Millisecond)
 
 	defer headSub.Unsubscribe()
 	defer bidSub.Unsubscribe()
+	defer epochSub.Unsubscribe()
 	defer ticker.Stop()
 
 	for {
@@ -216,8 +324,18 @@ func (s *Service) run() {
 		case event := <-bidSub.Channel():
 			s.handleBidEvent(event)
 
+		case epochStats, ok := <-epochSub.Channel():
+			if ok {
+				s.RefreshRegistrationState()
+
+				// Prune expired pending payments now that a new epoch has started
+				if s.bidTracker != nil {
+					s.bidTracker.PruneExpiredPayments(epochStats.Epoch)
+				}
+			}
+
 		case <-ticker.C:
-			if s.enabled.Load() {
+			if s.enabled.Load() && s.IsRegistered() {
 				s.scheduler.ProcessTick(s.ctx)
 			}
 		}
@@ -245,8 +363,8 @@ func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	// Close bidding for this slot - block already produced
 	s.scheduler.OnHeadEvent(event, nil)
 
-	// Check if this block contains our payload (async to not block)
-	go s.checkForOurPayload(event)
+	// Check bid inclusion and payload follow-up (async to not block)
+	go s.processHeadBlock(event)
 }
 
 // handleBidEvent processes a bid event from the event stream.
@@ -275,32 +393,237 @@ func (s *Service) handleBidEvent(event *beacon.BidEvent) {
 	}).Debug("Bid event received")
 }
 
-// checkForOurPayload checks if the beacon block contains our execution payload.
-func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
+// processHeadBlock handles a new head block:
+//  1. Check if the previous slot had our bid included — if so, check if this block
+//     builds on our payload (confirmed) or not (orphaned → pending payment).
+//  2. Check if this block includes our bid for the current slot.
+func (s *Service) processHeadBlock(event *beacon.HeadEvent) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	// Fetch the beacon block by its root
+	// Fetch the beacon block
 	blockInfo, err := s.clClient.GetBlockInfo(ctx, fmt.Sprintf("0x%x", event.Block[:]))
 	if err != nil {
 		s.log.WithError(err).WithField("slot", event.Slot).Debug("Failed to get block info")
 		return
 	}
 
+	// Step 1: Check follow-up for our previously included bid.
+	// If our bid was included in the previous slot, the execution payload in this
+	// block should have prev_block_hash == our payload's block_hash if we revealed.
+	// If it doesn't match, our payload was orphaned (missed reveal or reorg).
+	s.checkFollowUpBlock(event, blockInfo)
+
+	// Step 2: Check if this block includes our bid.
+	s.checkForOurPayload(event, blockInfo)
+}
+
+// checkFollowUpBlock checks if the previous slot's included bid was confirmed or orphaned.
+func (s *Service) checkFollowUpBlock(event *beacon.HeadEvent, blockInfo *beacon.BlockInfo) {
+	s.lastIncludedMu.Lock()
+	prevSlot := s.lastIncludedSlot
+	prevHash := s.lastIncludedBlockHash
+	prevValue := s.lastIncludedBidValue
+	s.lastIncludedMu.Unlock()
+
+	if prevSlot == 0 || prevValue == 0 {
+		return
+	}
+
+	// Only check the immediate follow-up slot
+	if event.Slot <= prevSlot {
+		return
+	}
+
+	// Compare: does this block's execution parent match our payload?
+	// blockInfo.ExecutionBlockHash is the execution block hash of the envelope.
+	// We need to check if the envelope's parent_hash matches our payload.
+	// Since we can't easily get parent_hash from BlockInfo, we check if our
+	// payload store has a payload whose block_hash is referenced as the parent
+	// of the current execution payload. For now, use the payload_available event's
+	// block hash — if the execution payload for this slot was built on top of our
+	// payload, the parent hash would be our block hash.
+
+	// Clear the tracking regardless — we only check once
+	s.lastIncludedMu.Lock()
+	if s.lastIncludedSlot == prevSlot {
+		s.lastIncludedSlot = 0
+		s.lastIncludedBlockHash = phase0.Hash32{}
+		s.lastIncludedBidValue = 0
+	}
+	s.lastIncludedMu.Unlock()
+
+	// Check if the payload was revealed by looking at the scheduler state
+	slotState := s.scheduler.getSlotStateSafe(prevSlot)
+	if slotState != nil && slotState.Revealed {
+		// We revealed — the payment was already deducted from live balance via MarkRevealed.
+		s.log.WithFields(logrus.Fields{
+			"slot":       prevSlot,
+			"block_hash": fmt.Sprintf("%x", prevHash[:8]),
+		}).Debug("Previous bid was revealed, payment already deducted")
+
+		return
+	}
+
+	// We did NOT reveal — the payment stays as a pending payment for 2 epochs.
+	// RecordWonBid already added it. Nothing more to do — the pending payment
+	// will be settled by the beacon state's BuilderPendingPayments quorum logic.
+	s.log.WithFields(logrus.Fields{
+		"slot":       prevSlot,
+		"block_hash": fmt.Sprintf("%x", prevHash[:8]),
+		"value":      prevValue,
+	}).Warn("Previous bid was NOT revealed — payment pending for 2 epochs")
+}
+
+// checkForOurPayload checks if the beacon block contains our execution payload bid.
+func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.BlockInfo) {
 	// Check if this execution block hash matches any of our stored payloads
 	payload := s.payloadStore.GetByBlockHash(blockInfo.ExecutionBlockHash)
 	if payload == nil {
-		// Not our payload
 		return
 	}
 
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
+		"bid_value":  payload.BidValue,
 	}).Info("Our payload was included in a beacon block!")
 
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
+
+	// Record as pending payment (will be moved to balance deduction if revealed,
+	// or stay pending for 2 epochs if not revealed)
+	if s.bidTracker != nil && payload.BidValue > 0 {
+		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
+	}
+
+	// Track for follow-up block check
+	s.lastIncludedMu.Lock()
+	s.lastIncludedSlot = payload.Slot
+	s.lastIncludedBlockHash = blockInfo.ExecutionBlockHash
+	s.lastIncludedBidValue = payload.BidValue
+	s.lastIncludedMu.Unlock()
+
+	// Increment stats
+	if s.builderSvc != nil {
+		s.builderSvc.IncrementBlocksIncluded()
+	}
+
+	// Notify UI
+	s.bidIncludedDispatch.Fire(&BidIncludedEvent{
+		Slot:      payload.Slot,
+		BlockHash: blockInfo.ExecutionBlockHash,
+		BidValue:  payload.BidValue,
+	})
+}
+
+// GetRegistrationState returns the current registration state.
+func (s *Service) GetRegistrationState() int32 {
+	return s.registrationState.Load()
+}
+
+// IsRegistered returns whether the builder has a valid index and its deposit is finalized.
+func (s *Service) IsRegistered() bool {
+	return s.registrationState.Load() == RegistrationStateRegistered
+}
+
+// IsActive returns whether the builder can actively participate (registered or pending finalization).
+func (s *Service) IsActive() bool {
+	state := s.registrationState.Load()
+	return state == RegistrationStateRegistered || state == RegistrationStatePendingFinalization
+}
+
+// SetRegistrationPending marks the builder as having a deposit in flight.
+// Called by the lifecycle manager when a deposit is submitted.
+func (s *Service) SetRegistrationPending() {
+	s.registrationState.Store(RegistrationStatePending)
+	s.log.Info("Builder deposit submitted, waiting for beacon chain inclusion")
+}
+
+// SetBuilderRegistered updates the builder index when the lifecycle manager detects registration.
+// It sets the appropriate state based on finalization status.
+// Called by the lifecycle manager's registration callback.
+func (s *Service) SetBuilderRegistered(index uint64) {
+	s.builderIndex = index
+
+	if s.bidCreator != nil {
+		s.bidCreator.SetBuilderIndex(index)
+	}
+
+	if s.revealHandler != nil {
+		s.revealHandler.SetBuilderIndex(index)
+	}
+
+	if s.bidTracker != nil {
+		s.bidTracker.SetBuilderIndex(index)
+	}
+
+	// Determine the correct state based on finalization
+	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	if info != nil {
+		s.registrationState.Store(s.computeRegistrationState(info))
+	} else {
+		s.registrationState.Store(RegistrationStatePendingFinalization)
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"builder_index": index,
+		"state":         RegistrationStateName(s.registrationState.Load()),
+	}).Info("Builder registration detected, updating state")
+}
+
+// computeRegistrationState determines the registration state from beacon chain builder info.
+func (s *Service) computeRegistrationState(info *chain.BuilderInfo) int32 {
+	if info.WithdrawableEpoch != chain.FarFutureEpoch {
+		// Exit has been initiated
+		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+		if info.WithdrawableEpoch <= uint64(finalizedEpoch) {
+			return RegistrationStateExited
+		}
+
+		return RegistrationStateExiting
+	}
+
+	// Check if deposit epoch is finalized
+	finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
+	if info.DepositEpoch < uint64(finalizedEpoch) {
+		return RegistrationStateRegistered
+	}
+
+	return RegistrationStatePendingFinalization
+}
+
+// RefreshRegistrationState re-evaluates the registration state from the chain service.
+// Called periodically to detect state transitions (e.g. finalization, exit).
+func (s *Service) RefreshRegistrationState() {
+	currentState := s.registrationState.Load()
+
+	// States that don't need refresh
+	if currentState == RegistrationStateWaitingGloas || currentState == RegistrationStateUnknown {
+		return
+	}
+
+	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	if info == nil {
+		// Builder not in state — keep current state if pending (deposit submitted),
+		// otherwise mark as unregistered
+		if currentState != RegistrationStatePending && currentState != RegistrationStateUnregistered {
+			s.registrationState.Store(RegistrationStateUnregistered)
+			s.log.Info("Builder no longer found in beacon state")
+		}
+
+		return
+	}
+
+	newState := s.computeRegistrationState(info)
+	if newState != currentState {
+		s.registrationState.Store(newState)
+		s.log.WithFields(logrus.Fields{
+			"old_state": RegistrationStateName(currentState),
+			"new_state": RegistrationStateName(newState),
+		}).Info("Builder registration state changed")
+	}
 }
 
 // GetBidTracker returns the bid tracker.

@@ -28,8 +28,11 @@ func NewSigner(blsSigner *signer.BLSSigner) *Signer {
 }
 
 // SignExecutionPayloadBid signs an execution payload bid.
+// forkVersion must be the current fork version (e.g. Gloas fork version) to match
+// Prysm's verification which uses st.Fork().CurrentVersion.
 func (s *Signer) SignExecutionPayloadBid(
 	bid *gloas.ExecutionPayloadBid,
+	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
 	// Compute hash tree root of the bid
@@ -42,16 +45,16 @@ func (s *Signer) SignExecutionPayloadBid(
 
 	copy(root[:], bidRoot[:])
 
-	// Compute domain for execution payload bid signing
-	// Using current fork version (empty for now, should be fetched from chain)
-	domain := signer.ComputeDomain(DomainBeaconBuilder, phase0.Version{}, genesisValidatorsRoot)
+	domain := signer.ComputeDomain(DomainBeaconBuilder, forkVersion, genesisValidatorsRoot)
 
 	return s.blsSigner.SignWithDomain(root, domain)
 }
 
 // SignExecutionPayloadEnvelope signs an execution payload envelope.
+// forkVersion must be the current fork version to match Prysm's verification.
 func (s *Signer) SignExecutionPayloadEnvelope(
 	envelope *gloas.ExecutionPayloadEnvelope,
+	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
 	// Compute hash tree root of the envelope
@@ -64,8 +67,7 @@ func (s *Signer) SignExecutionPayloadEnvelope(
 
 	copy(root[:], envelopeRoot[:])
 
-	// Compute domain for execution payload envelope signing
-	domain := signer.ComputeDomain(DomainBeaconBuilder, phase0.Version{}, genesisValidatorsRoot)
+	domain := signer.ComputeDomain(DomainBeaconBuilder, forkVersion, genesisValidatorsRoot)
 
 	return s.blsSigner.SignWithDomain(root, domain)
 }

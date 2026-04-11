@@ -20,6 +20,7 @@ type BidCreator struct {
 	signer       *Signer
 	clClient     *beacon.Client
 	genesis      *beacon.Genesis
+	chainSpec    *beacon.ChainSpec
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -29,6 +30,7 @@ func NewBidCreator(
 	signer *Signer,
 	clClient *beacon.Client,
 	genesis *beacon.Genesis,
+	chainSpec *beacon.ChainSpec,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *BidCreator {
@@ -36,6 +38,7 @@ func NewBidCreator(
 		signer:       signer,
 		clClient:     clClient,
 		genesis:      genesis,
+		chainSpec:    chainSpec,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "bid-creator"),
 	}
@@ -63,9 +66,11 @@ func (c *BidCreator) CreateAndSubmitBid(
 		BuilderIndex:       gloas.BuilderIndex(c.builderIndex),
 		Slot:               payload.Slot,
 		Value:              phase0.Gwei(bidValue),
-		ExecutionPayment:   phase0.Gwei(bidValue), // Same as value for now
+		ExecutionPayment:   0, // Same as value for now
 		BlobKZGCommitments: []deneb.KZGCommitment{},
 	}
+
+	c.log.Info("Created execution payload bid")
 
 	if payload.BlobsBundle != nil {
 		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
@@ -74,14 +79,26 @@ func (c *BidCreator) CreateAndSubmitBid(
 		}
 	}
 
-	// Sign the bid using proper domain
+	c.log.Info("Populated bid with blobs")
+
+	c.log.Info("Signing bid before submitting")
+	// Sign the bid using proper domain.
+	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
+	var forkVersion phase0.Version
+	if c.chainSpec.GloasForkVersion != nil {
+		forkVersion = *c.chainSpec.GloasForkVersion
+	}
+
 	signature, err := c.signer.SignExecutionPayloadBid(
 		bid,
+		forkVersion,
 		c.genesis.GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to sign bid: %w", err)
 	}
+
+	c.log.Info("Signed bid successfully!")
 
 	// Create signed bid
 	signedBid := &gloas.SignedExecutionPayloadBid{
@@ -96,15 +113,17 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
-		"slot":          payload.Slot,
-		"value":         bidValue,
-		"block_hash":    fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"builder_index": c.builderIndex,
-		"fee_recipient": payload.FeeRecipient.Hex(),
-		"gas_limit":     payload.GasLimit,
+		"slot":              payload.Slot,
+		"value":             bidValue,
+		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"builder_index":     c.builderIndex,
+		"fee_recipient":     payload.FeeRecipient.Hex(),
+		"gas_limit":         payload.GasLimit,
+		"parent_block_hash": fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
+		"parent_block_root": fmt.Sprintf("%x", payload.ParentBlockRoot[:8]),
 	})
 
-	logger.Debug("Submitting bid")
+	logger.Info("Submitting bid")
 
 	// Submit bid
 	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {

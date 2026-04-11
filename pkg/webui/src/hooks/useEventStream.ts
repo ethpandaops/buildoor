@@ -161,12 +161,15 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'bid_submitted': {
-          const data = event.data as { slot: number; block_hash: string; value: number; bid_count: number; success: boolean; error?: string };
+          const data = event.data as { slot: number; block_hash: string; value: number; bid_count: number; success: boolean; error?: string; warning?: string };
           const bidSuccess = data.success !== false;
-          const bidMsg = bidSuccess
+          let bidMsg = bidSuccess
             ? `Bid #${data.bid_count} submitted for slot ${data.slot} (value: ${data.value} gwei)`
             : `Bid #${data.bid_count} FAILED for slot ${data.slot}: ${data.error || 'unknown error'}`;
-          addEvent(bidSuccess ? 'bid_submitted' : 'bid_failed', bidMsg, event.timestamp);
+          if (bidSuccess && data.warning) {
+            bidMsg += ` [${data.warning}]`;
+          }
+          addEvent(bidSuccess && !data.warning ? 'bid_submitted' : bidSuccess ? 'lifecycle_warning' : 'bid_failed', bidMsg, event.timestamp);
 
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };
@@ -213,7 +216,6 @@ export function useEventStream(): UseEventStreamResult {
           const data = event.data as { slot: number; builder_index: number; value: number; block_hash: string; is_ours: boolean; received_at: number };
           if (data.is_ours) {
             addEvent('bid_event', `Our bid seen on network for slot ${data.slot}`, event.timestamp);
-            updateSlotState(data.slot, { bidWon: true });
           } else {
             setSlotStates(prev => {
               const state = prev[data.slot] || { slot: data.slot };
@@ -304,6 +306,23 @@ export function useEventStream(): UseEventStreamResult {
           // No need to store in main state, just log it
           const data = event.data as { slot: number; block_hash: string; num_transactions: number; value_eth: string };
           addEvent('bid_won', `Bid won for slot ${data.slot} (${data.num_transactions} txs, ${parseFloat(data.value_eth).toFixed(6)} ETH)`, event.timestamp);
+          break;
+        }
+
+        case 'bid_included': {
+          const data = event.data as { slot: number; block_hash: string; bid_value: number };
+          addEvent('lifecycle_success', `Block won for slot ${data.slot}!`, event.timestamp);
+          updateSlotState(data.slot, { bidWon: true });
+          break;
+        }
+
+        case 'lifecycle': {
+          const data = event.data as { action: string; message: string; status: string };
+          const eventType = data.status === 'error' ? 'lifecycle_error'
+            : data.status === 'warning' ? 'lifecycle_warning'
+            : data.status === 'success' ? 'lifecycle_success'
+            : 'lifecycle';
+          addEvent(eventType, data.message, event.timestamp);
           break;
         }
       }

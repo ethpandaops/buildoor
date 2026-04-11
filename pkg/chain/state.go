@@ -11,8 +11,6 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 )
 
-const farFutureEpoch = uint64(0xFFFFFFFFFFFFFFFF)
-
 // fetchEpochStats fetches the beacon state and computes epoch statistics.
 func (s *service) fetchEpochStats(
 	ctx context.Context,
@@ -46,10 +44,11 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 
 	// Extract common data based on state version
 	var (
-		validators        []*phase0.Validator
-		randaoMixes       []phase0.Root
-		proposerLookahead []phase0.ValidatorIndex
-		isGloas           bool
+		validators          []*phase0.Validator
+		randaoMixes         []phase0.Root
+		proposerLookahead   []phase0.ValidatorIndex
+		finalizedCheckpoint *phase0.Checkpoint
+		isGloas             bool
 	)
 
 	switch state.Version {
@@ -61,6 +60,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Phase0.Slot
 		validators = state.Phase0.Validators
 		randaoMixes = state.Phase0.RANDAOMixes
+		finalizedCheckpoint = state.Phase0.FinalizedCheckpoint
 
 	case spec.DataVersionAltair:
 		if state.Altair == nil {
@@ -70,6 +70,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Altair.Slot
 		validators = state.Altair.Validators
 		randaoMixes = state.Altair.RANDAOMixes
+		finalizedCheckpoint = state.Altair.FinalizedCheckpoint
 
 	case spec.DataVersionBellatrix:
 		if state.Bellatrix == nil {
@@ -79,6 +80,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Bellatrix.Slot
 		validators = state.Bellatrix.Validators
 		randaoMixes = state.Bellatrix.RANDAOMixes
+		finalizedCheckpoint = state.Bellatrix.FinalizedCheckpoint
 
 	case spec.DataVersionCapella:
 		if state.Capella == nil {
@@ -88,6 +90,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Capella.Slot
 		validators = state.Capella.Validators
 		randaoMixes = state.Capella.RANDAOMixes
+		finalizedCheckpoint = state.Capella.FinalizedCheckpoint
 
 	case spec.DataVersionDeneb:
 		if state.Deneb == nil {
@@ -97,6 +100,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Deneb.Slot
 		validators = state.Deneb.Validators
 		randaoMixes = state.Deneb.RANDAOMixes
+		finalizedCheckpoint = state.Deneb.FinalizedCheckpoint
 
 	case spec.DataVersionElectra:
 		if state.Electra == nil {
@@ -106,6 +110,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		stats.StateSlot = state.Electra.Slot
 		validators = state.Electra.Validators
 		randaoMixes = state.Electra.RANDAOMixes
+		finalizedCheckpoint = state.Electra.FinalizedCheckpoint
 
 	case spec.DataVersionFulu:
 		if state.Fulu == nil {
@@ -116,6 +121,7 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		validators = state.Fulu.Validators
 		randaoMixes = state.Fulu.RANDAOMixes
 		proposerLookahead = state.Fulu.ProposerLookahead
+		finalizedCheckpoint = state.Fulu.FinalizedCheckpoint
 
 	case spec.DataVersionGloas:
 		if state.Gloas == nil {
@@ -126,14 +132,22 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		validators = state.Gloas.Validators
 		randaoMixes = state.Gloas.RANDAOMixes
 		proposerLookahead = state.Gloas.ProposerLookahead
+		finalizedCheckpoint = state.Gloas.FinalizedCheckpoint
 		isGloas = true
 		stats.IsGloas = true
 
 		stats.Builders = extractBuilders(state.Gloas.Builders)
 		stats.BuildersLoaded = true
 
+		// Sum pending payments per builder from state
+		applyPendingPayments(stats.Builders, state.Gloas.BuilderPendingPayments)
+
 	default:
 		return nil, fmt.Errorf("unsupported state version: %s", state.Version)
+	}
+
+	if finalizedCheckpoint != nil {
+		stats.FinalizedEpoch = finalizedCheckpoint.Epoch
 	}
 
 	// Build active indices and effective balances
@@ -242,7 +256,27 @@ func builderToInfo(index uint64, builder *gloas.Builder) *BuilderInfo {
 	}
 
 	// Determine if active (not yet exited)
-	info.Active = info.WithdrawableEpoch == farFutureEpoch
+	info.Active = info.WithdrawableEpoch == FarFutureEpoch
 
 	return info
+}
+
+// applyPendingPayments sums pending payment amounts from the beacon state per builder.
+func applyPendingPayments(builders []*BuilderInfo, payments []*gloas.BuilderPendingPayment) {
+	if len(payments) == 0 || len(builders) == 0 {
+		return
+	}
+
+	for _, payment := range payments {
+		if payment == nil || payment.Withdrawal == nil || payment.Withdrawal.Amount == 0 {
+			continue
+		}
+
+		idx := uint64(payment.Withdrawal.BuilderIndex)
+		if idx >= uint64(len(builders)) {
+			continue
+		}
+
+		builders[idx].PendingPayments += uint64(payment.Withdrawal.Amount)
+	}
 }

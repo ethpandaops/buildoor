@@ -358,23 +358,36 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             'payload'
           )}
 
-          {/* Block received */}
-          {state.blockReceivedAt && genesisTime > 0 && renderEventDot(
-            'block-received',
-            state.blockReceivedAt - slotStartTime,
-            {
-              title: 'Block Received',
+          {/* Block received — with crown when block contains our payload */}
+          {state.blockReceivedAt && genesisTime > 0 && (() => {
+            const blockMs = state.blockReceivedAt! - slotStartTime;
+            const x = calculatePosition(blockMs, rangeStart, totalRange);
+            if (x > 100) return null;
+            const clampedX = Math.max(0, x);
+            const won = !!state.bidWon;
+            const popoverData: PopoverData = {
+              title: won ? 'Block Won!' : 'Block Received',
               items: [
-                { label: 'Time', value: `${state.blockReceivedAt - slotStartTime}ms` },
+                { label: 'Time', value: `${blockMs}ms` },
                 ...(state.blockRoot ? [{
                   label: 'Block Root',
                   value: truncateHash(state.blockRoot),
                   copyValue: state.blockRoot
-                }] : [])
+                }] : []),
+                ...(won ? [{ label: 'Result', value: 'Our payload was included in this block' }] : [])
               ]
-            },
-            'block'
-          )}
+            };
+            return (
+              <div
+                key="block"
+                className={`event-dot block-received`}
+                style={{ left: `${clampedX}%` }}
+                onClick={(e) => showPopover(e, popoverData)}
+              >
+                {won && <i className="fas fa-crown event-dot-crown" />}
+              </div>
+            );
+          })()}
 
           {/* Payload available */}
           {state.payloadAvailableAt && genesisTime > 0 && renderEventDot(

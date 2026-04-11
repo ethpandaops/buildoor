@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
+	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -77,6 +78,12 @@ type UpdateBuilderAPIConfigRequest struct {
 	BlockValueSubsidyGwei   *uint64 `json:"block_value_subsidy_gwei,omitempty"`
 }
 
+// UpdateLifecycleConfigRequest is the request for updating lifecycle config.
+type UpdateLifecycleConfigRequest struct {
+	TopupThreshold *uint64 `json:"topup_threshold,omitempty"` // Gwei
+	TopupAmount    *uint64 `json:"topup_amount,omitempty"`    // Gwei
+}
+
 // LifecycleStatusResponse is the response for lifecycle status.
 type LifecycleStatusResponse struct {
 	IsRegistered      bool   `json:"is_registered"`
@@ -117,40 +124,40 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		CurrentSlot: uint64(h.builderSvc.GetCurrentSlot()),
 	}
 
-	// Get builder index and pubkey from ePBS service if available
+	// Get builder identity and pending payments from ePBS service
 	if h.epbsSvc != nil {
 		resp.BuilderIndex = h.epbsSvc.GetBuilderIndex()
 		pubkey := h.epbsSvc.GetBuilderPubkey()
 		resp.BuilderPubkey = pubkey.String()
+		resp.IsRegistered = h.epbsSvc.IsRegistered()
 
 		// Get pending payments from bid tracker
 		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
 			resp.PendingPayments = tracker.GetTotalPendingPayments()
 		}
-	}
 
-	// Get lifecycle info if available
-	if h.lifecycleMgr != nil {
-		resp.LifecycleEnabled = true
-		state := h.lifecycleMgr.GetBuilderState()
-
-		if state != nil {
-			resp.IsRegistered = state.IsRegistered
-			resp.CLBalance = state.Balance
-			resp.DepositEpoch = state.DepositEpoch
-			resp.WithdrawableEpoch = state.WithdrawableEpoch
-
-			// Calculate effective balance
-			if resp.CLBalance > resp.PendingPayments {
-				resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
+		// Get live balance from chain service (works without lifecycle enabled)
+		if h.chainSvc != nil {
+			if builderInfo := h.chainSvc.GetBuilderByPubkey(pubkey); builderInfo != nil {
+				resp.CLBalance = builderInfo.Balance
+				resp.DepositEpoch = builderInfo.DepositEpoch
+				resp.WithdrawableEpoch = builderInfo.WithdrawableEpoch
 			}
 		}
+	}
 
-		// Get wallet info
+	// Calculate effective balance
+	if resp.CLBalance > resp.PendingPayments {
+		resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
+	}
+
+	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
+	if h.lifecycleMgr != nil {
+		resp.LifecycleEnabled = true
+
 		if wallet := h.lifecycleMgr.GetWallet(); wallet != nil {
 			resp.WalletAddress = wallet.Address().Hex()
 
-			// Get wallet balance
 			if balance, err := wallet.GetBalance(r.Context()); err == nil && balance != nil {
 				resp.WalletBalance = balance.String()
 			}
@@ -662,10 +669,47 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
+// UpdateLifecycleConfig updates the lifecycle configuration (topup threshold/amount).
+func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req UpdateLifecycleConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	cfg := h.builderSvc.GetConfig()
+
+	if req.TopupThreshold != nil {
+		cfg.TopupThreshold = *req.TopupThreshold
+	}
+
+	if req.TopupAmount != nil {
+		cfg.TopupAmount = *req.TopupAmount
+	}
+
+	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastConfigUpdate()
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 // ToggleServiceRequest is the request for toggling services.
 type ToggleServiceRequest struct {
 	EPBSEnabled       *bool `json:"epbs_enabled,omitempty"`
 	BuilderAPIEnabled *bool `json:"builder_api_enabled,omitempty"`
+	LifecycleEnabled  *bool `json:"lifecycle_enabled,omitempty"`
 }
 
 // ToggleServices toggles the enabled state of ePBS and/or Builder API services.
@@ -690,17 +734,29 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		h.builderAPISvc.SetEnabled(*req.BuilderAPIEnabled)
 	}
 
+	if req.LifecycleEnabled != nil && h.lifecycleMgr != nil {
+		h.lifecycleMgr.SetEnabled(*req.LifecycleEnabled)
+	}
+
 	// Broadcast updated status to all connected clients
 	if h.eventStreamMgr != nil {
 		h.eventStreamMgr.BroadcastServiceStatus()
 	}
 
 	// Return current status
+	regState := "unknown"
+	if h.epbsSvc != nil {
+		regState = epbs.RegistrationStateName(h.epbsSvc.GetRegistrationState())
+	}
+
 	status := ServiceStatusEvent{
-		EPBSAvailable:       h.epbsSvc != nil,
-		EPBSEnabled:         h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
-		BuilderAPIAvailable: h.builderAPISvc != nil,
-		BuilderAPIEnabled:   h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+		EPBSAvailable:         h.epbsSvc != nil,
+		EPBSEnabled:           h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
+		EPBSRegistrationState: regState,
+		BuilderAPIAvailable:   h.builderAPISvc != nil,
+		BuilderAPIEnabled:     h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
+		LifecycleAvailable:    h.lifecycleMgr != nil,
+		LifecycleEnabled:      h.lifecycleMgr != nil && h.lifecycleMgr.IsEnabled(),
 	}
 	writeJSON(w, http.StatusOK, status)
 }
@@ -757,6 +813,53 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// ProposerPreferencesEntry represents a single cached proposer preference for the API response.
+type ProposerPreferencesEntry struct {
+	Slot           uint64 `json:"slot"`
+	ValidatorIndex uint64 `json:"validator_index"`
+	FeeRecipient   string `json:"fee_recipient"`
+	GasLimit       uint64 `json:"gas_limit"`
+}
+
+// ProposerPreferencesResponse is the response for GetProposerPreferences.
+type ProposerPreferencesResponse struct {
+	Preferences []ProposerPreferencesEntry `json:"preferences"`
+}
+
+// GetProposerPreferences godoc
+// @Id getProposerPreferences
+// @Summary Get cached proposer preferences
+// @Tags Buildoor
+// @Description Returns all proposer preferences currently in the cache, received via P2P gossip.
+// @Produce json
+// @Success 200 {object} ProposerPreferencesResponse "Success"
+// @Failure 404 {object} map[string]string "Proposer preferences not enabled"
+// @Router /api/buildoor/proposer-preferences [get]
+func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Request) {
+	if h.propPrefSvc == nil {
+		writeError(w, http.StatusNotFound, "proposer preferences service not enabled")
+		return
+	}
+
+	entries := h.propPrefSvc.GetCache().GetAll()
+	result := make([]ProposerPreferencesEntry, 0, len(entries))
+
+	for slot, pref := range entries {
+		if pref.Message == nil {
+			continue
+		}
+
+		result = append(result, ProposerPreferencesEntry{
+			Slot:           uint64(slot),
+			ValidatorIndex: uint64(pref.Message.ValidatorIndex),
+			FeeRecipient:   fmt.Sprintf("0x%x", pref.Message.FeeRecipient[:]),
+			GasLimit:       pref.Message.GasLimit,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ProposerPreferencesResponse{Preferences: result})
 }
 
 // configToMap returns the config as a map with sensitive fields redacted.

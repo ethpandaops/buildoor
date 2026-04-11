@@ -22,7 +22,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -90,15 +91,16 @@ and begins building blocks according to configuration.`,
 
 		var w *wallet.Wallet
 
-		if cfg.LifecycleEnabled {
-			if cfg.ELRPC == "" {
-				return fmt.Errorf("--el-rpc is required when lifecycle is enabled")
-			}
+		// Initialize RPC client and wallet when prerequisites are available.
+		// This makes lifecycle management available for on-the-fly toggling
+		// even when not enabled at startup via --lifecycle.
+		lifecycleAvailable := cfg.ELRPC != "" && cfg.WalletPrivkey != ""
 
-			if cfg.WalletPrivkey == "" {
-				return fmt.Errorf("--wallet-privkey is required when lifecycle is enabled")
-			}
+		if cfg.LifecycleEnabled && !lifecycleAvailable {
+			return fmt.Errorf("--el-rpc and --wallet-privkey are required when lifecycle is enabled")
+		}
 
+		if lifecycleAvailable {
 			logger.Info("Connecting to EL RPC for lifecycle management...")
 
 			rpcClient, err = execution.NewClient(ctx, cfg.ELRPC, logger)
@@ -153,50 +155,57 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
+		// Apply slot-relative timing defaults now that we know the slot duration
+		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
+		cfg.ApplySlotDefaults(slotTimeMs)
+
+		logger.WithFields(logrus.Fields{
+			"slot_time_ms":       slotTimeMs,
+			"build_start_time":   cfg.EPBS.BuildStartTime,
+			"payload_build_time": cfg.PayloadBuildTime,
+			"bid_start_time":     cfg.EPBS.BidStartTime,
+			"bid_end_time":       cfg.EPBS.BidEndTime,
+		}).Info("Timing defaults applied")
+
 		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
-		// 6. Initialize lifecycle manager (if enabled)
+		// 6. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
 
-		if cfg.LifecycleEnabled {
+		if lifecycleAvailable {
 			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
 			}
 
-			// Ensure builder is registered
-			logger.Info("Checking builder registration...")
-
-			if err := lifecycleMgr.EnsureBuilderRegistered(ctx); err != nil {
-				return fmt.Errorf("builder registration failed: %w", err)
-			}
+			lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
 		}
 
 		// 7. Initialize builder service (standalone block building)
 		logger.Info("Initializing builder service...")
 
-		// Get fee recipient from wallet or use zero address
-		var feeRecipient common.Address
+		// Get fee recipient from wallet or use default address
+		feeRecipient := common.HexToAddress("0x8943545177806ED17B9F23F0a21ee5948eCaa776")
 		if w != nil {
 			feeRecipient = w.Address()
 		}
 
 		// Validator store and index cache when Builder API is available (port > 0)
 		// (fee recipient from registrations; cache avoids beacon state lookup every build)
+		validatorIndexCache := chain.NewValidatorIndexCache(clClient, chainSvc, logger)
+		if err := validatorIndexCache.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start validator index cache: %w", err)
+		}
+		defer validatorIndexCache.Stop()
+
 		var validatorStore *validators.Store
-		var validatorIndexCache *chain.ValidatorIndexCache
 		builderAPIAvailable := cfg.BuilderAPI.Port > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
-			validatorIndexCache = chain.NewValidatorIndexCache(clClient, chainSvc, logger)
-			if err := validatorIndexCache.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start validator index cache: %w", err)
-			}
-			defer validatorIndexCache.Stop()
 		}
 		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
@@ -259,6 +268,14 @@ and begins building blocks according to configuration.`,
 			defer builderAPISrv.Stop() //nolint:errcheck // cleanup
 		}
 
+		// Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
+		var propPrefSvc *proposerpreferences.Service
+
+		if epbsAvailable {
+			propPrefSvc = proposerpreferences.NewService(clClient, logger)
+			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
+		}
+
 		// 9. Start API server (if configured)
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
@@ -279,7 +296,7 @@ and begins building blocks according to configuration.`,
 				AuthKey:    apiKey,
 				UserHeader: cfg.APIUserHeader,
 				TokenKey:   cfg.APITokenKey,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
@@ -291,17 +308,14 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
-		// 10. Start lifecycle manager (if enabled)
-		if lifecycleMgr != nil {
-			// Connect bid tracker to lifecycle manager for balance tracking
-			if epbsSvc != nil {
-				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
-			}
-
-			if err := lifecycleMgr.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start lifecycle manager: %w", err)
-			}
-			defer lifecycleMgr.Stop()
+		// 10. Start lifecycle manager callbacks (if enabled)
+		if lifecycleMgr != nil && epbsSvc != nil {
+			lifecycleMgr.SetDepositPendingCallback(func() {
+				epbsSvc.SetRegistrationPending()
+			})
+			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
+				epbsSvc.SetBuilderRegistered(index)
+			})
 		}
 
 		// 11. Start builder service
@@ -320,6 +334,28 @@ and begins building blocks according to configuration.`,
 				return fmt.Errorf("failed to start ePBS: %w", err)
 			}
 			defer epbsSvc.Stop()
+		}
+
+		// 13. Start lifecycle manager (after ePBS so bid tracker is available)
+		if lifecycleMgr != nil {
+			if epbsSvc != nil {
+				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
+			}
+
+			if err := lifecycleMgr.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start lifecycle manager: %w", err)
+			}
+			defer lifecycleMgr.Stop()
+		}
+
+		// 14. Start proposer preferences service (if initialized)
+		if propPrefSvc != nil {
+			if err := propPrefSvc.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start proposer preferences service: %w", err)
+			}
+			defer propPrefSvc.Stop()
+
+			logger.Info("Proposer preferences SSE listener started")
 		}
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")

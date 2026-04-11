@@ -21,6 +21,8 @@ func TestNewPayloadBuilder_UseProposerFeeRecipient(t *testing.T) {
 		false,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 	assert.NotNil(t, b)
 	assert.False(t, b.useProposerFeeRecipient)
@@ -35,6 +37,8 @@ func TestNewPayloadBuilder_UseProposerFeeRecipient(t *testing.T) {
 		true,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 	assert.NotNil(t, b2)
 	assert.True(t, b2.useProposerFeeRecipient)
@@ -42,5 +46,5 @@ func TestNewPayloadBuilder_UseProposerFeeRecipient(t *testing.T) {
 
 func TestNewPayloadBuilder_AcceptsNilClients(t *testing.T) {
 	// Constructor allows nil clients (used in tests); actual build will fail if they're nil.
-	_ = NewPayloadBuilder(nil, (*engine.Client)(nil), common.Address{}, 0, logrus.New(), false, nil, nil)
+	_ = NewPayloadBuilder(nil, (*engine.Client)(nil), common.Address{}, 0, logrus.New(), false, nil, nil, nil, nil)
 }

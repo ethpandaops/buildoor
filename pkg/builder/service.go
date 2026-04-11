@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -34,6 +35,7 @@ type Service struct {
 	feeRecipient           common.Address
 	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
 	validatorIndexCache    *chain.ValidatorIndexCache // optional: index→pubkey cache so we don't query beacon every build
+	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
@@ -114,6 +116,8 @@ func (s *Service) Start(ctx context.Context) error {
 		useProposerFeeRecipient,
 		s.validatorStore,
 		s.validatorIndexCache,
+		s.propPrefCache,
+		s.chainSvc.IsGloas,
 	)
 
 	// Start event stream
@@ -190,6 +194,17 @@ func (s *Service) GetCLClient() *beacon.Client {
 // IsGloas returns whether we're on the Gloas fork.
 func (s *Service) IsGloas() bool {
 	return s.chainSvc.IsGloas()
+}
+
+// GetProposerPreferencesCache returns the proposer preferences cache.
+func (s *Service) GetProposerPreferencesCache() *proposerpreferences.Cache {
+	return s.propPrefCache
+}
+
+// SetProposerPreferencesCache sets the proposer preferences cache used for Gloas+ builds.
+// Must be called before Start().
+func (s *Service) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
+	s.propPrefCache = cache
 }
 
 // SubscribePayloadReady subscribes to payload ready events.
@@ -393,10 +408,11 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 	s.payloadReadyDispatcher.Fire(payloadEvent)
 
 	s.log.WithFields(logrus.Fields{
-		"slot":        slot,
-		"block_hash":  fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
-		"block_value": payloadEvent.BlockValue,
-		"source":      payloadEvent.BuildSource.String(),
+		"slot":              slot,
+		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
+		"block_value":       payloadEvent.BlockValue,
+		"source":            payloadEvent.BuildSource.String(),
+		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
 	// Mark slot as built
@@ -481,11 +497,12 @@ func (s *Service) IncrementBidsSubmitted() {
 	})
 }
 
-// IncrementBlocksIncluded increments the blocks included counter.
-// Called by the ePBS service when our payload is included.
+// IncrementBlocksIncluded increments the blocks included and bids won counters.
+// Called by the ePBS service when our payload is included in a beacon block.
 func (s *Service) IncrementBlocksIncluded() {
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.BlocksIncluded++
+		stats.BidsWon++
 	})
 }
 

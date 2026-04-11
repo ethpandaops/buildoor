@@ -37,6 +37,9 @@ type Service interface {
 	// Head vote tracking
 	GetHeadVoteTracker() *HeadVoteTracker
 
+	// Finality
+	GetFinalizedEpoch() phase0.Epoch
+
 	// Builder access
 	GetBuilderByIndex(index uint64) *BuilderInfo
 	GetBuilderByPubkey(pubkey phase0.BLSPubKey) *BuilderInfo
@@ -131,6 +134,16 @@ func (s *service) Stop() error {
 	s.log.Info("Chain service stopped")
 
 	return nil
+}
+
+// GetFinalizedEpoch returns the finalized epoch from the current epoch's cached state.
+func (s *service) GetFinalizedEpoch() phase0.Epoch {
+	stats := s.GetCurrentEpochStats()
+	if stats == nil {
+		return 0
+	}
+
+	return stats.FinalizedEpoch
 }
 
 // GetCurrentEpochStats returns the stats for the current epoch.

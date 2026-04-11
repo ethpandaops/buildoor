@@ -14,7 +14,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -41,6 +41,8 @@ const (
 	EventTypeBuilderAPISubmitBlindedRcvd EventType = "builder_api_submit_blinded_received"
 	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
+	EventTypeLifecycle                   EventType = "lifecycle"
+	EventTypeBidIncluded                 EventType = "bid_included"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -74,6 +76,7 @@ type BidSubmittedEvent struct {
 	Timestamp int64  `json:"timestamp"`
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 // HeadReceivedEvent is sent when a head event is received.
@@ -134,7 +137,6 @@ type BuilderInfoEvent struct {
 	LifecycleEnabled  bool   `json:"lifecycle_enabled"`
 	WalletAddress     string `json:"wallet_address,omitempty"`
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
-	PendingDeposit    uint64 `json:"pending_deposit_gwei,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
 }
@@ -161,10 +163,20 @@ type BidWonStreamEvent struct {
 
 // ServiceStatusEvent indicates which services are available and enabled.
 type ServiceStatusEvent struct {
-	EPBSAvailable       bool `json:"epbs_available"`
-	EPBSEnabled         bool `json:"epbs_enabled"`
-	BuilderAPIAvailable bool `json:"builder_api_available"`
-	BuilderAPIEnabled   bool `json:"builder_api_enabled"`
+	EPBSAvailable         bool   `json:"epbs_available"`
+	EPBSEnabled           bool   `json:"epbs_enabled"`
+	EPBSRegistrationState string `json:"epbs_registration_state"`
+	BuilderAPIAvailable   bool   `json:"builder_api_available"`
+	BuilderAPIEnabled     bool   `json:"builder_api_enabled"`
+	LifecycleAvailable    bool   `json:"lifecycle_available"`
+	LifecycleEnabled      bool   `json:"lifecycle_enabled"`
+}
+
+// LifecycleStreamEvent is sent when a lifecycle action occurs (deposit, topup, exit, state change).
+type LifecycleStreamEvent struct {
+	Action  string `json:"action"`  // "deposit", "topup", "exit", "state_change", "waiting_gloas", "balance_topup"
+	Message string `json:"message"` // Human-readable description
+	Status  string `json:"status"`  // "info", "success", "warning", "error"
 }
 
 // BuilderAPIGetHeaderReceivedEvent is sent when a getHeader request is received.
@@ -268,6 +280,29 @@ func (m *EventStreamManager) Start() {
 		defer bidSubmitSub.Unsubscribe()
 	}
 
+	// Subscribe to reveal events from ePBS service (if available)
+	var revealChan <-chan *epbs.RevealEvent
+	if m.epbsSvc != nil {
+		revealSub := m.epbsSvc.SubscribeReveals(16)
+		revealChan = revealSub.Channel()
+		defer revealSub.Unsubscribe()
+	}
+
+	// Subscribe to bid included events from ePBS service (if available)
+	var bidIncludedChan <-chan *epbs.BidIncludedEvent
+	if m.epbsSvc != nil {
+		bidIncludedSub := m.epbsSvc.SubscribeBidIncluded(16)
+		bidIncludedChan = bidIncludedSub.Channel()
+		defer bidIncludedSub.Unsubscribe()
+	}
+
+	// Wire lifecycle event callback (if lifecycle manager available)
+	if m.lifecycleMgr != nil {
+		m.lifecycleMgr.SetEventCallback(func(event *lifecycle.LifecycleEvent) {
+			m.BroadcastLifecycle(event.Action, event.Message, event.Status)
+		})
+	}
+
 	// Subscribe to head vote updates (if chain service available)
 	var headVoteChan <-chan *chain.HeadVoteUpdate
 	if m.chainSvc != nil {
@@ -318,6 +353,24 @@ func (m *EventStreamManager) Start() {
 			case event, ok := <-headVoteChan:
 				if ok {
 					m.handleHeadVoteUpdate(event)
+				}
+
+			case event, ok := <-revealChan:
+				if ok {
+					m.BroadcastReveal(uint64(event.Slot), event.Success, event.Skipped)
+				}
+
+			case event, ok := <-bidIncludedChan:
+				if ok {
+					m.Broadcast(&StreamEvent{
+						Type:      EventTypeBidIncluded,
+						Timestamp: time.Now().UnixMilli(),
+						Data: map[string]any{
+							"slot":       uint64(event.Slot),
+							"block_hash": fmt.Sprintf("0x%x", event.BlockHash[:]),
+							"bid_value":  event.BidValue,
+						},
+					})
 				}
 
 			case <-ticker.C:
@@ -443,6 +496,7 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *epbs.BidSubmissionE
 			Timestamp: time.Now().UnixMilli(),
 			Success:   event.Success,
 			Error:     event.Error,
+			Warning:   event.Warning,
 		},
 	})
 
@@ -657,55 +711,70 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder pubkey and index from ePBS service
+	// Get builder identity, balance, and pending payments
 	if m.epbsSvc != nil {
 		pubkey := m.epbsSvc.GetBuilderPubkey()
 		info.BuilderPubkey = pubkey.String()
 		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
+		info.IsRegistered = m.epbsSvc.IsRegistered()
 
-		// Get pending payments from bid tracker
-		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
-			info.PendingPayments = tracker.GetTotalPendingPayments()
-		}
-	}
-
-	// Get lifecycle info if available
-	if m.lifecycleMgr != nil {
-		info.LifecycleEnabled = true
-		state := m.lifecycleMgr.GetBuilderState()
-
-		if state != nil {
-			info.IsRegistered = state.IsRegistered
-			info.CLBalance = state.Balance
-			info.DepositEpoch = state.DepositEpoch
-			info.WithdrawableEpoch = state.WithdrawableEpoch
-
-			// Calculate effective balance
-			if info.CLBalance > info.PendingPayments {
-				info.EffectiveBalance = info.CLBalance - info.PendingPayments
+		// Get balance and pending payments from chain state
+		if m.chainSvc != nil {
+			if builderInfo := m.chainSvc.GetBuilderByPubkey(pubkey); builderInfo != nil {
+				info.CLBalance = builderInfo.Balance
+				info.PendingPayments = builderInfo.PendingPayments
+				info.DepositEpoch = builderInfo.DepositEpoch
+				info.WithdrawableEpoch = builderInfo.WithdrawableEpoch
 			}
 		}
 
-		// Get wallet info
+		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
+		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
+			adjustment := tracker.GetBalanceAdjustment()
+			adjusted := int64(info.CLBalance) + adjustment
+			if adjusted < 0 {
+				adjusted = 0
+			}
+
+			info.CLBalance = uint64(adjusted)
+		}
+	}
+
+	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
+	if m.lifecycleMgr != nil {
+		info.LifecycleEnabled = true
+
 		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
 			info.WalletAddress = wallet.Address().Hex()
 
-			// Get wallet balance (async-safe, we just use cached value or fetch)
 			if balance, err := wallet.GetBalance(m.ctx); err == nil && balance != nil {
 				info.WalletBalance = balance.String()
 			}
 		}
 	}
 
+	// Calculate effective balance (live balance minus unrevealed pending payments)
+	if info.CLBalance > info.PendingPayments {
+		info.EffectiveBalance = info.CLBalance - info.PendingPayments
+	}
+
 	return info
 }
 
 func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
+	regState := "unknown"
+	if m.epbsSvc != nil {
+		regState = epbs.RegistrationStateName(m.epbsSvc.GetRegistrationState())
+	}
+
 	return ServiceStatusEvent{
-		EPBSAvailable:       m.epbsSvc != nil,
-		EPBSEnabled:         m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
-		BuilderAPIAvailable: m.builderAPISvc != nil,
-		BuilderAPIEnabled:   m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
+		EPBSAvailable:         m.epbsSvc != nil,
+		EPBSEnabled:           m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
+		EPBSRegistrationState: regState,
+		BuilderAPIAvailable:   m.builderAPISvc != nil,
+		BuilderAPIEnabled:     m.builderAPISvc != nil && m.builderAPISvc.IsEnabled(),
+		LifecycleAvailable:    m.lifecycleMgr != nil,
+		LifecycleEnabled:      m.lifecycleMgr != nil && m.lifecycleMgr.IsEnabled(),
 	}
 }
 
@@ -714,6 +783,7 @@ func (m *EventStreamManager) sendServiceStatus() {
 
 	m.lastServiceStatusMu.Lock()
 	changed := status != m.lastServiceStatus
+	prevRegState := m.lastServiceStatus.EPBSRegistrationState
 	if changed {
 		m.lastServiceStatus = status
 	}
@@ -728,6 +798,46 @@ func (m *EventStreamManager) sendServiceStatus() {
 		Timestamp: time.Now().UnixMilli(),
 		Data:      status,
 	})
+
+	// Emit lifecycle log event when registration state changes
+	if prevRegState != "" && prevRegState != status.EPBSRegistrationState {
+		m.emitRegistrationStateChange(prevRegState, status.EPBSRegistrationState)
+	}
+}
+
+// emitRegistrationStateChange emits a lifecycle event when the ePBS registration state transitions.
+func (m *EventStreamManager) emitRegistrationStateChange(from, to string) {
+	var message string
+	var logStatus string
+
+	switch to {
+	case "unregistered":
+		message = "Builder not registered on beacon chain"
+		logStatus = "info"
+	case "pending":
+		message = "Builder deposit submitted, waiting for beacon chain inclusion"
+		logStatus = "info"
+	case "pending_finalization":
+		message = "Builder deposit included in beacon state, waiting for finalization"
+		logStatus = "info"
+	case "registered":
+		message = "Builder deposit finalized, builder is now active"
+		logStatus = "success"
+	case "exiting":
+		message = "Builder exit initiated, waiting for withdrawable epoch"
+		logStatus = "warning"
+	case "exited":
+		message = "Builder has exited"
+		logStatus = "warning"
+	case "waiting_gloas":
+		message = "Waiting for Gloas fork activation"
+		logStatus = "info"
+	default:
+		message = fmt.Sprintf("Registration state changed: %s -> %s", from, to)
+		logStatus = "info"
+	}
+
+	m.BroadcastLifecycle("state_change", message, logStatus)
 }
 
 // BroadcastServiceStatus broadcasts the current service status.
@@ -1023,6 +1133,19 @@ func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numT
 			ValueETH:        valueETH,
 			ValueWei:        valueWei,
 			Timestamp:       now,
+		},
+	})
+}
+
+// BroadcastLifecycle broadcasts a lifecycle event (deposit, exit, state change, etc.).
+func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLifecycle,
+		Timestamp: time.Now().UnixMilli(),
+		Data: LifecycleStreamEvent{
+			Action:  action,
+			Message: message,
+			Status:  status,
 		},
 	})
 }
