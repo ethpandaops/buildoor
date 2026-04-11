@@ -584,9 +584,9 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 	}
 
 	status := BuilderAPIStatusResponse{
-		Enabled:                 cfg.BuilderAPIEnabled,
-		Port:                    cfg.BuilderAPI.Port,
-		ValidatorCount:          validatorCount,
+		Enabled:               cfg.BuilderAPIEnabled,
+		Port:                  cfg.BuilderAPI.Port,
+		ValidatorCount:        validatorCount,
 		BlockValueSubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}
 	writeJSON(w, http.StatusOK, status)

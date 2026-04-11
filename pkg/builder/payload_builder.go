@@ -23,16 +23,16 @@ import (
 
 // PayloadBuilder handles execution payload building via the Engine API.
 type PayloadBuilder struct {
-	clClient                *beacon.Client
-	engineClient            *engine.Client
-	feeRecipient            common.Address
+	clClient     *beacon.Client
+	engineClient *engine.Client
+	feeRecipient common.Address
 
-	validatorStore          *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
-	validatorIndexCache     *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
-	propPrefCache           *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
-	isGloas                 func() bool                // returns true when on the Gloas fork
-	payloadBuildTime        uint64
-	log                     logrus.FieldLogger
+	validatorStore      *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
+	validatorIndexCache *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
+	propPrefCache       *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
+	isGloas             func() bool                // returns true when on the Gloas fork
+	payloadBuildTime    uint64
+	log                 logrus.FieldLogger
 
 	// Active build tracking
 	activeBuild *activeBuild
