@@ -261,6 +261,17 @@
   border: 2px solid #bd2130;
 }
 
+.event-dot-crown {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 8px;
+  color: #ffc107;
+  text-shadow: 0 0 2px rgba(0,0,0,0.8);
+  pointer-events: none;
+}
+
 /* Build delay line - horizontal line from FCU to payload ready */
 .build-delay-line {
   position: absolute;
@@ -504,6 +515,10 @@
 .event-reveal { border-left: 3px solid #6f42c1; }
 .event-bid-seen { border-left: 3px solid var(--bs-secondary); }
 .event-envelope { border-left: 3px solid #20c997; }
+.event-lifecycle { border-left: 3px solid #0dcaf0; }
+.event-lifecycle-success { border-left: 3px solid #198754; }
+.event-lifecycle-warning { border-left: 3px solid #ffc107; }
+.event-lifecycle-error { border-left: 3px solid #dc3545; }
 
 /* Stats - compact horizontal layout */
 .stat-item {

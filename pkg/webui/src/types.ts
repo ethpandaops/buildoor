@@ -23,6 +23,9 @@ export interface StreamEvent {
 export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
+  deposit_amount: number;
+  topup_threshold: number;
+  topup_amount: number;
 }
 
 export interface ScheduleConfig {
@@ -46,8 +49,11 @@ export interface EPBSConfig {
 export interface ServiceStatus {
   epbs_available: boolean;
   epbs_enabled: boolean;
+  epbs_registration_state: string; // "unknown" | "unregistered" | "waiting_gloas" | "pending" | "pending_finalization" | "registered" | "exiting" | "exited"
   builder_api_available: boolean;
   builder_api_enabled: boolean;
+  lifecycle_available: boolean;
+  lifecycle_enabled: boolean;
 }
 
 export interface ChainInfo {
@@ -79,7 +85,6 @@ export interface BuilderInfo {
   lifecycle_enabled: boolean;
   wallet_address?: string;
   wallet_balance_wei?: string;
-  pending_deposit_gwei?: number;
   deposit_epoch: number;
   withdrawable_epoch: number;
 }

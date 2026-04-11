@@ -196,6 +196,11 @@ func (s *Service) IsGloas() bool {
 	return s.chainSvc.IsGloas()
 }
 
+// GetProposerPreferencesCache returns the proposer preferences cache.
+func (s *Service) GetProposerPreferencesCache() *proposerpreferences.Cache {
+	return s.propPrefCache
+}
+
 // SetProposerPreferencesCache sets the proposer preferences cache used for Gloas+ builds.
 // Must be called before Start().
 func (s *Service) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
@@ -403,11 +408,11 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 	s.payloadReadyDispatcher.Fire(payloadEvent)
 
 	s.log.WithFields(logrus.Fields{
-		"slot":        slot,
-		"block_hash":  fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
-		"block_value": payloadEvent.BlockValue,
-		"source":      payloadEvent.BuildSource.String(),
-	    "parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
+		"slot":              slot,
+		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
+		"block_value":       payloadEvent.BlockValue,
+		"source":            payloadEvent.BuildSource.String(),
+		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
 	// Mark slot as built
@@ -492,11 +497,12 @@ func (s *Service) IncrementBidsSubmitted() {
 	})
 }
 
-// IncrementBlocksIncluded increments the blocks included counter.
-// Called by the ePBS service when our payload is included.
+// IncrementBlocksIncluded increments the blocks included and bids won counters.
+// Called by the ePBS service when our payload is included in a beacon block.
 func (s *Service) IncrementBlocksIncluded() {
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.BlocksIncluded++
+		stats.BidsWon++
 	})
 }
 

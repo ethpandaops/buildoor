@@ -27,17 +27,18 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg             *builder.EPBSConfig
-	chainSpec       *beacon.ChainSpec
-	genesis         *beacon.Genesis
-	bidCreator      *BidCreator
-	revealHandler   *RevealHandler
-	bidTracker      *BidTracker
-	payloadStore    *PayloadStore
-	payloadCache    *builder.PayloadCache
-	service         *Service // Reference to parent service for firing events
-	isBuilderActive func() bool
-	log             logrus.FieldLogger
+	cfg                    *builder.EPBSConfig
+	chainSpec              *beacon.ChainSpec
+	genesis                *beacon.Genesis
+	bidCreator             *BidCreator
+	revealHandler          *RevealHandler
+	bidTracker             *BidTracker
+	payloadStore           *PayloadStore
+	payloadCache           *builder.PayloadCache
+	service                *Service // Reference to parent service for firing events
+	isBuilderActive        func() bool
+	hasProposerPreferences func(phase0.Slot) bool
+	log                    logrus.FieldLogger
 
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
@@ -56,25 +57,27 @@ func NewScheduler(
 	payloadCache *builder.PayloadCache,
 	service *Service,
 	isBuilderActive func() bool,
+	hasProposerPreferences func(phase0.Slot) bool,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:             cfg,
-		chainSpec:       chainSpec,
-		genesis:         genesis,
-		bidCreator:      bidCreator,
-		revealHandler:   revealHandler,
-		bidTracker:      bidTracker,
-		payloadStore:    payloadStore,
-		payloadCache:    payloadCache,
-		service:         service,
-		isBuilderActive: isBuilderActive,
-		slotStates:      make(map[phase0.Slot]*SlotState),
-		log:             log.WithField("component", "scheduler"),
+		cfg:                    cfg,
+		chainSpec:              chainSpec,
+		genesis:                genesis,
+		bidCreator:             bidCreator,
+		revealHandler:          revealHandler,
+		bidTracker:             bidTracker,
+		payloadStore:           payloadStore,
+		payloadCache:           payloadCache,
+		service:                service,
+		isBuilderActive:        isBuilderActive,
+		hasProposerPreferences: hasProposerPreferences,
+		slotStates:             make(map[phase0.Slot]*SlotState),
+		log:                    log.WithField("component", "scheduler"),
 	}
 }
 
-// getSlotState returns or creates state for a slot.
+// getSlotState returns or creates state for a slot. Must be called with mu held.
 func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 	state, ok := s.slotStates[slot]
 	if !ok {
@@ -83,6 +86,21 @@ func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 	}
 
 	return state
+}
+
+// getSlotStateSafe returns a copy of the slot state, or nil if not found. Thread-safe.
+func (s *Scheduler) getSlotStateSafe(slot phase0.Slot) *SlotState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.slotStates[slot]
+	if !ok {
+		return nil
+	}
+
+	stateCopy := *state
+
+	return &stateCopy
 }
 
 // OnPayloadReady stores the payload for reveals.
@@ -140,7 +158,7 @@ func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent, blockInfo *beacon.Block
 }
 
 // ProcessTick is called frequently to check if any bids or reveals are due.
-func (s *Scheduler) ProcessTick(ctx context.Context) {	
+func (s *Scheduler) ProcessTick(ctx context.Context) {
 	now := time.Now()
 
 	// Calculate current slot and position within slot
@@ -167,9 +185,9 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 		return
 	}
 
-	// Check slots that might need bidding (current and next due to negative start time)
+	// Check slots that might need bidding (current slot + next slot for negative bid start times)
 	s.checkSlotForBidding(ctx, currentSlot, now, msIntoSlot)
-	// s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
+	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
 
 	// Check for reveals
 	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
@@ -228,13 +246,21 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	s.mu.Unlock()
 
+	// Warn if no proposer preferences — the BN will reject the bid
+	hasPrefs := s.hasProposerPreferences != nil && s.hasProposerPreferences(slot)
+
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"bid_value":  bidValue,
-		"bid_count":  state.BidCount,
-		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"ms_into_slot": msRelativeToSlot,
+		"slot":                     slot,
+		"bid_value":                bidValue,
+		"bid_count":                state.BidCount,
+		"block_hash":               fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"ms_into_slot":             msRelativeToSlot,
+		"has_proposer_preferences": hasPrefs,
 	}).Info("Creating and submitting bid")
+
+	if !hasPrefs {
+		s.log.WithField("slot", slot).Warn("No proposer preferences for slot — bid will likely be rejected by beacon node")
+	}
 
 	// Submit bid
 	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
@@ -273,13 +299,22 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Fire bid success event
 	if s.service != nil {
-		s.service.FireBidSubmission(&BidSubmissionEvent{
+		event := &BidSubmissionEvent{
 			Slot:      slot,
 			BlockHash: payload.BlockHash,
 			Value:     bidValue,
 			BidCount:  bidCount,
 			Success:   true,
-		})
+		}
+		if !hasPrefs {
+			event.Warning = "no proposer preferences — bid likely rejected"
+		}
+		s.service.FireBidSubmission(event)
+	}
+
+	// Increment stats (count each bid submission)
+	if s.service != nil && s.service.builderSvc != nil {
+		s.service.builderSvc.IncrementBidsSubmitted()
 	}
 
 	s.log.WithFields(logrus.Fields{
@@ -309,7 +344,7 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
+		"slot":         slot,
 		"ms_into_slot": msIntoSlot,
 	}).Info("Revealing payload")
 
@@ -321,21 +356,41 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	}
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"block_root": fmt.Sprintf("%x", blockRoot[:8]),
-		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"slot":         slot,
+		"block_root":   fmt.Sprintf("%x", blockRoot[:8]),
+		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msIntoSlot,
 	}).Info("Submitting reveal")
 
 	err := s.revealHandler.SubmitReveal(ctx, payload, blockRoot)
 	if err != nil {
 		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit reveal")
+
+		if s.service != nil {
+			s.service.FireReveal(&RevealEvent{Slot: slot, Success: false})
+		}
+
 		return
 	}
 
 	s.mu.Lock()
 	state.Revealed = true
 	s.mu.Unlock()
+
+	// Mark payment as revealed (immediate deduction from live balance)
+	s.bidTracker.MarkRevealed(slot)
+
+	// Fire reveal event for UI and increment stats
+	if s.service != nil {
+		s.service.FireReveal(&RevealEvent{
+			Slot:    slot,
+			Success: true,
+		})
+
+		if s.service.builderSvc != nil {
+			s.service.builderSvc.IncrementRevealsSuccess()
+		}
+	}
 
 	s.log.WithField("slot", slot).Info("Reveal submitted")
 }

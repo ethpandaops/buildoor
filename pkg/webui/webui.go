@@ -11,7 +11,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
@@ -77,6 +77,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	apiRouter.HandleFunc("/lifecycle/deposit", apiHandler.PostDeposit).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/lifecycle/topup", apiHandler.PostTopup).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/lifecycle/exit", apiHandler.PostExit).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/config/lifecycle", apiHandler.UpdateLifecycleConfig).Methods(http.MethodPost)
 
 	// metrics endpoint
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")

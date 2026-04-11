@@ -53,20 +53,42 @@ func (s *BalanceService) GetCurrentBalance(ctx context.Context) (uint64, error) 
 	return state.Balance, nil
 }
 
-// GetEffectiveBalance returns the balance minus pending payments.
+// GetEffectiveBalance returns the live balance minus pending payments.
+// Live balance = chain state balance + local adjustments (topups, revealed bid deductions).
+// Pending payments = from chain state's BuilderPendingPayments (ground truth, survives restarts).
 func (s *BalanceService) GetEffectiveBalance(ctx context.Context) (uint64, error) {
-	currentBalance, err := s.GetCurrentBalance(ctx)
+	isRegistered, state, err := s.depositSvc.IsBuilderRegistered(ctx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to check registration: %w", err)
 	}
 
-	pendingPayments := s.bidTracker.GetTotalPendingPayments()
-
-	if pendingPayments >= currentBalance {
-		return 0, nil
+	if !isRegistered {
+		return 0, fmt.Errorf("builder not registered")
 	}
 
-	return currentBalance - pendingPayments, nil
+	liveBalance := int64(state.Balance)
+
+	// Apply local adjustments (topups add, revealed bids subtract since last state refresh)
+	if s.bidTracker != nil {
+		liveBalance += s.bidTracker.GetBalanceAdjustment()
+	}
+
+	if liveBalance < 0 {
+		liveBalance = 0
+	}
+
+	// Get pending payments from chain state (ground truth from beacon state)
+	builderInfo := s.depositSvc.chainSvc.GetBuilderByPubkey(s.depositSvc.signer.PublicKey())
+	if builderInfo != nil && builderInfo.PendingPayments > 0 {
+		effective := uint64(liveBalance)
+		if builderInfo.PendingPayments >= effective {
+			return 0, nil
+		}
+
+		return effective - builderInfo.PendingPayments, nil
+	}
+
+	return uint64(liveBalance), nil
 }
 
 // NeedsTopup checks if a top-up is needed and returns the required amount.

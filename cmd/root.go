@@ -69,13 +69,13 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("schedule-next-n", defaults.Schedule.NextN, "Build next N slots then stop")
 	rootCmd.PersistentFlags().Uint64("schedule-start-slot", defaults.Schedule.StartSlot, "Start building at this slot")
 
-	// Build start time flag
-	rootCmd.PersistentFlags().Int64("build-start-time", defaults.EPBS.BuildStartTime, "Build start time in ms relative to slot start")
+	// Build start time flag (0 = auto from slot time)
+	rootCmd.PersistentFlags().Int64("build-start-time", 0, "Build start time in ms relative to slot start (0 = auto: -slotTime/3)")
 
-	// ePBS time-based flags (use defaults from config package)
-	rootCmd.PersistentFlags().Int64("epbs-bid-start", defaults.EPBS.BidStartTime, "First bid time in ms relative to slot start")
-	rootCmd.PersistentFlags().Int64("epbs-bid-end", defaults.EPBS.BidEndTime, "Last bid time in ms relative to slot start")
-	rootCmd.PersistentFlags().Int64("epbs-reveal-time", defaults.EPBS.RevealTime, "Reveal time in ms relative to slot start")
+	// ePBS time-based flags (0 = auto from slot time)
+	rootCmd.PersistentFlags().Int64("epbs-bid-start", 0, "First bid time in ms relative to slot start (0 = auto: -slotTime/12)")
+	rootCmd.PersistentFlags().Int64("epbs-bid-end", 0, "Last bid time in ms relative to slot start (0 = auto: slotTime/12)")
+	rootCmd.PersistentFlags().Int64("epbs-reveal-time", 0, "Reveal time in ms relative to slot start (0 = auto: slotTime/6)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
@@ -83,8 +83,8 @@ func init() {
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
 
-	// Payload Build Time
-	rootCmd.PersistentFlags().Uint64("payload-build-time", defaults.PayloadBuildTime, "Time to allow the EL to build the payload after triggering the payload build via fcu (in ms)")
+	// Payload Build Time (0 = auto from slot time)
+	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: slotTime/6)")
 
 	// Bind all flags to viper
 	if err := v.BindPFlags(rootCmd.PersistentFlags()); err != nil {
