@@ -15,9 +15,9 @@ func DefaultConfig() *Config {
 			Port:                  0,      // Default 0 = disabled; set > 0 to enable Builder API availability
 			BlockValueSubsidyGwei: 100000, // 100k Gwei
 		},
-		DepositAmount:  10000000000, // 10 ETH in Gwei
-		TopupThreshold: 2000000000,  // 2 ETH in Gwei
-		TopupAmount:    5000000000,  // 5 ETH in Gwei
+		DepositAmount:  50000000000, // 50 ETH in Gwei
+		TopupThreshold: 10000000000, // 10 ETH in Gwei
+		TopupAmount:    50000000000, // 50 ETH in Gwei
 		Schedule: ScheduleConfig{
 			Mode:     ScheduleModeAll,
 			EveryNth: 1,
@@ -42,7 +42,7 @@ func DefaultConfig() *Config {
 //	PayloadBuildTime: 1/6 slot  (e.g.  2000ms for 12s,  1000ms for 6s)
 //	BidStartTime:    -1/12 slot (e.g. -1000ms for 12s,  -500ms for 6s)
 //	BidEndTime:       1/12 slot (e.g.  1000ms for 12s,   500ms for 6s)
-//	RevealTime:       0         (at slot start)
+//	RevealTime:       1/6 slot  (e.g.  2000ms for 12s,  1000ms for 6s)
 func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 	if c.EPBS.BuildStartTime == 0 {
 		c.EPBS.BuildStartTime = -slotTimeMs / 3
@@ -60,5 +60,7 @@ func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 		c.EPBS.BidEndTime = slotTimeMs / 12
 	}
 
-	// RevealTime 0 is the intended default (at slot start), so no auto-compute needed.
+	if c.EPBS.RevealTime == 0 {
+		c.EPBS.RevealTime = slotTimeMs / 6
+	}
 }

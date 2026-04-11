@@ -297,6 +297,11 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		s.service.FireBidSubmission(event)
 	}
 
+	// Increment stats (count each bid submission)
+	if s.service != nil && s.service.builderSvc != nil {
+		s.service.builderSvc.IncrementBidsSubmitted()
+	}
+
 	s.log.WithFields(logrus.Fields{
 		"slot":       slot,
 		"bid_value":  bidValue,
@@ -360,12 +365,16 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	// Mark payment as revealed (immediate deduction from live balance)
 	s.bidTracker.MarkRevealed(slot)
 
-	// Fire reveal event for UI
+	// Fire reveal event for UI and increment stats
 	if s.service != nil {
 		s.service.FireReveal(&RevealEvent{
 			Slot:    slot,
 			Success: true,
 		})
+
+		if s.service.builderSvc != nil {
+			s.service.builderSvc.IncrementRevealsSuccess()
+		}
 	}
 
 	s.log.WithField("slot", slot).Info("Reveal submitted")

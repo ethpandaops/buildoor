@@ -497,11 +497,12 @@ func (s *Service) IncrementBidsSubmitted() {
 	})
 }
 
-// IncrementBlocksIncluded increments the blocks included counter.
-// Called by the ePBS service when our payload is included.
+// IncrementBlocksIncluded increments the blocks included and bids won counters.
+// Called by the ePBS service when our payload is included in a beacon block.
 func (s *Service) IncrementBlocksIncluded() {
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.BlocksIncluded++
+		stats.BidsWon++
 	})
 }
 

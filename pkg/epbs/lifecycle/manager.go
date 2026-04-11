@@ -467,6 +467,7 @@ func (m *Manager) refreshBuilderState() {
 	}
 
 	m.stateMu.Lock()
+	oldBalance := m.builderState.Balance
 	m.builderState = &builder.BuilderState{
 		Pubkey:            pubkey[:],
 		Index:             info.Index,
@@ -477,8 +478,10 @@ func (m *Manager) refreshBuilderState() {
 	}
 	m.stateMu.Unlock()
 
-	// Reset balance adjustment — fresh state includes deposits and deductions
-	if m.bidTracker != nil {
+	// Only reset balance adjustment when the chain state actually changed (new epoch).
+	// Between epochs the chain state returns the same stale balance, so we must
+	// keep the local adjustment to avoid re-triggering topups.
+	if info.Balance != oldBalance && m.bidTracker != nil {
 		m.bidTracker.ResetBalanceAdjustment()
 	}
 }

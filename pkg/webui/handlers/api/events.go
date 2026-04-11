@@ -711,30 +711,24 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder pubkey, index, and pending payments from ePBS service
+	// Get builder identity, balance, and pending payments
 	if m.epbsSvc != nil {
 		pubkey := m.epbsSvc.GetBuilderPubkey()
 		info.BuilderPubkey = pubkey.String()
 		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
 		info.IsRegistered = m.epbsSvc.IsRegistered()
 
-		// Get pending payments from bid tracker
-		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
-			info.PendingPayments = tracker.GetTotalPendingPayments()
-		}
-
-		// Get live balance from chain service (works even without lifecycle enabled)
+		// Get balance and pending payments from chain state
 		if m.chainSvc != nil {
 			if builderInfo := m.chainSvc.GetBuilderByPubkey(pubkey); builderInfo != nil {
 				info.CLBalance = builderInfo.Balance
+				info.PendingPayments = builderInfo.PendingPayments
 				info.DepositEpoch = builderInfo.DepositEpoch
 				info.WithdrawableEpoch = builderInfo.WithdrawableEpoch
 			}
 		}
-	}
 
-	// Apply balance adjustment from bid tracker (topups add, revealed bids subtract)
-	if m.epbsSvc != nil {
+		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
 			adjustment := tracker.GetBalanceAdjustment()
 			adjusted := int64(info.CLBalance) + adjustment

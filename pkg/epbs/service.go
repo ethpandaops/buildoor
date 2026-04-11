@@ -419,6 +419,11 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
 	}
 
+	// Increment stats
+	if s.builderSvc != nil {
+		s.builderSvc.IncrementBlocksIncluded()
+	}
+
 	// Notify UI
 	s.bidIncludedDispatch.Fire(&BidIncludedEvent{
 		Slot:      payload.Slot,

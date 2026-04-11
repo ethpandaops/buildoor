@@ -44,11 +44,11 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 
 	// Extract common data based on state version
 	var (
-		validators           []*phase0.Validator
-		randaoMixes          []phase0.Root
-		proposerLookahead    []phase0.ValidatorIndex
-		finalizedCheckpoint  *phase0.Checkpoint
-		isGloas              bool
+		validators          []*phase0.Validator
+		randaoMixes         []phase0.Root
+		proposerLookahead   []phase0.ValidatorIndex
+		finalizedCheckpoint *phase0.Checkpoint
+		isGloas             bool
 	)
 
 	switch state.Version {
@@ -138,6 +138,9 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 
 		stats.Builders = extractBuilders(state.Gloas.Builders)
 		stats.BuildersLoaded = true
+
+		// Sum pending payments per builder from state
+		applyPendingPayments(stats.Builders, state.Gloas.BuilderPendingPayments)
 
 	default:
 		return nil, fmt.Errorf("unsupported state version: %s", state.Version)
@@ -256,4 +259,24 @@ func builderToInfo(index uint64, builder *gloas.Builder) *BuilderInfo {
 	info.Active = info.WithdrawableEpoch == FarFutureEpoch
 
 	return info
+}
+
+// applyPendingPayments sums pending payment amounts from the beacon state per builder.
+func applyPendingPayments(builders []*BuilderInfo, payments []*gloas.BuilderPendingPayment) {
+	if len(payments) == 0 || len(builders) == 0 {
+		return
+	}
+
+	for _, payment := range payments {
+		if payment == nil || payment.Withdrawal == nil || payment.Withdrawal.Amount == 0 {
+			continue
+		}
+
+		idx := uint64(payment.Withdrawal.BuilderIndex)
+		if idx >= uint64(len(builders)) {
+			continue
+		}
+
+		builders[idx].PendingPayments += uint64(payment.Withdrawal.Amount)
+	}
 }

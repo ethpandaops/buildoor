@@ -17,6 +17,7 @@ type BuilderInfo struct {
 	Active            bool
 	DepositEpoch      uint64
 	WithdrawableEpoch uint64
+	PendingPayments   uint64 // Sum of pending payments from BuilderPendingPayments in state
 }
 
 // SlotToTime converts a slot number to a timestamp.
