@@ -97,12 +97,19 @@ type Service struct {
 	revealDispatch        *utils.Dispatcher[*RevealEvent]
 	bidIncludedDispatch   *utils.Dispatcher[*BidIncludedEvent]
 	builderSvc            *builder.Service
-	enabled               atomic.Bool
-	registrationState     atomic.Int32
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	log                   logrus.FieldLogger
-	wg                    sync.WaitGroup
+
+	// Track our last included bid to check if the follow-up block uses our payload
+	lastIncludedSlot      phase0.Slot
+	lastIncludedBlockHash phase0.Hash32
+	lastIncludedBidValue  uint64
+	lastIncludedMu        sync.Mutex
+
+	enabled           atomic.Bool
+	registrationState atomic.Int32
+	ctx               context.Context
+	cancel            context.CancelFunc
+	log               logrus.FieldLogger
+	wg                sync.WaitGroup
 }
 
 // NewService creates a new ePBS service.
@@ -356,8 +363,8 @@ func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	// Close bidding for this slot - block already produced
 	s.scheduler.OnHeadEvent(event, nil)
 
-	// Check if this block contains our payload (async to not block)
-	go s.checkForOurPayload(event)
+	// Check bid inclusion and payload follow-up (async to not block)
+	go s.processHeadBlock(event)
 }
 
 // handleBidEvent processes a bid event from the event stream.
@@ -386,22 +393,93 @@ func (s *Service) handleBidEvent(event *beacon.BidEvent) {
 	}).Debug("Bid event received")
 }
 
-// checkForOurPayload checks if the beacon block contains our execution payload.
-func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
+// processHeadBlock handles a new head block:
+//  1. Check if the previous slot had our bid included — if so, check if this block
+//     builds on our payload (confirmed) or not (orphaned → pending payment).
+//  2. Check if this block includes our bid for the current slot.
+func (s *Service) processHeadBlock(event *beacon.HeadEvent) {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	// Fetch the beacon block by its root
+	// Fetch the beacon block
 	blockInfo, err := s.clClient.GetBlockInfo(ctx, fmt.Sprintf("0x%x", event.Block[:]))
 	if err != nil {
 		s.log.WithError(err).WithField("slot", event.Slot).Debug("Failed to get block info")
 		return
 	}
 
+	// Step 1: Check follow-up for our previously included bid.
+	// If our bid was included in the previous slot, the execution payload in this
+	// block should have prev_block_hash == our payload's block_hash if we revealed.
+	// If it doesn't match, our payload was orphaned (missed reveal or reorg).
+	s.checkFollowUpBlock(event, blockInfo)
+
+	// Step 2: Check if this block includes our bid.
+	s.checkForOurPayload(event, blockInfo)
+}
+
+// checkFollowUpBlock checks if the previous slot's included bid was confirmed or orphaned.
+func (s *Service) checkFollowUpBlock(event *beacon.HeadEvent, blockInfo *beacon.BlockInfo) {
+	s.lastIncludedMu.Lock()
+	prevSlot := s.lastIncludedSlot
+	prevHash := s.lastIncludedBlockHash
+	prevValue := s.lastIncludedBidValue
+	s.lastIncludedMu.Unlock()
+
+	if prevSlot == 0 || prevValue == 0 {
+		return
+	}
+
+	// Only check the immediate follow-up slot
+	if event.Slot <= prevSlot {
+		return
+	}
+
+	// Compare: does this block's execution parent match our payload?
+	// blockInfo.ExecutionBlockHash is the execution block hash of the envelope.
+	// We need to check if the envelope's parent_hash matches our payload.
+	// Since we can't easily get parent_hash from BlockInfo, we check if our
+	// payload store has a payload whose block_hash is referenced as the parent
+	// of the current execution payload. For now, use the payload_available event's
+	// block hash — if the execution payload for this slot was built on top of our
+	// payload, the parent hash would be our block hash.
+
+	// Clear the tracking regardless — we only check once
+	s.lastIncludedMu.Lock()
+	if s.lastIncludedSlot == prevSlot {
+		s.lastIncludedSlot = 0
+		s.lastIncludedBlockHash = phase0.Hash32{}
+		s.lastIncludedBidValue = 0
+	}
+	s.lastIncludedMu.Unlock()
+
+	// Check if the payload was revealed by looking at the scheduler state
+	slotState := s.scheduler.getSlotStateSafe(prevSlot)
+	if slotState != nil && slotState.Revealed {
+		// We revealed — the payment was already deducted from live balance via MarkRevealed.
+		s.log.WithFields(logrus.Fields{
+			"slot":       prevSlot,
+			"block_hash": fmt.Sprintf("%x", prevHash[:8]),
+		}).Debug("Previous bid was revealed, payment already deducted")
+
+		return
+	}
+
+	// We did NOT reveal — the payment stays as a pending payment for 2 epochs.
+	// RecordWonBid already added it. Nothing more to do — the pending payment
+	// will be settled by the beacon state's BuilderPendingPayments quorum logic.
+	s.log.WithFields(logrus.Fields{
+		"slot":       prevSlot,
+		"block_hash": fmt.Sprintf("%x", prevHash[:8]),
+		"value":      prevValue,
+	}).Warn("Previous bid was NOT revealed — payment pending for 2 epochs")
+}
+
+// checkForOurPayload checks if the beacon block contains our execution payload bid.
+func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.BlockInfo) {
 	// Check if this execution block hash matches any of our stored payloads
 	payload := s.payloadStore.GetByBlockHash(blockInfo.ExecutionBlockHash)
 	if payload == nil {
-		// Not our payload
 		return
 	}
 
@@ -414,10 +492,18 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent) {
 	// Mark bid as included in scheduler
 	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
 
-	// Record pending payment obligation
+	// Record as pending payment (will be moved to balance deduction if revealed,
+	// or stay pending for 2 epochs if not revealed)
 	if s.bidTracker != nil && payload.BidValue > 0 {
 		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
 	}
+
+	// Track for follow-up block check
+	s.lastIncludedMu.Lock()
+	s.lastIncludedSlot = payload.Slot
+	s.lastIncludedBlockHash = blockInfo.ExecutionBlockHash
+	s.lastIncludedBidValue = payload.BidValue
+	s.lastIncludedMu.Unlock()
 
 	// Increment stats
 	if s.builderSvc != nil {

@@ -77,7 +77,7 @@ func NewScheduler(
 	}
 }
 
-// getSlotState returns or creates state for a slot.
+// getSlotState returns or creates state for a slot. Must be called with mu held.
 func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 	state, ok := s.slotStates[slot]
 	if !ok {
@@ -86,6 +86,21 @@ func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 	}
 
 	return state
+}
+
+// getSlotStateSafe returns a copy of the slot state, or nil if not found. Thread-safe.
+func (s *Scheduler) getSlotStateSafe(slot phase0.Slot) *SlotState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, ok := s.slotStates[slot]
+	if !ok {
+		return nil
+	}
+
+	stateCopy := *state
+
+	return &stateCopy
 }
 
 // OnPayloadReady stores the payload for reveals.
