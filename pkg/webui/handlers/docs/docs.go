@@ -91,6 +91,36 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/proposer-preferences": {
+            "get": {
+                "description": "Returns all proposer preferences currently in the cache, received via P2P gossip.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get cached proposer preferences",
+                "operationId": "getProposerPreferences",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.ProposerPreferencesResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Proposer preferences not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/validators": {
             "get": {
                 "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
@@ -713,6 +743,34 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ProposerPreferencesEntry": {
+            "type": "object",
+            "properties": {
+                "fee_recipient": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "slot": {
+                    "type": "integer"
+                },
+                "validator_index": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.ProposerPreferencesResponse": {
+            "type": "object",
+            "properties": {
+                "preferences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.ProposerPreferencesEntry"
+                    }
+                }
+            }
+        },
         "api.StatsResponse": {
             "type": "object",
             "properties": {
@@ -813,6 +871,9 @@ const docTemplate = `{
                 },
                 "bid_start_time": {
                     "type": "integer"
+                },
+                "bid_static_min": {
+                    "type": "boolean"
                 },
                 "build_start_time": {
                     "type": "integer"

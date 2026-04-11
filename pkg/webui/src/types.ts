@@ -219,7 +219,6 @@ export interface BuilderAPIStatus {
   enabled: boolean;
   port: number;
   validator_count: number;
-  use_proposer_fee_recipient: boolean;
   block_value_subsidy_gwei: number;
 }
 

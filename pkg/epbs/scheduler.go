@@ -234,14 +234,16 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		}
 	}
 
-	// Calculate bid value
-	bidValue := s.cfg.BidMinAmount
-	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
-		bidValue = s.cfg.BidMinAmount + uint64(state.BidCount)*s.cfg.BidIncrease
+	// Calculate bid value.
+	// Start from block value with BidMinAmount as a floor.
+	bidBase := payload.BlockValue
+	if s.cfg.BidMinAmount > bidBase {
+		bidBase = s.cfg.BidMinAmount
 	}
 
-	if payload.BlockValue > bidValue {
-		bidValue = payload.BlockValue
+	bidValue := bidBase
+	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
+		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
 	}
 
 	s.mu.Unlock()

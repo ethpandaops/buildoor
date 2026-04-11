@@ -74,8 +74,7 @@ type UpdateBuilderConfigRequest struct {
 
 // UpdateBuilderAPIConfigRequest is the request for updating Builder API config.
 type UpdateBuilderAPIConfigRequest struct {
-	UseProposerFeeRecipient *bool   `json:"use_proposer_fee_recipient,omitempty"`
-	BlockValueSubsidyGwei   *uint64 `json:"block_value_subsidy_gwei,omitempty"`
+	BlockValueSubsidyGwei *uint64 `json:"block_value_subsidy_gwei,omitempty"`
 }
 
 // UpdateLifecycleConfigRequest is the request for updating lifecycle config.
@@ -562,11 +561,10 @@ func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 
 // BuilderAPIStatusResponse is the response for GetBuilderAPIStatus.
 type BuilderAPIStatusResponse struct {
-	Enabled                 bool   `json:"enabled"`
-	Port                    int    `json:"port"`
-	ValidatorCount          int    `json:"validator_count"`
-	UseProposerFeeRecipient bool   `json:"use_proposer_fee_recipient"`
-	BlockValueSubsidyGwei   uint64 `json:"block_value_subsidy_gwei"`
+	Enabled               bool   `json:"enabled"`
+	Port                  int    `json:"port"`
+	ValidatorCount        int    `json:"validator_count"`
+	BlockValueSubsidyGwei uint64 `json:"block_value_subsidy_gwei"`
 }
 
 // GetBuilderAPIStatus godoc
@@ -586,11 +584,10 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 	}
 
 	status := BuilderAPIStatusResponse{
-		Enabled:                 cfg.BuilderAPIEnabled,
-		Port:                    cfg.BuilderAPI.Port,
-		ValidatorCount:          validatorCount,
-		UseProposerFeeRecipient: cfg.BuilderAPI.UseProposerFeeRecipient,
-		BlockValueSubsidyGwei:   cfg.BuilderAPI.BlockValueSubsidyGwei,
+		Enabled:               cfg.BuilderAPIEnabled,
+		Port:                  cfg.BuilderAPI.Port,
+		ValidatorCount:        validatorCount,
+		BlockValueSubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}
 	writeJSON(w, http.StatusOK, status)
 }
@@ -647,10 +644,6 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	cfg := h.builderSvc.GetConfig()
-
-	if req.UseProposerFeeRecipient != nil {
-		cfg.BuilderAPI.UseProposerFeeRecipient = *req.UseProposerFeeRecipient
-	}
 
 	if req.BlockValueSubsidyGwei != nil {
 		cfg.BuilderAPI.BlockValueSubsidyGwei = *req.BlockValueSubsidyGwei

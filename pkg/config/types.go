@@ -53,12 +53,7 @@ type BuilderAPIConfig struct {
 	// Default: 9000.
 	Port int `yaml:"port" json:"port"`
 
-	// UseProposerFeeRecipient, when true, builds payloads with the proposer's fee recipient
-	// (from payload_attributes) so block rewards go to the proposer. Useful with subsidy for testing.
-	UseProposerFeeRecipient bool `yaml:"use_proposer_fee_recipient" json:"use_proposer_fee_recipient"`
-
 	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
-	// Does not change the actual block; use with UseProposerFeeRecipient so proposer gets block reward.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 }
 
@@ -82,6 +77,7 @@ type EPBSConfig struct {
 	RevealTime int64 `yaml:"reveal_time" json:"reveal_time"`
 
 	// BidMinAmount is the minimum bid amount in gwei.
+	// Bids use max(blockValue, BidMinAmount) as the starting bid value.
 	BidMinAmount uint64 `yaml:"bid_min_amount" json:"bid_min_amount"`
 
 	// BidIncrease is the amount to increase bid per subsequent bid in gwei.
