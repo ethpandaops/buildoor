@@ -23,7 +23,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     bid_min_amount: 0,
     bid_increase: 0,
     bid_interval: 0,
-    bid_static_min: false,
   });
 
   // Sync timing form state when not editing
@@ -54,7 +53,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
           bid_min_amount: timingForm.bid_min_amount,
           bid_increase: timingForm.bid_increase,
           bid_interval: timingForm.bid_interval,
-          bid_static_min: timingForm.bid_static_min,
         }),
       });
       const result = await response.json();
@@ -199,12 +197,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                   <div className="config-item-value">{epbs?.bid_interval || 0} ms</div>
                 </div>
               </div>
-              <div className="col-6">
-                <div className="config-item">
-                  <div className="config-item-label">Static Min Bid</div>
-                  <div className="config-item-value">{epbs?.bid_static_min ? 'Yes' : 'No'}</div>
-                </div>
-              </div>
             </div>
           ) : (
             <form onSubmit={handleTimingSave}>
@@ -267,16 +259,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                   onChange={(e) => setTimingForm({ ...timingForm, bid_interval: parseInt(e.target.value) || 0 })}
                   required
                 />
-              </div>
-              <div className="mb-2 form-check">
-                <input
-                  type="checkbox"
-                  className="form-check-input"
-                  id="bidStaticMin"
-                  checked={timingForm.bid_static_min}
-                  onChange={(e) => setTimingForm({ ...timingForm, bid_static_min: e.target.checked })}
-                />
-                <label className="form-check-label" htmlFor="bidStaticMin">Static min bid (ignore block value)</label>
               </div>
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>

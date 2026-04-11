@@ -235,12 +235,9 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	// Calculate bid value.
-	// Default: start from block value (with BidMinAmount as floor).
-	// BidStaticMin: always start from BidMinAmount, ignore block value.
+	// Start from block value with BidMinAmount as a floor.
 	bidBase := payload.BlockValue
-	if s.cfg.BidStaticMin {
-		bidBase = s.cfg.BidMinAmount
-	} else if s.cfg.BidMinAmount > bidBase {
+	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
 	}
 

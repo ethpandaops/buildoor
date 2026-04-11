@@ -82,8 +82,7 @@ type EPBSConfig struct {
 	RevealTime int64 `yaml:"reveal_time" json:"reveal_time"`
 
 	// BidMinAmount is the minimum bid amount in gwei.
-	// By default, bids start from the actual block value (from the EL) with BidMinAmount as a floor.
-	// When BidStaticMin is true, BidMinAmount is used as the fixed starting bid instead.
+	// Bids use max(blockValue, BidMinAmount) as the starting bid value.
 	BidMinAmount uint64 `yaml:"bid_min_amount" json:"bid_min_amount"`
 
 	// BidIncrease is the amount to increase bid per subsequent bid in gwei.
@@ -91,10 +90,6 @@ type EPBSConfig struct {
 
 	// BidInterval is milliseconds between bids. 0 means single bid.
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
-
-	// BidStaticMin when true ignores the block value and always starts bids from BidMinAmount.
-	// Default (false): bids start from max(blockValue, BidMinAmount).
-	BidStaticMin bool `yaml:"bid_static_min" json:"bid_static_min"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

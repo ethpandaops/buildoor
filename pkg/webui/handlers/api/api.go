@@ -63,7 +63,6 @@ type UpdateEPBSRequest struct {
 	BidMinAmount      *uint64 `json:"bid_min_amount,omitempty"`
 	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
 	BidInterval       *int64  `json:"bid_interval,omitempty"`
-	BidStaticMin      *bool   `json:"bid_static_min,omitempty"`
 	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
 }
 
@@ -330,10 +329,6 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	if req.BidInterval != nil {
 		cfg.EPBS.BidInterval = *req.BidInterval
-	}
-
-	if req.BidStaticMin != nil {
-		cfg.EPBS.BidStaticMin = *req.BidStaticMin
 	}
 
 	if req.PayloadBuildDelay != nil {
