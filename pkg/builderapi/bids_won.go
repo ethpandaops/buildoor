@@ -21,6 +21,8 @@ type BidWonEntry struct {
 type BidsWonStore struct {
 	entries []BidWonEntry
 	maxSize int
+	start   int
+	size    int
 	mu      sync.RWMutex
 }
 
@@ -31,7 +33,7 @@ func NewBidsWonStore(maxSize int) *BidsWonStore {
 		maxSize = 1000 // Default size
 	}
 	return &BidsWonStore{
-		entries: make([]BidWonEntry, 0, maxSize),
+		entries: make([]BidWonEntry, maxSize),
 		maxSize: maxSize,
 	}
 }
@@ -43,13 +45,16 @@ func (s *BidsWonStore) Add(entry BidWonEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Prepend new entry (newest first)
-	s.entries = append([]BidWonEntry{entry}, s.entries...)
+	if s.size < s.maxSize {
+		insertIndex := (s.start + s.size) % s.maxSize
+		s.entries[insertIndex] = entry
+		s.size++
 
-	// Evict oldest if over capacity
-	if len(s.entries) > s.maxSize {
-		s.entries = s.entries[:s.maxSize]
+		return
 	}
+
+	s.entries[s.start] = entry
+	s.start = (s.start + 1) % s.maxSize
 }
 
 // GetPage returns a page of entries with pagination support.
@@ -59,7 +64,7 @@ func (s *BidsWonStore) GetPage(offset, limit int) ([]BidWonEntry, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	total := len(s.entries)
+	total := s.size
 
 	// Validate offset
 	if offset < 0 {
@@ -77,7 +82,9 @@ func (s *BidsWonStore) GetPage(offset, limit int) ([]BidWonEntry, int) {
 
 	// Return slice copy to prevent external modification
 	page := make([]BidWonEntry, end-offset)
-	copy(page, s.entries[offset:end])
+	for i := range page {
+		page[i] = s.entryAt(offset + i)
+	}
 
 	return page, total
 }
@@ -86,7 +93,17 @@ func (s *BidsWonStore) GetPage(offset, limit int) ([]BidWonEntry, int) {
 func (s *BidsWonStore) Count() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.entries)
+	return s.size
+}
+
+// entryAt resolves a newest-first logical index to the backing circular buffer.
+func (s *BidsWonStore) entryAt(index int) BidWonEntry {
+	physicalIndex := (s.start + s.size - 1 - index) % s.maxSize
+	if physicalIndex < 0 {
+		physicalIndex += s.maxSize
+	}
+
+	return s.entries[physicalIndex]
 }
 
 // weiToETH converts wei (uint64) to ETH string with 18 decimal places.
