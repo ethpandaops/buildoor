@@ -79,6 +79,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
+	rootCmd.PersistentFlags().Bool("epbs-bid-static-min", defaults.EPBS.BidStaticMin, "Always use BidMinAmount as fixed bid base, ignoring block value")
 
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
@@ -170,6 +171,7 @@ func initConfig() error {
 			BidMinAmount:   v.GetUint64("epbs-bid-min"),
 			BidIncrease:    v.GetUint64("epbs-bid-increase"),
 			BidInterval:    v.GetInt64("epbs-bid-interval"),
+			BidStaticMin:   v.GetBool("epbs-bid-static-min"),
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
 		PayloadBuildTime:    v.GetUint64("payload-build-time"),

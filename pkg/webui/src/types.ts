@@ -43,6 +43,7 @@ export interface EPBSConfig {
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
+  bid_static_min: boolean;
   payload_build_delay?: number;
 }
 

@@ -49,6 +49,24 @@ definitions:
       withdrawable_epoch:
         type: integer
     type: object
+  api.ProposerPreferencesEntry:
+    properties:
+      fee_recipient:
+        type: string
+      gas_limit:
+        type: integer
+      slot:
+        type: integer
+      validator_index:
+        type: integer
+    type: object
+  api.ProposerPreferencesResponse:
+    properties:
+      preferences:
+        items:
+          $ref: '#/definitions/api.ProposerPreferencesEntry'
+        type: array
+    type: object
   api.StatsResponse:
     properties:
       bids_submitted:
@@ -116,6 +134,8 @@ definitions:
         type: integer
       bid_start_time:
         type: integer
+      bid_static_min:
+        type: boolean
       build_start_time:
         type: integer
       payload_build_delay:
@@ -225,6 +245,27 @@ paths:
               type: string
             type: object
       summary: Get Builder API status
+      tags:
+      - Buildoor
+  /api/buildoor/proposer-preferences:
+    get:
+      description: Returns all proposer preferences currently in the cache, received
+        via P2P gossip.
+      operationId: getProposerPreferences
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.ProposerPreferencesResponse'
+        "404":
+          description: Proposer preferences not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get cached proposer preferences
       tags:
       - Buildoor
   /api/buildoor/validators:

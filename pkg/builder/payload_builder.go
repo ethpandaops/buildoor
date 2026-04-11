@@ -247,8 +247,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	if payloadResult.BlockValue != nil {
 		// BlockValue from engine API is in wei; convert to gwei for bid values.
 		gweiValue := new(big.Int).Div(payloadResult.BlockValue, big.NewInt(1_000_000_000))
-		// bump up gweiValue by 0.5eth
-		gweiValue.Add(gweiValue, big.NewInt(500_000_000))
 		blockValueGwei = gweiValue.Uint64()
 	}
 
