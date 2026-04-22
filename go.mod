@@ -2,12 +2,9 @@ module github.com/ethpandaops/buildoor
 
 go 1.25.7
 
-// CRITICAL: Required for ePBS/Gloas types
-replace github.com/attestantio/go-eth2-client => github.com/pk910/go-eth2-client v0.0.0-20260401105128-4544cf21b737
-
 require (
-	github.com/attestantio/go-eth2-client v0.0.0-00010101000000-000000000000
 	github.com/ethereum/go-ethereum v1.17.2
+	github.com/ethpandaops/go-eth2-client v0.1.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/herumi/bls-eth-go-binary v1.37.0

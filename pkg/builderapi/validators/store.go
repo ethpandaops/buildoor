@@ -4,8 +4,8 @@ package validators
 import (
 	"sync"
 
-	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
-	"github.com/attestantio/go-eth2-client/spec/phase0"
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 // Store holds validator registrations by pubkey (in-memory).

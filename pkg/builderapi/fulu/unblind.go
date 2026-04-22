@@ -4,10 +4,10 @@ package fulu
 import (
 	"fmt"
 
-	apiv1electra "github.com/attestantio/go-eth2-client/api/v1/electra"
-	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
-	"github.com/attestantio/go-eth2-client/spec/deneb"
-	"github.com/attestantio/go-eth2-client/spec/electra"
+	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
+	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 )
