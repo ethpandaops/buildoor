@@ -99,7 +99,7 @@ buildoor run \
 
 ## Configuration Reference
 
-Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or environment variables.
+Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or an environment variables.
 
 ### Core Flags
 
