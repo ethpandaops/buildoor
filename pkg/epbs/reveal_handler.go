@@ -49,7 +49,7 @@ func (h *RevealHandler) SubmitReveal(
 	payload *BuiltPayload,
 	blockRoot phase0.Root,
 ) error {
-	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload, uint64(payload.Slot))
+	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload)
 	if err != nil {
 		return fmt.Errorf("failed to convert payload to gloas format: %w", err)
 	}

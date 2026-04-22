@@ -195,6 +195,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			SuggestedFeeRecipient: b.feeRecipient,
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
+			SlotNumber:            uint64(attrs.ProposalSlot),
 		},
 	)
 	if err != nil {

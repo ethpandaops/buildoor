@@ -69,9 +69,8 @@ func ExecutionPayloadFromEngine(p *engine.ExecutionPayload) (*deneb.ExecutionPay
 }
 
 // ExecutionPayloadToGloas builds gloas.ExecutionPayload from engine.ExecutionPayload.
-// SlotNumber is supplied by the caller since the EL does not know slot numbers.
-// BlockAccessList is left empty — the engine API does not yet surface it.
-func ExecutionPayloadToGloas(p *engine.ExecutionPayload, slotNumber uint64) (*gloas.ExecutionPayload, error) {
+// SlotNumber and BlockAccessList come from engine_getPayloadV6 (Amsterdam).
+func ExecutionPayloadToGloas(p *engine.ExecutionPayload) (*gloas.ExecutionPayload, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -82,20 +81,21 @@ func ExecutionPayloadToGloas(p *engine.ExecutionPayload, slotNumber uint64) (*gl
 	}
 
 	payload := &gloas.ExecutionPayload{
-		ParentHash:    phase0.Hash32(p.ParentHash),
-		FeeRecipient:  bellatrix.ExecutionAddress(p.FeeRecipient),
-		StateRoot:     phase0.Root(p.StateRoot),
-		ReceiptsRoot:  phase0.Root(p.ReceiptsRoot),
-		BlockNumber:   p.BlockNumber,
-		GasLimit:      p.GasLimit,
-		GasUsed:       p.GasUsed,
-		Timestamp:     p.Timestamp,
-		ExtraData:     p.ExtraData,
-		BaseFeePerGas: baseFee,
-		BlockHash:     phase0.Hash32(p.BlockHash),
-		BlobGasUsed:   p.BlobGasUsed,
-		ExcessBlobGas: p.ExcessBlobGas,
-		SlotNumber:    slotNumber,
+		ParentHash:      phase0.Hash32(p.ParentHash),
+		FeeRecipient:    bellatrix.ExecutionAddress(p.FeeRecipient),
+		StateRoot:       phase0.Root(p.StateRoot),
+		ReceiptsRoot:    phase0.Root(p.ReceiptsRoot),
+		BlockNumber:     p.BlockNumber,
+		GasLimit:        p.GasLimit,
+		GasUsed:         p.GasUsed,
+		Timestamp:       p.Timestamp,
+		ExtraData:       p.ExtraData,
+		BaseFeePerGas:   baseFee,
+		BlockHash:       phase0.Hash32(p.BlockHash),
+		BlobGasUsed:     p.BlobGasUsed,
+		ExcessBlobGas:   p.ExcessBlobGas,
+		BlockAccessList: gloas.BlockAccessList(p.BlockAccessList),
+		SlotNumber:      p.SlotNumber,
 	}
 
 	copy(payload.LogsBloom[:], p.LogsBloom[:])

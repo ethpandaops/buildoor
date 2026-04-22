@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/http"
 	"os"
@@ -51,6 +52,7 @@ type PayloadAttributes struct {
 	SuggestedFeeRecipient common.Address
 	Withdrawals           []*types.Withdrawal
 	ParentBeaconBlockRoot *common.Hash
+	SlotNumber            uint64 // Amsterdam (PayloadAttributesV4); zero before activation
 }
 
 // ExecutionPayload represents an execution layer payload (typed, with JSON marshal/unmarshal for API).
@@ -73,6 +75,8 @@ type ExecutionPayload struct {
 	BlobGasUsed      uint64
 	ExcessBlobGas    uint64
 	ParentBeaconRoot *common.Hash
+	BlockAccessList  []byte // Amsterdam (ExecutionPayloadV4), RLP-encoded per EIP-7928
+	SlotNumber       uint64 // Amsterdam (ExecutionPayloadV4); zero before activation
 }
 
 // executionPayloadJSON is the Engine API JSON shape for executionPayload (used for marshal/unmarshal).
@@ -95,6 +99,8 @@ type executionPayloadJSON struct {
 	BlobGasUsed      hexutil.Uint64      `json:"blobGasUsed,omitempty"`
 	ExcessBlobGas    hexutil.Uint64      `json:"excessBlobGas,omitempty"`
 	ParentBeaconRoot *common.Hash        `json:"parentBeaconBlockRoot,omitempty"`
+	BlockAccessList  hexutil.Bytes       `json:"blockAccessList,omitempty"`
+	SlotNumber       hexutil.Uint64      `json:"slotNumber,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler for ExecutionPayload.
@@ -126,6 +132,8 @@ func (p *ExecutionPayload) UnmarshalJSON(data []byte) error {
 	p.BlobGasUsed = uint64(j.BlobGasUsed)
 	p.ExcessBlobGas = uint64(j.ExcessBlobGas)
 	p.ParentBeaconRoot = j.ParentBeaconRoot
+	p.BlockAccessList = j.BlockAccessList
+	p.SlotNumber = uint64(j.SlotNumber)
 	return nil
 }
 
@@ -149,6 +157,8 @@ func (p *ExecutionPayload) MarshalJSON() ([]byte, error) {
 		BlobGasUsed:      hexutil.Uint64(p.BlobGasUsed),
 		ExcessBlobGas:    hexutil.Uint64(p.ExcessBlobGas),
 		ParentBeaconRoot: p.ParentBeaconRoot,
+		BlockAccessList:  p.BlockAccessList,
+		SlotNumber:       hexutil.Uint64(p.SlotNumber),
 	}
 	if p.BaseFeePerGas != nil {
 		j.BaseFeePerGas = (*hexutil.Big)(p.BaseFeePerGas)
@@ -362,7 +372,7 @@ type ForkchoiceState struct {
 	FinalizedBlockHash common.Hash `json:"finalizedBlockHash"`
 }
 
-// ForkchoiceUpdatedResponse is the response from engine_forkchoiceUpdatedV3.
+// ForkchoiceUpdatedResponse is the response from engine_forkchoiceUpdatedV3/V4.
 type ForkchoiceUpdatedResponse struct {
 	PayloadStatus PayloadStatus `json:"payloadStatus"`
 	PayloadID     *PayloadID    `json:"payloadId"`
@@ -421,8 +431,13 @@ func (c *Client) RequestPayloadBuild(
 		attrsMap["parentBeaconBlockRoot"] = attrs.ParentBeaconBlockRoot.Hex()
 	}
 
+	// V4-only: slotNumber. We try V4 first and fall back to V3 without this field below.
+	attrsV4 := make(map[string]any, len(attrsMap)+1)
+	maps.Copy(attrsV4, attrsMap)
+	attrsV4["slotNumber"] = fmt.Sprintf("0x%x", attrs.SlotNumber)
+
 	c.log.WithFields(logrus.Fields{
-		"attrs_map": attrsMap,
+		"attrs_map": attrsV4,
 	}).Info("Payload attributes map being sent to forkchoiceUpdated")
 
 	// log the payload attributes being sent
@@ -432,10 +447,17 @@ func (c *Client) RequestPayloadBuild(
 		"suggested_fee_recipient":  attrs.SuggestedFeeRecipient.Hex(),
 		"withdrawals":              len(attrs.Withdrawals),
 		"parent_beacon_block_root": attrs.ParentBeaconBlockRoot.Hex(),
+		"slot_number":              attrs.SlotNumber,
 	}).Info("Payload attributes being sent to forkchoiceUpdated")
 
 	var response ForkchoiceUpdatedResponse
-	if err := c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap); err != nil {
+	err := c.call(ctx, "engine_forkchoiceUpdatedV4", &response, state, attrsV4)
+	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
+		c.log.Debug("engine_forkchoiceUpdatedV4 unsupported, trying V3")
+
+		err = c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap)
+	}
+	if err != nil {
 		return PayloadID{}, fmt.Errorf("forkchoiceUpdated failed: %w", err)
 	}
 
@@ -562,8 +584,14 @@ func (c *Client) GetPayloadRaw(
 
 	payloadIDHex := fmt.Sprintf("0x%x", payloadID[:])
 
-	// Try V5 first (Osaka/Fulu), fall back to V4, then V3 if unsupported
-	err := c.call(ctx, "engine_getPayloadV5", &response, payloadIDHex)
+	// Try V6 first (Amsterdam/Gloas), fall back to V5, V4, V3 if unsupported.
+	err := c.call(ctx, "engine_getPayloadV6", &response, payloadIDHex)
+	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
+		c.log.Debug("engine_getPayloadV6 unsupported, trying V5")
+
+		err = c.call(ctx, "engine_getPayloadV5", &response, payloadIDHex)
+	}
+
 	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
 		c.log.Debug("engine_getPayloadV5 unsupported, trying V4")
 
