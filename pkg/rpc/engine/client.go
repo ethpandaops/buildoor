@@ -2,6 +2,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -99,8 +100,10 @@ type executionPayloadJSON struct {
 	BlobGasUsed      hexutil.Uint64      `json:"blobGasUsed,omitempty"`
 	ExcessBlobGas    hexutil.Uint64      `json:"excessBlobGas,omitempty"`
 	ParentBeaconRoot *common.Hash        `json:"parentBeaconBlockRoot,omitempty"`
-	BlockAccessList  hexutil.Bytes       `json:"blockAccessList,omitempty"`
-	SlotNumber       hexutil.Uint64      `json:"slotNumber,omitempty"`
+	// BlockAccessList is raw so we tolerate null / non-hex shapes from ELs that
+	// haven't settled on the final Amsterdam encoding yet. Decoded in UnmarshalJSON.
+	BlockAccessList json.RawMessage `json:"blockAccessList,omitempty"`
+	SlotNumber      hexutil.Uint64  `json:"slotNumber,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler for ExecutionPayload.
@@ -132,9 +135,31 @@ func (p *ExecutionPayload) UnmarshalJSON(data []byte) error {
 	p.BlobGasUsed = uint64(j.BlobGasUsed)
 	p.ExcessBlobGas = uint64(j.ExcessBlobGas)
 	p.ParentBeaconRoot = j.ParentBeaconRoot
-	p.BlockAccessList = j.BlockAccessList
+	p.BlockAccessList = decodeBlockAccessList(j.BlockAccessList)
 	p.SlotNumber = uint64(j.SlotNumber)
 	return nil
+}
+
+// decodeBlockAccessList accepts the EL's blockAccessList in whatever shape it arrives:
+// null or absent → nil; a hex DATA string → decoded bytes; anything else (a JSON
+// object/array — not yet in the spec but some ELs emit it) → passed through verbatim.
+func decodeBlockAccessList(raw json.RawMessage) []byte {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil
+		}
+		decoded, err := hexutil.Decode(s)
+		if err != nil {
+			return nil
+		}
+		return decoded
+	}
+	return trimmed
 }
 
 // MarshalJSON implements json.Marshaler for ExecutionPayload.
@@ -157,8 +182,10 @@ func (p *ExecutionPayload) MarshalJSON() ([]byte, error) {
 		BlobGasUsed:      hexutil.Uint64(p.BlobGasUsed),
 		ExcessBlobGas:    hexutil.Uint64(p.ExcessBlobGas),
 		ParentBeaconRoot: p.ParentBeaconRoot,
-		BlockAccessList:  p.BlockAccessList,
 		SlotNumber:       hexutil.Uint64(p.SlotNumber),
+	}
+	if len(p.BlockAccessList) > 0 {
+		j.BlockAccessList, _ = json.Marshal(hexutil.Bytes(p.BlockAccessList))
 	}
 	if p.BaseFeePerGas != nil {
 		j.BaseFeePerGas = (*hexutil.Big)(p.BaseFeePerGas)
