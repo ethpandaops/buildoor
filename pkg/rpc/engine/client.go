@@ -135,15 +135,15 @@ func (p *ExecutionPayload) UnmarshalJSON(data []byte) error {
 	p.BlobGasUsed = uint64(j.BlobGasUsed)
 	p.ExcessBlobGas = uint64(j.ExcessBlobGas)
 	p.ParentBeaconRoot = j.ParentBeaconRoot
-	p.BlockAccessList = decodeBlockAccessList(j.BlockAccessList)
+	p.BlockAccessList = DecodeBlockAccessList(j.BlockAccessList)
 	p.SlotNumber = uint64(j.SlotNumber)
 	return nil
 }
 
-// decodeBlockAccessList accepts the EL's blockAccessList in whatever shape it arrives:
+// DecodeBlockAccessList accepts the EL's blockAccessList in whatever shape it arrives:
 // null or absent → nil; a hex DATA string → decoded bytes; anything else (a JSON
 // object/array — not yet in the spec but some ELs emit it) → passed through verbatim.
-func decodeBlockAccessList(raw json.RawMessage) []byte {
+func DecodeBlockAccessList(raw json.RawMessage) []byte {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
 		return nil

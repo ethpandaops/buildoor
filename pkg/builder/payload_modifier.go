@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
 
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -20,23 +21,25 @@ const maxExtraDataSize = 32
 // fullPayloadJSON is the full execution payload as returned by the engine API.
 // All fields are in engine API format (camelCase, hex-encoded numerics).
 type fullPayloadJSON struct {
-	ParentHash    string          `json:"parentHash"`
-	FeeRecipient  string          `json:"feeRecipient"`
-	StateRoot     string          `json:"stateRoot"`
-	ReceiptsRoot  string          `json:"receiptsRoot"`
-	LogsBloom     string          `json:"logsBloom"`
-	PrevRandao    string          `json:"prevRandao"`
-	BlockNumber   string          `json:"blockNumber"`
-	GasLimit      string          `json:"gasLimit"`
-	GasUsed       string          `json:"gasUsed"`
-	Timestamp     string          `json:"timestamp"`
-	ExtraData     string          `json:"extraData"`
-	BaseFeePerGas string          `json:"baseFeePerGas"`
-	BlockHash     string          `json:"blockHash"`
-	Transactions  []string        `json:"transactions"`
-	Withdrawals   json.RawMessage `json:"withdrawals"`
-	BlobGasUsed   string          `json:"blobGasUsed"`
-	ExcessBlobGas string          `json:"excessBlobGas"`
+	ParentHash      string          `json:"parentHash"`
+	FeeRecipient    string          `json:"feeRecipient"`
+	StateRoot       string          `json:"stateRoot"`
+	ReceiptsRoot    string          `json:"receiptsRoot"`
+	LogsBloom       string          `json:"logsBloom"`
+	PrevRandao      string          `json:"prevRandao"`
+	BlockNumber     string          `json:"blockNumber"`
+	GasLimit        string          `json:"gasLimit"`
+	GasUsed         string          `json:"gasUsed"`
+	Timestamp       string          `json:"timestamp"`
+	ExtraData       string          `json:"extraData"`
+	BaseFeePerGas   string          `json:"baseFeePerGas"`
+	BlockHash       string          `json:"blockHash"`
+	Transactions    []string        `json:"transactions"`
+	Withdrawals     json.RawMessage `json:"withdrawals"`
+	BlobGasUsed     string          `json:"blobGasUsed"`
+	ExcessBlobGas   string          `json:"excessBlobGas"`
+	BlockAccessList json.RawMessage `json:"blockAccessList"` // Amsterdam (V6+)
+	SlotNumber      string          `json:"slotNumber"`      // Amsterdam (V6+)
 }
 
 // engineWithdrawalJSON is the JSON format for withdrawals in the engine API.
@@ -287,6 +290,31 @@ func buildHeaderFromPayload(
 		requestsHash = &h
 	}
 
+	// Amsterdam (EIP-7732 / EIP-7928): slotNumber and blockAccessList hash join the
+	// header. We treat the presence of slotNumber as the Amsterdam signal — geth
+	// emits it iff the payload is Amsterdam.
+	var (
+		slotNumber          *uint64
+		blockAccessListHash *common.Hash
+	)
+
+	if payload.SlotNumber != "" {
+		sn, err := parseHexUint64(payload.SlotNumber)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slotNumber: %w", err)
+		}
+		slotNumber = &sn
+
+		balBytes := engine.DecodeBlockAccessList(payload.BlockAccessList)
+		if len(balBytes) == 0 {
+			h := types.EmptyBlockAccessListHash
+			blockAccessListHash = &h
+		} else {
+			h := crypto.Keccak256Hash(balBytes)
+			blockAccessListHash = &h
+		}
+	}
+
 	// Construct the full block header with post-merge constants
 	header := &types.Header{
 		ParentHash:       common.HexToHash(payload.ParentHash),
@@ -308,8 +336,10 @@ func buildHeaderFromPayload(
 		WithdrawalsHash:  withdrawalsHash,
 		BlobGasUsed:      blobGasUsed,
 		ExcessBlobGas:    excessBlobGas,
-		ParentBeaconRoot: &parentBeaconBlockRoot,
-		RequestsHash:     requestsHash,
+		ParentBeaconRoot:    &parentBeaconBlockRoot,
+		RequestsHash:        requestsHash,
+		BlockAccessListHash: blockAccessListHash,
+		SlotNumber:          slotNumber,
 	}
 
 	return header, nil
