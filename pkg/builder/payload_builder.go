@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethpandaops/go-eth2-client/spec/capella"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethpandaops/go-eth2-client/spec/capella"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
@@ -195,6 +195,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			SuggestedFeeRecipient: b.feeRecipient,
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
+			SlotNumber:            uint64(attrs.ProposalSlot),
 		},
 	)
 	if err != nil {
@@ -351,6 +352,7 @@ func (b *PayloadBuilder) BuildPayloadWithContext(
 			SuggestedFeeRecipient: b.feeRecipient,
 			Withdrawals:           buildCtx.Withdrawals,
 			ParentBeaconBlockRoot: &buildCtx.ParentBeaconRoot,
+			SlotNumber:            uint64(buildCtx.Slot),
 		},
 	)
 	if err != nil {
