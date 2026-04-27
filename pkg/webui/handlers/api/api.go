@@ -64,6 +64,7 @@ type UpdateEPBSRequest struct {
 	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
 	BidInterval       *int64  `json:"bid_interval,omitempty"`
 	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
+	P2PBidSubsidy     *uint64 `json:"p2p_bid_subsidy,omitempty"`
 }
 
 // UpdateBuilderConfigRequest is the request for updating shared builder config.
@@ -332,6 +333,10 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	if req.PayloadBuildDelay != nil {
 		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
+	}
+
+	if req.P2PBidSubsidy != nil {
+		cfg.EPBS.P2PBidSubsidy = *req.P2PBidSubsidy
 	}
 
 	if err := h.builderSvc.UpdateConfig(cfg); err != nil {

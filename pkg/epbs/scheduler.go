@@ -246,11 +246,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
 	}
 
-	// P2P bonus: validator BNs reject our gossiped bid with "Local EL value exceeds
+	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
 	// P2P bid, using self-build" when their local EL build is worth more than ours.
-	// Add 0.5 ETH so the bid clears their local-EL threshold on devnets.
-	const p2pBidBonusGwei uint64 = 500000000
-	bidValue += p2pBidBonusGwei
+	// Configurable via --p2p-bid-subsidy (gwei).
+	bidValue += s.cfg.P2PBidSubsidy
 
 	s.mu.Unlock()
 
