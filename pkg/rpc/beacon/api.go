@@ -46,7 +46,6 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 	return nil
 }
 
-
 // publishEnvelopeRequest embeds the signed envelope JSON fields and adds optional
 // blobs + cell_proofs for data column broadcasting (Prysm's PublishExecutionPayloadEnvelopeRequest).
 type publishEnvelopeRequest struct {
