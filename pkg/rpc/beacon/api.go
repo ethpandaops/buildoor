@@ -19,7 +19,7 @@ type ExecutionPayloadBidResponse struct {
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload/bid", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
 	if err != nil {
@@ -46,40 +46,6 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 	return nil
 }
 
-// GetExecutionPayloadBidTemplate fetches an execution payload bid template.
-func (c *Client) GetExecutionPayloadBidTemplate(
-	ctx context.Context,
-	slot phase0.Slot,
-	builderIndex uint64,
-) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/eth/v1/validator/execution_payload_bid/%d/%d", c.baseURL, slot, builderIndex)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get bid template: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
-		return nil, fmt.Errorf("failed to get bid template: status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var response ExecutionPayloadBidResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return response.Data, nil
-}
 
 // publishEnvelopeRequest embeds the signed envelope JSON fields and adds optional
 // blobs + cell_proofs for data column broadcasting (Prysm's PublishExecutionPayloadEnvelopeRequest).
