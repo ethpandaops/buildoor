@@ -19,7 +19,7 @@ type ExecutionPayloadBidResponse struct {
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bid", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
 	if err != nil {
