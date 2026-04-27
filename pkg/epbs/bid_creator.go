@@ -7,11 +7,13 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -55,19 +57,35 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	copy(feeRecipient[:], payload.FeeRecipient[:])
 
+	// Compute the execution requests root over the typed Electra requests.
+	// Empty requests root is the HTR of an empty *electra.ExecutionRequests.
+	execRequests := &electra.ExecutionRequests{}
+	if len(payload.ExecutionRequests) > 0 {
+		parsed, err := fulu.ParseExecutionRequests(payload.ExecutionRequests)
+		if err != nil {
+			return fmt.Errorf("failed to parse execution requests: %w", err)
+		}
+		execRequests = parsed
+	}
+	execRequestsRoot, err := execRequests.HashTreeRoot()
+	if err != nil {
+		return fmt.Errorf("failed to compute execution requests root: %w", err)
+	}
+
 	// Build the execution payload bid
 	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:    payload.ParentBlockHash,
-		ParentBlockRoot:    payload.ParentBlockRoot,
-		BlockHash:          payload.BlockHash,
-		PrevRandao:         payload.PrevRandao,
-		FeeRecipient:       feeRecipient,
-		GasLimit:           payload.GasLimit,
-		BuilderIndex:       gloas.BuilderIndex(c.builderIndex),
-		Slot:               payload.Slot,
-		Value:              phase0.Gwei(bidValue),
-		ExecutionPayment:   0, // Same as value for now
-		BlobKZGCommitments: []deneb.KZGCommitment{},
+		ParentBlockHash:       payload.ParentBlockHash,
+		ParentBlockRoot:       payload.ParentBlockRoot,
+		BlockHash:             payload.BlockHash,
+		PrevRandao:            payload.PrevRandao,
+		FeeRecipient:          feeRecipient,
+		GasLimit:              payload.GasLimit,
+		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
+		Slot:                  payload.Slot,
+		Value:                 phase0.Gwei(bidValue),
+		ExecutionPayment:      0, // Same as value for now
+		BlobKZGCommitments:    []deneb.KZGCommitment{},
+		ExecutionRequestsRoot: execRequestsRoot,
 	}
 
 	c.log.Info("Created execution payload bid")
