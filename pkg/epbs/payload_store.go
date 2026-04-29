@@ -6,6 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
@@ -13,6 +14,7 @@ import (
 // Payload, BlobsBundle, and ExecutionRequests are stored typed; marshal to JSON only when submitting to beacon.
 type BuiltPayload struct {
 	Slot              phase0.Slot
+	Variant           builder.PayloadVariant
 	BlockHash         phase0.Hash32
 	ParentBlockHash   phase0.Hash32
 	ParentBlockRoot   phase0.Root
@@ -26,16 +28,22 @@ type BuiltPayload struct {
 	GasLimit          uint64
 }
 
-// PayloadStore stores built execution payloads for later reveal.
+type storeKey struct {
+	slot    phase0.Slot
+	variant builder.PayloadVariant
+}
+
+// PayloadStore stores built execution payloads for later reveal, keyed by
+// (slot, variant) so the FULL and EMPTY variants for the same slot coexist.
 type PayloadStore struct {
-	payloads map[phase0.Slot]*BuiltPayload
+	payloads map[storeKey]*BuiltPayload
 	mu       sync.RWMutex
 }
 
 // NewPayloadStore creates a new payload store.
 func NewPayloadStore() *PayloadStore {
 	return &PayloadStore{
-		payloads: make(map[phase0.Slot]*BuiltPayload, 16),
+		payloads: make(map[storeKey]*BuiltPayload, 16),
 	}
 }
 
@@ -44,23 +52,59 @@ func (s *PayloadStore) Store(payload *BuiltPayload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.payloads[payload.Slot] = payload
+	s.payloads[storeKey{slot: payload.Slot, variant: payload.Variant}] = payload
 }
 
-// Get retrieves a stored payload for a slot.
+// Get retrieves a stored payload for a slot. When both variants are present,
+// the FULL variant is returned by preference. Used by callers that don't
+// care which variant they get (e.g. fallback paths).
 func (s *PayloadStore) Get(slot phase0.Slot) *BuiltPayload {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.payloads[slot]
+	if p, ok := s.payloads[storeKey{slot: slot, variant: builder.PayloadVariantFull}]; ok {
+		return p
+	}
+	if p, ok := s.payloads[storeKey{slot: slot, variant: builder.PayloadVariantEmpty}]; ok {
+		return p
+	}
+
+	return nil
 }
 
-// Delete removes a payload for a slot.
+// GetByVariant retrieves the stored payload for a specific (slot, variant) pair.
+func (s *PayloadStore) GetByVariant(slot phase0.Slot, variant builder.PayloadVariant) *BuiltPayload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.payloads[storeKey{slot: slot, variant: variant}]
+}
+
+// GetAllForSlot returns every variant stored for the given slot.
+func (s *PayloadStore) GetAllForSlot(slot phase0.Slot) []*BuiltPayload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]*BuiltPayload, 0, 2)
+	for k, p := range s.payloads {
+		if k.slot == slot {
+			out = append(out, p)
+		}
+	}
+
+	return out
+}
+
+// Delete removes all variants for a slot.
 func (s *PayloadStore) Delete(slot phase0.Slot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.payloads, slot)
+	for k := range s.payloads {
+		if k.slot == slot {
+			delete(s.payloads, k)
+		}
+	}
 }
 
 // Cleanup removes payloads older than the given slot.
@@ -68,9 +112,9 @@ func (s *PayloadStore) Cleanup(olderThan phase0.Slot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for slot := range s.payloads {
-		if slot < olderThan {
-			delete(s.payloads, slot)
+	for k := range s.payloads {
+		if k.slot < olderThan {
+			delete(s.payloads, k)
 		}
 	}
 }

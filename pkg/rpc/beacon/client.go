@@ -574,6 +574,56 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 	}, nil
 }
 
+// BidInfo contains the execution-payload-bid fields the builder needs to derive
+// the FCU head hash for the FULL and EMPTY variants of the next slot's payload.
+type BidInfo struct {
+	BlockHash       phase0.Hash32 // Bid's block_hash → FULL head
+	ParentBlockHash phase0.Hash32 // Bid's parent_block_hash → EMPTY head
+}
+
+// GetExecutionPayloadBid fetches a beacon block by ID and returns the chosen
+// execution payload bid embedded in it. Only valid for Gloas+ blocks. Returns
+// an error for pre-Gloas blocks (which carry the payload inline rather than a bid).
+func (c *Client) GetExecutionPayloadBid(ctx context.Context, blockID string) (*BidInfo, error) {
+	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support signed beacon block provider")
+	}
+
+	resp, err := provider.SignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
+		Block: blockID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get beacon block: %w", err)
+	}
+	if resp.Data == nil {
+		return nil, fmt.Errorf("beacon block response is nil")
+	}
+
+	versionedBid, err := resp.Data.SignedExecutionPayloadBid()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get signed execution payload bid: %w", err)
+	}
+	if versionedBid == nil {
+		return nil, fmt.Errorf("signed execution payload bid is nil")
+	}
+
+	blockHash, err := versionedBid.BlockHash()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read bid block_hash: %w", err)
+	}
+
+	parentBlockHash, err := versionedBid.ParentBlockHash()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read bid parent_block_hash: %w", err)
+	}
+
+	return &BidInfo{
+		BlockHash:       blockHash,
+		ParentBlockHash: parentBlockHash,
+	}, nil
+}
+
 // GetFinalityInfo fetches finality checkpoints and returns execution block hashes.
 func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 	// Get finality checkpoints

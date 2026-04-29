@@ -336,8 +336,51 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             />
           )}
 
-          {/* Payload created */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+          {/* Payload created — render FULL and EMPTY dots independently when present.
+              Falls back to a single legacy dot when no variant info is available. */}
+          {state.payloadFullCreatedAt && genesisTime > 0 && renderEventDot(
+            'payload-created payload-created-full',
+            state.payloadFullCreatedAt - slotStartTime,
+            {
+              title: 'FULL Payload Created',
+              items: [
+                { label: 'Variant', value: 'FULL (built on bid.block_hash)' },
+                { label: 'Time', value: `${state.payloadFullCreatedAt - slotStartTime}ms` },
+                ...(state.payloadFullBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.payloadFullBlockHash),
+                  copyValue: state.payloadFullBlockHash
+                }] : []),
+                ...(state.payloadFullBlockValue ? [{
+                  label: 'Block Value',
+                  value: formatGwei(state.payloadFullBlockValue)
+                }] : [])
+              ]
+            },
+            'payload-full'
+          )}
+          {state.payloadEmptyCreatedAt && genesisTime > 0 && renderEventDot(
+            'payload-created payload-created-empty',
+            state.payloadEmptyCreatedAt - slotStartTime,
+            {
+              title: 'EMPTY Payload Created',
+              items: [
+                { label: 'Variant', value: 'EMPTY (built on bid.parent_block_hash)' },
+                { label: 'Time', value: `${state.payloadEmptyCreatedAt - slotStartTime}ms` },
+                ...(state.payloadEmptyBlockHash ? [{
+                  label: 'Block Hash',
+                  value: truncateHash(state.payloadEmptyBlockHash),
+                  copyValue: state.payloadEmptyBlockHash
+                }] : []),
+                ...(state.payloadEmptyBlockValue ? [{
+                  label: 'Block Value',
+                  value: formatGwei(state.payloadEmptyBlockValue)
+                }] : [])
+              ]
+            },
+            'payload-empty'
+          )}
+          {!state.payloadFullCreatedAt && !state.payloadEmptyCreatedAt && state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {

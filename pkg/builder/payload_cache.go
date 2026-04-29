@@ -11,10 +11,19 @@ const (
 	DefaultCacheSize = 1000
 )
 
-// PayloadCache stores built payloads for a limited number of slots.
-// It uses a simple LRU-like approach, keeping only the most recent slots.
+// payloadKey is the composite cache key. FULL and EMPTY variants for the same
+// slot end up under different keys because their ParentBlockHash differs
+// (FULL uses bid.block_hash, EMPTY uses bid.parent_block_hash).
+type payloadKey struct {
+	parentBlockRoot phase0.Root
+	parentBlockHash phase0.Hash32
+	slot            phase0.Slot
+}
+
+// PayloadCache stores built payloads keyed by (parent_block_root, parent_block_hash, slot).
+// When more than one event arrives for the same key, the highest-value one is retained.
 type PayloadCache struct {
-	payloads map[phase0.Slot]*PayloadReadyEvent
+	payloads map[payloadKey]*PayloadReadyEvent
 	maxSlots int
 	mu       sync.RWMutex
 }
@@ -26,27 +35,83 @@ func NewPayloadCache(maxSlots int) *PayloadCache {
 	}
 
 	return &PayloadCache{
-		payloads: make(map[phase0.Slot]*PayloadReadyEvent, maxSlots),
+		payloads: make(map[payloadKey]*PayloadReadyEvent, maxSlots),
 		maxSlots: maxSlots,
 	}
 }
 
-// Store stores a payload in the cache.
-// It automatically evicts old payloads to maintain the size limit.
+func keyFor(event *PayloadReadyEvent) payloadKey {
+	return payloadKey{
+		parentBlockRoot: event.ParentBlockRoot,
+		parentBlockHash: event.ParentBlockHash,
+		slot:            event.Slot,
+	}
+}
+
+// Store stores a payload in the cache. If an entry already exists for the same
+// (parent_block_root, parent_block_hash, slot) key, the higher-value event wins.
 func (c *PayloadCache) Store(event *PayloadReadyEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.payloads[event.Slot] = event
-	c.evictOld(event.Slot)
+	key := keyFor(event)
+	if existing, ok := c.payloads[key]; ok && existing.BlockValue >= event.BlockValue {
+		return
+	}
+
+	c.payloads[key] = event
+	c.evictOld()
 }
 
-// Get retrieves a payload for the given slot.
+// Get retrieves the highest-value cached payload for the given slot, regardless
+// of variant. Used by callers (e.g. Builder API pre-Gloas) that don't care
+// about FULL vs EMPTY.
 func (c *PayloadCache) Get(slot phase0.Slot) *PayloadReadyEvent {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.payloads[slot]
+	var best *PayloadReadyEvent
+	for k, p := range c.payloads {
+		if k.slot != slot {
+			continue
+		}
+		if best == nil || p.BlockValue > best.BlockValue {
+			best = p
+		}
+	}
+
+	return best
+}
+
+// GetByVariant retrieves the cached payload for a specific (slot, variant) pair.
+// Returns nil if no payload was built for that variant.
+func (c *PayloadCache) GetByVariant(slot phase0.Slot, variant PayloadVariant) *PayloadReadyEvent {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	for k, p := range c.payloads {
+		if k.slot == slot && p.Variant == variant {
+			return p
+		}
+	}
+
+	return nil
+}
+
+// GetAllForSlot returns every cached payload for the given slot (one per variant
+// at most under normal operation).
+func (c *PayloadCache) GetAllForSlot(slot phase0.Slot) []*PayloadReadyEvent {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	out := make([]*PayloadReadyEvent, 0, 2)
+	for k, p := range c.payloads {
+		if k.slot == slot {
+			out = append(out, p)
+		}
+	}
+
+	return out
 }
 
 // GetByBlockHash retrieves a payload by its block hash.
@@ -63,12 +128,16 @@ func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *PayloadReadyEven
 	return nil
 }
 
-// Delete removes a payload for the given slot.
+// Delete removes all cached payloads for the given slot (every variant).
 func (c *PayloadCache) Delete(slot phase0.Slot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	delete(c.payloads, slot)
+	for k := range c.payloads {
+		if k.slot == slot {
+			delete(c.payloads, k)
+		}
+	}
 }
 
 // GetAll returns all cached payloads.
@@ -92,34 +161,30 @@ func (c *PayloadCache) Size() int {
 	return len(c.payloads)
 }
 
-// evictOld removes payloads older than the retention limit.
-// Must be called with lock held.
-func (c *PayloadCache) evictOld(_ phase0.Slot) {
-	if len(c.payloads) <= c.maxSlots {
-		return
+// evictOld removes payloads belonging to the oldest slots once we exceed maxSlots
+// distinct slot count. Must be called with the lock held.
+func (c *PayloadCache) evictOld() {
+	slots := make(map[phase0.Slot]struct{}, len(c.payloads))
+	for k := range c.payloads {
+		slots[k.slot] = struct{}{}
 	}
 
-	// Find and remove the oldest slots beyond our limit
-	var oldestSlot phase0.Slot
-
-	for slot := range c.payloads {
-		if oldestSlot == 0 || slot < oldestSlot {
-			oldestSlot = slot
-		}
-	}
-
-	// Keep evicting until we're at the limit
-	for len(c.payloads) > c.maxSlots {
-		delete(c.payloads, oldestSlot)
-
-		// Find next oldest
-		oldestSlot = 0
-
-		for slot := range c.payloads {
-			if oldestSlot == 0 || slot < oldestSlot {
-				oldestSlot = slot
+	for len(slots) > c.maxSlots {
+		var oldest phase0.Slot
+		first := true
+		for s := range slots {
+			if first || s < oldest {
+				oldest = s
+				first = false
 			}
 		}
+
+		for k := range c.payloads {
+			if k.slot == oldest {
+				delete(c.payloads, k)
+			}
+		}
+		delete(slots, oldest)
 	}
 }
 
@@ -128,9 +193,9 @@ func (c *PayloadCache) Cleanup(olderThan phase0.Slot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for slot := range c.payloads {
-		if slot < olderThan {
-			delete(c.payloads, slot)
+	for k := range c.payloads {
+		if k.slot < olderThan {
+			delete(c.payloads, k)
 		}
 	}
 }

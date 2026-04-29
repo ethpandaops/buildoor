@@ -13,15 +13,41 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
+// variantBidState tracks bid pacing state for one (slot, variant) pair so
+// FULL and EMPTY don't share a single LastBidTime/LastBidHash counter.
+type variantBidState struct {
+	LastBidTime time.Time
+	LastBidHash phase0.Hash32
+	BidCount    int
+}
+
 // SlotState tracks the state for a single slot's bidding/revealing.
 type SlotState struct {
-	LastBidTime     time.Time
-	LastBidHash     phase0.Hash32
-	BidCount        int
-	BidsClosed      bool        // Block received, no more bids possible
-	BidIncluded     bool        // Our bid was picked
-	IncludedInBlock phase0.Root // Block that included our bid
+	// Aggregated fields kept for backwards-compat with WebUI/event consumers.
+	LastBidTime time.Time     // most-recent bid time across variants
+	LastBidHash phase0.Hash32 // most-recent bid hash across variants
+	BidCount    int           // total bids submitted across variants
+
+	// Per-variant pacing state so FULL and EMPTY can be bid independently.
+	BidStates map[builder.PayloadVariant]*variantBidState
+
+	BidsClosed      bool                   // Block received, no more bids possible
+	BidIncluded     bool                   // Our bid was picked
+	IncludedInBlock phase0.Root            // Block that included our bid
+	BidVariant      builder.PayloadVariant // Variant that was included (only valid when BidIncluded)
 	Revealed        bool
+}
+
+func (state *SlotState) variantState(variant builder.PayloadVariant) *variantBidState {
+	if state.BidStates == nil {
+		state.BidStates = make(map[builder.PayloadVariant]*variantBidState, 2)
+	}
+	vs, ok := state.BidStates[variant]
+	if !ok {
+		vs = &variantBidState{}
+		state.BidStates[variant] = vs
+	}
+	return vs
 }
 
 // Scheduler handles time-based bid and reveal scheduling.
@@ -107,6 +133,7 @@ func (s *Scheduler) getSlotStateSafe(slot phase0.Slot) *SlotState {
 func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
 	s.payloadStore.Store(&BuiltPayload{
 		Slot:              event.Slot,
+		Variant:           event.Variant,
 		BlockHash:         event.BlockHash,
 		ParentBlockHash:   event.ParentBlockHash,
 		ParentBlockRoot:   event.ParentBlockRoot,
@@ -137,21 +164,36 @@ func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent, blockInfo *beacon.Block
 		return
 	}
 
-	// Check if this block contains our payload
+	// Check whether the new block's execution payload matches any of our bids
+	// across any (slot, variant). The first match wins — we record which variant
+	// got included so the reveal step can fetch the correct payload.
 	for slot, state := range s.slotStates {
-		if state.LastBidHash == (phase0.Hash32{}) {
+		if state.BidIncluded {
 			continue
 		}
 
-		if state.LastBidHash == blockInfo.ExecutionBlockHash {
+		for variant, vs := range state.BidStates {
+			if vs.LastBidHash == (phase0.Hash32{}) {
+				continue
+			}
+			if vs.LastBidHash != blockInfo.ExecutionBlockHash {
+				continue
+			}
+
 			state.BidIncluded = true
+			state.BidVariant = variant
 			state.IncludedInBlock = event.Block
 
 			s.log.WithFields(logrus.Fields{
 				"slot":       slot,
-				"block_root": event.Block[:8],
+				"variant":    variant.String(),
+				"block_root": fmt.Sprintf("%x", event.Block[:8]),
 			}).Info("Our bid was included!")
 
+			break
+		}
+
+		if state.BidIncluded {
 			break
 		}
 	}
@@ -193,96 +235,108 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
 }
 
-// checkSlotForBidding checks if we should bid for this slot.
+// checkSlotForBidding checks if we should bid for this slot. When both FULL and
+// EMPTY payloads exist, a bid is submitted for each — the proposer picks whichever
+// matches reality. Per-variant bid pacing is tracked on SlotState.BidStates.
 func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, now time.Time, msRelativeToSlot int64) {
-	// Are we in bid period for this slot?
-	// msRelativeToSlot is negative if we're before the slot starts
 	if msRelativeToSlot < s.cfg.BidStartTime || msRelativeToSlot >= s.cfg.BidEndTime {
 		return
 	}
 
-	// Get payload from builder cache
-	payload := s.payloadCache.Get(slot)
-	if payload == nil {
+	payloads := s.payloadCache.GetAllForSlot(slot)
+	if len(payloads) == 0 {
 		return
 	}
 
+	for _, payload := range payloads {
+		s.maybeBidForVariant(ctx, slot, payload, now, msRelativeToSlot)
+	}
+}
+
+// maybeBidForVariant evaluates and possibly submits a bid for one specific
+// (slot, variant) payload. Per-variant pacing is tracked on SlotState.BidStates.
+func (s *Scheduler) maybeBidForVariant(
+	ctx context.Context,
+	slot phase0.Slot,
+	payload *builder.PayloadReadyEvent,
+	now time.Time,
+	msRelativeToSlot int64,
+) {
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
-	// Check if we should bid
-	// - Not if bidding is closed (block already received)
-	// - Not if our bid was already included
-	// - Not if we bid too recently (respect interval)
-	// - Not if payload hasn't changed and we already bid (single bid mode)
 	if state.BidsClosed || state.BidIncluded {
 		s.mu.Unlock()
 		return
 	}
 
-	// Check bid interval
+	vs := state.variantState(payload.Variant)
+
 	if s.cfg.BidInterval > 0 {
-		if time.Since(state.LastBidTime) < time.Duration(s.cfg.BidInterval)*time.Millisecond {
+		if time.Since(vs.LastBidTime) < time.Duration(s.cfg.BidInterval)*time.Millisecond {
 			s.mu.Unlock()
 			return
 		}
 	} else {
 		// Single bid mode - only bid if payload changed or never bid
-		if state.BidCount > 0 && state.LastBidHash == payload.BlockHash {
+		if vs.BidCount > 0 && vs.LastBidHash == payload.BlockHash {
 			s.mu.Unlock()
 			return
 		}
 	}
 
-	// Calculate bid value.
-	// Start from block value with BidMinAmount as a floor.
 	bidBase := payload.BlockValue
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
 	}
 
 	bidValue := bidBase
-	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
-		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
+	if s.cfg.BidInterval > 0 && vs.BidCount > 0 {
+		bidValue = bidBase + uint64(vs.BidCount)*s.cfg.BidIncrease
 	}
 
-	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
-	// P2P bid, using self-build" when their local EL build is worth more than ours.
-	// Configurable via --p2p-bid-subsidy (gwei).
 	bidValue += s.cfg.P2PBidSubsidy
 
 	s.mu.Unlock()
 
-	// Warn if no proposer preferences — the BN will reject the bid
 	hasPrefs := s.hasProposerPreferences != nil && s.hasProposerPreferences(slot)
 
 	s.log.WithFields(logrus.Fields{
 		"slot":                     slot,
+		"variant":                  payload.Variant.String(),
 		"bid_value":                bidValue,
-		"bid_count":                state.BidCount,
+		"bid_count":                vs.BidCount,
 		"block_hash":               fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot":             msRelativeToSlot,
 		"has_proposer_preferences": hasPrefs,
 	}).Info("Creating and submitting bid")
 
 	if !hasPrefs {
-		s.log.WithField("slot", slot).Warn("No proposer preferences for slot — bid will likely be rejected by beacon node")
+		s.log.WithFields(logrus.Fields{
+			"slot":    slot,
+			"variant": payload.Variant.String(),
+		}).Warn("No proposer preferences for slot — bid will likely be rejected by beacon node")
 	}
 
-	// Submit bid
 	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
 
-	// Update state regardless of success - we don't want to spam on failure
+	// Update per-variant state regardless of success.
 	s.mu.Lock()
+	vs.LastBidTime = now
+	vs.LastBidHash = payload.BlockHash
+	vs.BidCount++
 	state.LastBidTime = now
 	state.LastBidHash = payload.BlockHash
 	state.BidCount++
-	bidCount := state.BidCount
+	bidCount := vs.BidCount
 	s.mu.Unlock()
 
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
-		// Fire bid failure event
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":    slot,
+			"variant": payload.Variant.String(),
+		}).Error("Failed to submit bid")
+
 		if s.service != nil {
 			s.service.FireBidSubmission(&BidSubmissionEvent{
 				Slot:      slot,
@@ -296,7 +350,6 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
-	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{
 		Slot:         slot,
 		BuilderIndex: s.bidCreator.builderIndex,
@@ -304,7 +357,6 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		BlockHash:    payload.BlockHash,
 	}, true)
 
-	// Fire bid success event
 	if s.service != nil {
 		event := &BidSubmissionEvent{
 			Slot:      slot,
@@ -319,16 +371,16 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		s.service.FireBidSubmission(event)
 	}
 
-	// Increment stats (count each bid submission)
 	if s.service != nil && s.service.builderSvc != nil {
 		s.service.builderSvc.IncrementBidsSubmitted()
 	}
 
 	s.log.WithFields(logrus.Fields{
 		"slot":       slot,
+		"variant":    payload.Variant.String(),
 		"bid_value":  bidValue,
 		"bid_count":  bidCount,
-		"block_hash": payload.BlockHash[:8],
+		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
 	}).Info("Bid submitted")
 }
 
@@ -348,17 +400,22 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	}
 
 	blockRoot := state.IncludedInBlock
+	bidVariant := state.BidVariant
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
+		"variant":      bidVariant.String(),
 		"ms_into_slot": msIntoSlot,
 	}).Info("Revealing payload")
 
-	// Get payload for reveal
-	payload := s.payloadStore.Get(slot)
+	// Get payload for reveal — must match the variant that was included.
+	payload := s.payloadStore.GetByVariant(slot, bidVariant)
 	if payload == nil {
-		s.log.WithField("slot", slot).Error("No payload found for reveal")
+		s.log.WithFields(logrus.Fields{
+			"slot":    slot,
+			"variant": bidVariant.String(),
+		}).Error("No payload found for reveal")
 		return
 	}
 
@@ -422,13 +479,16 @@ func (s *Scheduler) UpdateConfig(cfg *builder.EPBSConfig) {
 	s.cfg = cfg
 }
 
-// MarkBidIncluded marks a bid as included for a slot.
-func (s *Scheduler) MarkBidIncluded(slot phase0.Slot, blockRoot phase0.Root) {
+// MarkBidIncluded marks a bid as included for a slot. The variant indicates
+// which variant of our payload was selected — required so the reveal step
+// pulls the correct payload from the store.
+func (s *Scheduler) MarkBidIncluded(slot phase0.Slot, blockRoot phase0.Root, variant builder.PayloadVariant) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	state := s.getSlotState(slot)
 	state.BidIncluded = true
+	state.BidVariant = variant
 	state.IncludedInBlock = blockRoot
 }
 

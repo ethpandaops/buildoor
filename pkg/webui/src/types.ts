@@ -94,11 +94,14 @@ export interface SlotStartEvent {
   slot_start_time: number;
 }
 
+export type PayloadVariant = 'full' | 'empty';
+
 export interface PayloadReadyEvent {
   slot: number;
   block_hash: string;
   parent_block_hash: string;
   block_value: number;
+  variant: PayloadVariant;
   ready_at: number;
 }
 
@@ -157,6 +160,14 @@ export interface SlotState {
   payloadCreatedAt?: number;
   payloadBlockHash?: string;
   payloadBlockValue?: number;
+  payloadFullReady?: boolean;
+  payloadFullBlockHash?: string;
+  payloadFullBlockValue?: number;
+  payloadFullCreatedAt?: number;
+  payloadEmptyReady?: boolean;
+  payloadEmptyBlockHash?: string;
+  payloadEmptyBlockValue?: number;
+  payloadEmptyCreatedAt?: number;
   blockReceivedAt?: number;
   blockRoot?: string;
   bidsClosed?: boolean;

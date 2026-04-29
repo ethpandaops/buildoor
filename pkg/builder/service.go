@@ -348,8 +348,27 @@ func (s *Service) scheduleBuildForSlot(slot phase0.Slot) {
 	})
 }
 
+// gloasFullBuildLeadSlots is how many slots after the Gloas fork-epoch boundary
+// we skip building entirely. This avoids ambiguous parent-block-hash semantics
+// during the transition where attrs.ParentBlockRoot may point to a Fulu block
+// that has no embedded bid for us to read.
+const gloasFullBuildLeadSlots = phase0.Slot(3)
+
 // executeBuildForSlot fetches the latest cached payload_attributes for the
 // given slot and performs payload building.
+//
+// Build mode is fork-dependent:
+//   - Pre-Gloas (Electra/Fulu): single FULL build using attrs.ParentBlockHash as the FCU head.
+//     No beacon-block-by-root fetch is needed because there is no bid to resolve.
+//   - Gloas fork boundary [GLOAS_FIRST_SLOT, GLOAS_FIRST_SLOT+gloasFullBuildLeadSlots]:
+//     skipped entirely. The parent beacon block is Fulu (no embedded bid) so EMPTY
+//     can't be derived; rather than special-case both variants we duck the few slots.
+//   - Post-Gloas (after the boundary window): fetch the chosen bid embedded in the
+//     beacon block at attrs.ParentBlockRoot and run two sequential builds:
+//       1. EMPTY with head = bid.parent_block_hash (assumes prior slot was missed)
+//       2. FULL  with head = bid.block_hash        (assumes prior slot was published)
+//     Each completed build emits its PayloadReadyEvent independently so ePBS can
+//     start bidding on whichever lands first.
 func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 	event := s.clClient.Events().GetLatestPayloadAttributes(slot)
 	if event == nil {
@@ -359,23 +378,85 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		return
 	}
 
+	chainSpec := s.chainSvc.GetChainSpec()
+	isGloas := s.chainSvc.IsGloas()
+
+	if isGloas && chainSpec != nil && chainSpec.GloasForkEpoch != nil {
+		gloasFirstSlot := phase0.Slot(*chainSpec.GloasForkEpoch * chainSpec.SlotsPerEpoch)
+		if slot >= gloasFirstSlot && slot <= gloasFirstSlot+gloasFullBuildLeadSlots {
+			s.log.WithFields(logrus.Fields{
+				"slot":             slot,
+				"gloas_first_slot": gloasFirstSlot,
+				"skip_until":       gloasFirstSlot + gloasFullBuildLeadSlots,
+			}).Info("Skipping build at Gloas fork boundary")
+			return
+		}
+	}
+
 	s.log.WithFields(logrus.Fields{
 		"slot":        event.ProposalSlot,
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+		"is_gloas":    isGloas,
 	}).Info("Starting payload build")
 
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
-	defer cancel()
-
-	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
-	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error(
-			"Failed to build payload from attributes",
-		)
+	if !isGloas {
+		s.runSingleBuild(slot, event, PayloadVariantFull, phase0.Hash32{}, true)
 		return
 	}
 
-	s.emitPayloadReady(slot, payloadEvent)
+	bid, err := s.fetchBidForParent(event.ParentBlockRoot)
+	if err != nil {
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":              slot,
+			"parent_block_root": fmt.Sprintf("%x", event.ParentBlockRoot[:8]),
+		}).Warn("Failed to fetch bid for parent block, falling back to single FULL build")
+
+		s.runSingleBuild(slot, event, PayloadVariantFull, phase0.Hash32{}, true)
+		return
+	}
+
+	// Sequential: EMPTY first, then FULL. Each emits its event when it completes.
+	// Use a single statsCounted flag so SlotsBuilt / OnSlotBuilt fires once per slot,
+	// not once per variant.
+	emptyOK := s.runSingleBuild(slot, event, PayloadVariantEmpty, bid.ParentBlockHash, true)
+	s.runSingleBuild(slot, event, PayloadVariantFull, bid.BlockHash, !emptyOK)
+}
+
+// runSingleBuild executes one variant of BuildPayloadFromAttributes and emits
+// its PayloadReadyEvent on success. countSlotStat controls whether
+// SlotsBuilt/OnSlotBuilt fires for this build — we only want to count one per
+// slot, not one per variant.
+func (s *Service) runSingleBuild(
+	slot phase0.Slot,
+	event *beacon.PayloadAttributesEvent,
+	variant PayloadVariant,
+	headOverride phase0.Hash32,
+	countSlotStat bool,
+) bool {
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+
+	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, variant, headOverride)
+	if err != nil {
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":    slot,
+			"variant": variant.String(),
+		}).Error("Failed to build payload from attributes")
+		return false
+	}
+
+	s.emitPayloadReady(slot, payloadEvent, countSlotStat)
+	return true
+}
+
+// fetchBidForParent fetches the chosen execution payload bid from the beacon
+// block at the given root. Used post-Gloas to derive the FCU head for the
+// FULL and EMPTY variants.
+func (s *Service) fetchBidForParent(parentRoot phase0.Root) (*beacon.BidInfo, error) {
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+
+	return s.clClient.GetExecutionPayloadBid(ctx, fmt.Sprintf("0x%x", parentRoot[:]))
 }
 
 // handlePayloadAvailableEvent processes an execution_payload_available event (Gloas only).
@@ -398,7 +479,9 @@ func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEven
 }
 
 // emitPayloadReady stores the payload and emits the ready event.
-func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyEvent) {
+// countSlotStat should be true for at most one variant per slot so SlotsBuilt
+// and OnSlotBuilt fire once per slot, not once per variant.
+func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyEvent, countSlotStat bool) {
 	// Store in cache
 	s.payloadCache.Store(payloadEvent)
 
@@ -407,11 +490,16 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 
 	s.log.WithFields(logrus.Fields{
 		"slot":              slot,
+		"variant":           payloadEvent.Variant.String(),
 		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
 		"block_value":       payloadEvent.BlockValue,
 		"source":            payloadEvent.BuildSource.String(),
 		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
+
+	if !countSlotStat {
+		return
+	}
 
 	// Mark slot as built
 	s.slotManager.OnSlotBuilt(slot)

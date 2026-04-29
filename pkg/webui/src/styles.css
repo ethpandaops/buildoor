@@ -241,6 +241,18 @@
   border: 2px solid #138496;
 }
 
+/* FULL variant: solid teal (canonical "build on parent slot's published payload"). */
+.payload-created-full {
+  background: #17a2b8;
+  border: 2px solid #0c5460;
+}
+
+/* EMPTY variant: amber so it stands out when both dots overlap on the timeline. */
+.payload-created-empty {
+  background: #ffc107;
+  border: 2px solid #b88a00;
+}
+
 .bid-submitted {
   background: #28a745;
   border: 2px solid #1e7e34;

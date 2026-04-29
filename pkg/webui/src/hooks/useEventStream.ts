@@ -149,14 +149,28 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_ready': {
-          const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
-          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
-          updateSlotState(data.slot, {
+          const data = event.data as { slot: number; block_hash: string; block_value: number; variant?: 'full' | 'empty'; ready_at: number };
+          const variant = data.variant ?? 'full';
+          const variantLabel = variant.toUpperCase();
+          addEvent('payload_ready', `${variantLabel} payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
+          const update: Partial<import('../types').SlotState> = {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value
-          });
+          };
+          if (variant === 'full') {
+            update.payloadFullReady = true;
+            update.payloadFullCreatedAt = data.ready_at;
+            update.payloadFullBlockHash = data.block_hash;
+            update.payloadFullBlockValue = data.block_value;
+          } else {
+            update.payloadEmptyReady = true;
+            update.payloadEmptyCreatedAt = data.ready_at;
+            update.payloadEmptyBlockHash = data.block_hash;
+            update.payloadEmptyBlockValue = data.block_value;
+          }
+          updateSlotState(data.slot, update);
           break;
         }
 

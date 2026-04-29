@@ -64,6 +64,7 @@ type PayloadReadyStreamEvent struct {
 	BlockHash       string `json:"block_hash"`
 	ParentBlockHash string `json:"parent_block_hash"`
 	BlockValue      uint64 `json:"block_value"`
+	Variant         string `json:"variant"` // "full" or "empty"
 	ReadyAt         int64  `json:"ready_at"`
 }
 
@@ -106,15 +107,17 @@ type BidStreamEvent struct {
 
 // SlotStateEvent represents the current state of a slot.
 type SlotStateEvent struct {
-	Slot           uint64 `json:"slot"`
-	PayloadReady   bool   `json:"payload_ready"`
-	BidCount       int    `json:"bid_count"`
-	BidsClosed     bool   `json:"bids_closed"`
-	BidIncluded    bool   `json:"bid_included"`
-	Revealed       bool   `json:"revealed"`
-	HighestBidOurs bool   `json:"highest_bid_ours"`
-	HighestBid     uint64 `json:"highest_bid"`
-	OurBid         uint64 `json:"our_bid"`
+	Slot              uint64 `json:"slot"`
+	PayloadReady      bool   `json:"payload_ready"`       // any variant ready
+	PayloadReadyFull  bool   `json:"payload_ready_full"`  // FULL variant ready
+	PayloadReadyEmpty bool   `json:"payload_ready_empty"` // EMPTY variant ready
+	BidCount          int    `json:"bid_count"`
+	BidsClosed        bool   `json:"bids_closed"`
+	BidIncluded       bool   `json:"bid_included"`
+	Revealed          bool   `json:"revealed"`
+	HighestBidOurs    bool   `json:"highest_bid_ours"`
+	HighestBid        uint64 `json:"highest_bid"`
+	OurBid            uint64 `json:"our_bid"`
 }
 
 // PayloadAvailableStreamEvent is sent when a payload becomes available.
@@ -465,19 +468,24 @@ func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent
 			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
 			ParentBlockHash: fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
 			BlockValue:      event.BlockValue,
+			Variant:         event.Variant.String(),
 			ReadyAt:         event.ReadyAt.UnixMilli(),
 		},
 	})
 
-	// Update slot state
+	// Update slot state — track per-variant ready state.
 	m.slotStatesMu.Lock()
-	if state, ok := m.slotStates[event.Slot]; ok {
-		state.PayloadReady = true
-	} else {
-		m.slotStates[event.Slot] = &SlotStateEvent{
-			Slot:         uint64(event.Slot),
-			PayloadReady: true,
-		}
+	state, ok := m.slotStates[event.Slot]
+	if !ok {
+		state = &SlotStateEvent{Slot: uint64(event.Slot)}
+		m.slotStates[event.Slot] = state
+	}
+	state.PayloadReady = true
+	switch event.Variant {
+	case builder.PayloadVariantFull:
+		state.PayloadReadyFull = true
+	case builder.PayloadVariantEmpty:
+		state.PayloadReadyEmpty = true
 	}
 	m.slotStatesMu.Unlock()
 

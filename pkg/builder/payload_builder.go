@@ -34,14 +34,22 @@ type PayloadBuilder struct {
 	payloadBuildTime    uint64
 	log                 logrus.FieldLogger
 
-	// Active build tracking
-	activeBuild *activeBuild
-	mu          sync.Mutex
+	// Active build tracking, keyed by (slot, variant) so the FULL and EMPTY
+	// builds for the same slot don't trample each other.
+	activeBuilds map[buildKey]*activeBuild
+	mu           sync.Mutex
+}
+
+// buildKey identifies an in-flight build by slot and variant.
+type buildKey struct {
+	slot    phase0.Slot
+	variant PayloadVariant
 }
 
 // activeBuild tracks an in-progress payload build.
 type activeBuild struct {
 	slot      phase0.Slot
+	variant   PayloadVariant
 	payloadID engine.PayloadID
 	cancelFn  context.CancelFunc
 }
@@ -71,36 +79,57 @@ func NewPayloadBuilder(
 		isGloas:             isGloas,
 		payloadBuildTime:    payloadBuildTime,
 		log:                 log.WithField("component", "payload-builder"),
+		activeBuilds:        make(map[buildKey]*activeBuild),
 	}
 }
 
 // BuildPayloadFromAttributes builds a payload using data from a payload_attributes event.
 // This is the primary build path, triggered when the beacon node emits payload_attributes.
-// The event contains all necessary information: timestamp, randao, withdrawals, etc.
+//
+// variant indicates whether to build assuming the parent slot was published (FULL) or
+// missed (EMPTY). headBlockHashOverride, when non-zero, is used as the FCU head — this
+// is how the caller passes the bid-derived head:
+//   - FULL: caller passes bid.block_hash (== attrs.ParentBlockHash in normal operation).
+//   - EMPTY: caller passes bid.parent_block_hash (the grandparent EL block).
+//
+// When headBlockHashOverride is the zero hash, attrs.ParentBlockHash is used (legacy
+// pre-Gloas single-build path).
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
+	variant PayloadVariant,
+	headBlockHashOverride phase0.Hash32,
 ) (*PayloadReadyEvent, error) {
+	key := buildKey{slot: attrs.ProposalSlot, variant: variant}
+
 	b.mu.Lock()
 
-	// Cancel any existing build for a different slot
-	if b.activeBuild != nil && b.activeBuild.slot != attrs.ProposalSlot {
-		b.activeBuild.cancelFn()
-		b.activeBuild = nil
+	// Cancel any existing builds for older slots; same-slot/same-variant rebuild
+	// cancels the prior; same-slot/other-variant is left alone.
+	for k, ab := range b.activeBuilds {
+		if k.slot != attrs.ProposalSlot {
+			ab.cancelFn()
+			delete(b.activeBuilds, k)
+		}
+	}
+	if existing, ok := b.activeBuilds[key]; ok {
+		existing.cancelFn()
+		delete(b.activeBuilds, key)
 	}
 
 	buildCtx, cancel := context.WithCancel(ctx)
 
-	b.activeBuild = &activeBuild{
+	b.activeBuilds[key] = &activeBuild{
 		slot:     attrs.ProposalSlot,
+		variant:  variant,
 		cancelFn: cancel,
 	}
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		if b.activeBuild != nil && b.activeBuild.slot == attrs.ProposalSlot {
-			b.activeBuild = nil
+		if ab, ok := b.activeBuilds[key]; ok && ab.cancelFn != nil {
+			delete(b.activeBuilds, key)
 		}
 		b.mu.Unlock()
 	}()
@@ -111,9 +140,16 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
-	// Convert hashes for engine API
-	// parent_block_hash from payload_attributes is the execution layer parent
-	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
+	// Choose the FCU head block hash. The caller-supplied variant-specific override
+	// wins; otherwise fall back to attrs.ParentBlockHash (pre-Gloas single-build).
+	var chosenHead phase0.Hash32
+	if headBlockHashOverride != (phase0.Hash32{}) {
+		chosenHead = headBlockHashOverride
+	} else {
+		chosenHead = attrs.ParentBlockHash
+	}
+
+	headBlockHash := common.BytesToHash(chosenHead[:])
 	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
 	finalizedBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
 	parentBeaconRoot := common.BytesToHash(attrs.ParentBeaconBlockRoot[:])
@@ -178,9 +214,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	b.log.WithFields(logrus.Fields{
 		"slot":             attrs.ProposalSlot,
+		"variant":          variant.String(),
 		"timestamp":        attrs.Timestamp,
 		"withdrawal_count": len(engineWithdrawals),
-		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"head_hash":        fmt.Sprintf("%x", chosenHead[:8]),
+		"attrs_parent":     fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
 	}).Debug("Building payload from attributes")
 
 	// Request payload build from the EL
@@ -203,13 +241,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	b.mu.Lock()
-	if b.activeBuild != nil && b.activeBuild.slot == attrs.ProposalSlot {
-		b.activeBuild.payloadID = payloadID
+	if ab, ok := b.activeBuilds[key]; ok {
+		ab.payloadID = payloadID
 	}
 	b.mu.Unlock()
 
 	b.log.WithFields(logrus.Fields{
 		"slot":       attrs.ProposalSlot,
+		"variant":    variant.String(),
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
@@ -254,7 +293,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   finalityInfo.HeadExecutionBlockHash,
+		ParentBlockHash:   chosenHead,
 		BlockHash:         blockHash,
 		Payload:           payload,
 		BlobsBundle:       payloadResult.BlobsBundle,
@@ -265,13 +304,15 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		FeeRecipient:      proposerFeeRecipient,
 		BlockValue:        blockValueGwei,
 		BuildSource:       BuildSourceBlock,
+		Variant:           variant,
 		ReadyAt:           time.Now(),
 	}
 
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
+		"variant":           variant.String(),
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
-		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
+		"parent_hash":       fmt.Sprintf("%x", chosenHead[:8]),
 		"block_value":       blockValueGwei,
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
@@ -281,16 +322,22 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	return event, nil
 }
 
-// AbortBuild aborts any active build for the given slot.
+// AbortBuild aborts any active builds for the given slot (across all variants).
 func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.activeBuild != nil && b.activeBuild.slot == slot {
-		b.activeBuild.cancelFn()
-		b.activeBuild = nil
+	for k, ab := range b.activeBuilds {
+		if k.slot != slot {
+			continue
+		}
+		ab.cancelFn()
+		delete(b.activeBuilds, k)
 
-		b.log.WithField("slot", slot).Debug("Build aborted")
+		b.log.WithFields(logrus.Fields{
+			"slot":    slot,
+			"variant": k.variant.String(),
+		}).Debug("Build aborted")
 	}
 }
 

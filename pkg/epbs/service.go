@@ -489,8 +489,9 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 		"bid_value":  payload.BidValue,
 	}).Info("Our payload was included in a beacon block!")
 
-	// Mark bid as included in scheduler
-	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
+	// Mark bid as included in scheduler, recording which variant was chosen
+	// so the reveal pulls the correct payload from the store.
+	s.scheduler.MarkBidIncluded(payload.Slot, event.Block, payload.Variant)
 
 	// Record as pending payment (will be moved to balance deduction if revealed,
 	// or stay pending for 2 epochs if not revealed)
