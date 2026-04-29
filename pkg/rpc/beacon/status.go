@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 // ChainStatusResult holds the head and finality data needed to populate a libp2p StatusV2 message.

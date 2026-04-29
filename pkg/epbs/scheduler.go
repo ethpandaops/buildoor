@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -245,6 +245,11 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
 		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
 	}
+
+	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
+	// P2P bid, using self-build" when their local EL build is worth more than ours.
+	// Configurable via --p2p-bid-subsidy (gwei).
+	bidValue += s.cfg.P2PBidSubsidy
 
 	s.mu.Unlock()
 

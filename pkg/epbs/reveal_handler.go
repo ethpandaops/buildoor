@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/attestantio/go-eth2-client/spec/electra"
-	"github.com/attestantio/go-eth2-client/spec/gloas"
-	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
+	"github.com/ethpandaops/go-eth2-client/spec/gloas"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
@@ -43,28 +43,17 @@ func NewRevealHandler(
 	}
 }
 
-// SubmitReveal submits a payload reveal for the given slot.
-// It uses the two-step flow:
-//  1. Construct: POST /eth/v1/builder/execution_payload_envelope — beacon node derives state_root
-//  2. Sign the returned envelope
-//  3. Publish: POST /eth/v1/beacon/execution_payload_envelope — broadcast to the network
+// SubmitReveal constructs the envelope locally, signs it, and publishes it to the beacon node.
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
 	payload *BuiltPayload,
 	blockRoot phase0.Root,
 ) error {
-	// Convert engine payload to deneb format (beacon API spec: snake_case, decimal strings).
-	denebPayload, err := fulu.ExecutionPayloadFromEngine(payload.ExecutionPayload)
+	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload)
 	if err != nil {
-		return fmt.Errorf("failed to convert payload to deneb format: %w", err)
+		return fmt.Errorf("failed to convert payload to gloas format: %w", err)
 	}
 
-	payloadJSON, err := json.Marshal(denebPayload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal execution payload: %w", err)
-	}
-
-	// Parse raw execution requests into typed electra.ExecutionRequests for the construct request.
 	var execRequests *electra.ExecutionRequests
 	if len(payload.ExecutionRequests) > 0 {
 		execRequests, err = fulu.ParseExecutionRequests(payload.ExecutionRequests)
@@ -75,50 +64,20 @@ func (h *RevealHandler) SubmitReveal(
 		execRequests = &electra.ExecutionRequests{}
 	}
 
-	execRequestsJSON, err := json.Marshal(execRequests)
-	if err != nil {
-		return fmt.Errorf("failed to marshal execution requests: %w", err)
+	envelope := &gloas.ExecutionPayloadEnvelope{
+		Payload:           gloasPayload,
+		ExecutionRequests: execRequests,
+		BuilderIndex:      gloas.BuilderIndex(h.builderIndex),
+		BeaconBlockRoot:   blockRoot,
 	}
 
-	beaconBlockRootHex := fmt.Sprintf("%#x", blockRoot)
-
-	h.log.WithFields(logrus.Fields{
-		"slot":              payload.Slot,
-		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"beacon_block_root": beaconBlockRootHex,
-	}).Info("Constructing execution payload envelope via beacon node")
-
-	// Step 1: Construct — beacon node fills in state_root, builder_index, slot.
-	envelopeJSON, err := h.clClient.ConstructExecutionPayloadEnvelope(
-		ctx,
-		beaconBlockRootHex,
-		payloadJSON,
-		execRequestsJSON,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to construct envelope: %w", err)
-	}
-
-	// Unmarshal the returned envelope so we can sign it.
-	var envelope gloas.ExecutionPayloadEnvelope
-	if err := json.Unmarshal(envelopeJSON, &envelope); err != nil {
-		return fmt.Errorf("failed to unmarshal constructed envelope: %w", err)
-	}
-
-	h.log.WithFields(logrus.Fields{
-		"slot":          envelope.Slot,
-		"builder_index": envelope.BuilderIndex,
-		"state_root":    fmt.Sprintf("%#x", envelope.StateRoot),
-	}).Info("Envelope constructed by beacon node")
-
-	// Step 2: Sign the envelope.
 	var forkVersion phase0.Version
 	if h.chainSpec.GloasForkVersion != nil {
 		forkVersion = *h.chainSpec.GloasForkVersion
 	}
 
 	signature, err := h.signer.SignExecutionPayloadEnvelope(
-		&envelope,
+		envelope,
 		forkVersion,
 		h.genesis.GenesisValidatorsRoot,
 	)
@@ -127,7 +86,7 @@ func (h *RevealHandler) SubmitReveal(
 	}
 
 	signedEnvelope := &gloas.SignedExecutionPayloadEnvelope{
-		Message:   &envelope,
+		Message:   envelope,
 		Signature: signature,
 	}
 
@@ -136,7 +95,6 @@ func (h *RevealHandler) SubmitReveal(
 		return fmt.Errorf("failed to marshal signed envelope: %w", err)
 	}
 
-	// Step 3: Publish the signed envelope with blobs and cell proofs for data column broadcasting.
 	var blobs [][]byte
 	var cellProofs [][]byte
 

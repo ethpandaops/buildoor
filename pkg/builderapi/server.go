@@ -18,10 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
-	apiv1electra "github.com/attestantio/go-eth2-client/api/v1/electra"
-	apiv1fulu "github.com/attestantio/go-eth2-client/api/v1/fulu"
-	"github.com/attestantio/go-eth2-client/spec/phase0"
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
+	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
+	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 

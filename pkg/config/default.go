@@ -25,9 +25,10 @@ func DefaultConfig() *Config {
 		EPBS: EPBSConfig{
 			// Timing fields: 0 = auto-compute from slot time (see ApplySlotDefaults).
 			// Explicit non-zero values override the auto-computed defaults.
-			BidMinAmount: 1000000, // 1M gwei = 0.001 ETH
-			BidIncrease:  100000,  // 100k gwei per subsequent bid
-			BidInterval:  250,     // 250ms between bids
+			BidMinAmount:  1000000,   // 1M gwei = 0.001 ETH
+			BidIncrease:   100000,    // 100k gwei per subsequent bid
+			BidInterval:   250,       // 250ms between bids
+			P2PBidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
 		},
 		ValidateWithdrawals: false,
 	}
