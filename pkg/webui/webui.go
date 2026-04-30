@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"net/http"
@@ -34,13 +35,16 @@ var (
 )
 
 func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service) *api.APIHandler {
+	authHandler, err := auth.NewAuthHandler(context.Background(), config.AuthProviderURL)
+	if err != nil {
+		logrus.WithError(err).Fatal("failed to initialize auth handler")
+	}
+	if authHandler.IsOpen() {
+		logrus.Warn("--auth-provider-url is empty: API endpoints are unauthenticated. Configure an authenticatoor URL to require auth.")
+	}
+
 	// init router
 	router := mux.NewRouter()
-
-	authHandler := auth.NewAuthHandler(config.AuthKey, config.UserHeader, config.TokenKey)
-	authRouter := router.PathPrefix("/auth").Subrouter()
-	authRouter.HandleFunc("/token", authHandler.GetToken).Methods(http.MethodGet)
-	authRouter.HandleFunc("/login", authHandler.GetLogin).Methods(http.MethodGet)
 
 	// API routes
 	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc, propPrefSvc)
@@ -92,7 +96,13 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 		router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 	}
 
-	spaHandler, err := handlers.NewSPAHandler(logrus.WithField("module", "web-spa"), staticEmbedFS)
+	spaHandler, err := handlers.NewSPAHandler(
+		logrus.WithField("module", "web-spa"),
+		staticEmbedFS,
+		handlers.RuntimeConfig{
+			AuthProviderURL: config.AuthProviderURL,
+		},
+	)
 	if err != nil {
 		logrus.Fatalf("error initializing spa handler: %v", err)
 	}

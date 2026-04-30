@@ -1,38 +1,36 @@
 package auth
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func (h *AuthHandler) CheckAuthToken(tokenStr string) *jwt.Token {
-	var token *jwt.Token = nil
+// openToken is the sentinel returned in open mode. Callers only inspect
+// `token != nil && token.Valid`, so an empty *jwt.Token with Valid set is
+// enough for them to treat the request as authenticated.
+var openToken = &jwt.Token{Valid: true}
 
-	// Extract token from "Bearer <token>"
+// CheckAuthToken validates a bearer token (with or without the "Bearer "
+// prefix). In open mode it always returns a valid token; in remote mode
+// it delegates to the JWKS verifier and returns nil on any failure.
+func (h *AuthHandler) CheckAuthToken(tokenStr string) *jwt.Token {
+	// Open mode — no verifier configured, every request is authorized.
+	if h.verifier == nil {
+		return openToken
+	}
+
 	parts := strings.SplitN(tokenStr, " ", 2)
 	if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
 		tokenStr = parts[1]
 	}
-
-	if h.tokenKey != "" {
-		token, _ = jwt.ParseWithClaims(tokenStr, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(h.tokenKey), nil
-		})
+	if tokenStr == "" {
+		return nil
 	}
 
-	if token == nil {
-		token, _ = jwt.ParseWithClaims(tokenStr, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return []byte(h.authKey), nil
-		})
+	claims, err := h.verifier.Verify(tokenStr)
+	if err != nil {
+		return nil
 	}
-
-	return token
+	return &jwt.Token{Valid: true, Claims: claims}
 }

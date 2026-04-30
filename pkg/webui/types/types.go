@@ -8,7 +8,8 @@ type FrontendConfig struct {
 	Pprof    bool
 	Minify   bool
 
-	AuthKey    string
-	UserHeader string
-	TokenKey   string
+	// AuthProviderURL is the canonical URL of the remote authenticatoor
+	// service. Tokens are validated against its JWKS, and the SPA picks
+	// it up via /api/runtime-config to load <url>/client.js.
+	AuthProviderURL string
 }

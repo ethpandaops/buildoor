@@ -1,16 +1,16 @@
 // Auth types
-export interface AuthTokenResponse {
-  token: string;
-  user: string;
-  expr: string;  // Unix timestamp as string
-  now: string;   // Server's current time as string
-}
-
 export interface AuthState {
+  /**
+   * Whether authentication is enabled at all. False when the backend is
+   * running without --auth-provider-url (open API). In that case
+   * isLoggedIn is true (the user is implicitly authorized), no token is
+   * sent on requests, and login/logout controls are hidden.
+   */
+  authEnabled: boolean;
   isLoggedIn: boolean;
   user: string | null;
   token: string | null;
-  expiresAt: number | null;  // Local timestamp
+  expiresAt: number | null; // Local timestamp (ms)
 }
 
 // Event types from the SSE stream

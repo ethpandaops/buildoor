@@ -6,8 +6,7 @@ package config
 func DefaultConfig() *Config {
 	return &Config{
 		APIPort:           0,
-		APIUserHeader:     "Cf-Access-Authenticated-User-Email",
-		APITokenKey:       "",
+		AuthProviderURL:   "",
 		LifecycleEnabled:  false,
 		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default

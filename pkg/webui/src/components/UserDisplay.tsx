@@ -2,7 +2,12 @@ import React from 'react';
 import { useAuthContext } from '../context/AuthContext';
 
 export const UserDisplay: React.FC = () => {
-  const { isLoggedIn, user, loading, login } = useAuthContext();
+  const { authEnabled, isLoggedIn, user, loading, login, logout } = useAuthContext();
+
+  // Open mode (no --auth-provider-url configured) — hide login UI entirely.
+  if (!authEnabled) {
+    return null;
+  }
 
   if (loading) {
     return (
@@ -31,6 +36,14 @@ export const UserDisplay: React.FC = () => {
     <div className="d-flex align-items-center gap-2 text-light">
       <i className="fas fa-user-circle"></i>
       <span className="user-name">{user}</span>
+      <button
+        type="button"
+        className="btn btn-outline-light btn-sm ms-2"
+        onClick={logout}
+        title="Log out"
+      >
+        <i className="fas fa-sign-out-alt"></i>
+      </button>
     </div>
   );
 };

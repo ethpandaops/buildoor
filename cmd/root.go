@@ -51,8 +51,7 @@ func init() {
 	rootCmd.PersistentFlags().String("el-rpc", "", "Execution layer JSON-RPC URL (for lifecycle transactions)")
 	rootCmd.PersistentFlags().String("wallet-privkey", "", "Wallet ECDSA private key (hex)")
 	rootCmd.PersistentFlags().Int("api-port", 0, "HTTP API port (0 = disabled)")
-	rootCmd.PersistentFlags().String("api-user-header", defaults.APIUserHeader, "HTTP API user header")
-	rootCmd.PersistentFlags().String("api-token-key", defaults.APITokenKey, "HTTP API token key")
+	rootCmd.PersistentFlags().String("auth-provider-url", "", "Optional authenticatoor URL (e.g. https://auth.<devnet>.example.io); when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty the API is unauthenticated.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (requires --builder-api-port > 0)")
@@ -145,8 +144,7 @@ func initConfig() error {
 		ELRPC:             v.GetString("el-rpc"),
 		WalletPrivkey:     v.GetString("wallet-privkey"),
 		APIPort:           v.GetInt("api-port"),
-		APIUserHeader:     v.GetString("api-user-header"),
-		APITokenKey:       v.GetString("api-token-key"),
+		AuthProviderURL:   v.GetString("auth-provider-url"),
 		LifecycleEnabled:  v.GetBool("lifecycle"),
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),

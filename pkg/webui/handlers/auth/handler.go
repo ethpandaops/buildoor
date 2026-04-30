@@ -1,75 +1,78 @@
+// Package auth bridges the buildoor web UI to a remote authenticatoor
+// service. When --auth-provider-url is configured, tokens are validated
+// against that service's JWKS. When it's not set, the API runs open —
+// buildoor is typically deployed in a restricted environment, so this is
+// a deliberate choice for the operator.
 package auth
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/ethpandaops/service-authenticatoor/pkg/auth"
 )
 
-// AuthHandler handles authentication requests for the buildoor web UI.
+// AuthHandler validates incoming bearer tokens. When verifier is nil the
+// API is treated as open (no authentication required); CheckAuthToken
+// always returns a non-nil token.
 type AuthHandler struct {
-	authKey    string
-	userHeader string
-	tokenKey   string
+	verifier auth.Verifier // nil → open mode
 }
 
-// NewAuthHandler creates a new authentication handler.
-func NewAuthHandler(authKey string, userHeader string, tokenKey string) *AuthHandler {
-	return &AuthHandler{
-		authKey:    authKey,
-		userHeader: userHeader,
-		tokenKey:   tokenKey,
+// NewAuthHandler returns a handler. When authProviderURL is empty the
+// returned handler operates in open mode (no token verification, all
+// calls allowed). When set, it bootstraps a JWKS verifier from the
+// service's OIDC discovery doc, falling back to <url>/jwks.json.
+func NewAuthHandler(ctx context.Context, authProviderURL string) (*AuthHandler, error) {
+	authProviderURL = strings.TrimRight(authProviderURL, "/")
+	if authProviderURL == "" {
+		return &AuthHandler{}, nil
 	}
+
+	expectedIssuer := authProviderURL
+	jwksURL := authProviderURL + "/jwks.json"
+	if disc, err := auth.FetchDiscovery(ctx, http.DefaultClient, authProviderURL); err == nil {
+		expectedIssuer = disc.Issuer
+		jwksURL = disc.JWKSURI
+	}
+
+	verifier, err := auth.NewJWKSVerifier(ctx, auth.VerifierConfig{
+		JWKSURL:          jwksURL,
+		ExpectedIssuer:   expectedIssuer,
+		ExpectedAudience: parentZone(authProviderURL),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("auth: build verifier: %w", err)
+	}
+
+	return &AuthHandler{verifier: verifier}, nil
 }
 
-// HandleAuthentication handles the authentication request.
-func (h *AuthHandler) GetToken(w http.ResponseWriter, r *http.Request) {
-	headers := r.Header
-	authUser := "unauthenticated"
+// IsOpen reports whether this handler is running in open mode (no auth
+// provider configured).
+func (h *AuthHandler) IsOpen() bool {
+	return h.verifier == nil
+}
 
-	// Try exact header match first
-	if values, ok := headers[h.userHeader]; ok && len(values) > 0 {
-		authUser = values[0]
-	} else {
-		// Try case-insensitive match
-		for key, values := range headers {
-			if strings.EqualFold(key, h.userHeader) && len(values) > 0 {
-				authUser = values[0]
-				break
-			}
+// parentZone returns the parent DNS zone of a URL's host, used as the
+// default expected audience: "https://auth.foo.example" → "foo.example".
+func parentZone(rawURL string) string {
+	for _, p := range []string{"https://", "http://"} {
+		if strings.HasPrefix(rawURL, p) {
+			rawURL = rawURL[len(p):]
+			break
 		}
 	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.RegisteredClaims{
-		Issuer:    "buildoor",
-		Subject:   authUser,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
-	})
-
-	tokenString, err := token.SignedString([]byte(h.authKey))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if i := strings.IndexByte(rawURL, '/'); i >= 0 {
+		rawURL = rawURL[:i]
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"token": tokenString,
-		"user":  authUser,
-		"expr":  fmt.Sprintf("%d", token.Claims.(jwt.RegisteredClaims).ExpiresAt.Time.Unix()),
-		"now":   fmt.Sprintf("%d", time.Now().Unix()),
-	}); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if i := strings.IndexByte(rawURL, ':'); i >= 0 {
+		rawURL = rawURL[:i]
 	}
-}
-
-func (h *AuthHandler) GetLogin(w http.ResponseWriter, r *http.Request) {
-	// redirect back to the index page
-	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+	if i := strings.IndexByte(rawURL, '.'); i > 0 {
+		return rawURL[i+1:]
+	}
+	return rawURL
 }
