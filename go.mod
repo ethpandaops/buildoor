@@ -4,15 +4,15 @@ go 1.25.7
 
 require (
 	github.com/ethereum/go-ethereum v1.17.3-0.20260425183644-2249bebf5e88
-	github.com/ethpandaops/go-eth2-client v0.1.0
+	github.com/ethpandaops/go-eth2-client v0.1.1
 	github.com/ethpandaops/service-authenticatoor v0.0.0-20260430215651-f6b6f69d6711
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/herumi/bls-eth-go-binary v1.37.0
 	github.com/holiman/uint256 v1.3.2
-	github.com/pk910/dynamic-ssz v1.3.0
+	github.com/pk910/dynamic-ssz v1.3.1
 	github.com/prometheus/client_golang v1.23.2
-	github.com/rs/zerolog v1.35.0
+	github.com/rs/zerolog v1.35.1
 	github.com/sirupsen/logrus v1.9.4
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
