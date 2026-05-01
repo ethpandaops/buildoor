@@ -47,7 +47,7 @@ func NewRevealHandler(
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
 	payload *BuiltPayload,
-	blockRoot phase0.Root,
+	blockInfo *beacon.BlockInfo,
 ) error {
 	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload)
 	if err != nil {
@@ -65,10 +65,11 @@ func (h *RevealHandler) SubmitReveal(
 	}
 
 	envelope := &gloas.ExecutionPayloadEnvelope{
-		Payload:           gloasPayload,
-		ExecutionRequests: execRequests,
-		BuilderIndex:      gloas.BuilderIndex(h.builderIndex),
-		BeaconBlockRoot:   blockRoot,
+		Payload:               gloasPayload,
+		ExecutionRequests:     execRequests,
+		BuilderIndex:          gloas.BuilderIndex(h.builderIndex),
+		BeaconBlockRoot:       blockInfo.Root,
+		ParentBeaconBlockRoot: blockInfo.ParentRoot,
 	}
 
 	var forkVersion phase0.Version
