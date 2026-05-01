@@ -946,6 +946,20 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	// Disable proxy buffering (nginx) so events flush immediately to clients.
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// Get the flusher
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	// Flush response headers and a leading comment to the client immediately.
+	// This makes nginx parse X-Accel-Buffering before SendInitialState has a chance
+	// to block, ensuring buffering is disabled for the rest of the stream.
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, ": connected\n\n")
+	flusher.Flush()
+
 	// Create channel for this client
 	clientCh := make(chan *StreamEvent, 32)
 
@@ -956,18 +970,20 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	// Send initial state
 	h.eventStreamMgr.SendInitialState(clientCh)
 
-	// Get the flusher
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
+	// Heartbeat keeps the connection alive past proxy idle timeouts and ensures
+	// regular flushes so any intermediate buffers don't stall the stream.
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
 
 	// Stream events
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": ping\n\n")
+			flusher.Flush()
 
 		case event, ok := <-clientCh:
 			if !ok {
