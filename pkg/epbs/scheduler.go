@@ -18,9 +18,9 @@ type SlotState struct {
 	LastBidTime     time.Time
 	LastBidHash     phase0.Hash32
 	BidCount        int
-	BidsClosed      bool        // Block received, no more bids possible
-	BidIncluded     bool        // Our bid was picked
-	IncludedInBlock phase0.Root // Block that included our bid
+	BidsClosed      bool              // Block received, no more bids possible
+	BidIncluded     bool              // Our bid was picked
+	IncludedInBlock *beacon.BlockInfo // Block that included our bid
 	Revealed        bool
 }
 
@@ -121,39 +121,16 @@ func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
 	})
 }
 
-// OnHeadEvent checks if our bid was included and closes bidding for the slot.
-func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent, blockInfo *beacon.BlockInfo) {
+// OnHeadEvent closes bidding for the slot — once a block is produced, no more bids can make it.
+// Bid-inclusion marking happens via MarkBidIncluded from the async processHeadBlock path.
+func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Close bidding for this slot - block is already produced, no more bids can make it
 	slotState := s.getSlotState(event.Slot)
 	if !slotState.BidsClosed {
 		slotState.BidsClosed = true
 		s.log.WithField("slot", event.Slot).Debug("Bidding closed for slot (block received)")
-	}
-
-	if blockInfo == nil {
-		return
-	}
-
-	// Check if this block contains our payload
-	for slot, state := range s.slotStates {
-		if state.LastBidHash == (phase0.Hash32{}) {
-			continue
-		}
-
-		if state.LastBidHash == blockInfo.ExecutionBlockHash {
-			state.BidIncluded = true
-			state.IncludedInBlock = event.Block
-
-			s.log.WithFields(logrus.Fields{
-				"slot":       slot,
-				"block_root": event.Block[:8],
-			}).Info("Our bid was included!")
-
-			break
-		}
 	}
 }
 
@@ -342,12 +319,12 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
-	if !state.BidIncluded || state.Revealed {
+	if !state.BidIncluded || state.Revealed || state.IncludedInBlock == nil {
 		s.mu.Unlock()
 		return
 	}
 
-	blockRoot := state.IncludedInBlock
+	blockInfo := state.IncludedInBlock
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
@@ -364,12 +341,13 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
-		"block_root":   fmt.Sprintf("%x", blockRoot[:8]),
+		"block_root":   fmt.Sprintf("%x", blockInfo.Root[:8]),
+		"parent_root":  fmt.Sprintf("%x", blockInfo.ParentRoot[:8]),
 		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msIntoSlot,
 	}).Info("Submitting reveal")
 
-	err := s.revealHandler.SubmitReveal(ctx, payload, blockRoot)
+	err := s.revealHandler.SubmitReveal(ctx, payload, blockInfo)
 	if err != nil {
 		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit reveal")
 
@@ -423,13 +401,13 @@ func (s *Scheduler) UpdateConfig(cfg *builder.EPBSConfig) {
 }
 
 // MarkBidIncluded marks a bid as included for a slot.
-func (s *Scheduler) MarkBidIncluded(slot phase0.Slot, blockRoot phase0.Root) {
+func (s *Scheduler) MarkBidIncluded(slot phase0.Slot, blockInfo *beacon.BlockInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	state := s.getSlotState(slot)
 	state.BidIncluded = true
-	state.IncludedInBlock = blockRoot
+	state.IncludedInBlock = blockInfo
 }
 
 // GetBidTracker returns the bid tracker.

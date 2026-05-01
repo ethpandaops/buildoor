@@ -515,6 +515,7 @@ func (c *Client) SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.Signed
 // BlockInfo contains execution-relevant information from a beacon block.
 type BlockInfo struct {
 	Slot               phase0.Slot
+	Root               phase0.Root
 	ExecutionBlockHash phase0.Hash32
 	ParentRoot         phase0.Root
 	StateRoot          phase0.Root
@@ -567,8 +568,14 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get state root: %w", err)
 	}
 
+	root, err := block.Root()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get block root: %w", err)
+	}
+
 	return &BlockInfo{
 		Slot:               slot,
+		Root:               root,
 		ExecutionBlockHash: execBlockHash,
 		ParentRoot:         parentRoot,
 		StateRoot:          stateRoot,

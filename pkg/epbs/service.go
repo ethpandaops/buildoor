@@ -361,7 +361,7 @@ func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	}).Info("Head event received")
 
 	// Close bidding for this slot - block already produced
-	s.scheduler.OnHeadEvent(event, nil)
+	s.scheduler.OnHeadEvent(event)
 
 	// Check bid inclusion and payload follow-up (async to not block)
 	go s.processHeadBlock(event)
@@ -490,7 +490,7 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 	}).Info("Our payload was included in a beacon block!")
 
 	// Mark bid as included in scheduler
-	s.scheduler.MarkBidIncluded(payload.Slot, event.Block)
+	s.scheduler.MarkBidIncluded(payload.Slot, blockInfo)
 
 	// Record as pending payment (will be moved to balance deduction if revealed,
 	// or stay pending for 2 epochs if not revealed)
