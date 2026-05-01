@@ -91,10 +91,9 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 		c.Layout = httpSwagger.StandaloneLayout
 	}))
 
-	if config.Pprof {
-		// add pprof handler
-		router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
-	}
+	// pprof handler — net/http/pprof registers itself on http.DefaultServeMux
+	// via the blank import above.
+	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 
 	spaHandler, err := handlers.NewSPAHandler(
 		logrus.WithField("module", "web-spa"),
