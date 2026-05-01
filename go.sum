@@ -63,6 +63,8 @@ github.com/ethereum/go-ethereum v1.17.3-0.20260425183644-2249bebf5e88 h1:sBEzWvA
 github.com/ethereum/go-ethereum v1.17.3-0.20260425183644-2249bebf5e88/go.mod h1:X4hqPRObAqgvkwPFWZ7X0tI80JdoWbO9yohCS7w8f9c=
 github.com/ethpandaops/go-eth2-client v0.1.1 h1:+uaGtPiyjp8sb2K9cjeZpbHrRCu6yjHtlx4J8+bbA8U=
 github.com/ethpandaops/go-eth2-client v0.1.1/go.mod h1:qoj9ZVKydI99IuIyWt4EvGq4rGgMYfOy6q8zTtwYdy4=
+github.com/ethpandaops/go-eth2-client v0.1.2-0.20260501105559-03ed5eacf583 h1:hELKAXI1fVVhrsm61rgNKtKHynxSlnHcpCXXF8mS4Yc=
+github.com/ethpandaops/go-eth2-client v0.1.2-0.20260501105559-03ed5eacf583/go.mod h1:qoj9ZVKydI99IuIyWt4EvGq4rGgMYfOy6q8zTtwYdy4=
 github.com/ethpandaops/service-authenticatoor v0.0.0-20260430215651-f6b6f69d6711 h1:3z0D0oX/tY5HntWyAMxFhHTxNabqPz6cDpEuyd6N2MY=
 github.com/ethpandaops/service-authenticatoor v0.0.0-20260430215651-f6b6f69d6711/go.mod h1:+C6sQMBxY2E3u6BITSZakQrGRovNnB1CamuQh/RIaXI=
 github.com/fatih/color v1.10.0/go.mod h1:ELkj/draVOlAH/xkhN6mQ50Qd0MPOk5AAr3maGEBuJM=
