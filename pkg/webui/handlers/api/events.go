@@ -943,6 +943,8 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Disable proxy buffering (nginx) so events flush immediately to clients.
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Create channel for this client
 	clientCh := make(chan *StreamEvent, 32)
