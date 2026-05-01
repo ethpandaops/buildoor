@@ -91,6 +91,7 @@ func NewClient(ctx context.Context, baseURL string, log logrus.FieldLogger) (*Cl
 		http.WithLogLevel(zerolog.WarnLevel),
 		http.WithTimeout(30*time.Second),
 		http.WithAllowDelayedStart(true),
+		http.WithCustomSpecSupport(true),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
