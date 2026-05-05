@@ -19,7 +19,9 @@ type Config struct {
 	TopupThreshold      uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
 	TopupAmount         uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
 	Schedule            ScheduleConfig   `yaml:"schedule" json:"schedule"`
-	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"`               // Time-scheduled ePBS config
+	SpamoorEnabled      bool             `yaml:"spamoor_enabled" json:"spamoor_enabled"` // When true, ePBS submits bids via libp2p gossip instead of HTTP
+	Spamoor             SpamoorConfig    `yaml:"spamoor" json:"spamoor"`         // Spamoor (libp2p gossip) config
 	Debug               bool             `yaml:"debug" json:"debug"`
 	Pprof               bool             `yaml:"pprof" json:"pprof"`
 	ValidateWithdrawals bool             `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
@@ -88,6 +90,43 @@ type EPBSConfig struct {
 	// P2PBidSubsidy is added to every bid in gwei so the gossiped bid clears the
 	// validator BN's local-EL threshold ("Local EL value exceeds P2P bid").
 	P2PBidSubsidy uint64 `yaml:"p2p_bid_subsidy" json:"p2p_bid_subsidy"`
+}
+
+// SpamoorConfig configures the libp2p-based gossip submission of execution
+// payload bids. When enabled, the ePBS service publishes signed bids directly
+// to the gossipsub mesh on the standard `execution_payload_bid` topic instead
+// of POSTing them to the beacon node.
+type SpamoorConfig struct {
+	// P2PPrivKey is the path to a secp256k1 private key file. If empty, an
+	// ephemeral key is generated each run. If the path doesn't exist, a key
+	// is generated and persisted there.
+	P2PPrivKey string `yaml:"p2p_privkey" json:"p2p_privkey"`
+
+	// TCPPort is the libp2p TCP listen port. Default: 9100.
+	TCPPort uint `yaml:"tcp_port" json:"tcp_port"`
+
+	// QUICPort is the libp2p QUIC listen port (UDP). Default: 9100.
+	QUICPort uint `yaml:"quic_port" json:"quic_port"`
+
+	// DiscPort is the discv5 listen port (UDP). Default: 9101.
+	DiscPort uint `yaml:"disc_port" json:"disc_port"`
+
+	// Bootnodes is a comma-separated list of ENRs, or "@/path/to/file" with
+	// one ENR per line. Used to seed discv5 discovery. Optional if
+	// StaticPeers is set.
+	Bootnodes string `yaml:"bootnodes" json:"bootnodes"`
+
+	// StaticPeers is a comma-separated list of libp2p multiaddrs (e.g.
+	// /ip4/1.2.3.4/tcp/9000/p2p/<peerID>) that are dialed directly without
+	// going through discv5.
+	StaticPeers string `yaml:"static_peers" json:"static_peers"`
+
+	// GossipD is the gossipsub mesh degree (D). Mainnet default is 8;
+	// spamoor uses higher values for wider propagation. Default: 8.
+	GossipD int `yaml:"gossip_d" json:"gossip_d"`
+
+	// MaxPeers caps the libp2p peer count. 0 = unbounded. Default: 200.
+	MaxPeers int `yaml:"max_peers" json:"max_peers"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.
