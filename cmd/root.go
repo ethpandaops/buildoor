@@ -83,6 +83,17 @@ func init() {
 	// Validate withdrawals flag
 	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
 
+	// Spamoor flags (libp2p-based bid gossip; replaces HTTP submission when enabled)
+	rootCmd.PersistentFlags().Bool("spamoor", false, "Submit ePBS bids via libp2p gossip instead of the beacon node HTTP endpoint (requires --epbs-enabled)")
+	rootCmd.PersistentFlags().String("spamoor-p2p-privkey", "", "Path to secp256k1 p2p private key file (auto-generated if absent)")
+	rootCmd.PersistentFlags().Uint("spamoor-tcp-port", defaults.Spamoor.TCPPort, "Spamoor libp2p TCP listen port")
+	rootCmd.PersistentFlags().Uint("spamoor-quic-port", defaults.Spamoor.QUICPort, "Spamoor libp2p QUIC listen port (UDP)")
+	rootCmd.PersistentFlags().Uint("spamoor-disc-port", defaults.Spamoor.DiscPort, "Spamoor discv5 listen port (UDP)")
+	rootCmd.PersistentFlags().String("spamoor-bootnodes", "", "Comma-separated ENRs (or @/path/to/file) to seed discv5")
+	rootCmd.PersistentFlags().String("spamoor-static-peers", "", "Comma-separated libp2p multiaddrs to dial directly")
+	rootCmd.PersistentFlags().Int("spamoor-gossip-d", defaults.Spamoor.GossipD, "Gossipsub mesh degree D (mainnet default 8)")
+	rootCmd.PersistentFlags().Int("spamoor-max-peers", defaults.Spamoor.MaxPeers, "Max libp2p peers (0 = unbounded)")
+
 	// Payload Build Time (0 = auto from slot time)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: slotTime/6)")
 
@@ -173,6 +184,17 @@ func initConfig() error {
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
 		PayloadBuildTime:    v.GetUint64("payload-build-time"),
+		SpamoorEnabled:      v.GetBool("spamoor"),
+		Spamoor: builder.SpamoorConfig{
+			P2PPrivKey:  v.GetString("spamoor-p2p-privkey"),
+			TCPPort:     v.GetUint("spamoor-tcp-port"),
+			QUICPort:    v.GetUint("spamoor-quic-port"),
+			DiscPort:    v.GetUint("spamoor-disc-port"),
+			Bootnodes:   v.GetString("spamoor-bootnodes"),
+			StaticPeers: v.GetString("spamoor-static-peers"),
+			GossipD:     v.GetInt("spamoor-gossip-d"),
+			MaxPeers:    v.GetInt("spamoor-max-peers"),
+		},
 	}
 
 	return nil
