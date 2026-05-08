@@ -863,44 +863,66 @@ func (m *EventStreamManager) cleanupOldSlots(currentSlot phase0.Slot) {
 }
 
 // SendInitialState sends the current state to a newly connected client.
-func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
+// Sends are ctx-aware: if the client disconnects (or shutdown is signalled)
+// while the channel buffer is full, the goroutine bails out instead of
+// blocking forever. This is what lets the caller safely run this in a
+// goroutine alongside the SSE read loop.
+func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *StreamEvent) {
+	send := func(ev *StreamEvent) bool {
+		select {
+		case ch <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
 	// Send current config
-	cfg := m.builderSvc.GetConfig()
-	ch <- &StreamEvent{
+	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      m.builderSvc.GetConfig(),
+	}) {
+		return
 	}
 
 	// Send current status
-	ch <- &StreamEvent{
+	if !send(&StreamEvent{
 		Type:      EventTypeStatus,
 		Timestamp: time.Now().UnixMilli(),
 		Data: StatusResponse{
 			Running:     true,
 			CurrentSlot: uint64(m.builderSvc.GetCurrentSlot()),
 		},
+	}) {
+		return
 	}
 
 	// Send service status
-	ch <- &StreamEvent{
+	if !send(&StreamEvent{
 		Type:      EventTypeServiceStatus,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      m.getServiceStatus(),
+	}) {
+		return
 	}
 
 	// Send current stats
-	ch <- &StreamEvent{
+	if !send(&StreamEvent{
 		Type:      EventTypeStats,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      m.buildStatsResponse(),
+	}) {
+		return
 	}
 
 	// Send builder info
-	ch <- &StreamEvent{
+	if !send(&StreamEvent{
 		Type:      EventTypeBuilderInfo,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      m.getBuilderInfo(),
+	}) {
+		return
 	}
 
 	// Send genesis and chain spec info
@@ -908,26 +930,38 @@ func (m *EventStreamManager) SendInitialState(ch chan *StreamEvent) {
 	chainSpec := m.builderSvc.GetChainSpec()
 
 	if genesis != nil && chainSpec != nil {
-		ch <- &StreamEvent{
+		if !send(&StreamEvent{
 			Type:      "chain_info",
 			Timestamp: time.Now().UnixMilli(),
 			Data: map[string]any{
 				"genesis_time":     genesis.GenesisTime.UnixMilli(),
 				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
 			},
+		}) {
+			return
 		}
 	}
 
-	// Send recent slot states
+	// Send recent slot states.
+	// Snapshot under lock then release before sending: a blocking channel send
+	// while holding RLock would wedge handleHeadEvent's Lock() and freeze the
+	// entire event-processing goroutine.
 	m.slotStatesMu.RLock()
+	states := make([]SlotStateEvent, 0, len(m.slotStates))
 	for _, state := range m.slotStates {
-		ch <- &StreamEvent{
-			Type:      EventTypeSlotState,
-			Timestamp: time.Now().UnixMilli(),
-			Data:      *state,
-		}
+		states = append(states, *state)
 	}
 	m.slotStatesMu.RUnlock()
+
+	for _, state := range states {
+		if !send(&StreamEvent{
+			Type:      EventTypeSlotState,
+			Timestamp: time.Now().UnixMilli(),
+			Data:      state,
+		}) {
+			return
+		}
+	}
 }
 
 // EventStream handles the SSE endpoint for real-time events.
@@ -965,10 +999,22 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 
 	// Add client
 	h.eventStreamMgr.AddClient(clientCh)
+	// RemoveClient closes the channel, so it must run *after* SendInitialState
+	// has stopped writing to it. Defers run LIFO, and we install the
+	// initial-state wait below — that wait will execute first.
 	defer h.eventStreamMgr.RemoveClient(clientCh)
 
-	// Send initial state
-	h.eventStreamMgr.SendInitialState(clientCh)
+	// Send initial state in a goroutine so the read loop below can drain the
+	// channel concurrently. SendInitialState performs blocking sends; if it
+	// ran inline and the 32-slot buffer filled (e.g. broadcasts piling on
+	// while we're still emitting initial events), the connection would stall
+	// before ever reaching the reader.
+	initDone := make(chan struct{})
+	go func() {
+		defer close(initDone)
+		h.eventStreamMgr.SendInitialState(r.Context(), clientCh)
+	}()
+	defer func() { <-initDone }()
 
 	// Heartbeat keeps the connection alive past proxy idle timeouts and ensures
 	// regular flushes so any intermediate buffers don't stall the stream.

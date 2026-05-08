@@ -61,6 +61,10 @@ type Service struct {
 	// Payload inclusion tracking (deduplication between detection methods)
 	wonPayloadsMu sync.Mutex
 	wonPayloads   map[phase0.Hash32]phase0.Slot
+
+	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
+	elClientVersionMu sync.RWMutex
+	elClientVersion   *engine.ClientVersion
 }
 
 // NewService creates a new builder service.
@@ -128,9 +132,71 @@ func (s *Service) Start(ctx context.Context) error {
 
 	go s.run()
 
+	// Refresh EL client identification in the background.
+	s.wg.Add(1)
+
+	go s.refreshELClientVersionLoop()
+
 	s.log.Info("Builder service started")
 
 	return nil
+}
+
+// refreshELClientVersionLoop polls the EL for its client identification.
+// Refreshes immediately on start and then every 5 minutes; tolerates errors
+// silently since this is informational only.
+func (s *Service) refreshELClientVersionLoop() {
+	defer s.wg.Done()
+
+	refresh := func() {
+		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+		defer cancel()
+
+		v, err := s.engineClient.GetClientVersion(ctx)
+		if err != nil {
+			s.log.WithError(err).Debug("Failed to fetch EL client version")
+			return
+		}
+
+		s.elClientVersionMu.Lock()
+		s.elClientVersion = v
+		s.elClientVersionMu.Unlock()
+
+		s.log.WithFields(logrus.Fields{
+			"name":    v.Name,
+			"version": v.Version,
+			"code":    v.Code,
+		}).Info("EL client identified")
+	}
+
+	refresh()
+
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
+}
+
+// GetELClientVersion returns the cached EL client identification.
+// Returns nil if the EL has not yet responded or does not support engine_getClientVersionV1.
+func (s *Service) GetELClientVersion() *engine.ClientVersion {
+	s.elClientVersionMu.RLock()
+	defer s.elClientVersionMu.RUnlock()
+
+	if s.elClientVersion == nil {
+		return nil
+	}
+
+	v := *s.elClientVersion
+
+	return &v
 }
 
 // Stop stops the builder service.
