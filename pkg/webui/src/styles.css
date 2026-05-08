@@ -752,3 +752,20 @@ nav .theme-selector .theme-navicon {
     max-width: 1520px;
   }
 }
+
+/* Make room for the global ethPandaOps panda menu when injected.
+   The menu mounts a fixed top-left button (~16px offset, 44px wide) on body
+   as #panda-menu-root, which would otherwise overlap our logo and title. */
+body:has(#panda-menu-root) header.header-bar > nav.navbar {
+  padding-left: 64px;
+}
+
+body:has(#panda-menu-root) #react-app > header:not(.header-bar) {
+  padding-left: 64px;
+}
+
+@media (max-width: 575.98px) {
+  body:has(#panda-menu-root) header.header-bar > nav.navbar .brand-logo {
+    display: none;
+  }
+}
