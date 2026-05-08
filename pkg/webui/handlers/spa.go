@@ -31,8 +31,10 @@ type RuntimeConfig struct {
 
 // NewSPAHandler creates a new SPA handler. The runtimeConfig is encoded
 // into a small <script> block injected into the <head> of index.html
-// before any other script runs.
-func NewSPAHandler(logger logrus.FieldLogger, staticEmbedFS fs.FS, runtimeConfig RuntimeConfig) (*SPAHandler, error) {
+// before any other script runs. headInjectHTML is an optional raw HTML
+// snippet (typically custom <script>/<meta>/<link> tags from a deployment
+// env var) injected after the runtime config so it can read it.
+func NewSPAHandler(logger logrus.FieldLogger, staticEmbedFS fs.FS, runtimeConfig RuntimeConfig, headInjectHTML string) (*SPAHandler, error) {
 	subFS, err := fs.Sub(staticEmbedFS, "static")
 	if err != nil {
 		return nil, err
@@ -49,7 +51,7 @@ func NewSPAHandler(logger logrus.FieldLogger, staticEmbedFS fs.FS, runtimeConfig
 		return nil, err
 	}
 
-	indexHTML, err = injectRuntimeConfig(indexHTML, runtimeConfig)
+	indexHTML, err = injectHead(indexHTML, runtimeConfig, headInjectHTML)
 	if err != nil {
 		return nil, err
 	}
@@ -62,32 +64,33 @@ func NewSPAHandler(logger logrus.FieldLogger, staticEmbedFS fs.FS, runtimeConfig
 	}, nil
 }
 
-// injectRuntimeConfig inserts a small <script> block immediately before
-// </head> that publishes runtime config under
-// window.ethpandaops.buildoor.config. The JSON payload is HTML-safe
-// (encoding/json escapes <, >, & by default), so values can't break out
-// of the script tag.
-func injectRuntimeConfig(html []byte, cfg RuntimeConfig) ([]byte, error) {
+// injectHead inserts a runtime-config <script> followed by an optional
+// raw HTML snippet immediately before </head>. The runtime config JSON
+// is HTML-safe (encoding/json escapes <, >, & by default), so values
+// can't break out of the script tag. The raw snippet is operator-supplied
+// (deployment env var) and inserted verbatim.
+func injectHead(html []byte, cfg RuntimeConfig, extraHTML string) ([]byte, error) {
 	payload, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal runtime config: %w", err)
 	}
-	tag := []byte(
+	injected := []byte(
 		"<script>" +
 			"window.ethpandaops=window.ethpandaops||{};" +
 			"window.ethpandaops.buildoor=window.ethpandaops.buildoor||{};" +
 			"window.ethpandaops.buildoor.config=" + string(payload) + ";" +
-			"</script>",
+			"</script>" +
+			extraHTML,
 	)
 
 	const headClose = "</head>"
 	idx := strings.Index(string(html), headClose)
 	if idx < 0 {
-		return append(tag, html...), nil
+		return append(injected, html...), nil
 	}
-	out := make([]byte, 0, len(html)+len(tag))
+	out := make([]byte, 0, len(html)+len(injected))
 	out = append(out, html[:idx]...)
-	out = append(out, tag...)
+	out = append(out, injected...)
 	out = append(out, html[idx:]...)
 	return out, nil
 }

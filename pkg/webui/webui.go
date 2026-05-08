@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -95,12 +96,17 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	// via the blank import above.
 	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 
+	// Optional raw HTML snippet injected into <head> of the served index.html
+	// (e.g. analytics/tracking scripts). Set per deployment via env var.
+	headInjectHTML := os.Getenv("BUILDOOR_INJECT_HEAD_HTML")
+
 	spaHandler, err := handlers.NewSPAHandler(
 		logrus.WithField("module", "web-spa"),
 		staticEmbedFS,
 		handlers.RuntimeConfig{
 			AuthProviderURL: config.AuthProviderURL,
 		},
+		headInjectHTML,
 	)
 	if err != nil {
 		logrus.Fatalf("error initializing spa handler: %v", err)
