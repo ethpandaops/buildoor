@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -66,6 +67,7 @@ func StartOverviewServer(cfg *OverviewConfig, log logrus.FieldLogger) error {
 		subFS,
 		"overview.html",
 		handlers.RuntimeConfig{},
+		os.Getenv("BUILDOOR_INJECT_HEAD_HTML"),
 	)
 	if err != nil {
 		return fmt.Errorf("init overview SPA handler: %w", err)
