@@ -38,6 +38,7 @@ interface AuthenticatoorLib {
 
 interface RuntimeConfig {
   authProviderURL: string;
+  overviewURL: string;
 }
 
 declare global {
@@ -101,8 +102,10 @@ class AuthStore {
   }
 
   private readRuntimeConfig(): RuntimeConfig {
+    const cfg = window.ethpandaops?.buildoor?.config;
     return {
-      authProviderURL: window.ethpandaops?.buildoor?.config?.authProviderURL ?? '',
+      authProviderURL: cfg?.authProviderURL ?? '',
+      overviewURL: cfg?.overviewURL ?? '',
     };
   }
 

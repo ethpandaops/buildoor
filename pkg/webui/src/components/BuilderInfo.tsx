@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import type { BuilderInfo as BuilderInfoType, ServiceStatus, Config } from '../types';
+import { CopyableHash } from './CopyableHash';
 
 interface BuilderInfoProps {
   builderInfo: BuilderInfoType | null;
@@ -20,33 +21,6 @@ function formatWei(wei: string): string {
   const eth = Number(weiNum) / 1e18;
   return eth.toFixed(4);
 }
-
-// Truncate hash/address with ellipsis
-function truncateHash(hash: string, chars: number = 8): string {
-  if (hash.length <= chars * 2 + 2) return hash;
-  return `${hash.substring(0, chars + 2)}...${hash.substring(hash.length - chars)}`;
-}
-
-// CopyableHash renders a truncated hash/address that copies the full value on click.
-const CopyableHash: React.FC<{ value: string; chars?: number }> = ({ value, chars = 8 }) => {
-  const [copied, setCopied] = React.useState(false);
-  const handleClick = () => {
-    navigator.clipboard.writeText(value).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-  return (
-    <span
-      title={`${value}\nClick to copy`}
-      onClick={handleClick}
-      style={{ cursor: 'pointer' }}
-      className={copied ? 'text-success' : ''}
-    >
-      {copied ? 'Copied!' : truncateHash(value, chars)}
-    </span>
-  );
-};
 
 export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceStatus, config }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();

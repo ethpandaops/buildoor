@@ -22,9 +22,10 @@ import (
 
 // OverviewConfig configures the multi-instance overview HTTP server.
 type OverviewConfig struct {
-	Host  string   // bind host (defaults to 0.0.0.0)
-	Port  int      // bind port
-	Hosts []string // buildoor instance URLs (one per builder)
+	Host           string   // bind host (defaults to 0.0.0.0)
+	Port           int      // bind port
+	Hosts          []string // buildoor instance URLs (one per builder)
+	InjectHeadHTML string   // optional <head> HTML snippet (falls back to BUILDOOR_INJECT_HEAD_HTML env var)
 }
 
 // OverviewHostEntry is a single configured buildoor instance returned to the UI.
@@ -62,12 +63,17 @@ func StartOverviewServer(cfg *OverviewConfig, log logrus.FieldLogger) error {
 		return fmt.Errorf("static FS: %w", err)
 	}
 
+	headInjectHTML := cfg.InjectHeadHTML
+	if headInjectHTML == "" {
+		headInjectHTML = os.Getenv("BUILDOOR_INJECT_HEAD_HTML")
+	}
+
 	spaHandler, err := handlers.NewSPAHandlerWithIndex(
 		log.WithField("module", "web-overview-spa"),
 		subFS,
 		"overview.html",
 		handlers.RuntimeConfig{},
-		os.Getenv("BUILDOOR_INJECT_HEAD_HTML"),
+		headInjectHTML,
 	)
 	if err != nil {
 		return fmt.Errorf("init overview SPA handler: %w", err)

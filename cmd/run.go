@@ -286,6 +286,8 @@ and begins building blocks according to configuration.`,
 				Minify:   !cfg.Debug,
 
 				AuthProviderURL: cfg.AuthProviderURL,
+				InjectHeadHTML:  cfg.InjectHeadHTML,
+				OverviewURL:     cfg.OverviewURL,
 			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc)
 
 			// Connect Builder API server to event stream (if both are enabled)

@@ -27,6 +27,7 @@ type SPAHandler struct {
 // at boot — no extra round-trip to the backend.
 type RuntimeConfig struct {
 	AuthProviderURL string `json:"authProviderURL"`
+	OverviewURL     string `json:"overviewURL,omitempty"`
 }
 
 // NewSPAHandler creates a new SPA handler. The runtimeConfig is encoded

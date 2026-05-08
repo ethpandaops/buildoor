@@ -41,9 +41,10 @@ Each --host must point at a buildoor instance with --api-port enabled.`,
 		hosts := normalizeOverviewHosts(hostFlag)
 
 		return webui.StartOverviewServer(&webui.OverviewConfig{
-			Host:  bind,
-			Port:  port,
-			Hosts: hosts,
+			Host:           bind,
+			Port:           port,
+			Hosts:          hosts,
+			InjectHeadHTML: cfg.InjectHeadHTML,
 		}, logger)
 	},
 }

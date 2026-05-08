@@ -98,14 +98,19 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
 
 	// Optional raw HTML snippet injected into <head> of the served index.html
-	// (e.g. analytics/tracking scripts). Set per deployment via env var.
-	headInjectHTML := os.Getenv("BUILDOOR_INJECT_HEAD_HTML")
+	// (e.g. the panda menu loader / analytics). The CLI flag wins; fall back
+	// to the legacy BUILDOOR_INJECT_HEAD_HTML env var when the flag is empty.
+	headInjectHTML := config.InjectHeadHTML
+	if headInjectHTML == "" {
+		headInjectHTML = os.Getenv("BUILDOOR_INJECT_HEAD_HTML")
+	}
 
 	spaHandler, err := handlers.NewSPAHandler(
 		logrus.WithField("module", "web-spa"),
 		staticEmbedFS,
 		handlers.RuntimeConfig{
 			AuthProviderURL: config.AuthProviderURL,
+			OverviewURL:     config.OverviewURL,
 		},
 		headInjectHTML,
 	)

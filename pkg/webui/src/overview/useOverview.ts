@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { InstanceStatus, OverviewHost, OverviewResponse } from './types';
 
-const POLL_INTERVAL_MS = 5000;
-const REQUEST_TIMEOUT_MS = 4500;
+const POLL_INTERVAL_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 async function fetchOverview(host: OverviewHost, signal: AbortSignal): Promise<OverviewResponse> {
   const resp = await fetch(`/api/overview/proxy/${host.id}`, { signal });

@@ -91,6 +91,27 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/overview": {
+            "get": {
+                "description": "Returns a single-payload summary used by the multi-instance overview UI:\nrunning state, builder pubkey, current slot, EL client info, available/enabled\nservices, balances, and recent build stats.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get a compact overview of this buildoor instance",
+                "operationId": "getOverview",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.OverviewResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/proposer-preferences": {
             "get": {
                 "description": "Returns all proposer preferences currently in the cache, received via P2P gossip.",
@@ -698,9 +719,6 @@ const docTemplate = `{
                 "port": {
                     "type": "integer"
                 },
-                "use_proposer_fee_recipient": {
-                    "type": "boolean"
-                },
                 "validator_count": {
                     "type": "integer"
                 }
@@ -739,6 +757,130 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "withdrawable_epoch": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.OverviewBalances": {
+            "type": "object",
+            "properties": {
+                "cl_balance_gwei": {
+                    "type": "integer"
+                },
+                "effective_balance_gwei": {
+                    "type": "integer"
+                },
+                "pending_payments_gwei": {
+                    "type": "integer"
+                },
+                "wallet_address": {
+                    "type": "string"
+                },
+                "wallet_balance_wei": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.OverviewELClient": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "commit": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.OverviewResponse": {
+            "type": "object",
+            "properties": {
+                "balances": {
+                    "$ref": "#/definitions/api.OverviewBalances"
+                },
+                "builder_index": {
+                    "type": "integer"
+                },
+                "builder_pubkey": {
+                    "type": "string"
+                },
+                "current_slot": {
+                    "type": "integer"
+                },
+                "el_client": {
+                    "$ref": "#/definitions/api.OverviewELClient"
+                },
+                "is_registered": {
+                    "type": "boolean"
+                },
+                "running": {
+                    "type": "boolean"
+                },
+                "services": {
+                    "$ref": "#/definitions/api.OverviewServices"
+                },
+                "stats": {
+                    "$ref": "#/definitions/api.OverviewStats"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.OverviewServices": {
+            "type": "object",
+            "properties": {
+                "builder_api_available": {
+                    "type": "boolean"
+                },
+                "builder_api_enabled": {
+                    "type": "boolean"
+                },
+                "epbs_available": {
+                    "type": "boolean"
+                },
+                "epbs_enabled": {
+                    "type": "boolean"
+                },
+                "epbs_registration_state": {
+                    "type": "string"
+                },
+                "lifecycle_available": {
+                    "type": "boolean"
+                },
+                "lifecycle_enabled": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.OverviewStats": {
+            "type": "object",
+            "properties": {
+                "bids_submitted": {
+                    "type": "integer"
+                },
+                "bids_won": {
+                    "type": "integer"
+                },
+                "blocks_included": {
+                    "type": "integer"
+                },
+                "builder_api_blocks_published": {
+                    "type": "integer"
+                },
+                "builder_api_headers_requested": {
+                    "type": "integer"
+                },
+                "builder_api_registered_validators": {
+                    "type": "integer"
+                },
+                "slots_built": {
                     "type": "integer"
                 }
             }
@@ -872,10 +1014,10 @@ const docTemplate = `{
                 "bid_start_time": {
                     "type": "integer"
                 },
-                "bid_static_min": {
-                    "type": "boolean"
-                },
                 "build_start_time": {
+                    "type": "integer"
+                },
+                "p2p_bid_subsidy": {
                     "type": "integer"
                 },
                 "payload_build_delay": {
