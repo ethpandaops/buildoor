@@ -720,6 +720,39 @@ type BlockResponse struct {
 	ParentBeaconRoot string            `json:"parentBeaconBlockRoot"`
 }
 
+// ClientVersion is the response shape from engine_getClientVersionV1.
+// See https://github.com/ethereum/execution-apis/blob/main/src/engine/identification.md
+type ClientVersion struct {
+	Code    string `json:"code"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
+// GetClientVersion calls engine_getClientVersionV1 to retrieve the EL's client identification.
+// We send our own client info (best-effort) per the spec; the EL responds with theirs.
+func (c *Client) GetClientVersion(ctx context.Context) (*ClientVersion, error) {
+	req := ClientVersion{
+		Code:    "BO",
+		Name:    "buildoor",
+		Version: "0",
+		Commit:  "00000000",
+	}
+
+	var response []ClientVersion
+	if err := c.call(ctx, "engine_getClientVersionV1", &response, req); err != nil {
+		return nil, fmt.Errorf("engine_getClientVersionV1 failed: %w", err)
+	}
+
+	if len(response) == 0 {
+		return nil, fmt.Errorf("engine_getClientVersionV1 returned no entries")
+	}
+
+	v := response[0]
+
+	return &v, nil
+}
+
 // GetLatestBlock fetches the latest block from the EL via eth_getBlockByNumber.
 func (c *Client) GetLatestBlock(ctx context.Context) (*BlockResponse, error) {
 	var block BlockResponse

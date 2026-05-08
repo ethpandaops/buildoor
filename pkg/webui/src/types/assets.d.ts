@@ -28,6 +28,10 @@ declare module '*.ico' {
   export default src;
 }
 
+declare module '*.css';
+
+declare module 'bootstrap/dist/js/bootstrap.bundle.min.js';
+
 declare module 'swagger-ui-react' {
   import type { ComponentType } from 'react';
   const SwaggerUI: ComponentType<Record<string, unknown>>;

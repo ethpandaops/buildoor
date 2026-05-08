@@ -40,7 +40,18 @@ func NewSPAHandler(logger logrus.FieldLogger, staticEmbedFS fs.FS, runtimeConfig
 		return nil, err
 	}
 
-	indexFile, err := subFS.Open("index.html")
+	return newSPAHandlerFromSub(logger, subFS, "index.html", runtimeConfig)
+}
+
+// NewSPAHandlerWithIndex creates an SPA handler from an already-rooted FS (e.g. one
+// that has already had fs.Sub applied) and a custom index filename. The overview
+// command uses this to serve overview.html from the same static bundle.
+func NewSPAHandlerWithIndex(logger logrus.FieldLogger, rootFS fs.FS, indexFilename string, runtimeConfig RuntimeConfig) (*SPAHandler, error) {
+	return newSPAHandlerFromSub(logger, rootFS, indexFilename, runtimeConfig)
+}
+
+func newSPAHandlerFromSub(logger logrus.FieldLogger, subFS fs.FS, indexFilename string, runtimeConfig RuntimeConfig) (*SPAHandler, error) {
+	indexFile, err := subFS.Open(indexFilename)
 	if err != nil {
 		return nil, err
 	}
