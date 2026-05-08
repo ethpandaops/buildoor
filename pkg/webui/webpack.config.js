@@ -3,9 +3,12 @@ const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 module.exports = {
-  entry: './src/index.tsx',
+  entry: {
+    buildoor: './src/index.tsx',
+    overview: './src/overview.tsx',
+  },
   output: {
-    filename: 'bundle/buildoor.[contenthash].js',
+    filename: 'bundle/[name].[contenthash].js',
     chunkFilename: 'bundle/[name].[contenthash].js',
     path: path.resolve(__dirname, 'static'),
     publicPath: '/',
@@ -37,7 +40,7 @@ module.exports = {
   },
   plugins: [
     new MiniCssExtractPlugin({
-      filename: 'bundle/buildoor.[contenthash].css',
+      filename: 'bundle/[name].[contenthash].css',
       chunkFilename: 'bundle/[name].[contenthash].css',
     }),
     new HtmlWebpackPlugin({
@@ -46,6 +49,15 @@ module.exports = {
       favicon: './src/assets/buildoor.ico',
       inject: 'body',
       scriptLoading: 'defer',
+      chunks: ['buildoor'],
+    }),
+    new HtmlWebpackPlugin({
+      template: './src/overview.html',
+      filename: 'overview.html',
+      favicon: './src/assets/buildoor.ico',
+      inject: 'body',
+      scriptLoading: 'defer',
+      chunks: ['overview'],
     }),
   ],
   performance: {
