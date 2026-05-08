@@ -74,6 +74,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/builder-api-status", apiHandler.GetBuilderAPIStatus).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/overview", apiHandler.GetOverview).Methods(http.MethodGet, http.MethodOptions)
 	apiRouter.HandleFunc("/buildoor/proposer-preferences", apiHandler.GetProposerPreferences).Methods(http.MethodGet)
 
 	// Lifecycle endpoints (if manager available)
