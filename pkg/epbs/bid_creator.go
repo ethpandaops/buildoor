@@ -83,7 +83,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
 		Slot:                  payload.Slot,
 		Value:                 phase0.Gwei(bidValue),
-		ExecutionPayment:      0, // Same as value for now
+		ExecutionPayment:      0,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
 	}

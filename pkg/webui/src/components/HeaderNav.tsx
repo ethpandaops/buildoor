@@ -6,6 +6,7 @@ const NAV_ITEMS: Array<{ view: ViewType; label: string }> = [
   { view: 'dashboard', label: 'Dashboard' },
   { view: 'bids-won', label: 'Bids Won' },
   { view: 'validators', label: 'Validators' },
+  { view: 'proposer-preferences', label: 'Proposer Prefs' },
   { view: 'api-docs', label: 'API' },
 ];
 
