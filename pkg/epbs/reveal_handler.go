@@ -104,9 +104,9 @@ func (h *RevealHandler) SubmitReveal(
 		cellProofs = payload.BlobsBundle.Proofs
 
 		h.log.WithFields(logrus.Fields{
-			"blob_count":       len(blobs),
-			"cell_proof_count": len(cellProofs),
-		}).Info("Including blobs and cell proofs with envelope publish")
+			"blob_count":      len(blobs),
+			"kzg_proof_count": len(cellProofs),
+		}).Info("Including blobs and kzg proofs with envelope publish")
 	}
 
 	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON, blobs, cellProofs); err != nil {
