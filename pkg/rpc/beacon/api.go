@@ -46,48 +46,42 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 	return nil
 }
 
-// publishEnvelopeRequest embeds the signed envelope JSON fields and adds optional
-// blobs + cell_proofs for data column broadcasting (Prysm's PublishExecutionPayloadEnvelopeRequest).
-type publishEnvelopeRequest struct {
-	Message    json.RawMessage `json:"message"`
-	Signature  json.RawMessage `json:"signature"`
-	Blobs      []string        `json:"blobs,omitempty"`
-	CellProofs []string        `json:"cell_proofs,omitempty"`
+// signedExecutionPayloadEnvelopeContents is the stateless publish body: the signed
+// envelope nested under "signed_execution_payload_envelope" alongside kzg_proofs and blobs
+// (mirrors Prysm's SignedExecutionPayloadEnvelopeContents struct).
+type signedExecutionPayloadEnvelopeContents struct {
+	SignedExecutionPayloadEnvelope json.RawMessage `json:"signed_execution_payload_envelope"`
+	KzgProofs                      []string        `json:"kzg_proofs,omitempty"`
+	Blobs                          []string        `json:"blobs,omitempty"`
 }
 
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
-// When blobs and cell proofs are provided, they are included so the beacon node
-// can compute and broadcast data column sidecars alongside the envelope.
-func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, cellProofs [][]byte) error {
+// When blobs and kzg proofs are provided they are wrapped in the
+// SignedExecutionPayloadEnvelopeContents body so the beacon node can derive
+// and broadcast data column sidecars; otherwise the bare signed envelope is sent.
+func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
 
-	// Unmarshal the signed envelope to extract message and signature fields,
-	// then re-marshal with blobs/cell_proofs at the same level.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(envelope, &raw); err != nil {
-		return fmt.Errorf("failed to parse signed envelope: %w", err)
-	}
-
-	reqBody := publishEnvelopeRequest{
-		Message:   raw["message"],
-		Signature: raw["signature"],
-	}
+	var bodyJSON []byte
+	var err error
 
 	if len(blobs) > 0 {
-		reqBody.Blobs = make([]string, len(blobs))
+		contents := signedExecutionPayloadEnvelopeContents{
+			SignedExecutionPayloadEnvelope: envelope,
+		}
+		contents.Blobs = make([]string, len(blobs))
 		for i, b := range blobs {
-			reqBody.Blobs[i] = fmt.Sprintf("0x%x", b)
+			contents.Blobs[i] = fmt.Sprintf("0x%x", b)
 		}
+		contents.KzgProofs = make([]string, len(kzgProofs))
+		for i, p := range kzgProofs {
+			contents.KzgProofs[i] = fmt.Sprintf("0x%x", p)
+		}
+		bodyJSON, err = json.Marshal(contents)
+	} else {
+		bodyJSON = envelope
 	}
 
-	if len(cellProofs) > 0 {
-		reqBody.CellProofs = make([]string, len(cellProofs))
-		for i, p := range cellProofs {
-			reqBody.CellProofs[i] = fmt.Sprintf("0x%x", p)
-		}
-	}
-
-	bodyJSON, err := json.Marshal(reqBody)
 	if err != nil {
 		return fmt.Errorf("failed to marshal publish request: %w", err)
 	}
@@ -121,9 +115,8 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 func (c *Client) GetExecutionPayloadEnvelopeTemplate(
 	ctx context.Context,
 	slot phase0.Slot,
-	builderIndex uint64,
 ) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/eth/v1/validator/execution_payload_envelope/%d/%d", c.baseURL, slot, builderIndex)
+	url := fmt.Sprintf("%s/eth/v1/validator/execution_payload_envelope/%d", c.baseURL, slot)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

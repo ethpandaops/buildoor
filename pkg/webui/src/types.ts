@@ -239,3 +239,15 @@ export interface BidsWonResponse {
   offset: number;
   limit: number;
 }
+
+// Proposer preferences types
+export interface ProposerPreference {
+  slot: number;
+  validator_index: number;
+  fee_recipient: string;
+  gas_limit: number;
+}
+
+export interface ProposerPreferencesResponse {
+  preferences: ProposerPreference[];
+}
