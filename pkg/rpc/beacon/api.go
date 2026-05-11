@@ -51,8 +51,8 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 // (mirrors Prysm's SignedExecutionPayloadEnvelopeContents struct).
 type signedExecutionPayloadEnvelopeContents struct {
 	SignedExecutionPayloadEnvelope json.RawMessage `json:"signed_execution_payload_envelope"`
-	KzgProofs                     []string        `json:"kzg_proofs,omitempty"`
-	Blobs                         []string        `json:"blobs,omitempty"`
+	KzgProofs                      []string        `json:"kzg_proofs,omitempty"`
+	Blobs                          []string        `json:"blobs,omitempty"`
 }
 
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
