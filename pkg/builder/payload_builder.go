@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"sync"
 	"time"
 
@@ -242,11 +241,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	var blockHash phase0.Hash32
 	copy(blockHash[:], payload.BlockHash[:])
 
-	var blockValueGwei uint64
+	var blockValueWei uint64
 	if payloadResult.BlockValue != nil {
-		// BlockValue from engine API is in wei; convert to gwei for bid values.
-		gweiValue := new(big.Int).Div(payloadResult.BlockValue, big.NewInt(1_000_000_000))
-		blockValueGwei = gweiValue.Uint64()
+		blockValueWei = payloadResult.BlockValue.Uint64()
 	}
 
 	txCount := len(payload.Transactions)
@@ -263,7 +260,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
 		FeeRecipient:      proposerFeeRecipient,
-		BlockValue:        blockValueGwei,
+		BlockValue:        blockValueWei,
 		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),
 	}
@@ -272,7 +269,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
 		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
-		"block_value":       blockValueGwei,
+		"block_value":       blockValueWei,
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,

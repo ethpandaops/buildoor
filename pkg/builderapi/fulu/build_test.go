@@ -31,7 +31,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	require.NoError(t, err)
 	pk := blsSigner.PublicKey()
 
-	blockValue := uint64(1_000_000) // 0.001 ETH in Gwei
+	blockValue := uint64(1_000_000_000_000_000) // 0.001 ETH in wei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
@@ -51,8 +51,8 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	require.NoError(t, err)
 	pk := blsSigner.PublicKey()
 
-	blockValue := uint64(500_000)
-	subsidy := uint64(1_000_000) // 0.001 ETH
+	blockValue := uint64(500_000_000_000_000) // 0.0005 ETH in wei
+	subsidy := uint64(1_000_000)              // 0.001 ETH subsidy in gwei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
@@ -64,8 +64,8 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	require.NotNil(t, bid.Message)
 	require.NotNil(t, bid.Message.Value)
 	assert.True(t, bid.Message.Value.IsUint64())
-	assert.Equal(t, blockValue+subsidy, bid.Message.Value.Uint64(),
-		"bid value should be block_value + subsidy")
+	assert.Equal(t, blockValue+subsidy*1_000_000_000, bid.Message.Value.Uint64(),
+		"bid value should be block_value_wei + subsidy_gwei_converted_to_wei")
 }
 
 func minimalPayloadReadyEvent(t *testing.T, blockValue uint64) *builder.PayloadReadyEvent {

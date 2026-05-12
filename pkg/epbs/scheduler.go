@@ -213,7 +213,8 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Calculate bid value.
 	// Start from block value with BidMinAmount as a floor.
-	bidBase := payload.BlockValue
+	// BlockValue is in wei; BidMinAmount/BidIncrease/P2PBidSubsidy are in gwei.
+	bidBase := payload.BlockValue / 1_000_000_000
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
 	}
