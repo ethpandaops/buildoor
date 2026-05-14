@@ -118,7 +118,7 @@ func discoverPeers(ctx context.Context, iterator enode.Iterator, store *peerStor
 		log.WithFields(logrus.Fields{
 			"peer":  peerShort(ai.ID),
 			"total": store.size(),
-		}).Debug("discovered peer")
+		}).Info("discovered peer")
 	}
 }
 
