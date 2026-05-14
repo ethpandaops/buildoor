@@ -53,7 +53,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	pk := blsSigner.PublicKey()
 
 	blockValue := new(big.Int).SetUint64(500_000_000_000_000) // 0.0005 ETH in wei
-	subsidy := uint64(1_000_000)                               // 0.001 ETH subsidy in gwei
+	subsidy := uint64(1_000_000)                              // 0.001 ETH subsidy in gwei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
