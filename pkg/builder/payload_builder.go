@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -241,9 +242,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	var blockHash phase0.Hash32
 	copy(blockHash[:], payload.BlockHash[:])
 
-	var blockValueWei uint64
-	if payloadResult.BlockValue != nil {
-		blockValueWei = payloadResult.BlockValue.Uint64()
+	blockValue := payloadResult.BlockValue
+	if blockValue == nil {
+		blockValue = new(big.Int)
 	}
 
 	txCount := len(payload.Transactions)
@@ -260,7 +261,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
 		FeeRecipient:      proposerFeeRecipient,
-		BlockValue:        blockValueWei,
+		BlockValue:        blockValue,
 		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),
 	}
@@ -269,7 +270,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
 		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
-		"block_value":       blockValueWei,
+		"block_value":       blockValue.String(),
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,

@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -46,7 +47,7 @@ type PayloadReadyEvent struct {
 	GasLimit          uint64
 	PrevRandao        phase0.Root
 	FeeRecipient      common.Address
-	BlockValue        uint64      // MEV value from EL in wei
+	BlockValue        *big.Int    // MEV value from EL in wei
 	BuildSource       BuildSource // How the payload was built
 	ReadyAt           time.Time   // When the payload became ready
 }
