@@ -2,7 +2,6 @@ package epbs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
@@ -20,7 +19,7 @@ import (
 // BidCreator handles creation and submission of execution payload bids.
 type BidCreator struct {
 	signer       *Signer
-	clClient     *beacon.Client
+	submitter    BidSubmitter
 	genesis      *beacon.Genesis
 	chainSpec    *beacon.ChainSpec
 	builderIndex uint64
@@ -28,9 +27,10 @@ type BidCreator struct {
 }
 
 // NewBidCreator creates a new bid creator.
+// The submitter selects the transport for the signed bid (HTTP or gossip).
 func NewBidCreator(
 	signer *Signer,
-	clClient *beacon.Client,
+	submitter BidSubmitter,
 	genesis *beacon.Genesis,
 	chainSpec *beacon.ChainSpec,
 	builderIndex uint64,
@@ -38,7 +38,7 @@ func NewBidCreator(
 ) *BidCreator {
 	return &BidCreator{
 		signer:       signer,
-		clClient:     clClient,
+		submitter:    submitter,
 		genesis:      genesis,
 		chainSpec:    chainSpec,
 		builderIndex: builderIndex,
@@ -124,12 +124,6 @@ func (c *BidCreator) CreateAndSubmitBid(
 		Signature: signature,
 	}
 
-	// Marshal to JSON for submission
-	signedBidJSON, err := json.Marshal(signedBid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal signed bid: %w", err)
-	}
-
 	logger := c.log.WithFields(logrus.Fields{
 		"slot":              payload.Slot,
 		"value":             bidValue,
@@ -143,8 +137,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	logger.Info("Submitting bid")
 
-	// Submit bid
-	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {
+	if err := c.submitter.Submit(ctx, signedBid); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
 	}
 

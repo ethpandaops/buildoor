@@ -25,6 +25,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
+	"github.com/ethpandaops/buildoor/pkg/spamoor"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
@@ -219,10 +220,48 @@ and begins building blocks according to configuration.`,
 			logger.Info("Gloas fork epoch not found in chain spec, ePBS not available")
 		}
 
+		// 8a. Initialize spamoor (libp2p bid gossip) if requested.
+		// When enabled, ePBS routes bids through gossipsub instead of HTTP.
+		var (
+			spamoorSvc   *spamoor.Service
+			bidSubmitter epbs.BidSubmitter
+		)
+
+		if cfg.SpamoorEnabled {
+			if !epbsAvailable {
+				return fmt.Errorf("--spamoor requires ePBS to be available (Gloas fork must be scheduled)")
+			}
+
+			if chainSpec.GloasForkVersion == nil {
+				return fmt.Errorf("--spamoor: chain spec missing GloasForkVersion")
+			}
+
+			logger.Info("Initializing spamoor (libp2p bid gossip)...")
+
+			spamoorSvc, err = spamoor.NewService(
+				&cfg.Spamoor,
+				*chainSpec.GloasForkVersion,
+				genesis.GenesisValidatorsRoot,
+				genesis.GenesisTime,
+				chainSpec.SecondsPerSlot,
+				logger,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to initialize spamoor: %w", err)
+			}
+
+			if err := spamoorSvc.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start spamoor: %w", err)
+			}
+			defer spamoorSvc.Stop()
+
+			bidSubmitter = spamoorSvc
+		}
+
 		if epbsAvailable {
 			logger.Info("Initializing ePBS service...")
 
-			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, bidSubmitter, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize ePBS: %w", err)
 			}
