@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	ecdsaprysm "github.com/OffchainLabs/prysm/v7/crypto/ecdsa"
 	"github.com/OffchainLabs/prysm/v7/consensus-types/primitives"
+	ecdsaprysm "github.com/OffchainLabs/prysm/v7/crypto/ecdsa"
 	ethpb "github.com/OffchainLabs/prysm/v7/proto/prysm/v1alpha1"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/enode"
@@ -84,19 +84,7 @@ func startDiscovery(ctx context.Context, cfg discoveryConfig) (*discover.UDPv5, 
 	cfg.Log.WithField("bootnodes", len(cfg.Bootnodes)).Info("discv5 listener started")
 
 	forkFilter := enode.Filter(listener.RandomNodes(), func(n *enode.Node) bool {
-		matches := matchesForkDigest(n, cfg.ForkDigest)
-		if matches {
-			cfg.Log.WithFields(logrus.Fields{
-				"peer": peerShort(peer.ID(n.ID().String())),
-				"fork_digest": fmt.Sprintf("0x%x", cfg.ForkDigest[:]),
-			}).Info("discovered peer")
-		} else {
-			cfg.Log.WithFields(logrus.Fields{
-				"peer": peerShort(peer.ID(n.ID().String())),
-				"fork_digest": fmt.Sprintf("0x%x", cfg.ForkDigest[:]),
-			}).Info("discarded peer")
-		}
-		return matches
+		return matchesForkDigest(n, cfg.ForkDigest, cfg.Log)
 	})
 
 	go discoverPeers(ctx, forkFilter, cfg.Store, cfg.Log)
@@ -134,7 +122,7 @@ func discoverPeers(ctx context.Context, iterator enode.Iterator, store *peerStor
 	}
 }
 
-func matchesForkDigest(node *enode.Node, forkDigest [4]byte) bool {
+func matchesForkDigest(node *enode.Node, forkDigest [4]byte, logger logrus.FieldLogger) bool {
 	var eth2Data []byte
 	if err := node.Record().Load(enr.WithEntry(eth2ENRKey, &eth2Data)); err != nil {
 		return false
@@ -152,6 +140,11 @@ func matchesForkDigest(node *enode.Node, forkDigest [4]byte) bool {
 	if len(forkID.CurrentForkDigest) < 4 {
 		return false
 	}
+
+	logger.WithFields(logrus.Fields{
+		"peer_fork_digest": fmt.Sprintf("0x%x", forkID.CurrentForkDigest[:]),
+		"our_fork_digest":  fmt.Sprintf("0x%x", forkDigest[:]),
+	}).Info("matching fork digest from peer")
 
 	return forkID.CurrentForkDigest[0] == forkDigest[0] &&
 		forkID.CurrentForkDigest[1] == forkDigest[1] &&
