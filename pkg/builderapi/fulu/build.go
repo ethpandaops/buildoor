@@ -58,7 +58,8 @@ func BuildSignedBuilderBid(
 	value := new(uint256.Int)
 	value.SetUint64(event.BlockValue)
 	if subsidyGwei > 0 {
-		value.Add(value, new(uint256.Int).SetUint64(subsidyGwei))
+		subsidyWei := subsidyGwei * 1_000_000_000
+		value.Add(value, new(uint256.Int).SetUint64(subsidyWei))
 	}
 
 	bid := &BuilderBid{

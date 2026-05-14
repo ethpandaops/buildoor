@@ -239,7 +239,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		ParentBlockHash: parentHash,
 		BlockHash:       phase0.Hash32(payload.BlockHash),
 		Payload:         payload,
-		BlockValue:      500_000, // 0.0005 ETH in Gwei
+		BlockValue:      500_000_000_000_000, // 0.0005 ETH in wei
 	}
 	cache.Store(event)
 	mock := &mockPayloadCacheProvider{cache: cache}
@@ -266,8 +266,8 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		} `json:"data"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	// block_value 500_000 + subsidy 1_000_000 = 1_500_000
-	assert.Equal(t, "1500000", resp.Data.Message.Value, "bid value should be block_value + subsidy")
+	// block_value 500_000_000_000_000 wei + subsidy 1_000_000 gwei (= 1_000_000_000_000_000 wei) = 1_500_000_000_000_000 wei
+	assert.Equal(t, "1500000000000000", resp.Data.Message.Value, "bid value should be block_value_wei + subsidy_wei")
 }
 
 // TestSubmitBlindedBlockV2_InvalidJSON returns 400 for invalid JSON body.
