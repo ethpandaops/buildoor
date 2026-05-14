@@ -84,7 +84,19 @@ func startDiscovery(ctx context.Context, cfg discoveryConfig) (*discover.UDPv5, 
 	cfg.Log.WithField("bootnodes", len(cfg.Bootnodes)).Info("discv5 listener started")
 
 	forkFilter := enode.Filter(listener.RandomNodes(), func(n *enode.Node) bool {
-		return matchesForkDigest(n, cfg.ForkDigest)
+		matches := matchesForkDigest(n, cfg.ForkDigest)
+		if matches {
+			cfg.Log.WithFields(logrus.Fields{
+				"peer": peerShort(peer.ID(n.ID().String())),
+				"fork_digest": fmt.Sprintf("0x%x", cfg.ForkDigest[:]),
+			}).Info("discovered peer")
+		} else {
+			cfg.Log.WithFields(logrus.Fields{
+				"peer": peerShort(peer.ID(n.ID().String())),
+				"fork_digest": fmt.Sprintf("0x%x", cfg.ForkDigest[:]),
+			}).Info("discarded peer")
+		}
+		return matches
 	})
 
 	go discoverPeers(ctx, forkFilter, cfg.Store, cfg.Log)
