@@ -236,6 +236,13 @@ and begins building blocks according to configuration.`,
 				return fmt.Errorf("--spamoor: chain spec missing GloasForkVersion")
 			}
 
+			logger.WithFields(logrus.Fields{
+				"gloas_fork_version": fmt.Sprintf("0x%x",
+					(*chainSpec.GloasForkVersion)[:]),
+				"genesis_validators_root": fmt.Sprintf("0x%x",
+					genesis.GenesisValidatorsRoot[:]),
+			}).Debug("Spamoor fork digest inputs")
+
 			logger.Info("Initializing spamoor (libp2p bid gossip)...")
 
 			spamoorSvc, err = spamoor.NewService(
