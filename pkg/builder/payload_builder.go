@@ -252,7 +252,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   finalityInfo.HeadExecutionBlockHash,
+		ParentBlockHash:   phase0.Hash32(headBlockHash),
 		BlockHash:         blockHash,
 		Payload:           payload,
 		BlobsBundle:       payloadResult.BlobsBundle,
