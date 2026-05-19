@@ -63,7 +63,7 @@ type PayloadReadyStreamEvent struct {
 	Slot            uint64 `json:"slot"`
 	BlockHash       string `json:"block_hash"`
 	ParentBlockHash string `json:"parent_block_hash"`
-	BlockValue      uint64 `json:"block_value"`
+	BlockValue      string `json:"block_value"`
 	ReadyAt         int64  `json:"ready_at"`
 }
 
@@ -157,7 +157,7 @@ type BidWonStreamEvent struct {
 	NumTransactions int    `json:"num_transactions"`
 	NumBlobs        int    `json:"num_blobs"`
 	ValueETH        string `json:"value_eth"`
-	ValueWei        uint64 `json:"value_wei"`
+	ValueWei        string `json:"value_wei"`
 	Timestamp       int64  `json:"timestamp"`
 }
 
@@ -464,7 +464,7 @@ func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent
 			Slot:            uint64(event.Slot),
 			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
 			ParentBlockHash: fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
-			BlockValue:      event.BlockValue,
+			BlockValue:      event.BlockValue.String(),
 			ReadyAt:         event.ReadyAt.UnixMilli(),
 		},
 	})
@@ -1184,7 +1184,7 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedDelivered(slot uint
 }
 
 // BroadcastBidWon broadcasts a bid won event when a block is successfully delivered.
-func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei uint64) {
+func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei string) {
 	now := time.Now().UnixMilli()
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeBidWon,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -239,7 +240,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		ParentBlockHash: parentHash,
 		BlockHash:       phase0.Hash32(payload.BlockHash),
 		Payload:         payload,
-		BlockValue:      500_000_000_000_000, // 0.0005 ETH in wei
+		BlockValue:      new(big.Int).SetUint64(500_000_000_000_000), // 0.0005 ETH in wei
 	}
 	cache.Store(event)
 	mock := &mockPayloadCacheProvider{cache: cache}

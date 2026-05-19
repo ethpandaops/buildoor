@@ -1,6 +1,7 @@
 package epbs
 
 import (
+	"math/big"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -19,7 +20,7 @@ type BuiltPayload struct {
 	ExecutionPayload  *engine.ExecutionPayload // Typed execution payload
 	BlobsBundle       *engine.BlobsBundle      // Typed blobs bundle if present
 	ExecutionRequests engine.ExecutionRequests // Typed execution requests (Electra/Fulu)
-	BidValue          uint64
+	BidValue          *big.Int
 	FeeRecipient      common.Address
 	Timestamp         uint64
 	PrevRandao        phase0.Root

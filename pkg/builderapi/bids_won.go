@@ -12,7 +12,7 @@ type BidWonEntry struct {
 	NumTransactions int    `json:"num_transactions"`
 	NumBlobs        int    `json:"num_blobs"`
 	ValueETH        string `json:"value_eth"` // Formatted as ETH string for precision
-	ValueWei        uint64 `json:"value_wei"` // Stored in wei for sorting
+	ValueWei        string `json:"value_wei"` // Stored as decimal wei string
 	Timestamp       int64  `json:"timestamp"` // Unix timestamp in milliseconds
 }
 
@@ -89,15 +89,13 @@ func (s *BidsWonStore) Count() int {
 	return len(s.entries)
 }
 
-// weiToETH converts wei (uint64) to ETH string with 18 decimal places.
-func weiToETH(wei uint64) string {
-	// Convert wei to big.Float
-	weiFloat := new(big.Float).SetUint64(wei)
-
-	// Divide by 1e18 to get ETH
+// weiToETH converts wei (*big.Int) to ETH string with 18 decimal places.
+func weiToETH(wei *big.Int) string {
+	if wei == nil {
+		return "0.000000000000000000"
+	}
+	weiFloat := new(big.Float).SetInt(wei)
 	ethDivisor := new(big.Float).SetFloat64(1e18)
 	ethValue := new(big.Float).Quo(weiFloat, ethDivisor)
-
-	// Format with 18 decimal precision
 	return ethValue.Text('f', 18)
 }
