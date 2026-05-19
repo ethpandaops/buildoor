@@ -105,10 +105,6 @@ jobs:
       run: |
         cd buildoor_linux_arm64
         tar -czf ../buildoor_snapshot_linux_arm64.tar.gz .
-    - name: "Generate release package: buildoor_snapshot_darwin_amd64.tar.gz"
-      run: |
-        cd buildoor_darwin_amd64
-        tar -czf ../buildoor_snapshot_darwin_amd64.tar.gz .
     - name: "Generate release package: buildoor_snapshot_darwin_arm64.tar.gz"
       run: |
         cd buildoor_darwin_arm64
@@ -133,11 +129,9 @@ jobs:
           | [buildoor_snapshot_windows_amd64.zip](https://github.com/ethpandaops/buildoor/releases/download/snapshot/buildoor_snapshot_windows_amd64.zip) | buildoor executables for windows/amd64 |
           | [buildoor_snapshot_linux_amd64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/snapshot/buildoor_snapshot_linux_amd64.tar.gz) | buildoor executables for linux/amd64 |
           | [buildoor_snapshot_linux_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/snapshot/buildoor_snapshot_linux_arm64.tar.gz) | buildoor executables for linux/arm64 |
-          | [buildoor_snapshot_darwin_amd64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/snapshot/buildoor_snapshot_darwin_amd64.tar.gz) | buildoor executable for macos/amd64 |
           | [buildoor_snapshot_darwin_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/snapshot/buildoor_snapshot_darwin_arm64.tar.gz) | buildoor executable for macos/arm64 |
         files: |
           buildoor_snapshot_windows_amd64.zip
           buildoor_snapshot_linux_amd64.tar.gz
           buildoor_snapshot_linux_arm64.tar.gz
-          buildoor_snapshot_darwin_amd64.tar.gz
           buildoor_snapshot_darwin_arm64.tar.gz
