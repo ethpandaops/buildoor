@@ -127,18 +127,23 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
 	// Fallback:   use the builder's configured fee recipient.
 	proposerFeeRecipient := b.feeRecipient
+	var targetGasLimit uint64
 
 	if b.isGloas != nil && b.isGloas() {
 		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
 				proposerFeeRecipient = common.Address(prefs.Message.FeeRecipient)
+				targetGasLimit = prefs.Message.GasLimit
 				b.log.WithFields(logrus.Fields{
 					"proposer_index": attrs.ProposerIndex,
 					"fee_recipient":  proposerFeeRecipient.Hex(),
 					"gas_limit":      prefs.Message.GasLimit,
 				}).Debug("Using fee recipient and gas limit from proposer preferences")
 			}
+		}
+		if targetGasLimit == 0 {
+			targetGasLimit = attrs.TargetGasLimit
 		}
 
 		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
@@ -196,6 +201,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
 			SlotNumber:            uint64(attrs.ProposalSlot),
+			TargetGasLimit:        targetGasLimit,
 		},
 	)
 	if err != nil {
