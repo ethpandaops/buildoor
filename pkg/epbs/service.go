@@ -90,6 +90,7 @@ type Service struct {
 	bidTracker            *BidTracker
 	payloadStore          *PayloadStore
 	clClient              *beacon.Client
+	bidSubmitter          BidSubmitter
 	chainSvc              chain.Service
 	builderIndex          uint64
 	builderPubkey         phase0.BLSPubKey
@@ -114,14 +115,21 @@ type Service struct {
 }
 
 // NewService creates a new ePBS service.
+// bidSubmitter is the transport for signed bids; pass nil to default to the HTTP submitter
+// (POST to the beacon node). Spamoor mode passes a gossipsub-backed submitter instead.
 func NewService(
 	cfg *builder.EPBSConfig,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
+	bidSubmitter BidSubmitter,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "epbs-service")
+
+	if bidSubmitter == nil {
+		bidSubmitter = NewHTTPSubmitter(clClient)
+	}
 
 	// Create ePBS signer wrapper
 	epbsSigner := NewSigner(blsSigner)
@@ -130,6 +138,7 @@ func NewService(
 		cfg:                   cfg,
 		signer:                epbsSigner,
 		clClient:              clClient,
+		bidSubmitter:          bidSubmitter,
 		chainSvc:              chainSvc,
 		builderPubkey:         blsSigner.PublicKey(),
 		payloadStore:          NewPayloadStore(),
@@ -217,7 +226,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 	s.bidTracker = NewBidTracker(s.builderIndex, chainSpec, s.log)
 	s.bidCreator = NewBidCreator(
 		s.signer,
-		s.clClient,
+		s.bidSubmitter,
 		genesis,
 		chainSpec,
 		s.builderIndex,

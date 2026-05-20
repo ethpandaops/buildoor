@@ -30,6 +30,13 @@ func DefaultConfig() *Config {
 			P2PBidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
 		},
 		ValidateWithdrawals: false,
+		Spamoor: SpamoorConfig{
+			TCPPort:  9100,
+			QUICPort: 9100,
+			DiscPort: 9101,
+			GossipD:  8,
+			MaxPeers: 200,
+		},
 	}
 }
 
