@@ -182,11 +182,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	b.log.WithFields(logrus.Fields{
-		"slot":              attrs.ProposalSlot,
-		"timestamp":         attrs.Timestamp,
-		"withdrawal_count":  len(engineWithdrawals),
-		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
-		"target_gas_limit":  targetGasLimit,
+		"slot":             attrs.ProposalSlot,
+		"timestamp":        attrs.Timestamp,
+		"withdrawal_count": len(engineWithdrawals),
+		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"target_gas_limit": targetGasLimit,
 	}).Debug("Building payload from attributes")
 
 	// Request payload build from the EL
