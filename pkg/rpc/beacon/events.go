@@ -497,6 +497,8 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		e.attestationDispatcher.Fire(event)
 
 	case "proposer_preferences":
+		e.client.log.WithField("raw", data).Info("Proposer preferences SSE event received")
+
 		var raw proposerPreferencesEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
 			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse proposer_preferences event JSON")
