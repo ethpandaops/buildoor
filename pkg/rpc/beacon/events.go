@@ -139,6 +139,7 @@ type proposerPreferencesEventJSON struct {
 	Data    *gloas.SignedProposerPreferences `json:"data"`
 }
 
+
 // payloadAvailableEventJSON is used for JSON unmarshaling of execution_payload_available events.
 type payloadAvailableEventJSON struct {
 	Slot      string `json:"slot"`
@@ -509,8 +510,9 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		}
 
 		e.client.log.WithFields(map[string]interface{}{
-			"slot":            raw.Data.Message.ProposalSlot,
-			"validator_index": raw.Data.Message.ValidatorIndex,
+			"slot":             raw.Data.Message.ProposalSlot,
+			"validator_index":  raw.Data.Message.ValidatorIndex,
+			"target_gas_limit": raw.Data.Message.TargetGasLimit,
 		}).Debug("Proposer preferences event received")
 
 		e.proposerPreferencesDispatcher.Fire(raw.Data)

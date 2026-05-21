@@ -853,7 +853,7 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 			Slot:           uint64(slot),
 			ValidatorIndex: uint64(pref.Message.ValidatorIndex),
 			FeeRecipient:   fmt.Sprintf("0x%x", pref.Message.FeeRecipient[:]),
-			GasLimit:       pref.Message.GasLimit,
+			GasLimit:       pref.Message.TargetGasLimit,
 		})
 	}
 

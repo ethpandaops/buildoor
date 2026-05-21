@@ -103,7 +103,7 @@ func (s *Service) handleEvent(signed *gloas.SignedProposerPreferences) {
 		"slot":            slot,
 		"validator_index": validatorIndex,
 		"fee_recipient":   fmt.Sprintf("0x%x", signed.Message.FeeRecipient[:]),
-		"gas_limit":       signed.Message.GasLimit,
+		"target_gas_limit": signed.Message.TargetGasLimit,
 	})
 
 	log.Info("Received proposer preferences from SSE")
