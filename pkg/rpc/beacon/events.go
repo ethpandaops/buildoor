@@ -139,7 +139,6 @@ type proposerPreferencesEventJSON struct {
 	Data    *gloas.SignedProposerPreferences `json:"data"`
 }
 
-
 // payloadAvailableEventJSON is used for JSON unmarshaling of execution_payload_available events.
 type payloadAvailableEventJSON struct {
 	Slot      string `json:"slot"`

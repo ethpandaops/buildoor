@@ -100,9 +100,9 @@ func (s *Service) handleEvent(signed *gloas.SignedProposerPreferences) {
 	validatorIndex := signed.Message.ValidatorIndex
 
 	log := s.log.WithFields(logrus.Fields{
-		"slot":            slot,
-		"validator_index": validatorIndex,
-		"fee_recipient":   fmt.Sprintf("0x%x", signed.Message.FeeRecipient[:]),
+		"slot":             slot,
+		"validator_index":  validatorIndex,
+		"fee_recipient":    fmt.Sprintf("0x%x", signed.Message.FeeRecipient[:]),
 		"target_gas_limit": signed.Message.TargetGasLimit,
 	})
 
