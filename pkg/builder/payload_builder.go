@@ -186,6 +186,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"timestamp":        attrs.Timestamp,
 		"withdrawal_count": len(engineWithdrawals),
 		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"target_gas_limit": targetGasLimit,
 	}).Debug("Building payload from attributes")
 
 	// Request payload build from the EL
@@ -280,6 +281,8 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,
+		"target_gas_limit":  targetGasLimit,
+		"payload_gas_limit": payload.GasLimit,
 	}).Info("Payload built from attributes")
 
 	return event, nil
