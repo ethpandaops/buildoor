@@ -39,12 +39,16 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   };
 
   const handleLifecycleSave = async () => {
+    if (!isLoggedIn) return;
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     const authToken = getAuthHeader();
-    if (!authToken) return;
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
     try {
       await fetch('/api/config/lifecycle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        headers,
         body: JSON.stringify({
           topup_threshold: Math.round(parseFloat(lcThreshold) * 1e9),
           topup_amount: Math.round(parseFloat(lcAmount) * 1e9),
@@ -57,16 +61,17 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   };
 
   const handleLifecycleToggle = async () => {
+    if (!isLoggedIn) return;
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     const authToken = getAuthHeader();
-    if (!authToken) return;
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
     setToggling(true);
     try {
       await fetch('/api/services/toggle', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify({ lifecycle_enabled: !lifecycleEnabled }),
       });
     } catch (err) {

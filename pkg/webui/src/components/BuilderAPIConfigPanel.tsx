@@ -65,16 +65,17 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
 
   const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!isLoggedIn) return;
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     const token = getAuthHeader();
-    if (!token) return;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     setToggling(true);
     try {
       await fetch('/api/services/toggle', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({ builder_api_enabled: !isActive }),
       });
     } catch (err) {
