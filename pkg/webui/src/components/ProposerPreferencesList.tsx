@@ -131,7 +131,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
                             {pref.fee_recipient}
                           </span>
                         </td>
-                        <td className="small text-end">{pref.gas_limit.toLocaleString()}</td>
+                        <td className="small text-end">{pref.target_gas_limit.toLocaleString()}</td>
                       </tr>
                     ))
                   )}
