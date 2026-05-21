@@ -83,6 +83,7 @@ type PayloadAttributesEvent struct {
 	SuggestedFeeRecipient common.Address
 	Withdrawals           []*capella.Withdrawal
 	ParentBeaconBlockRoot phase0.Root
+	TargetGasLimit        uint64
 }
 
 // payloadAttributesEventJSON is used for JSON unmarshaling of payload_attributes events.
@@ -105,6 +106,7 @@ type payloadAttributesEventJSON struct {
 				Amount         string `json:"amount"`
 			} `json:"withdrawals"`
 			ParentBeaconBlockRoot string `json:"parent_beacon_block_root"`
+			TargetGasLimit        string `json:"target_gas_limit"`
 		} `json:"payload_attributes"`
 	} `json:"data"`
 }
@@ -747,6 +749,8 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
 	}
 
+	targetGasLimit, _ := strconv.ParseUint(raw.Data.PayloadAttributes.TargetGasLimit, 10, 64)
+
 	// Parse withdrawals
 	withdrawals := make([]*capella.Withdrawal, len(raw.Data.PayloadAttributes.Withdrawals))
 	for i, w := range raw.Data.PayloadAttributes.Withdrawals {
@@ -780,6 +784,7 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		SuggestedFeeRecipient: common.HexToAddress(raw.Data.PayloadAttributes.SuggestedFeeRecipient),
 		Withdrawals:           withdrawals,
 		ParentBeaconBlockRoot: parentBeaconBlockRoot,
+		TargetGasLimit:        targetGasLimit,
 	}, nil
 }
 

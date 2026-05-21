@@ -127,18 +127,23 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
 	// Fallback:   use the builder's configured fee recipient.
 	proposerFeeRecipient := b.feeRecipient
+	var targetGasLimit uint64
 
 	if b.isGloas != nil && b.isGloas() {
 		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
 				proposerFeeRecipient = common.Address(prefs.Message.FeeRecipient)
+				targetGasLimit = prefs.Message.GasLimit
 				b.log.WithFields(logrus.Fields{
 					"proposer_index": attrs.ProposerIndex,
 					"fee_recipient":  proposerFeeRecipient.Hex(),
 					"gas_limit":      prefs.Message.GasLimit,
 				}).Debug("Using fee recipient and gas limit from proposer preferences")
 			}
+		}
+		if targetGasLimit == 0 {
+			targetGasLimit = attrs.TargetGasLimit
 		}
 
 		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
@@ -181,6 +186,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"timestamp":        attrs.Timestamp,
 		"withdrawal_count": len(engineWithdrawals),
 		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"target_gas_limit": targetGasLimit,
 	}).Debug("Building payload from attributes")
 
 	// Request payload build from the EL
@@ -196,6 +202,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			Withdrawals:           engineWithdrawals,
 			ParentBeaconBlockRoot: &parentBeaconRoot,
 			SlotNumber:            uint64(attrs.ProposalSlot),
+			TargetGasLimit:        targetGasLimit,
 		},
 	)
 	if err != nil {
@@ -242,11 +249,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	var blockHash phase0.Hash32
 	copy(blockHash[:], payload.BlockHash[:])
 
-	var blockValueGwei uint64
-	if payloadResult.BlockValue != nil {
-		// BlockValue from engine API is in wei; convert to gwei for bid values.
-		gweiValue := new(big.Int).Div(payloadResult.BlockValue, big.NewInt(1_000_000_000))
-		blockValueGwei = gweiValue.Uint64()
+	blockValue := payloadResult.BlockValue
+	if blockValue == nil {
+		blockValue = new(big.Int)
 	}
 
 	txCount := len(payload.Transactions)
@@ -254,7 +259,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   finalityInfo.HeadExecutionBlockHash,
+		ParentBlockHash:   phase0.Hash32(headBlockHash),
 		BlockHash:         blockHash,
 		Payload:           payload,
 		BlobsBundle:       payloadResult.BlobsBundle,
@@ -263,7 +268,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		GasLimit:          payload.GasLimit,
 		PrevRandao:        attrs.PrevRandao,
 		FeeRecipient:      proposerFeeRecipient,
-		BlockValue:        blockValueGwei,
+		BlockValue:        blockValue,
 		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),
 	}
@@ -272,10 +277,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
 		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
-		"block_value":       blockValueGwei,
+		"block_value":       blockValue.String(),
 		"has_blobs":         payloadResult.BlobsBundle != nil,
 		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
 		"txs_in_payload":    txCount,
+		"target_gas_limit":  targetGasLimit,
+		"payload_gas_limit": payload.GasLimit,
 	}).Info("Payload built from attributes")
 
 	return event, nil

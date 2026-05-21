@@ -55,18 +55,15 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     const authToken = getAuthHeader();
-    if (!authToken) {
-      alert('You must be logged in to update configuration');
-      return;
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
     }
     try {
       const response = await fetch('/api/config/builder', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify(form),
       });
       const result = await response.json();
@@ -82,18 +79,15 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
 
   const handleScheduleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
     const authToken = getAuthHeader();
-    if (!authToken) {
-      alert('You must be logged in to update configuration');
-      return;
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
     }
     try {
       const response = await fetch('/api/config/schedule', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify(scheduleForm),
       });
       const result = await response.json();

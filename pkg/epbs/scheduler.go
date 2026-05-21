@@ -3,6 +3,7 @@ package epbs
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"time"
 
@@ -213,7 +214,8 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Calculate bid value.
 	// Start from block value with BidMinAmount as a floor.
-	bidBase := payload.BlockValue
+	// BlockValue is in wei; BidMinAmount/BidIncrease/P2PBidSubsidy are in gwei.
+	bidBase := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
 	}

@@ -54,6 +54,7 @@ type PayloadAttributes struct {
 	Withdrawals           []*types.Withdrawal
 	ParentBeaconBlockRoot *common.Hash
 	SlotNumber            uint64 // Amsterdam (PayloadAttributesV4); zero before activation
+	TargetGasLimit        uint64 // Amsterdam (PayloadAttributesV4); zero before activation
 }
 
 // ExecutionPayload represents an execution layer payload (typed, with JSON marshal/unmarshal for API).
@@ -462,6 +463,7 @@ func (c *Client) RequestPayloadBuild(
 	attrsV4 := make(map[string]any, len(attrsMap)+1)
 	maps.Copy(attrsV4, attrsMap)
 	attrsV4["slotNumber"] = fmt.Sprintf("0x%x", attrs.SlotNumber)
+	attrsV4["targetGasLimit"] = fmt.Sprintf("0x%x", attrs.TargetGasLimit)
 
 	c.log.WithFields(logrus.Fields{
 		"attrs_map": attrsV4,
@@ -475,6 +477,7 @@ func (c *Client) RequestPayloadBuild(
 		"withdrawals":              len(attrs.Withdrawals),
 		"parent_beacon_block_root": attrs.ParentBeaconBlockRoot.Hex(),
 		"slot_number":              attrs.SlotNumber,
+		"target_gas_limit":         attrs.TargetGasLimit,
 	}).Info("Payload attributes being sent to forkchoiceUpdated")
 
 	var response ForkchoiceUpdatedResponse

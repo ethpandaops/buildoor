@@ -1,11 +1,12 @@
 import { useSyncExternalStore } from 'react';
 
-export type ViewType = 'dashboard' | 'bids-won' | 'validators' | 'api-docs';
+export type ViewType = 'dashboard' | 'bids-won' | 'validators' | 'proposer-preferences' | 'api-docs';
 
 const VIEW_PATHS: Record<ViewType, string> = {
   dashboard: '/',
   'bids-won': '/bids-won',
   validators: '/validators',
+  'proposer-preferences': '/proposer-preferences',
   'api-docs': '/api-docs',
 };
 
