@@ -34,18 +34,17 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
 
   const handleTimingSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const authToken = getAuthHeader();
-    if (!authToken) {
+    if (!isLoggedIn) {
       alert('You must be logged in to update configuration');
       return;
     }
+    const authToken = getAuthHeader();
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
     try {
       const response = await fetch('/api/config/epbs', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify({
           bid_start_time: timingForm.bid_start_time,
           bid_end_time: timingForm.bid_end_time,
@@ -75,16 +74,15 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
 
   const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!isLoggedIn) return;
     const authToken = getAuthHeader();
-    if (!authToken) return;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
     setToggling(true);
     try {
       await fetch('/api/services/toggle', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
+        headers,
         body: JSON.stringify({ epbs_enabled: !isActive }),
       });
     } catch (err) {
