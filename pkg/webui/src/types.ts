@@ -245,7 +245,7 @@ export interface ProposerPreference {
   slot: number;
   validator_index: number;
   fee_recipient: string;
-  gas_limit: number;
+  target_gas_limit: number;
 }
 
 export interface ProposerPreferencesResponse {

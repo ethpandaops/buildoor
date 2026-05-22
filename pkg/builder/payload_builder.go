@@ -134,11 +134,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
 				proposerFeeRecipient = common.Address(prefs.Message.FeeRecipient)
-				targetGasLimit = prefs.Message.GasLimit
+				targetGasLimit = prefs.Message.TargetGasLimit
 				b.log.WithFields(logrus.Fields{
-					"proposer_index": attrs.ProposerIndex,
-					"fee_recipient":  proposerFeeRecipient.Hex(),
-					"gas_limit":      prefs.Message.GasLimit,
+					"proposer_index":   attrs.ProposerIndex,
+					"fee_recipient":    proposerFeeRecipient.Hex(),
+					"target_gas_limit": prefs.Message.TargetGasLimit,
 				}).Debug("Using fee recipient and gas limit from proposer preferences")
 			}
 		}

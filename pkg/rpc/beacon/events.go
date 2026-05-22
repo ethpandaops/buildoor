@@ -497,6 +497,8 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		e.attestationDispatcher.Fire(event)
 
 	case "proposer_preferences":
+		e.client.log.WithField("raw", data).Info("Proposer preferences SSE event received")
+
 		var raw proposerPreferencesEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
 			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse proposer_preferences event JSON")
@@ -509,8 +511,9 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		}
 
 		e.client.log.WithFields(map[string]interface{}{
-			"slot":            raw.Data.Message.ProposalSlot,
-			"validator_index": raw.Data.Message.ValidatorIndex,
+			"slot":             raw.Data.Message.ProposalSlot,
+			"validator_index":  raw.Data.Message.ValidatorIndex,
+			"target_gas_limit": raw.Data.Message.TargetGasLimit,
 		}).Debug("Proposer preferences event received")
 
 		e.proposerPreferencesDispatcher.Fire(raw.Data)

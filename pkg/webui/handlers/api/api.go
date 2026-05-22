@@ -818,7 +818,7 @@ type ProposerPreferencesEntry struct {
 	Slot           uint64 `json:"slot"`
 	ValidatorIndex uint64 `json:"validator_index"`
 	FeeRecipient   string `json:"fee_recipient"`
-	GasLimit       uint64 `json:"gas_limit"`
+	TargetGasLimit uint64 `json:"target_gas_limit"`
 }
 
 // ProposerPreferencesResponse is the response for GetProposerPreferences.
@@ -853,7 +853,7 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 			Slot:           uint64(slot),
 			ValidatorIndex: uint64(pref.Message.ValidatorIndex),
 			FeeRecipient:   fmt.Sprintf("0x%x", pref.Message.FeeRecipient[:]),
-			GasLimit:       pref.Message.GasLimit,
+			TargetGasLimit: pref.Message.TargetGasLimit,
 		})
 	}
 
