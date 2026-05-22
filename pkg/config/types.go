@@ -17,30 +17,30 @@ type ValidatorRangesConfig struct {
 
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
-	BuilderPrivkey      string           `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
-	CLClient            string           `yaml:"cl_client" json:"cl_client,omitempty"`
-	ELEngineAPI         string           `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
-	ELJWTSecret         string           `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
-	ELRPC               string           `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
-	WalletPrivkey       string           `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
-	APIPort             int              `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
-	AuthProviderURL     string           `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
-	InjectHeadHTML      string           `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
-	OverviewURL         string           `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
-	LifecycleEnabled    bool             `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
-	EPBSEnabled         bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
-	BuilderAPIEnabled   bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API (service available if port > 0)
-	BuilderAPI          BuilderAPIConfig `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
-	DepositAmount       uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
-	TopupThreshold      uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
-	TopupAmount         uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
-	Schedule            ScheduleConfig   `yaml:"schedule" json:"schedule"`
-	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
-	LogLevel            string           `yaml:"log_level" json:"log_level"`
-	ValidatorRanges     ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
-	Debug               bool             `yaml:"debug" json:"debug"`
-	Pprof               bool             `yaml:"pprof" json:"pprof"`
-	PayloadBuildTime    uint64           `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	BuilderPrivkey    string                `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	CLClient          string                `yaml:"cl_client" json:"cl_client,omitempty"`
+	ELEngineAPI       string                `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
+	ELJWTSecret       string                `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
+	ELRPC             string                `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	WalletPrivkey     string                `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
+	APIPort           int                   `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
+	AuthProviderURL   string                `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
+	InjectHeadHTML    string                `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
+	OverviewURL       string                `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
+	LifecycleEnabled  bool                  `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
+	EPBSEnabled       bool                  `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
+	BuilderAPIEnabled bool                  `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API (service available if port > 0)
+	BuilderAPI        BuilderAPIConfig      `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
+	DepositAmount     uint64                `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
+	TopupThreshold    uint64                `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
+	TopupAmount       uint64                `yaml:"topup_amount" json:"topup_amount"`               // Gwei
+	Schedule          ScheduleConfig        `yaml:"schedule" json:"schedule"`
+	EPBS              EPBSConfig            `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	LogLevel          string                `yaml:"log_level" json:"log_level"`
+	ValidatorRanges   ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+	Debug             bool                  `yaml:"debug" json:"debug"`
+	Pprof             bool                  `yaml:"pprof" json:"pprof"`
+	PayloadBuildTime  uint64                `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 }
 
 // ScheduleConfig defines when the builder should build blocks.

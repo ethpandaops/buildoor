@@ -25,8 +25,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
-	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
+	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
 )
