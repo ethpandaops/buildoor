@@ -1,0 +1,68 @@
+# buildoor.example.yaml — copy to buildoor.yaml and fill in your values.
+# Pass via: buildoor run --config buildoor.yaml
+# Auto-discovered if named buildoor.yaml in the current directory or $HOME/.buildoor/
+
+# ── Keys ──────────────────────────────────────────────────────────────────────
+builder_privkey: ""           # BLS private key (64 hex chars, no 0x prefix) [required]
+wallet_privkey: ""            # ECDSA private key for lifecycle transactions (optional)
+
+# ── Clients ───────────────────────────────────────────────────────────────────
+cl_client: "http://localhost:5052"        # Beacon node URL [required]
+el_engine_api: "http://localhost:8551"    # Engine API URL (JWT-authenticated) [required]
+el_jwt_secret: "/path/to/jwt.hex"         # Path to JWT secret file [required]
+el_rpc: "http://localhost:8545"           # EL JSON-RPC for lifecycle transactions (optional)
+
+# ── WebUI / API ───────────────────────────────────────────────────────────────
+api_port: 8082                # HTTP port for the WebUI dashboard (0 = disabled)
+auth_provider_url: ""         # Authenticatoor URL for JWT auth; empty = unauthenticated
+inject_head_html: ""          # Raw HTML injected into <head> of the SPA (e.g. analytics tags)
+overview_url: ""              # URL to multi-instance overview UI (adds top-nav entry)
+
+# ── Feature flags ─────────────────────────────────────────────────────────────
+epbs_enabled: false           # Enable ePBS bidding/revealing at startup
+lifecycle_enabled: false      # Enable builder lifecycle management (deposits/exits)
+builder_api_enabled: false    # Enable traditional Builder API at startup
+
+# ── Builder API (pre-ePBS / Fulu mode) ────────────────────────────────────────
+builder_api:
+  port: 18550                        # Builder API HTTP port (0 = disabled)
+  block_value_subsidy_gwei: 100000   # Added to every bid so proposers see a higher value
+
+# ── Lifecycle (requires lifecycle_enabled: true + wallet_privkey) ─────────────
+deposit_amount: 50000000000    # Initial deposit in Gwei (default: 50 ETH)
+topup_threshold: 10000000000   # Auto top-up when balance falls below this (Gwei, default: 10 ETH)
+topup_amount: 50000000000      # Amount to top-up to in Gwei (default: 50 ETH)
+
+# ── Schedule ──────────────────────────────────────────────────────────────────
+schedule:
+  mode: "all"          # all | every_nth | next_n
+  every_nth: 1         # Used when mode=every_nth: build every Nth slot
+  next_n: 0            # Used when mode=next_n: build next N slots then stop
+  start_slot: 0        # Optional: don't build before this slot
+
+# ── ePBS timing ───────────────────────────────────────────────────────────────
+# All times are milliseconds relative to the proposal slot start.
+# Negative = before slot start, positive = after.
+# Leave as 0 to auto-compute from slot duration:
+#   build_start_time: -slotTime/3   (e.g. -4000ms for a 12s slot)
+#   payload_build_time: slotTime/6  (e.g.  2000ms for a 12s slot)
+#   bid_start_time: -slotTime/12   (e.g. -1000ms for a 12s slot)
+#   bid_end_time: +slotTime/12     (e.g.  1000ms for a 12s slot)
+#   reveal_time: +slotTime/6       (e.g.  2000ms for a 12s slot)
+epbs:
+  build_start_time: 0    # When to trigger forkchoiceUpdated (0 = auto)
+  bid_start_time: 0      # When to send first bid (0 = auto)
+  bid_end_time: 0        # When to send last bid (0 = auto)
+  reveal_time: 0         # When to reveal payload (0 = auto)
+  bid_min_amount: 1000000       # Minimum bid in Gwei (default: 0.001 ETH)
+  bid_increase: 100000          # Gwei added per subsequent bid
+  bid_interval: 250             # ms between bids (0 = single bid)
+  p2p_bid_subsidy: 500000000    # Gwei added to gossiped bid to clear validator local-EL threshold
+
+# ── Payload building ──────────────────────────────────────────────────────────
+payload_build_time: 0     # ms given to EL to build payload after FCU (0 = auto: slotTime/6)
+
+# ── Logging & debug ───────────────────────────────────────────────────────────
+log_level: "info"    # debug | info | warn | error
+debug: false
+pprof: false

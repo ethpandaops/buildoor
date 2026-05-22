@@ -22,9 +22,9 @@ type Config struct {
 	TopupAmount         uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
 	Schedule            ScheduleConfig   `yaml:"schedule" json:"schedule"`
 	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	LogLevel            string           `yaml:"log_level" json:"log_level"`
 	Debug               bool             `yaml:"debug" json:"debug"`
 	Pprof               bool             `yaml:"pprof" json:"pprof"`
-	ValidateWithdrawals bool             `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
 	PayloadBuildTime    uint64           `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 }
 

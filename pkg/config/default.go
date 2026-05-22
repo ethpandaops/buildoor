@@ -5,6 +5,7 @@ package config
 // Call ApplySlotDefaults after loading the chain spec to fill them in.
 func DefaultConfig() *Config {
 	return &Config{
+		LogLevel:          "info",
 		APIPort:           0,
 		AuthProviderURL:   "",
 		LifecycleEnabled:  false,
@@ -29,7 +30,6 @@ func DefaultConfig() *Config {
 			BidInterval:   250,       // 250ms between bids
 			P2PBidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
 		},
-		ValidateWithdrawals: false,
 	}
 }
 

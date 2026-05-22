@@ -159,7 +159,6 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 |------|---------|-------------|
 | `--api-port` | `0` | WebUI/API HTTP port (0 = disabled) |
 | `--payload-build-time` | `2000` | Time given to the EL to build the payload after fcu (ms) |
-| `--validate-withdrawals` | `false` | Validate expected vs actual withdrawals |
 
 ## WebUI
 

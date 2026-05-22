@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/sirupsen/logrus"
-	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,51 +35,6 @@ func (l *Loader) LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
-
-	return cfg, nil
-}
-
-// LoadConfigFromFlags loads configuration from viper flags.
-func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
-	cfg := DefaultConfig()
-
-	// Core settings
-	if val := v.GetString("builder-privkey"); val != "" {
-		cfg.BuilderPrivkey = val
-	}
-
-	if val := v.GetString("cl-client"); val != "" {
-		cfg.CLClient = val
-	}
-
-	if val := v.GetString("el-engine-api"); val != "" {
-		cfg.ELEngineAPI = val
-	}
-
-	if val := v.GetString("el-jwt-secret"); val != "" {
-		cfg.ELJWTSecret = val
-	}
-
-	if val := v.GetString("el-rpc"); val != "" {
-		cfg.ELRPC = val
-	}
-
-	if val := v.GetString("wallet-privkey"); val != "" {
-		cfg.WalletPrivkey = val
-	}
-
-	cfg.APIPort = v.GetInt("api-port")
-	cfg.AuthProviderURL = v.GetString("auth-provider-url")
-	cfg.LifecycleEnabled = v.GetBool("lifecycle")
-	cfg.DepositAmount = v.GetUint64("deposit-amount")
-	cfg.TopupThreshold = v.GetUint64("topup-threshold")
-	cfg.TopupAmount = v.GetUint64("topup-amount")
-
-	// Schedule config
-	cfg.Schedule.Mode = ScheduleMode(v.GetString("schedule-mode"))
-	cfg.Schedule.EveryNth = v.GetUint64("schedule-every-nth")
-	cfg.Schedule.NextN = v.GetUint64("schedule-next-n")
-	cfg.Schedule.StartSlot = v.GetUint64("schedule-start-slot")
 
 	return cfg, nil
 }
