@@ -21,6 +21,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
+	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -273,6 +274,10 @@ and begins building blocks according to configuration.`,
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
+		// Initialize and start validator ranges resolver.
+		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
+		valRanges.Start(ctx)
+
 		// 9. Start API server (if configured)
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
@@ -288,7 +293,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc)
+			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
