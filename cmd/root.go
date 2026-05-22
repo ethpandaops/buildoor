@@ -88,6 +88,10 @@ func init() {
 	// Payload Build Time (0 = auto from slot time)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: slotTime/6)")
 
+	// Validator ranges
+	rootCmd.PersistentFlags().String("validator-ranges-file", "", "Path to validator ranges YAML file (format: '0-127: client-name')")
+	rootCmd.PersistentFlags().String("validator-ranges-url", "", "URL to fetch validator ranges JSON (format: {\"ranges\": {\"0-127\": \"client-name\"}})")
+
 	// Bind all flags to viper
 	if err := v.BindPFlags(rootCmd.PersistentFlags()); err != nil {
 		logger.WithError(err).Fatal("Failed to bind flags")
@@ -177,6 +181,10 @@ func initConfig() error {
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
 		PayloadBuildTime:    v.GetUint64("payload-build-time"),
+		ValidatorRanges: builder.ValidatorRangesConfig{
+			File: v.GetString("validator-ranges-file"),
+			URL:  v.GetString("validator-ranges-url"),
+		},
 	}
 
 	return nil
