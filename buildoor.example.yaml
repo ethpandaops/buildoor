@@ -62,6 +62,21 @@ epbs:
 # ── Payload building ──────────────────────────────────────────────────────────
 payload_build_time: 0     # ms given to EL to build payload after FCU (0 = auto: slotTime/6)
 
+# ── Validator ranges ──────────────────────────────────────────────────────────
+# Maps validator indices to client names for display in the proposer preferences
+# table. Exactly one of file or url should be set; url takes precedence if both
+# are provided. URL is refreshed every 5 minutes.
+#
+# File format (same as ethereum-package validator-ranges output):
+#   "0-127": "01-geth-lighthouse"
+#   "128-255": "02-nethermind-teku"
+#
+# URL format (ethpandaops devnet config API):
+#   https://config.<network>.ethpandaops.io/api/v1/nodes/validator-ranges
+validator_ranges:
+  file: ""   # path to validator-ranges YAML file
+  url: ""    # URL returning {"ranges": {"0-199": "client-name", ...}}
+
 # ── Logging & debug ───────────────────────────────────────────────────────────
 log_level: "info"    # debug | info | warn | error
 debug: false

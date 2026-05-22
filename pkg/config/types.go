@@ -1,6 +1,20 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
+// ValidatorRangesConfig configures how to load validator index → client name mappings.
+// Exactly one of File or URL should be set. If both are set, URL takes precedence.
+type ValidatorRangesConfig struct {
+	// File is a path to a YAML file in the format produced by ethereum-package:
+	//   "0-127": "01-geth-lighthouse"
+	//   "128-255": "02-nethermind-teku"
+	File string `yaml:"file" json:"file,omitempty"`
+
+	// URL is fetched on startup and refreshed every 5 minutes.
+	// Expected JSON: {"ranges": {"0-199": "prysm-ethrex-1", ...}}
+	// Template: https://config.<network>.ethpandaops.io/api/v1/nodes/validator-ranges
+	URL string `yaml:"url" json:"url,omitempty"`
+}
+
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
 	BuilderPrivkey      string           `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
@@ -23,6 +37,7 @@ type Config struct {
 	Schedule            ScheduleConfig   `yaml:"schedule" json:"schedule"`
 	EPBS                EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
 	LogLevel            string           `yaml:"log_level" json:"log_level"`
+	ValidatorRanges     ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
 	Debug               bool             `yaml:"debug" json:"debug"`
 	Pprof               bool             `yaml:"pprof" json:"pprof"`
 	PayloadBuildTime    uint64           `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
