@@ -14,11 +14,17 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
+// perHashBidState tracks bidding state for a single (slot, blockHash) pair.
+type perHashBidState struct {
+	LastBidTime time.Time
+	BidCount    int
+}
+
 // SlotState tracks the state for a single slot's bidding/revealing.
 type SlotState struct {
-	LastBidTime     time.Time
-	LastBidHash     phase0.Hash32
-	BidCount        int
+	// BidsByHash holds per-payload bid state. Each entry corresponds to one
+	// built payload (primary or fallback) identified by its EL block hash.
+	BidsByHash      map[phase0.Hash32]*perHashBidState
 	BidsClosed      bool              // Block received, no more bids possible
 	BidIncluded     bool              // Our bid was picked
 	IncludedInBlock *beacon.BlockInfo // Block that included our bid
@@ -82,7 +88,9 @@ func NewScheduler(
 func (s *Scheduler) getSlotState(slot phase0.Slot) *SlotState {
 	state, ok := s.slotStates[slot]
 	if !ok {
-		state = &SlotState{}
+		state = &SlotState{
+			BidsByHash: make(map[phase0.Hash32]*perHashBidState),
+		}
 		s.slotStates[slot] = state
 	}
 
@@ -172,6 +180,8 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 }
 
 // checkSlotForBidding checks if we should bid for this slot.
+// It iterates all payloads built for the slot (primary + any fallback) and submits
+// a bid for each one that has not yet been bid on (or whose interval has elapsed).
 func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, now time.Time, msRelativeToSlot int64) {
 	// Are we in bid period for this slot?
 	// msRelativeToSlot is negative if we're before the slot starts
@@ -179,89 +189,105 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
-	// Get payload from builder cache
-	payload := s.payloadCache.Get(slot)
-	if payload == nil {
+	// Get all payloads for this slot (primary + fallback builds)
+	payloads := s.payloadCache.GetAllForSlot(slot)
+	if len(payloads) == 0 {
 		return
 	}
 
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
-	// Check if we should bid
-	// - Not if bidding is closed (block already received)
-	// - Not if our bid was already included
-	// - Not if we bid too recently (respect interval)
-	// - Not if payload hasn't changed and we already bid (single bid mode)
 	if state.BidsClosed || state.BidIncluded {
 		s.mu.Unlock()
 		return
 	}
+	s.mu.Unlock()
 
-	// Check bid interval
-	if s.cfg.BidInterval > 0 {
-		if time.Since(state.LastBidTime) < time.Duration(s.cfg.BidInterval)*time.Millisecond {
-			s.mu.Unlock()
-			return
-		}
-	} else {
-		// Single bid mode - only bid if payload changed or never bid
-		if state.BidCount > 0 && state.LastBidHash == payload.BlockHash {
-			s.mu.Unlock()
-			return
-		}
+	hasPrefs := s.hasProposerPreferences != nil && s.hasProposerPreferences(slot)
+	if !hasPrefs {
+		s.log.WithField("slot", slot).Warn("No proposer preferences for slot — bids will likely be rejected by beacon node")
 	}
 
-	// Calculate bid value.
-	// Start from block value with BidMinAmount as a floor.
-	// BlockValue is in wei; BidMinAmount/BidIncrease/P2PBidSubsidy are in gwei.
+	for _, payload := range payloads {
+		s.tryBidForPayload(ctx, slot, payload, now, msRelativeToSlot, hasPrefs)
+	}
+}
+
+// tryBidForPayload attempts to submit a bid for a single payload, respecting the
+// per-hash bid interval and single-bid constraints.
+func (s *Scheduler) tryBidForPayload(
+	ctx context.Context,
+	slot phase0.Slot,
+	payload *builder.PayloadReadyEvent,
+	now time.Time,
+	msRelativeToSlot int64,
+	hasPrefs bool,
+) {
+	s.mu.Lock()
+	state := s.getSlotState(slot)
+
+	hashState, seen := state.BidsByHash[payload.BlockHash]
+	if !seen {
+		hashState = &perHashBidState{}
+		state.BidsByHash[payload.BlockHash] = hashState
+	}
+
+	// Check bid interval / single-bid guard for this specific block hash.
+	if s.cfg.BidInterval > 0 {
+		if time.Since(hashState.LastBidTime) < time.Duration(s.cfg.BidInterval)*time.Millisecond {
+			s.mu.Unlock()
+			return
+		}
+	} else if hashState.BidCount > 0 {
+		// Single-bid mode: only bid once per block hash.
+		s.mu.Unlock()
+		return
+	}
+
+	// Calculate bid value using the total bid count across all hashes for the escalation logic.
+	totalBidCount := 0
+	for _, hs := range state.BidsByHash {
+		totalBidCount += hs.BidCount
+	}
+
 	bidBase := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
 	}
 
 	bidValue := bidBase
-	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
-		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
+	if s.cfg.BidInterval > 0 && totalBidCount > 0 {
+		bidValue = bidBase + uint64(totalBidCount)*s.cfg.BidIncrease
 	}
 
-	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
-	// P2P bid, using self-build" when their local EL build is worth more than ours.
-	// Configurable via --p2p-bid-subsidy (gwei).
 	bidValue += s.cfg.P2PBidSubsidy
-
 	s.mu.Unlock()
-
-	// Warn if no proposer preferences — the BN will reject the bid
-	hasPrefs := s.hasProposerPreferences != nil && s.hasProposerPreferences(slot)
 
 	s.log.WithFields(logrus.Fields{
 		"slot":                     slot,
 		"bid_value":                bidValue,
-		"bid_count":                state.BidCount,
+		"bid_count":                hashState.BidCount,
 		"block_hash":               fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"parent_hash":              fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
 		"ms_into_slot":             msRelativeToSlot,
 		"has_proposer_preferences": hasPrefs,
 	}).Info("Creating and submitting bid")
 
-	if !hasPrefs {
-		s.log.WithField("slot", slot).Warn("No proposer preferences for slot — bid will likely be rejected by beacon node")
-	}
-
-	// Submit bid
 	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
 
-	// Update state regardless of success - we don't want to spam on failure
 	s.mu.Lock()
-	state.LastBidTime = now
-	state.LastBidHash = payload.BlockHash
-	state.BidCount++
-	bidCount := state.BidCount
+	hashState.LastBidTime = now
+	hashState.BidCount++
+	bidCount := hashState.BidCount
 	s.mu.Unlock()
 
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
-		// Fire bid failure event
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":       slot,
+			"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+		}).Error("Failed to submit bid")
+
 		if s.service != nil {
 			s.service.FireBidSubmission(&BidSubmissionEvent{
 				Slot:      slot,
@@ -272,10 +298,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 				Error:     err.Error(),
 			})
 		}
+
 		return
 	}
 
-	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{
 		Slot:         slot,
 		BuilderIndex: s.bidCreator.builderIndex,
@@ -283,7 +309,6 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		BlockHash:    payload.BlockHash,
 	}, true)
 
-	// Fire bid success event
 	if s.service != nil {
 		event := &BidSubmissionEvent{
 			Slot:      slot,
@@ -298,16 +323,16 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		s.service.FireBidSubmission(event)
 	}
 
-	// Increment stats (count each bid submission)
 	if s.service != nil && s.service.builderSvc != nil {
 		s.service.builderSvc.IncrementBidsSubmitted()
 	}
 
 	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"bid_value":  bidValue,
-		"bid_count":  bidCount,
-		"block_hash": payload.BlockHash[:8],
+		"slot":        slot,
+		"bid_value":   bidValue,
+		"bid_count":   bidCount,
+		"block_hash":  fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"parent_hash": fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
 	}).Info("Bid submitted")
 }
 
@@ -334,10 +359,15 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 		"ms_into_slot": msIntoSlot,
 	}).Info("Revealing payload")
 
-	// Get payload for reveal
-	payload := s.payloadStore.Get(slot)
+	// Identify the payload to reveal by looking up the accepted bid's block hash.
+	// blockInfo.ExecutionBlockHash = bid.message.block_hash for a Gloas block, which
+	// matches exactly the BlockHash field of the BuiltPayload we committed to.
+	payload := s.payloadStore.GetByBlockHash(blockInfo.ExecutionBlockHash)
 	if payload == nil {
-		s.log.WithField("slot", slot).Error("No payload found for reveal")
+		s.log.WithFields(logrus.Fields{
+			"slot":       slot,
+			"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
+		}).Error("No payload found for reveal (block hash not in store)")
 		return
 	}
 

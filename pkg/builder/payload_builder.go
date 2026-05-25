@@ -288,6 +288,27 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	return event, nil
 }
 
+// BuildPayloadFromAttributesOnHead builds a payload using headBlockHash as the FCU head
+// rather than attrs.ParentBlockHash. This is the secondary (fallback) build path: it uses
+// bid.message.parent_block_hash so that a valid payload exists whether or not the current
+// slot's reveal succeeds.
+//
+// Compared to the primary build, this path does NOT register an activeBuild entry, so it
+// runs concurrently with the primary without interfering with AbortBuild.
+func (b *PayloadBuilder) BuildPayloadFromAttributesOnHead(
+	ctx context.Context,
+	attrs *beacon.PayloadAttributesEvent,
+	headBlockHash common.Hash,
+) (*PayloadReadyEvent, error) {
+	// Shallow-copy attrs and override the parent block hash for the FCU call.
+	// All other fields (timestamp, randao, withdrawals, etc.) are identical to the
+	// primary build since they describe the same proposal slot.
+	override := *attrs
+	copy(override.ParentBlockHash[:], headBlockHash[:])
+
+	return b.BuildPayloadFromAttributes(ctx, &override)
+}
+
 // AbortBuild aborts any active build for the given slot.
 func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 	b.mu.Lock()

@@ -27,41 +27,81 @@ type BuiltPayload struct {
 	GasLimit          uint64
 }
 
-// PayloadStore stores built execution payloads for later reveal.
+// PayloadStore stores built execution payloads for later reveal, keyed by block hash.
+// Multiple payloads per slot are supported (primary + fallback builds).
 type PayloadStore struct {
-	payloads map[phase0.Slot]*BuiltPayload
+	payloads map[phase0.Hash32]*BuiltPayload // blockHash → payload
 	mu       sync.RWMutex
 }
 
 // NewPayloadStore creates a new payload store.
 func NewPayloadStore() *PayloadStore {
 	return &PayloadStore{
-		payloads: make(map[phase0.Slot]*BuiltPayload, 16),
+		payloads: make(map[phase0.Hash32]*BuiltPayload, 32),
 	}
 }
 
-// Store stores a built payload.
+// Store stores a built payload keyed by its block hash.
 func (s *PayloadStore) Store(payload *BuiltPayload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.payloads[payload.Slot] = payload
+	s.payloads[payload.BlockHash] = payload
 }
 
-// Get retrieves a stored payload for a slot.
+// GetByBlockHash retrieves a payload by its exact EL block hash.
+// This is the primary lookup path used during reveal: the accepted bid's block_hash
+// identifies which payload to reveal.
+func (s *PayloadStore) GetByBlockHash(blockHash phase0.Hash32) *BuiltPayload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.payloads[blockHash]
+}
+
+// Get returns any one payload for the given slot (most recently stored).
+// Prefer GetByBlockHash when the accepted bid's block_hash is known.
 func (s *PayloadStore) Get(slot phase0.Slot) *BuiltPayload {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.payloads[slot]
+	var latest *BuiltPayload
+	for _, p := range s.payloads {
+		if p.Slot == slot {
+			if latest == nil || p.Timestamp > latest.Timestamp {
+				latest = p
+			}
+		}
+	}
+
+	return latest
 }
 
-// Delete removes a payload for a slot.
+// GetAllForSlot returns all payloads built for a slot (primary + fallback).
+func (s *PayloadStore) GetAllForSlot(slot phase0.Slot) []*BuiltPayload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []*BuiltPayload
+	for _, p := range s.payloads {
+		if p.Slot == slot {
+			result = append(result, p)
+		}
+	}
+
+	return result
+}
+
+// Delete removes all payloads for the given slot.
 func (s *PayloadStore) Delete(slot phase0.Slot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.payloads, slot)
+	for hash, p := range s.payloads {
+		if p.Slot == slot {
+			delete(s.payloads, hash)
+		}
+	}
 }
 
 // Cleanup removes payloads older than the given slot.
@@ -69,23 +109,9 @@ func (s *PayloadStore) Cleanup(olderThan phase0.Slot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for slot := range s.payloads {
-		if slot < olderThan {
-			delete(s.payloads, slot)
+	for hash, p := range s.payloads {
+		if p.Slot < olderThan {
+			delete(s.payloads, hash)
 		}
 	}
-}
-
-// GetByBlockHash retrieves a stored payload by block hash.
-func (s *PayloadStore) GetByBlockHash(blockHash phase0.Hash32) *BuiltPayload {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, payload := range s.payloads {
-		if payload.BlockHash == blockHash {
-			return payload
-		}
-	}
-
-	return nil
 }

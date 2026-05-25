@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -395,10 +396,13 @@ func (s *Service) handleBidEvent(event *beacon.BidEvent) {
 }
 
 // processHeadBlock handles a new head block:
-//  1. Check if the previous slot had our bid included — if so, check if this block
-//     builds on our payload (confirmed) or not (orphaned → pending payment).
-//  2. Check if this block includes our bid for the current slot.
+//  1. Trigger a secondary fallback payload build for the next slot if the head
+//     arrived before the attestation deadline (1/3 of slot time).
+//  2. Check if the previous slot had our bid included — confirm or orphan.
+//  3. Check if this block includes our bid for the current slot.
 func (s *Service) processHeadBlock(event *beacon.HeadEvent) {
+	receivedAt := time.Now()
+
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
@@ -409,13 +413,32 @@ func (s *Service) processHeadBlock(event *beacon.HeadEvent) {
 		return
 	}
 
-	// Step 1: Check follow-up for our previously included bid.
-	// If our bid was included in the previous slot, the execution payload in this
-	// block should have prev_block_hash == our payload's block_hash if we revealed.
-	// If it doesn't match, our payload was orphaned (missed reveal or reorg).
+	// Step 1: Schedule a fallback payload build for the next slot if:
+	//   a) we are on Gloas (bid embedded in block),
+	//   b) the block arrived before the attestation deadline (1/3 of slot time), and
+	//   c) the bid's parent_block_hash differs from the primary head
+	//      (otherwise it would be a duplicate of the payload_attributes build).
+	if s.builderSvc != nil && blockInfo.BidParentBlockHash != (phase0.Hash32{}) {
+		chainSpec := s.chainSvc.GetChainSpec()
+		slotStart := s.chainSvc.SlotToTime(event.Slot)
+		attestationDeadline := chainSpec.SecondsPerSlot / 3
+
+		if receivedAt.Sub(slotStart) <= attestationDeadline {
+			nextSlot := event.Slot + 1
+			fallbackHead := common.BytesToHash(blockInfo.BidParentBlockHash[:])
+			s.builderSvc.ScheduleSecondaryBuildOnHead(nextSlot, fallbackHead)
+		} else {
+			s.log.WithFields(logrus.Fields{
+				"slot":    event.Slot,
+				"late_ms": receivedAt.Sub(slotStart).Milliseconds(),
+			}).Debug("Head arrived after attestation deadline, skipping secondary build")
+		}
+	}
+
+	// Step 2: Check follow-up for our previously included bid.
 	s.checkFollowUpBlock(event, blockInfo)
 
-	// Step 2: Check if this block includes our bid.
+	// Step 3: Check if this block includes our bid.
 	s.checkForOurPayload(event, blockInfo)
 }
 

@@ -517,6 +517,9 @@ type BlockInfo struct {
 	Slot               phase0.Slot
 	Root               phase0.Root
 	ExecutionBlockHash phase0.Hash32
+	// BidParentBlockHash is bid.message.parent_block_hash from a Gloas beacon block.
+	// Zero for pre-Gloas blocks. Used to trigger fallback payload builds.
+	BidParentBlockHash phase0.Hash32
 	ParentRoot         phase0.Root
 	StateRoot          phase0.Root
 }
@@ -573,10 +576,20 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get block root: %w", err)
 	}
 
+	var bidParentBlockHash phase0.Hash32
+	if block.Gloas != nil &&
+		block.Gloas.Message != nil &&
+		block.Gloas.Message.Body != nil &&
+		block.Gloas.Message.Body.SignedExecutionPayloadBid != nil &&
+		block.Gloas.Message.Body.SignedExecutionPayloadBid.Message != nil {
+		bidParentBlockHash = block.Gloas.Message.Body.SignedExecutionPayloadBid.Message.ParentBlockHash
+	}
+
 	return &BlockInfo{
 		Slot:               slot,
 		Root:               root,
 		ExecutionBlockHash: execBlockHash,
+		BidParentBlockHash: bidParentBlockHash,
 		ParentRoot:         parentRoot,
 		StateRoot:          stateRoot,
 	}, nil

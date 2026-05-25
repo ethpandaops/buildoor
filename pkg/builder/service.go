@@ -345,6 +345,69 @@ func (s *Service) checkPayloadInclusion(event *beacon.HeadEvent) {
 	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Slot)
 }
 
+// ScheduleSecondaryBuildOnHead schedules a fallback payload build for slot using
+// headOverride (bid.message.parent_block_hash from the current head's beacon block)
+// as the FCU head. Called by the ePBS service when a timely head event arrives.
+//
+// The build fires at BuildStartTime relative to the slot, mirroring the primary build.
+// It is a no-op if payload attributes for the slot are not in the cache by fire time,
+// or if headOverride equals the primary head (would produce a duplicate payload).
+func (s *Service) ScheduleSecondaryBuildOnHead(slot phase0.Slot, headOverride common.Hash) {
+	buildStartMs := s.cfg.EPBS.BuildStartTime
+	slotStart := s.chainSvc.SlotToTime(slot)
+	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
+	delay := time.Until(buildTime)
+
+	fire := func() {
+		attrs := s.clClient.Events().GetLatestPayloadAttributes(slot)
+		if attrs == nil {
+			s.log.WithFields(logrus.Fields{
+				"slot":          slot,
+				"head_override": headOverride.Hex(),
+			}).Warn("No cached payload attributes for secondary build, skipping")
+			return
+		}
+
+		// Skip if the override head is identical to the primary head — duplicate build.
+		if common.BytesToHash(attrs.ParentBlockHash[:]) == headOverride {
+			return
+		}
+
+		s.log.WithFields(logrus.Fields{
+			"slot":          slot,
+			"primary_head":  fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+			"fallback_head": headOverride.Hex()[:18],
+		}).Info("Starting secondary payload build on fallback head")
+
+		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+		defer cancel()
+
+		payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributesOnHead(ctx, attrs, headOverride)
+		if err != nil {
+			s.log.WithError(err).WithFields(logrus.Fields{
+				"slot":          slot,
+				"head_override": headOverride.Hex(),
+			}).Error("Secondary payload build failed")
+			return
+		}
+
+		s.emitPayloadReady(slot, payloadEvent)
+	}
+
+	if delay <= 0 {
+		go fire()
+		return
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":          slot,
+		"head_override": headOverride.Hex()[:18],
+		"delay_ms":      delay.Milliseconds(),
+	}).Debug("Scheduling secondary build for slot")
+
+	time.AfterFunc(delay, func() { fire() })
+}
+
 // handlePayloadAttributesEvent processes a payload_attributes event.
 // This is the primary trigger for building payloads.
 // The event is cached by the EventStream; this method schedules the build
