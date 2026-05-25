@@ -43,7 +43,7 @@ func NewRevealHandler(
 	}
 }
 
-// SubmitReveal constructs the envelope locally, signs it, and publishes it to the beacon node.
+// SubmitReveal constructs the envelope locally, signs it, and then publishes it to the beacon node.
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
 	payload *BuiltPayload,
