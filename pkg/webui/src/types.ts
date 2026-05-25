@@ -244,6 +244,7 @@ export interface BidsWonResponse {
 export interface ProposerPreference {
   slot: number;
   validator_index: number;
+  client_name?: string;
   fee_recipient: string;
   target_gas_limit: number;
 }

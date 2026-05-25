@@ -817,6 +817,7 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 type ProposerPreferencesEntry struct {
 	Slot           uint64 `json:"slot"`
 	ValidatorIndex uint64 `json:"validator_index"`
+	ClientName     string `json:"client_name,omitempty"`
 	FeeRecipient   string `json:"fee_recipient"`
 	TargetGasLimit uint64 `json:"target_gas_limit"`
 }
@@ -849,12 +850,16 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 			continue
 		}
 
-		result = append(result, ProposerPreferencesEntry{
+		entry := ProposerPreferencesEntry{
 			Slot:           uint64(slot),
 			ValidatorIndex: uint64(pref.Message.ValidatorIndex),
 			FeeRecipient:   fmt.Sprintf("0x%x", pref.Message.FeeRecipient[:]),
 			TargetGasLimit: pref.Message.TargetGasLimit,
-		})
+		}
+		if h.valRanges != nil {
+			entry.ClientName = h.valRanges.GetClientName(pref.Message.ValidatorIndex)
+		}
+		result = append(result, entry)
 	}
 
 	writeJSON(w, http.StatusOK, ProposerPreferencesResponse{Preferences: result})
