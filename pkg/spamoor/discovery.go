@@ -123,35 +123,34 @@ func discoverPeers(ctx context.Context, iterator enode.Iterator, store *peerStor
 }
 
 func matchesForkDigest(node *enode.Node, forkDigest [4]byte, logger logrus.FieldLogger) bool {
-	return true
+	// return true
+	var eth2Data []byte
+	if err := node.Record().Load(enr.WithEntry(eth2ENRKey, &eth2Data)); err != nil {
+		return false
+	}
 
-	// var eth2Data []byte
-	// if err := node.Record().Load(enr.WithEntry(eth2ENRKey, &eth2Data)); err != nil {
-	// 	return false
-	// }
+	if len(eth2Data) < 4 {
+		return false
+	}
 
-	// if len(eth2Data) < 4 {
-	// 	return false
-	// }
+	var forkID ethpb.ENRForkID
+	if err := forkID.UnmarshalSSZ(eth2Data); err != nil {
+		return false
+	}
 
-	// var forkID ethpb.ENRForkID
-	// if err := forkID.UnmarshalSSZ(eth2Data); err != nil {
-	// 	return false
-	// }
+	if len(forkID.CurrentForkDigest) < 4 {
+		return false
+	}
 
-	// if len(forkID.CurrentForkDigest) < 4 {
-	// 	return false
-	// }
+	logger.WithFields(logrus.Fields{
+		"peer_fork_digest": fmt.Sprintf("0x%x", forkID.CurrentForkDigest[:]),
+		"our_fork_digest":  fmt.Sprintf("0x%x", forkDigest[:]),
+	}).Info("matching fork digest from peer")
 
-	// logger.WithFields(logrus.Fields{
-	// 	"peer_fork_digest": fmt.Sprintf("0x%x", forkID.CurrentForkDigest[:]),
-	// 	"our_fork_digest":  fmt.Sprintf("0x%x", forkDigest[:]),
-	// }).Info("matching fork digest from peer")
-
-	// return forkID.CurrentForkDigest[0] == forkDigest[0] &&
-	// 	forkID.CurrentForkDigest[1] == forkDigest[1] &&
-	// 	forkID.CurrentForkDigest[2] == forkDigest[2] &&
-	// 	forkID.CurrentForkDigest[3] == forkDigest[3]
+	return forkID.CurrentForkDigest[0] == forkDigest[0] &&
+		forkID.CurrentForkDigest[1] == forkDigest[1] &&
+		forkID.CurrentForkDigest[2] == forkDigest[2] &&
+		forkID.CurrentForkDigest[3] == forkDigest[3]
 }
 
 func enodeToAddrInfo(node *enode.Node) (*peer.AddrInfo, error) {
