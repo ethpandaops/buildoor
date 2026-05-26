@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // Service owns the libp2p stack used to gossip ePBS execution_payload_bid
@@ -46,12 +47,28 @@ type Service struct {
 	wg     sync.WaitGroup
 }
 
-// NewService constructs the spamoor service. forkVersion is the current fork
-// version (Gloas) used to compute the fork digest along with gvr.
+// activeBPOAtEpoch returns the BPO epoch and max blobs per block that were
+// active at forkEpoch by scanning the blob schedule (sorted ascending by epoch).
+// If no entry qualifies, both values are 0, matching Prysm's zero-value behavior.
+func activeBPOAtEpoch(forkEpoch uint64, schedule []beacon.BlobScheduleEntry) (bpoEpoch, maxBlobs uint64) {
+	for _, e := range schedule {
+		if e.Epoch <= forkEpoch {
+			bpoEpoch = e.Epoch
+			maxBlobs = e.MaxBlobsPerBlock
+		}
+	}
+	return
+}
+
+// NewService constructs the spamoor service. forkVersion is the Gloas fork
+// version used to compute the BPO-modified fork digest. gloasForkEpoch and
+// blobSchedule are needed to derive the active BPO parameters for the XOR step.
 func NewService(
 	cfg *config.SpamoorConfig,
 	forkVersion phase0.Version,
 	gvr phase0.Root,
+	gloasForkEpoch uint64,
+	blobSchedule []beacon.BlobScheduleEntry,
 	genesisTime time.Time,
 	slotDuration time.Duration,
 	log logrus.FieldLogger,
@@ -60,7 +77,8 @@ func NewService(
 		return nil, errors.New("spamoor: config is nil")
 	}
 
-	digest, err := computeForkDigest(forkVersion, gvr)
+	bpoEpoch, maxBlobs := activeBPOAtEpoch(gloasForkEpoch, blobSchedule)
+	digest, err := computeForkDigest(forkVersion, gvr, bpoEpoch, maxBlobs)
 	if err != nil {
 		return nil, fmt.Errorf("compute fork digest: %w", err)
 	}

@@ -2,6 +2,8 @@ package spamoor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -28,9 +30,13 @@ const (
 	executionPayloadBidTopicSuffix = "execution_payload_bid"
 )
 
-// computeForkDigest derives the 4-byte fork digest from a fork version and
-// the genesis validators root. Standard pre/post-Gloas computation.
-func computeForkDigest(forkVersion phase0.Version, gvr phase0.Root) ([4]byte, error) {
+// computeForkDigest derives the 4-byte fork digest for a Fulu+ fork.
+// It first computes the standard ForkData HashTreeRoot, then XORs in the
+// BPO hash: SHA256(bpoEpoch_le64 || maxBlobsPerBlock_le64)[:4].
+// bpoEpoch is the epoch at which the active blob parameters took effect;
+// maxBlobsPerBlock is the corresponding blob limit. Both come from the last
+// BLOB_SCHEDULE entry at or before the fork epoch.
+func computeForkDigest(forkVersion phase0.Version, gvr phase0.Root, bpoEpoch, maxBlobsPerBlock uint64) ([4]byte, error) {
 	forkData := &phase0.ForkData{
 		CurrentVersion:        forkVersion,
 		GenesisValidatorsRoot: gvr,
@@ -43,6 +49,14 @@ func computeForkDigest(forkVersion phase0.Version, gvr phase0.Root) ([4]byte, er
 
 	var digest [4]byte
 	copy(digest[:], htr[:4])
+
+	var hb [16]byte
+	binary.LittleEndian.PutUint64(hb[:8], bpoEpoch)
+	binary.LittleEndian.PutUint64(hb[8:], maxBlobsPerBlock)
+	bpoHash := sha256.Sum256(hb[:])
+	for i := range 4 {
+		digest[i] ^= bpoHash[i]
+	}
 
 	return digest, nil
 }

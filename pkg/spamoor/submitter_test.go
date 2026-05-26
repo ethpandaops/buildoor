@@ -149,14 +149,33 @@ func TestComputeForkDigest_Stable(t *testing.T) {
 		gvr[i] = byte(i)
 	}
 
-	a, err := computeForkDigest(v, gvr)
+	a, err := computeForkDigest(v, gvr, 100, 6)
 	require.NoError(t, err)
 
-	b, err := computeForkDigest(v, gvr)
+	b, err := computeForkDigest(v, gvr, 100, 6)
 	require.NoError(t, err)
 
 	assert.Equal(t, a, b)
 	assert.NotEqual(t, [4]byte{}, a)
+}
+
+// TestComputeForkDigest_BPOXor verifies that the BPO XOR actually changes the
+// digest — different BPO params must produce different digests.
+func TestComputeForkDigest_BPOXor(t *testing.T) {
+	v := phase0.Version{0x05, 0x06, 0x07, 0x08}
+
+	var gvr phase0.Root
+	for i := range gvr {
+		gvr[i] = byte(i + 1)
+	}
+
+	base, err := computeForkDigest(v, gvr, 0, 0)
+	require.NoError(t, err)
+
+	withBPO, err := computeForkDigest(v, gvr, 100, 6)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, base, withBPO, "BPO XOR must change the digest")
 }
 
 // TestExecutionPayloadBidTopic verifies the topic string format.
