@@ -123,8 +123,8 @@ func discoverPeers(ctx context.Context, iterator enode.Iterator, store *peerStor
 }
 
 func matchesForkDigest(node *enode.Node, forkDigest [4]byte, logger logrus.FieldLogger) bool {
-	return true 
-	
+	return true
+
 	// var eth2Data []byte
 	// if err := node.Record().Load(enr.WithEntry(eth2ENRKey, &eth2Data)); err != nil {
 	// 	return false

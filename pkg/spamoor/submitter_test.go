@@ -180,4 +180,4 @@ func TestLoadOrGenerateKey(t *testing.T) {
 }
 
 var _ = (*ecdsa.PrivateKey)(nil) // keep ecdsa import if test bodies change
-var _ = logrus.New                // keep import for future tests
+var _ = logrus.New               // keep import for future tests
