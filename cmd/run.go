@@ -259,6 +259,7 @@ and begins building blocks according to configuration.`,
 
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
+			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 			if err := builderAPISrv.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start Builder API server: %w", err)
@@ -272,6 +273,9 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			if builderAPISrv != nil {
+				builderAPISrv.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			}
 		}
 
 		// Initialize and start validator ranges resolver.
@@ -312,6 +316,9 @@ and begins building blocks according to configuration.`,
 			})
 			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
 				epbsSvc.SetBuilderRegistered(index)
+				if builderAPISrv != nil {
+					builderAPISrv.SetBuilderIndex(index)
+				}
 			})
 		}
 

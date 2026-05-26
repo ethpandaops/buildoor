@@ -21,6 +21,9 @@ import (
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
+	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -29,8 +32,14 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
+
+// domainBeaconBuilder is DOMAIN_BEACON_BUILDER from the Gloas consensus spec,
+// used to sign ExecutionPayloadBid and ExecutionPayloadEnvelope messages.
+var domainBeaconBuilder = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
 
 // PayloadCacheProvider provides access to the payload cache (e.g. *builder.Service).
 // Used so tests can inject a mock without full builder deps.
@@ -66,18 +75,21 @@ type Server struct {
 	log                   *logrus.Logger
 	server                *http.Server
 	router                *mux.Router
-	builderSvc            PayloadCacheProvider // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
-	validatorsStore       *validators.Store    // in-memory validator registrations
-	blsSigner             *signer.BLSSigner    // optional: for signing Fulu builder bids (getHeader)
-	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
-	eventBroadcaster      EventBroadcaster     // optional: for broadcasting API events to WebUI
-	bidsWonStore          *BidsWonStore        // in-memory store of successfully delivered blocks
-	enabled               atomic.Bool          // runtime toggle for enabling/disabling the builder API
-	headersRequested      atomic.Uint64        // count of getHeader requests received
-	blocksPublished       atomic.Uint64        // count of successfully published blocks
-	genesisForkVersion    phase0.Version       // genesis fork version for builder domain (mev-boost-relay style)
-	forkVersion           phase0.Version       // current fork version for chain-specific verification
-	genesisValidatorsRoot phase0.Root          // genesis validators root for chain-specific verification
+	builderSvc            PayloadCacheProvider       // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
+	validatorsStore       *validators.Store          // in-memory validator registrations
+	blsSigner             *signer.BLSSigner          // optional: for signing Fulu builder bids (getHeader)
+	fuluPublisher         FuluBlockPublisher         // optional: for publishing unblinded blocks (submitBlindedBlockV2)
+	clClient              *beacon.Client             // optional: beacon client used to publish Gloas execution payload envelopes
+	eventBroadcaster      EventBroadcaster           // optional: for broadcasting API events to WebUI
+	bidsWonStore          *BidsWonStore              // in-memory store of successfully delivered blocks
+	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
+	builderIndex          atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
+	enabled               atomic.Bool                // runtime toggle for enabling/disabling the builder API
+	headersRequested      atomic.Uint64              // count of getHeader requests received
+	blocksPublished       atomic.Uint64              // count of successfully published blocks
+	genesisForkVersion    phase0.Version             // genesis fork version for builder domain (mev-boost-relay style)
+	forkVersion           phase0.Version             // current fork version for chain-specific verification
+	genesisValidatorsRoot phase0.Root                // genesis validators root for chain-specific verification
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
@@ -124,9 +136,27 @@ func (s *Server) SetFuluPublisher(p FuluBlockPublisher) {
 	s.fuluPublisher = p
 }
 
+// SetCLClient wires the beacon client used to publish Gloas execution payload
+// envelopes after a SignedBeaconBlock is submitted via the Builder API.
+func (s *Server) SetCLClient(c *beacon.Client) {
+	s.clClient = c
+}
+
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.
 func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 	s.eventBroadcaster = b
+}
+
+// SetProposerPreferencesCache wires the proposer preferences cache used to
+// resolve fee recipient and gas limit when building Gloas execution payload bids.
+func (s *Server) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
+	s.propPrefsCache = cache
+}
+
+// SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
+// Called from the lifecycle manager once registration is observed.
+func (s *Server) SetBuilderIndex(index uint64) {
+	s.builderIndex.Store(index)
 }
 
 // GetBidsWonStore returns the bids won store.
@@ -160,6 +190,15 @@ func (s *Server) registerRoutes() {
 	// --- Builder API v2 (Fulu blinded blocks) ---
 	builderAPIv2 := s.router.PathPrefix("/eth/v2/builder").Subrouter()
 	builderAPIv2.HandleFunc("/blinded_blocks", s.handleSubmitBlindedBlockV2).Methods(http.MethodPost)
+
+	// --- Builder API (Gloas) ---
+	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/execution_payload_bid.yaml
+	builderAPI.HandleFunc(
+		"/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}",
+		s.handleGetExecutionPayloadBid,
+	).Methods(http.MethodPost)
+	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/beacon_block.yaml
+	builderAPI.HandleFunc("/beacon_block", s.handleSubmitSignedBeaconBlock).Methods(http.MethodPost)
 
 	// --- Buildoor API (debug / tooling) ---
 	buildoorAPI := s.router.PathPrefix("/buildoor/v1").Subrouter()
@@ -450,6 +489,342 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Eth-Consensus-Version", "fulu")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// GetExecutionPayloadBidResponse is the JSON envelope returned by
+// POST /eth/v1/builder/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}.
+type GetExecutionPayloadBidResponse struct {
+	Version string                           `json:"version"`
+	Data    *gloas.SignedExecutionPayloadBid `json:"data"`
+}
+
+// handleGetExecutionPayloadBid handles
+// POST /eth/v1/builder/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}.
+//
+// Looks up the cached payload for the requested slot, validates the supplied
+// parent_hash and parent_root against it, then constructs and signs a Gloas
+// SignedExecutionPayloadBid using the proposer's fee recipient from the
+// ProposerPreferences cache. Returns 204 if no payload is cached, 400 if the
+// inputs do not match the cached payload or proposer preferences are missing.
+//
+// Note: RequestAuth verification and BuilderPreferences (max_execution_payment)
+// are not yet wired — both value and execution_payment are set to zero.
+func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
+
+	if !s.enabled.Load() || s.builderSvc == nil || s.blsSigner == nil {
+		log.Warn("getExecutionPayloadBid: returning 204 — builder service disabled or signer/payload cache unavailable")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if s.propPrefsCache == nil {
+		log.Warn("getExecutionPayloadBid: proposer preferences cache not configured")
+		writeValidatorError(w, http.StatusInternalServerError, "proposer preferences cache not configured")
+		return
+	}
+
+	vars := mux.Vars(r)
+	slotStr := vars["slot"]
+	parentHashStr := vars["parent_hash"]
+	parentRootStr := vars["parent_root"]
+	proposerPubkeyStr := vars["proposer_pubkey"]
+
+	log = log.WithFields(logrus.Fields{
+		"slot":            slotStr,
+		"parent_hash":     parentHashStr,
+		"parent_root":     parentRootStr,
+		"proposer_pubkey": proposerPubkeyStr,
+	})
+	log.Debug("getExecutionPayloadBid request received")
+
+	slotU64, err := strconv.ParseUint(slotStr, 10, 64)
+	if err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: invalid slot")
+		writeValidatorError(w, http.StatusBadRequest, "invalid slot: must be a number")
+		return
+	}
+	slot := phase0.Slot(slotU64)
+
+	parentHashBytes, err := hex.DecodeString(trimHex(parentHashStr))
+	if err != nil || len(parentHashBytes) != 32 {
+		log.WithError(err).Warn("getExecutionPayloadBid: invalid parent_hash")
+		writeValidatorError(w, http.StatusBadRequest, "invalid parent_hash: must be 32 bytes hex")
+		return
+	}
+	var parentHash phase0.Hash32
+	copy(parentHash[:], parentHashBytes)
+
+	parentRootBytes, err := hex.DecodeString(trimHex(parentRootStr))
+	if err != nil || len(parentRootBytes) != 32 {
+		log.WithError(err).Warn("getExecutionPayloadBid: invalid parent_root")
+		writeValidatorError(w, http.StatusBadRequest, "invalid parent_root: must be 32 bytes hex")
+		return
+	}
+	var parentRoot phase0.Root
+	copy(parentRoot[:], parentRootBytes)
+
+	event := s.builderSvc.GetPayloadCache().Get(slot)
+	if event == nil {
+		log.Info("getExecutionPayloadBid: returning 204 — no cached payload for slot")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if event.ParentBlockHash != parentHash {
+		log.WithFields(logrus.Fields{
+			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+		}).Info("getExecutionPayloadBid: 400 — parent_hash does not match cached payload")
+		writeValidatorError(w, http.StatusBadRequest, "parent_hash does not match cached payload")
+		return
+	}
+
+	if event.ParentBlockRoot != parentRoot {
+		log.WithFields(logrus.Fields{
+			"request_parent_root": "0x" + hex.EncodeToString(parentRoot[:]),
+			"cached_parent_root":  "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+		}).Info("getExecutionPayloadBid: 400 — parent_root does not match cached payload")
+		writeValidatorError(w, http.StatusBadRequest, "parent_root does not match cached payload")
+		return
+	}
+
+	signedPrefs, ok := s.propPrefsCache.Get(slot)
+	if !ok || signedPrefs == nil || signedPrefs.Message == nil {
+		log.Info("getExecutionPayloadBid: 400 — no proposer preferences cached for slot")
+		writeValidatorError(w, http.StatusBadRequest, "no proposer preferences cached for slot")
+		return
+	}
+	prefs := signedPrefs.Message
+
+	execRequests := &electra.ExecutionRequests{
+		Deposits:       []*electra.DepositRequest{},
+		Withdrawals:    []*electra.WithdrawalRequest{},
+		Consolidations: []*electra.ConsolidationRequest{},
+	}
+	if len(event.ExecutionRequests) > 0 {
+		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
+		if parseErr != nil {
+			log.WithError(parseErr).Warn("getExecutionPayloadBid: failed to parse execution requests")
+			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
+			return
+		}
+		execRequests = parsed
+	}
+	execRequestsRoot, err := execRequests.HashTreeRoot()
+	if err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to compute execution requests root")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to compute execution requests root")
+		return
+	}
+
+	bid := &gloas.ExecutionPayloadBid{
+		ParentBlockHash:       event.ParentBlockHash,
+		ParentBlockRoot:       event.ParentBlockRoot,
+		BlockHash:             event.BlockHash,
+		PrevRandao:            event.PrevRandao,
+		FeeRecipient:          prefs.FeeRecipient,
+		GasLimit:              event.GasLimit,
+		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
+		Slot:                  slot,
+		Value:                 0,
+		ExecutionPayment:      0,
+		BlobKZGCommitments:    []deneb.KZGCommitment{},
+		ExecutionRequestsRoot: execRequestsRoot,
+	}
+	if event.BlobsBundle != nil {
+		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(event.BlobsBundle.Commitments))
+		for i, c := range event.BlobsBundle.Commitments {
+			copy(bid.BlobKZGCommitments[i][:], c)
+		}
+	}
+
+	bidRoot, err := bid.HashTreeRoot()
+	if err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to compute bid hash tree root")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to compute bid root")
+		return
+	}
+	var root phase0.Root
+	copy(root[:], bidRoot[:])
+
+	domain := signer.ComputeDomain(domainBeaconBuilder, s.forkVersion, s.genesisValidatorsRoot)
+	sig, err := s.blsSigner.SignWithDomain(root, domain)
+	if err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to sign bid")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to sign bid")
+		return
+	}
+
+	signedBid := &gloas.SignedExecutionPayloadBid{
+		Message:   bid,
+		Signature: sig,
+	}
+
+	log.WithFields(logrus.Fields{
+		"block_hash":    "0x" + hex.EncodeToString(event.BlockHash[:]),
+		"builder_index": bid.BuilderIndex,
+		"fee_recipient": prefs.FeeRecipient.String(),
+		"gas_limit":     bid.GasLimit,
+	}).Info("getExecutionPayloadBid: delivered Gloas SignedExecutionPayloadBid")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Eth-Consensus-Version", "gloas")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(GetExecutionPayloadBidResponse{
+		Version: "gloas",
+		Data:    signedBid,
+	})
+}
+
+// handleSubmitSignedBeaconBlock handles POST /eth/v1/builder/beacon_block.
+//
+// The proposer submits a full Gloas SignedBeaconBlock that binds them to the
+// builder's bid. If the builder still holds the payload referenced by the
+// bid's block_hash, it constructs the corresponding SignedExecutionPayloadEnvelope
+// and publishes it (along with blobs / KZG cell proofs) to the beacon node.
+//
+// Returns 202 on success, 400 on a malformed block or missing payload,
+// 415 on wrong Content-Type, 500 on internal errors, and 503 if the server is
+// not fully configured.
+func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v1/builder/beacon_block")
+
+	if !s.enabled.Load() || s.builderSvc == nil || s.blsSigner == nil || s.clClient == nil {
+		log.Warn("submitSignedBeaconBlock: 503 — builder not fully configured (disabled, payload cache, signer, or CL client missing)")
+		writeValidatorError(w, http.StatusServiceUnavailable, "builder not ready")
+		return
+	}
+
+	if r.Header.Get("Content-Type") != "application/json" {
+		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("submitSignedBeaconBlock: rejected — Content-Type must be application/json")
+		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to read body")
+		writeValidatorError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+
+	var block gloas.SignedBeaconBlock
+	if err := json.Unmarshal(body, &block); err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: invalid JSON body")
+		writeValidatorError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	if block.Message == nil || block.Message.Body == nil ||
+		block.Message.Body.SignedExecutionPayloadBid == nil ||
+		block.Message.Body.SignedExecutionPayloadBid.Message == nil {
+		log.Warn("submitSignedBeaconBlock: missing signed_execution_payload_bid in block body")
+		writeValidatorError(w, http.StatusBadRequest, "missing signed_execution_payload_bid in block body")
+		return
+	}
+
+	bid := block.Message.Body.SignedExecutionPayloadBid.Message
+	blockHashHex := "0x" + hex.EncodeToString(bid.BlockHash[:])
+	log = log.WithFields(logrus.Fields{
+		"slot":       bid.Slot,
+		"block_hash": blockHashHex,
+	})
+	log.Debug("submitSignedBeaconBlock request received")
+
+	event := s.builderSvc.GetPayloadCache().GetByBlockHash(bid.BlockHash)
+	if event == nil {
+		log.Info("submitSignedBeaconBlock: 400 — no cached payload for bid block hash")
+		writeValidatorError(w, http.StatusBadRequest, "no cached payload for bid block hash")
+		return
+	}
+
+	gloasPayload, err := fulu.ExecutionPayloadToGloas(event.Payload)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to convert payload to gloas format")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to convert payload")
+		return
+	}
+
+	execRequests := &electra.ExecutionRequests{
+		Deposits:       []*electra.DepositRequest{},
+		Withdrawals:    []*electra.WithdrawalRequest{},
+		Consolidations: []*electra.ConsolidationRequest{},
+	}
+	if len(event.ExecutionRequests) > 0 {
+		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
+		if parseErr != nil {
+			log.WithError(parseErr).Warn("submitSignedBeaconBlock: failed to parse execution requests")
+			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
+			return
+		}
+		execRequests = parsed
+	}
+
+	beaconBlockRoot, err := block.Message.HashTreeRoot()
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to compute beacon block hash tree root")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to compute beacon block root")
+		return
+	}
+	var blockRoot phase0.Root
+	copy(blockRoot[:], beaconBlockRoot[:])
+
+	envelope := &gloas.ExecutionPayloadEnvelope{
+		Payload:               gloasPayload,
+		ExecutionRequests:     execRequests,
+		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
+		BeaconBlockRoot:       blockRoot,
+		ParentBeaconBlockRoot: block.Message.ParentRoot,
+	}
+
+	envelopeRoot, err := envelope.HashTreeRoot()
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to compute envelope hash tree root")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to compute envelope root")
+		return
+	}
+	var root phase0.Root
+	copy(root[:], envelopeRoot[:])
+
+	domain := signer.ComputeDomain(domainBeaconBuilder, s.forkVersion, s.genesisValidatorsRoot)
+	sig, err := s.blsSigner.SignWithDomain(root, domain)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to sign envelope")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to sign envelope")
+		return
+	}
+
+	signedEnvelope := &gloas.SignedExecutionPayloadEnvelope{
+		Message:   envelope,
+		Signature: sig,
+	}
+
+	envelopeJSON, err := json.Marshal(signedEnvelope)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to marshal signed envelope")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to marshal envelope")
+		return
+	}
+
+	var blobs, kzgProofs [][]byte
+	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
+		blobs = event.BlobsBundle.Blobs
+		kzgProofs = event.BlobsBundle.Proofs
+	}
+
+	if err := s.clClient.SubmitExecutionPayloadEnvelope(r.Context(), envelopeJSON, blobs, kzgProofs); err != nil {
+		log.WithError(err).Error("submitSignedBeaconBlock: failed to publish execution payload envelope")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to publish envelope: "+err.Error())
+		return
+	}
+
+	log.WithFields(logrus.Fields{
+		"beacon_block_root": "0x" + hex.EncodeToString(blockRoot[:]),
+		"blobs":             len(blobs),
+	}).Info("submitSignedBeaconBlock: published execution payload envelope")
+
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func trimHex(s string) string {
