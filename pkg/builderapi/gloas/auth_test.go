@@ -1,0 +1,181 @@
+package gloas_test
+
+import (
+	"strings"
+	"testing"
+
+	eth2gloas "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
+	"github.com/ethpandaops/buildoor/pkg/signer"
+)
+
+const (
+	validatorPrivkeyHex = "1111111111111111111111111111111111111111111111111111111111111111"
+	otherPrivkeyHex     = "2222222222222222222222222222222222222222222222222222222222222222"
+	builderPrivkeyHex   = "3333333333333333333333333333333333333333333333333333333333333333"
+)
+
+// signRequestAuth builds and BLS-signs a RequestAuth with the given signer using
+// DomainRequestAuth at the supplied genesis fork version (GVR=zero per spec).
+func signRequestAuth(
+	t *testing.T,
+	s *signer.BLSSigner,
+	builderPubkey phase0.BLSPubKey,
+	slot phase0.Slot,
+	genesisForkVersion phase0.Version,
+) *eth2gloas.SignedRequestAuth {
+	t.Helper()
+
+	msg := &eth2gloas.RequestAuth{
+		BuilderPubkey: builderPubkey,
+		Slot:          slot,
+	}
+
+	root, err := msg.HashTreeRoot()
+	require.NoError(t, err)
+
+	domain := signer.ComputeDomain(gloas.DomainRequestAuth, genesisForkVersion, phase0.Root{})
+
+	sig, err := s.SignWithDomain(root, domain)
+	require.NoError(t, err)
+
+	return &eth2gloas.SignedRequestAuth{
+		Message:   msg,
+		Signature: sig,
+	}
+}
+
+func TestDomainRequestAuthValue(t *testing.T) {
+	// Spec: DOMAIN_REQUEST_AUTH = DomainType('0x0B000001')
+	require.Equal(t, phase0.DomainType{0x0B, 0x00, 0x00, 0x01}, gloas.DomainRequestAuth)
+}
+
+func TestVerifyRequestAuth_RoundTrip(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	genesisForkVersion := phase0.Version{} // mainnet-style zero version
+
+	signed := signRequestAuth(t, validator, builder.PublicKey(), 1234, genesisForkVersion)
+
+	require.NoError(t, gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
+}
+
+func TestVerifyRequestAuth_WrongValidatorPubkey(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	other, err := signer.NewBLSSigner(otherPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	genesisForkVersion := phase0.Version{}
+
+	signed := signRequestAuth(t, validator, builder.PublicKey(), 42, genesisForkVersion)
+
+	err = gloas.VerifyRequestAuth(signed, other.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+}
+
+func TestVerifyRequestAuth_TamperedSlot(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	genesisForkVersion := phase0.Version{}
+
+	signed := signRequestAuth(t, validator, builder.PublicKey(), 100, genesisForkVersion)
+	signed.Message.Slot = 101 // tamper
+
+	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+}
+
+func TestVerifyRequestAuth_TamperedBuilderPubkey(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	other, err := signer.NewBLSSigner(otherPrivkeyHex)
+	require.NoError(t, err)
+
+	genesisForkVersion := phase0.Version{}
+
+	signed := signRequestAuth(t, validator, builder.PublicKey(), 7, genesisForkVersion)
+	signed.Message.BuilderPubkey = other.PublicKey() // tamper
+
+	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+}
+
+func TestVerifyRequestAuth_WrongGenesisForkVersion(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	signingFork := phase0.Version{0x00, 0x00, 0x00, 0x00}
+	verifyFork := phase0.Version{0x90, 0x00, 0x00, 0x69} // e.g. Sepolia-style
+
+	signed := signRequestAuth(t, validator, builder.PublicKey(), 7, signingFork)
+
+	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), verifyFork)
+	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+}
+
+func TestVerifyRequestAuth_NilSigned(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	err = gloas.VerifyRequestAuth(nil, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, gloas.ErrNilSignedRequestAuth)
+}
+
+func TestVerifyRequestAuth_NilMessage(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	signed := &eth2gloas.SignedRequestAuth{
+		Message:   nil,
+		Signature: phase0.BLSSignature{},
+	}
+
+	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, gloas.ErrNilRequestAuthMessage)
+}
+
+func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	builder, err := signer.NewBLSSigner(builderPrivkeyHex)
+	require.NoError(t, err)
+
+	signed := &eth2gloas.SignedRequestAuth{
+		Message: &eth2gloas.RequestAuth{
+			BuilderPubkey: builder.PublicKey(),
+			Slot:          1,
+		},
+		// All-zero signature is not a valid BLS signature.
+		Signature: phase0.BLSSignature{},
+	}
+
+	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+
+	// Sanity check: the error message hasn't drifted (loosely).
+	require.True(t, strings.Contains(err.Error(), "signature"))
+}
