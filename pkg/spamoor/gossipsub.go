@@ -88,6 +88,7 @@ func newGossipSub(ctx context.Context, h host.Host, genesisValRoot []byte, d int
 			return p2p.MsgID(genesisValRoot, pmsg)
 		}),
 		pubsub.WithMessageSignaturePolicy(pubsub.StrictNoSign),
+		pubsub.WithNoAuthor(),
 		pubsub.WithMaxMessageSize(int(params.BeaconConfig().MaxPayloadSize)),
 		pubsub.WithValidateQueueSize(gossipValidateQueueSize),
 	}
