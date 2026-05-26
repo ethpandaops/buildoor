@@ -50,7 +50,7 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string)
 	BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string)
 	BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string)
-	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei uint64)
+	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei string)
 }
 
 // RequestStats holds counters for Builder API requests.
@@ -308,7 +308,7 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 		ParentBlockRoot: "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
 		Payload:         marshalledPayload,
 		BlobsBundle:     marshalledBlobsBundle,
-		BlockValue:      fmt.Sprintf("%d", event.BlockValue),
+		BlockValue:      event.BlockValue.String(),
 		FeeRecipient:    event.FeeRecipient.Hex(),
 		GasLimit:        event.GasLimit,
 		Timestamp:       event.Timestamp,
@@ -559,7 +559,7 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 		NumTransactions: numTxs,
 		NumBlobs:        numBlobs,
 		ValueETH:        valueETH,
-		ValueWei:        event.BlockValue,
+		ValueWei:        event.BlockValue.String(),
 		Timestamp:       time.Now().UnixMilli(),
 	}
 
@@ -567,7 +567,7 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 
 	// Broadcast bid won event to WebUI
 	if s.eventBroadcaster != nil {
-		s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue)
+		s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue.String())
 		s.eventBroadcaster.BroadcastBuilderAPISubmitBlindedDelivered(uint64(slot), blockHashHex)
 	}
 

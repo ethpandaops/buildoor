@@ -30,7 +30,8 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
       (p) =>
         String(p.validator_index).includes(term) ||
         p.fee_recipient.toLowerCase().includes(term) ||
-        String(p.slot).includes(term),
+        String(p.slot).includes(term) ||
+        (p.client_name?.toLowerCase() ?? '').includes(term),
     );
   }, [preferences, searchTerm]);
 
@@ -93,7 +94,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
               <input
                 type="text"
                 className="form-control form-control-sm"
-                placeholder="Search by slot, validator index, or fee recipient..."
+                placeholder="Search by slot, validator index, client name, or fee recipient..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -105,6 +106,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
                   <tr>
                     <th className="small">Slot</th>
                     <th className="small">Validator Index</th>
+                    <th className="small">Client</th>
                     <th className="small">Fee Recipient</th>
                     <th className="small text-end">Gas Limit</th>
                   </tr>
@@ -112,7 +114,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
                 <tbody>
                   {paged.length === 0 ? (
                     <tr>
-                      <td colSpan={4} className="text-muted text-center small">
+                      <td colSpan={5} className="text-muted text-center small">
                         No preferences match your search
                       </td>
                     </tr>
@@ -121,6 +123,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
                       <tr key={idx}>
                         <td className="small font-monospace text-muted">{pref.slot}</td>
                         <td className="small font-monospace">{pref.validator_index}</td>
+                        <td className="small">{pref.client_name ?? <span className="text-muted">—</span>}</td>
                         <td className="small font-monospace">
                           <span
                             className="text-info hash-copy-text"
@@ -131,7 +134,7 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
                             {pref.fee_recipient}
                           </span>
                         </td>
-                        <td className="small text-end">{pref.gas_limit.toLocaleString()}</td>
+                        <td className="small text-end">{pref.target_gas_limit.toLocaleString()}</td>
                       </tr>
                     ))
                   )}

@@ -27,7 +27,11 @@ const (
 // Each element in raw is: [type_prefix_byte || request_1 || request_2 || ...]
 // where all requests of the same type are concatenated after a single prefix byte.
 func ParseExecutionRequests(raw engine.ExecutionRequests) (*electra.ExecutionRequests, error) {
-	result := &electra.ExecutionRequests{}
+	result := &electra.ExecutionRequests{
+		Deposits:       make([]*electra.DepositRequest, 0),
+		Withdrawals:    make([]*electra.WithdrawalRequest, 0),
+		Consolidations: make([]*electra.ConsolidationRequest, 0),
+	}
 
 	for i, entry := range raw {
 		if len(entry) == 0 {

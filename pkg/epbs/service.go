@@ -3,6 +3,7 @@ package epbs
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -495,7 +496,7 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
-		"bid_value":  payload.BidValue,
+		"bid_value":  payload.BidValue.String(),
 	}).Info("Our payload was included in a beacon block!")
 
 	// Mark bid as included in scheduler
@@ -503,15 +504,18 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 
 	// Record as pending payment (will be moved to balance deduction if revealed,
 	// or stay pending for 2 epochs if not revealed)
-	if s.bidTracker != nil && payload.BidValue > 0 {
-		s.bidTracker.RecordWonBid(payload.Slot, payload.BidValue)
+	if s.bidTracker != nil && payload.BidValue != nil && payload.BidValue.Sign() > 0 {
+		bidValueGwei := new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64()
+		s.bidTracker.RecordWonBid(payload.Slot, bidValueGwei)
 	}
 
 	// Track for follow-up block check
 	s.lastIncludedMu.Lock()
 	s.lastIncludedSlot = payload.Slot
 	s.lastIncludedBlockHash = blockInfo.ExecutionBlockHash
-	s.lastIncludedBidValue = payload.BidValue
+	if payload.BidValue != nil {
+		s.lastIncludedBidValue = new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64()
+	}
 	s.lastIncludedMu.Unlock()
 
 	// Increment stats
@@ -523,7 +527,7 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 	s.bidIncludedDispatch.Fire(&BidIncludedEvent{
 		Slot:      payload.Slot,
 		BlockHash: blockInfo.ExecutionBlockHash,
-		BidValue:  payload.BidValue,
+		BidValue:  new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64(),
 	})
 }
 

@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/OffchainLabs/prysm/v7 v7.1.3
 	github.com/ethereum/go-ethereum v1.17.3-0.20260425183644-2249bebf5e88
-	github.com/ethpandaops/go-eth2-client v0.1.2-0.20260501105559-03ed5eacf583
+	github.com/ethpandaops/go-eth2-client v0.1.3-0.20260521102012-54a5ac9554c5
 	github.com/ethpandaops/service-authenticatoor v0.0.0-20260430215651-f6b6f69d6711
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/golang/snappy v1.0.0
@@ -16,7 +16,7 @@ require (
 	github.com/libp2p/go-libp2p-mplex v0.11.0
 	github.com/libp2p/go-libp2p-pubsub v0.14.2
 	github.com/multiformats/go-multiaddr v0.16.1
-	github.com/pk910/dynamic-ssz v1.3.1
+	github.com/pk910/dynamic-ssz v1.3.2-0.20260505131440-111bcb265c8f
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prysmaticlabs/fastssz v0.0.0-20251103153600-259302269bfc
 	github.com/rs/zerolog v1.35.0
@@ -75,7 +75,7 @@ require (
 	github.com/go-openapi/spec v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
-	github.com/goccy/go-yaml v1.9.2 // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/gofrs/flock v0.12.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect

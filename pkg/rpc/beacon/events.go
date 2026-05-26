@@ -83,6 +83,7 @@ type PayloadAttributesEvent struct {
 	SuggestedFeeRecipient common.Address
 	Withdrawals           []*capella.Withdrawal
 	ParentBeaconBlockRoot phase0.Root
+	TargetGasLimit        uint64
 }
 
 // payloadAttributesEventJSON is used for JSON unmarshaling of payload_attributes events.
@@ -105,6 +106,7 @@ type payloadAttributesEventJSON struct {
 				Amount         string `json:"amount"`
 			} `json:"withdrawals"`
 			ParentBeaconBlockRoot string `json:"parent_beacon_block_root"`
+			TargetGasLimit        string `json:"target_gas_limit"`
 		} `json:"payload_attributes"`
 	} `json:"data"`
 }
@@ -495,6 +497,8 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		e.attestationDispatcher.Fire(event)
 
 	case "proposer_preferences":
+		e.client.log.WithField("raw", data).Info("Proposer preferences SSE event received")
+
 		var raw proposerPreferencesEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
 			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse proposer_preferences event JSON")
@@ -507,8 +511,9 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		}
 
 		e.client.log.WithFields(map[string]interface{}{
-			"slot":            raw.Data.Message.ProposalSlot,
-			"validator_index": raw.Data.Message.ValidatorIndex,
+			"slot":             raw.Data.Message.ProposalSlot,
+			"validator_index":  raw.Data.Message.ValidatorIndex,
+			"target_gas_limit": raw.Data.Message.TargetGasLimit,
 		}).Debug("Proposer preferences event received")
 
 		e.proposerPreferencesDispatcher.Fire(raw.Data)
@@ -747,6 +752,8 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
 	}
 
+	targetGasLimit, _ := strconv.ParseUint(raw.Data.PayloadAttributes.TargetGasLimit, 10, 64)
+
 	// Parse withdrawals
 	withdrawals := make([]*capella.Withdrawal, len(raw.Data.PayloadAttributes.Withdrawals))
 	for i, w := range raw.Data.PayloadAttributes.Withdrawals {
@@ -780,6 +787,7 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		SuggestedFeeRecipient: common.HexToAddress(raw.Data.PayloadAttributes.SuggestedFeeRecipient),
 		Withdrawals:           withdrawals,
 		ParentBeaconBlockRoot: parentBeaconBlockRoot,
+		TargetGasLimit:        targetGasLimit,
 	}, nil
 }
 

@@ -16,9 +16,9 @@ import (
 func TestParseExecutionRequests_Empty(t *testing.T) {
 	result, err := ParseExecutionRequests(nil)
 	require.NoError(t, err)
-	assert.Nil(t, result.Deposits)
-	assert.Nil(t, result.Withdrawals)
-	assert.Nil(t, result.Consolidations)
+	assert.Empty(t, result.Deposits)
+	assert.Empty(t, result.Withdrawals)
+	assert.Empty(t, result.Consolidations)
 }
 
 func TestParseExecutionRequests_SingleDeposit(t *testing.T) {
@@ -197,9 +197,9 @@ func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 
 	result, err := ParseExecutionRequests(raw)
 	require.NoError(t, err)
-	assert.Nil(t, result.Deposits)
-	assert.Nil(t, result.Withdrawals)
-	assert.Nil(t, result.Consolidations)
+	assert.Empty(t, result.Deposits)
+	assert.Empty(t, result.Withdrawals)
+	assert.Empty(t, result.Consolidations)
 }
 
 func TestParseExecutionRequests_EmptyEntry(t *testing.T) {

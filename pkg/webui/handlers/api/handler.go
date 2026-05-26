@@ -8,6 +8,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
+	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
@@ -21,6 +22,7 @@ type APIHandler struct {
 	validatorStore *validators.Store            // May be nil (only set when Builder API enabled)
 	builderAPISvc  *builderapi.Server           // May be nil (only set when Builder API enabled)
 	propPrefSvc    *proposerpreferences.Service // May be nil (only set when P2P peer addrs configured)
+	valRanges      *validatorranges.Resolver    // May be nil
 	eventStreamMgr *EventStreamManager          // May be nil
 }
 
@@ -34,6 +36,7 @@ func NewAPIHandler(
 	validatorStore *validators.Store,
 	builderAPISvc *builderapi.Server,
 	propPrefSvc *proposerpreferences.Service,
+	valRanges *validatorranges.Resolver,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -44,6 +47,7 @@ func NewAPIHandler(
 		validatorStore: validatorStore,
 		builderAPISvc:  builderAPISvc,
 		propPrefSvc:    propPrefSvc,
+		valRanges:      valRanges,
 	}
 
 	// Create and start event stream manager

@@ -43,7 +43,7 @@ func NewRevealHandler(
 	}
 }
 
-// SubmitReveal constructs the envelope locally, signs it, and publishes it to the beacon node.
+// SubmitReveal constructs the envelope locally, signs it, and then publishes it to the beacon node.
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
 	payload *BuiltPayload,
@@ -61,7 +61,11 @@ func (h *RevealHandler) SubmitReveal(
 			return fmt.Errorf("failed to parse execution requests: %w", err)
 		}
 	} else {
-		execRequests = &electra.ExecutionRequests{}
+		execRequests = &electra.ExecutionRequests{
+			Deposits:       make([]*electra.DepositRequest, 0),
+			Withdrawals:    make([]*electra.WithdrawalRequest, 0),
+			Consolidations: make([]*electra.ConsolidationRequest, 0),
+		}
 	}
 
 	envelope := &gloas.ExecutionPayloadEnvelope{

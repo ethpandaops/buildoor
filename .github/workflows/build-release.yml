@@ -16,7 +16,6 @@ jobs:
     name: "Build Buildoor"
     uses: ./.github/workflows/_shared-build.yaml
     with:
-      ref: ${{ github.sha }}
       release: "v${{ inputs.version }}"
       docker: true
       docker_repository: "ethpandaops/buildoor"
@@ -78,10 +77,6 @@ jobs:
       run: |
         cd buildoor_linux_arm64
         tar -czf ../buildoor_${{ inputs.version }}_linux_arm64.tar.gz .
-    - name: "Generate release package: buildoor_${{ inputs.version }}_darwin_amd64.tar.gz"
-      run: |
-        cd buildoor_darwin_amd64
-        tar -czf ../buildoor_${{ inputs.version }}_darwin_amd64.tar.gz .
     - name: "Generate release package: buildoor_${{ inputs.version }}_darwin_arm64.tar.gz"
       run: |
         cd buildoor_darwin_arm64
@@ -113,11 +108,9 @@ jobs:
           | [buildoor_${{ inputs.version }}_windows_amd64.zip](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_windows_amd64.zip) | buildoor executables for windows/amd64 |
           | [buildoor_${{ inputs.version }}_linux_amd64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_linux_amd64.tar.gz) | buildoor executables for linux/amd64 |
           | [buildoor_${{ inputs.version }}_linux_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_linux_arm64.tar.gz) | buildoor executables for linux/arm64 |
-          | [buildoor_${{ inputs.version }}_darwin_amd64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_darwin_amd64.tar.gz) | buildoor executable for macos/amd64 |
           | [buildoor_${{ inputs.version }}_darwin_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_darwin_arm64.tar.gz) | buildoor executable for macos/arm64 |
         files: |
           buildoor_${{ inputs.version }}_windows_amd64.zip
           buildoor_${{ inputs.version }}_linux_amd64.tar.gz
           buildoor_${{ inputs.version }}_linux_arm64.tar.gz
-          buildoor_${{ inputs.version }}_darwin_amd64.tar.gz
           buildoor_${{ inputs.version }}_darwin_arm64.tar.gz

@@ -98,7 +98,7 @@ export interface PayloadReadyEvent {
   slot: number;
   block_hash: string;
   parent_block_hash: string;
-  block_value: number;
+  block_value: string;
   ready_at: number;
 }
 
@@ -229,7 +229,7 @@ export interface BidWonEntry {
   num_transactions: number;
   num_blobs: number;
   value_eth: string;
-  value_wei: number;
+  value_wei: string;
   timestamp: number;
 }
 
@@ -244,8 +244,9 @@ export interface BidsWonResponse {
 export interface ProposerPreference {
   slot: number;
   validator_index: number;
+  client_name?: string;
   fee_recipient: string;
-  gas_limit: number;
+  target_gas_limit: number;
 }
 
 export interface ProposerPreferencesResponse {

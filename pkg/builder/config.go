@@ -4,12 +4,13 @@ import "github.com/ethpandaops/buildoor/pkg/config"
 
 // Type aliases for backwards compatibility - prefer using config package directly
 type (
-	Config           = config.Config
-	ScheduleConfig   = config.ScheduleConfig
-	ScheduleMode     = config.ScheduleMode
-	EPBSConfig       = config.EPBSConfig
-	BuilderAPIConfig = config.BuilderAPIConfig
-	SpamoorConfig    = config.SpamoorConfig
+	Config                = config.Config
+	ScheduleConfig        = config.ScheduleConfig
+	ScheduleMode          = config.ScheduleMode
+	EPBSConfig            = config.EPBSConfig
+	BuilderAPIConfig      = config.BuilderAPIConfig
+	SpamoorConfig         = config.SpamoorConfig
+	ValidatorRangesConfig = config.ValidatorRangesConfig
 )
 
 // Constants aliases for backwards compatibility

@@ -1,6 +1,7 @@
 package fulu
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,7 +32,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	require.NoError(t, err)
 	pk := blsSigner.PublicKey()
 
-	blockValue := uint64(1_000_000_000_000_000) // 0.001 ETH in wei
+	blockValue := new(big.Int).SetUint64(1_000_000_000_000_000) // 0.001 ETH in wei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
@@ -43,7 +44,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	require.NotNil(t, bid.Message)
 	require.NotNil(t, bid.Message.Value)
 	assert.True(t, bid.Message.Value.IsUint64())
-	assert.Equal(t, blockValue, bid.Message.Value.Uint64(), "bid value should equal block value when subsidy is 0")
+	assert.Equal(t, blockValue.Uint64(), bid.Message.Value.Uint64(), "bid value should equal block value when subsidy is 0")
 }
 
 func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
@@ -51,8 +52,8 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	require.NoError(t, err)
 	pk := blsSigner.PublicKey()
 
-	blockValue := uint64(500_000_000_000_000) // 0.0005 ETH in wei
-	subsidy := uint64(1_000_000)              // 0.001 ETH subsidy in gwei
+	blockValue := new(big.Int).SetUint64(500_000_000_000_000) // 0.0005 ETH in wei
+	subsidy := uint64(1_000_000)                              // 0.001 ETH subsidy in gwei
 	event := minimalPayloadReadyEvent(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
@@ -64,11 +65,12 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	require.NotNil(t, bid.Message)
 	require.NotNil(t, bid.Message.Value)
 	assert.True(t, bid.Message.Value.IsUint64())
-	assert.Equal(t, blockValue+subsidy*1_000_000_000, bid.Message.Value.Uint64(),
+	expected := new(big.Int).Add(blockValue, new(big.Int).SetUint64(subsidy*1_000_000_000))
+	assert.Equal(t, expected.Uint64(), bid.Message.Value.Uint64(),
 		"bid value should be block_value_wei + subsidy_gwei_converted_to_wei")
 }
 
-func minimalPayloadReadyEvent(t *testing.T, blockValue uint64) *builder.PayloadReadyEvent {
+func minimalPayloadReadyEvent(t *testing.T, blockValue *big.Int) *builder.PayloadReadyEvent {
 	t.Helper()
 	// ExecutionPayloadHeaderFromEngine needs ParentHash, FeeRecipient, StateRoot, ReceiptsRoot,
 	// LogsBloom (256 bytes), PrevRandao (32 bytes), Transactions (can be nil for root), Withdrawals (can be nil).
