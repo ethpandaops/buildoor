@@ -272,6 +272,7 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
 		// Initialize and start validator ranges resolver.
