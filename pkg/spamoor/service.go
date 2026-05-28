@@ -174,7 +174,7 @@ func (s *Service) Start(ctx context.Context) error {
 	}()
 
 	// Gossipsub + bid topic.
-	ps, err := newGossipSub(s.ctx, h, s.gvr[:], s.cfg.GossipD, s.log)
+	ps, err := newGossipSub(s.ctx, h, s.cfg.GossipD, s.log)
 	if err != nil {
 		return fmt.Errorf("init gossipsub: %w", err)
 	}

@@ -78,12 +78,10 @@ func TestGossipSubmitter_PublishRoundTrip(t *testing.T) {
 	// Connect the two hosts so gossipsub can form a mesh.
 	require.NoError(t, hA.Connect(ctx, peer.AddrInfo{ID: hB.ID(), Addrs: hB.Addrs()}))
 
-	gvr := make([]byte, 32)
-
-	psA, err := newGossipSub(ctx, hA, gvr, 8, nil)
+	psA, err := newGossipSub(ctx, hA, 8, nil)
 	require.NoError(t, err)
 
-	psB, err := newGossipSub(ctx, hB, gvr, 8, nil)
+	psB, err := newGossipSub(ctx, hB, 8, nil)
 	require.NoError(t, err)
 
 	digest := [4]byte{0xaa, 0xbb, 0xcc, 0xdd}
@@ -129,8 +127,7 @@ func TestGossipSubmitter_NilSafety(t *testing.T) {
 
 	// We can't easily build a real topic without a host; just exercise nil bid.
 	hA := newTestHost(t)
-	gvr := make([]byte, 32)
-	ps, err := newGossipSub(context.Background(), hA, gvr, 8, nil)
+	ps, err := newGossipSub(context.Background(), hA, 8, nil)
 	require.NoError(t, err)
 	topic, _, err := joinBidTopic(ps, [4]byte{1, 2, 3, 4})
 	require.NoError(t, err)
