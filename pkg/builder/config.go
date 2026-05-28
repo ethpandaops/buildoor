@@ -9,6 +9,7 @@ type (
 	ScheduleMode          = config.ScheduleMode
 	EPBSConfig            = config.EPBSConfig
 	BuilderAPIConfig      = config.BuilderAPIConfig
+	SpamoorConfig         = config.SpamoorConfig
 	ValidatorRangesConfig = config.ValidatorRangesConfig
 )
 
