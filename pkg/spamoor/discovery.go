@@ -118,7 +118,7 @@ func discoverPeers(ctx context.Context, iterator enode.Iterator, store *peerStor
 		log.WithFields(logrus.Fields{
 			"peer":  peerShort(ai.ID),
 			"total": store.size(),
-		}).Info("discovered peer")
+		}).Debug("discovered peer")
 	}
 }
 
@@ -141,11 +141,6 @@ func matchesForkDigest(node *enode.Node, forkDigest [4]byte, logger logrus.Field
 	if len(forkID.CurrentForkDigest) < 4 {
 		return false
 	}
-
-	logger.WithFields(logrus.Fields{
-		"peer_fork_digest": fmt.Sprintf("0x%x", forkID.CurrentForkDigest[:]),
-		"our_fork_digest":  fmt.Sprintf("0x%x", forkDigest[:]),
-	}).Info("matching fork digest from peer")
 
 	return forkID.CurrentForkDigest[0] == forkDigest[0] &&
 		forkID.CurrentForkDigest[1] == forkDigest[1] &&
