@@ -15,6 +15,7 @@ import (
 	pubsubpb "github.com/libp2p/go-libp2p-pubsub/pb"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -70,8 +71,9 @@ func executionPayloadBidTopic(forkDigest [4]byte) string {
 
 // newGossipSub creates a gossipsub router configured with eth2 parameters and
 // a tunable mesh degree (D). genesisValRoot is used for the eth2 message-id
-// function — peers will reject messages with mismatched IDs.
-func newGossipSub(ctx context.Context, h host.Host, genesisValRoot []byte, d int) (*pubsub.PubSub, error) {
+// function — peers will reject messages with mismatched IDs. A non-nil log
+// attaches a raw tracer that logs every gossipsub event at debug level.
+func newGossipSub(ctx context.Context, h host.Host, genesisValRoot []byte, d int, log logrus.FieldLogger) (*pubsub.PubSub, error) {
 	gsParams := pubsub.DefaultGossipSubParams()
 	gsParams.D = d
 	gsParams.Dlo = max(d-2, 1)
@@ -91,6 +93,10 @@ func newGossipSub(ctx context.Context, h host.Host, genesisValRoot []byte, d int
 		pubsub.WithNoAuthor(),
 		pubsub.WithMaxMessageSize(int(params.BeaconConfig().MaxPayloadSize)),
 		pubsub.WithValidateQueueSize(gossipValidateQueueSize),
+	}
+
+	if log != nil {
+		opts = append(opts, pubsub.WithRawTracer(newLoggingRawTracer(log)))
 	}
 
 	return pubsub.NewGossipSub(ctx, h, opts...)

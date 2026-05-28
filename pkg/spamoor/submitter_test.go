@@ -80,10 +80,10 @@ func TestGossipSubmitter_PublishRoundTrip(t *testing.T) {
 
 	gvr := make([]byte, 32)
 
-	psA, err := newGossipSub(ctx, hA, gvr, 8)
+	psA, err := newGossipSub(ctx, hA, gvr, 8, nil)
 	require.NoError(t, err)
 
-	psB, err := newGossipSub(ctx, hB, gvr, 8)
+	psB, err := newGossipSub(ctx, hB, gvr, 8, nil)
 	require.NoError(t, err)
 
 	digest := [4]byte{0xaa, 0xbb, 0xcc, 0xdd}
@@ -130,7 +130,7 @@ func TestGossipSubmitter_NilSafety(t *testing.T) {
 	// We can't easily build a real topic without a host; just exercise nil bid.
 	hA := newTestHost(t)
 	gvr := make([]byte, 32)
-	ps, err := newGossipSub(context.Background(), hA, gvr, 8)
+	ps, err := newGossipSub(context.Background(), hA, gvr, 8, nil)
 	require.NoError(t, err)
 	topic, _, err := joinBidTopic(ps, [4]byte{1, 2, 3, 4})
 	require.NoError(t, err)
