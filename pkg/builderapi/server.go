@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -83,6 +85,7 @@ type Server struct {
 	eventBroadcaster      EventBroadcaster           // optional: for broadcasting API events to WebUI
 	bidsWonStore          *BidsWonStore              // in-memory store of successfully delivered blocks
 	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
+	chainSvc              chain.Service              // optional: used to verify builder is active before serving Gloas bids
 	builderIndex          atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
 	enabled               atomic.Bool                // runtime toggle for enabling/disabling the builder API
 	headersRequested      atomic.Uint64              // count of getHeader requests received
@@ -151,6 +154,12 @@ func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 // resolve fee recipient and gas limit when building Gloas execution payload bids.
 func (s *Server) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
 	s.propPrefsCache = cache
+}
+
+// SetChainService wires the chain service used to verify the builder is active
+// (deposit finalized, not exited) before serving Gloas execution payload bids.
+func (s *Server) SetChainService(c chain.Service) {
+	s.chainSvc = c
 }
 
 // SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
@@ -518,6 +527,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	if s.chainSvc != nil && !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
+		log.Warn("getExecutionPayloadBid: returning 204 — builder not active on chain")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if s.propPrefsCache == nil {
 		log.Warn("getExecutionPayloadBid: proposer preferences cache not configured")
 		writeValidatorError(w, http.StatusInternalServerError, "proposer preferences cache not configured")
@@ -618,6 +633,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
+
 	bid := &gloas.ExecutionPayloadBid{
 		ParentBlockHash:       event.ParentBlockHash,
 		ParentBlockRoot:       event.ParentBlockRoot,
@@ -627,7 +644,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		GasLimit:              event.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
 		Slot:                  slot,
-		Value:                 0,
+		Value:                 phase0.Gwei(blockValueGwei + s.cfg.GloasBuilderApiSubsidy),
 		ExecutionPayment:      0,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,

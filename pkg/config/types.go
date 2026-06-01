@@ -71,6 +71,10 @@ type BuilderAPIConfig struct {
 
 	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+
+	// GloasBuilderApiSubsidy is added to the block value (converted to gwei) to form
+	// bid.ExecutionPayment in Gloas getExecutionPayloadBid calls.
+	GloasBuilderApiSubsidy uint64 `yaml:"gloas_builder_api_subsidy" json:"gloas_builder_api_subsidy"`
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
