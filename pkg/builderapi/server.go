@@ -665,7 +665,15 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	var root phase0.Root
 	copy(root[:], bidRoot[:])
 
-	domain := signer.ComputeDomain(domainBeaconBuilder, s.forkVersion, s.genesisValidatorsRoot)
+	// Use the Gloas fork version from the chain spec if available — same approach as the ePBS
+	// p2p bid path. Prysm verifies using st.Fork().CurrentVersion which is the Gloas version.
+	bidForkVersion := s.forkVersion
+	if s.chainSvc != nil {
+		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
+			bidForkVersion = *cs.GloasForkVersion
+		}
+	}
+	domain := signer.ComputeDomain(domainBeaconBuilder, bidForkVersion, s.genesisValidatorsRoot)
 	sig, err := s.blsSigner.SignWithDomain(root, domain)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to sign bid")
