@@ -646,8 +646,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		GasLimit:              event.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
 		Slot:                  slot,
-		Value:                 phase0.Gwei(blockValueGwei + 700000000),
-		ExecutionPayment:      0,
+		Value:                 0,
+		ExecutionPayment:      phase0.Gwei(blockValueGwei + 700000000),
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
 	}
