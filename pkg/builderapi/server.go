@@ -19,9 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
@@ -812,7 +814,13 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 	var root phase0.Root
 	copy(root[:], envelopeRoot[:])
 
-	domain := signer.ComputeDomain(domainBeaconBuilder, s.forkVersion, s.genesisValidatorsRoot)
+	envForkVersion := s.forkVersion
+	if s.chainSvc != nil {
+		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
+			envForkVersion = *cs.GloasForkVersion
+		}
+	}
+	domain := signer.ComputeDomain(domainBeaconBuilder, envForkVersion, s.genesisValidatorsRoot)
 	sig, err := s.blsSigner.SignWithDomain(root, domain)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to sign envelope")
@@ -831,6 +839,19 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		writeValidatorError(w, http.StatusInternalServerError, "failed to marshal envelope")
 		return
 	}
+
+	if err := s.clClient.SubmitProposal(r.Context(), &api.SubmitProposalOpts{
+		Proposal: &api.VersionedSignedProposal{
+			Version: spec.DataVersionGloas,
+			Blinded: false,
+			Gloas:   &block,
+		},
+	}); err != nil {
+		log.WithError(err).Error("submitSignedBeaconBlock: failed to broadcast beacon block")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to broadcast beacon block: "+err.Error())
+		return
+	}
+	log.Info("submitSignedBeaconBlock: broadcasted beacon block")
 
 	var blobs, kzgProofs [][]byte
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
