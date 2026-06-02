@@ -33,6 +33,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
+	gloasauth "github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
@@ -518,8 +519,10 @@ type GetExecutionPayloadBidResponse struct {
 // ProposerPreferences cache. Returns 204 if no payload is cached, 400 if the
 // inputs do not match the cached payload or proposer preferences are missing.
 //
-// Note: RequestAuth verification and BuilderPreferences (max_execution_payment)
-// are not yet wired — both value and execution_payment are set to zero.
+// If the request body contains a SignedRequestAuthV1, it is validated:
+//   - auth.message.slot must match the requested slot
+//   - auth.message.builder_url must match cfg.BuilderURL (if configured)
+//   - BLS signature must verify against the proposer_pubkey path parameter
 func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
 	log := s.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
 
@@ -562,6 +565,75 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 	slot := phase0.Slot(slotU64)
+
+	// Resolve the Gloas fork version once for use in both request auth and bid signing.
+	gloasForkVersion := s.forkVersion
+	if s.chainSvc != nil {
+		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
+			gloasForkVersion = *cs.GloasForkVersion
+		}
+	}
+
+	// Parse and validate SignedRequestAuth from the request body.
+	// Auth is always verified when present; s.cfg.RequireRequestAuth controls whether
+	// absence is an error.
+	var authBody []byte
+	if r.ContentLength > 0 {
+		var readErr error
+		authBody, readErr = io.ReadAll(r.Body)
+		if readErr != nil {
+			log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
+			writeValidatorError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
+	}
+	if len(authBody) > 0 {
+		var signedAuth gloas.SignedRequestAuth
+		if jsonErr := json.Unmarshal(authBody, &signedAuth); jsonErr != nil {
+			log.WithError(jsonErr).Warn("getExecutionPayloadBid: invalid SignedRequestAuth body")
+			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: "+jsonErr.Error())
+			return
+		}
+		if signedAuth.Message == nil {
+			log.Warn("getExecutionPayloadBid: SignedRequestAuth missing message")
+			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: message is null")
+			return
+		}
+		if signedAuth.Message.Slot != slot {
+			log.WithFields(logrus.Fields{
+				"auth_slot":    signedAuth.Message.Slot,
+				"request_slot": slot,
+			}).Warn("getExecutionPayloadBid: SignedRequestAuth slot mismatch")
+			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.slot does not match the requested slot")
+			return
+		}
+		if s.cfg.BuilderURL != "" && string(signedAuth.Message.BuilderURL) != s.cfg.BuilderURL {
+			log.WithFields(logrus.Fields{
+				"auth_url":    string(signedAuth.Message.BuilderURL),
+				"builder_url": s.cfg.BuilderURL,
+			}).Warn("getExecutionPayloadBid: SignedRequestAuth builder_url mismatch")
+			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.builder_url does not match this builder's URL")
+			return
+		}
+		pubkeyBytes, hexErr := hex.DecodeString(trimHex(proposerPubkeyStr))
+		if hexErr != nil || len(pubkeyBytes) != 48 {
+			log.WithError(hexErr).Warn("getExecutionPayloadBid: invalid proposer_pubkey for auth verification")
+			writeValidatorError(w, http.StatusBadRequest, "invalid proposer_pubkey: must be 48 bytes hex")
+			return
+		}
+		var proposerPubkey phase0.BLSPubKey
+		copy(proposerPubkey[:], pubkeyBytes)
+		if authErr := gloasauth.VerifyRequestAuth(&signedAuth, proposerPubkey, gloasForkVersion); authErr != nil {
+			log.WithError(authErr).Warn("getExecutionPayloadBid: SignedRequestAuth signature verification failed")
+			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
+			return
+		}
+		log.Debug("getExecutionPayloadBid: SignedRequestAuth verified")
+	} else if s.cfg.RequireRequestAuth {
+		log.Warn("getExecutionPayloadBid: missing required SignedRequestAuth")
+		writeValidatorError(w, http.StatusUnauthorized, "missing SignedRequestAuthV1: this builder requires authenticated requests")
+		return
+	}
 
 	parentHashBytes, err := hex.DecodeString(trimHex(parentHashStr))
 	if err != nil || len(parentHashBytes) != 32 {
@@ -667,15 +739,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	var root phase0.Root
 	copy(root[:], bidRoot[:])
 
-	// Use the Gloas fork version from the chain spec if available — same approach as the ePBS
-	// p2p bid path. Prysm verifies using st.Fork().CurrentVersion which is the Gloas version.
-	bidForkVersion := s.forkVersion
-	if s.chainSvc != nil {
-		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
-			bidForkVersion = *cs.GloasForkVersion
-		}
-	}
-	domain := signer.ComputeDomain(domainBeaconBuilder, bidForkVersion, s.genesisValidatorsRoot)
+	domain := signer.ComputeDomain(domainBeaconBuilder, gloasForkVersion, s.genesisValidatorsRoot)
 	sig, err := s.blsSigner.SignWithDomain(root, domain)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to sign bid")

@@ -69,6 +69,17 @@ type BuilderAPIConfig struct {
 	// Default: 9000.
 	Port int `yaml:"port" json:"port"`
 
+	// BuilderURL is this builder's publicly reachable URL (e.g. "https://builder.example.com").
+	// Used to verify the builder_url field in SignedRequestAuthV1 messages from proposers.
+	// If empty, builder_url validation is skipped.
+	BuilderURL string `yaml:"builder_url" json:"builder_url"`
+
+	// RequireRequestAuth controls whether a SignedRequestAuthV1 body is mandatory on
+	// getExecutionPayloadBid requests. When true, requests without an auth body are
+	// rejected with 401. When false (default), auth is optional — but if supplied it
+	// is always fully validated.
+	RequireRequestAuth bool `yaml:"require_request_auth" json:"require_request_auth"`
+
 	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 
