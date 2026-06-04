@@ -566,7 +566,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	}
 	slot := phase0.Slot(slotU64)
 
-	// Resolve the Gloas fork version once for use in both request auth and bid signing.
+	// Resolve the Gloas fork version once for bid signing (DomainBeaconBuilder is
+	// chain-fork bound). Request auth is NOT signed with this: per the Gloas
+	// builder-specs, RequestAuth is signed with compute_domain(DOMAIN_REQUEST_AUTH)
+	// using the genesis fork version and a zero genesis_validators_root — an
+	// application-space domain that mirrors DomainApplicationBuilder. So auth is
+	// verified below with s.genesisForkVersion, not gloasForkVersion.
 	gloasForkVersion := s.forkVersion
 	if s.chainSvc != nil {
 		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
@@ -623,7 +628,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		}
 		var proposerPubkey phase0.BLSPubKey
 		copy(proposerPubkey[:], pubkeyBytes)
-		if authErr := gloasauth.VerifyRequestAuth(&signedAuth, proposerPubkey, gloasForkVersion); authErr != nil {
+		if authErr := gloasauth.VerifyRequestAuth(&signedAuth, proposerPubkey, s.genesisForkVersion); authErr != nil {
 			log.WithError(authErr).Warn("getExecutionPayloadBid: SignedRequestAuth signature verification failed")
 			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
 			return
