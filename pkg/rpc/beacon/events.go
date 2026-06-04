@@ -84,6 +84,10 @@ type PayloadAttributesEvent struct {
 	Withdrawals           []*capella.Withdrawal
 	ParentBeaconBlockRoot phase0.Root
 	TargetGasLimit        uint64
+	// InclusionListTransactions carries the aggregated FOCIL inclusion list (EIP-7805),
+	// present only on the Heze fork (Version == "heze"). Each entry is a raw RLP-encoded
+	// transaction. Nil/empty on pre-Heze forks, where it is ignored (we use V4).
+	InclusionListTransactions [][]byte
 }
 
 // payloadAttributesEventJSON is used for JSON unmarshaling of payload_attributes events.
@@ -105,8 +109,9 @@ type payloadAttributesEventJSON struct {
 				Address        string `json:"address"`
 				Amount         string `json:"amount"`
 			} `json:"withdrawals"`
-			ParentBeaconBlockRoot string `json:"parent_beacon_block_root"`
-			TargetGasLimit        string `json:"target_gas_limit"`
+			ParentBeaconBlockRoot     string   `json:"parent_beacon_block_root"`
+			TargetGasLimit            string   `json:"target_gas_limit"`
+			InclusionListTransactions []string `json:"inclusion_list_transactions"`
 		} `json:"payload_attributes"`
 	} `json:"data"`
 }
@@ -775,19 +780,35 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		}
 	}
 
+	// Parse FOCIL inclusion list transactions (Heze / EIP-7805). The field is absent
+	// pre-Heze, leaving inclusionListTxs nil; on Heze it is present (possibly empty).
+	var inclusionListTxs [][]byte
+	if rawTxs := raw.Data.PayloadAttributes.InclusionListTransactions; rawTxs != nil {
+		inclusionListTxs = make([][]byte, len(rawTxs))
+		for i, txHex := range rawTxs {
+			tx, err := hex.DecodeString(strings.TrimPrefix(txHex, "0x"))
+			if err != nil {
+				return nil, fmt.Errorf("invalid inclusion_list_transactions[%d]: %w", i, err)
+			}
+
+			inclusionListTxs[i] = tx
+		}
+	}
+
 	return &PayloadAttributesEvent{
-		Version:               raw.Version,
-		ProposalSlot:          phase0.Slot(slot),
-		ProposerIndex:         phase0.ValidatorIndex(proposerIndex),
-		ParentBlockRoot:       parentBlockRoot,
-		ParentBlockNumber:     parentBlockNumber,
-		ParentBlockHash:       parentBlockHash,
-		Timestamp:             timestamp,
-		PrevRandao:            prevRandao,
-		SuggestedFeeRecipient: common.HexToAddress(raw.Data.PayloadAttributes.SuggestedFeeRecipient),
-		Withdrawals:           withdrawals,
-		ParentBeaconBlockRoot: parentBeaconBlockRoot,
-		TargetGasLimit:        targetGasLimit,
+		Version:                   raw.Version,
+		ProposalSlot:              phase0.Slot(slot),
+		ProposerIndex:             phase0.ValidatorIndex(proposerIndex),
+		ParentBlockRoot:           parentBlockRoot,
+		ParentBlockNumber:         parentBlockNumber,
+		ParentBlockHash:           parentBlockHash,
+		Timestamp:                 timestamp,
+		PrevRandao:                prevRandao,
+		SuggestedFeeRecipient:     common.HexToAddress(raw.Data.PayloadAttributes.SuggestedFeeRecipient),
+		Withdrawals:               withdrawals,
+		ParentBeaconBlockRoot:     parentBeaconBlockRoot,
+		TargetGasLimit:            targetGasLimit,
+		InclusionListTransactions: inclusionListTxs,
 	}, nil
 }
 

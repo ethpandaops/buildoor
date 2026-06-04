@@ -9,6 +9,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
+	"github.com/ethpandaops/go-eth2-client/spec/heze"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -72,63 +73,104 @@ func (c *BidCreator) CreateAndSubmitBid(
 		return fmt.Errorf("failed to compute execution requests root: %w", err)
 	}
 
-	// Build the execution payload bid
-	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       payload.ParentBlockHash,
-		ParentBlockRoot:       payload.ParentBlockRoot,
-		BlockHash:             payload.BlockHash,
-		PrevRandao:            payload.PrevRandao,
-		FeeRecipient:          feeRecipient,
-		GasLimit:              payload.GasLimit,
-		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
-		Slot:                  payload.Slot,
-		Value:                 phase0.Gwei(bidValue),
-		ExecutionPayment:      0,
-		BlobKZGCommitments:    []deneb.KZGCommitment{},
-		ExecutionRequestsRoot: execRequestsRoot,
-	}
-
-	c.log.Info("Created execution payload bid")
-
+	// Collect blob commitments (shared across fork bid types).
+	blobCommitments := []deneb.KZGCommitment{}
 	if payload.BlobsBundle != nil {
-		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
+		blobCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
 		for i, c := range payload.BlobsBundle.Commitments {
-			copy(bid.BlobKZGCommitments[i][:], c)
+			copy(blobCommitments[i][:], c)
 		}
 	}
 
-	c.log.Info("Populated bid with blobs")
+	// Build, sign, and marshal the bid for the current fork.
+	// Heze (EIP-7805) extends the Gloas bid with inclusion_list_bits.
+	var signedBidJSON []byte
 
-	c.log.Info("Signing bid before submitting")
-	// Sign the bid using proper domain.
-	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
-	var forkVersion phase0.Version
-	if c.chainSpec.GloasForkVersion != nil {
-		forkVersion = *c.chainSpec.GloasForkVersion
-	}
+	if payload.Version == "heze" {
+		bid := &heze.ExecutionPayloadBid{
+			ParentBlockHash:       payload.ParentBlockHash,
+			ParentBlockRoot:       payload.ParentBlockRoot,
+			BlockHash:             payload.BlockHash,
+			PrevRandao:            payload.PrevRandao,
+			FeeRecipient:          feeRecipient,
+			GasLimit:              payload.GasLimit,
+			BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
+			Slot:                  payload.Slot,
+			Value:                 phase0.Gwei(bidValue),
+			ExecutionPayment:      0,
+			BlobKZGCommitments:    blobCommitments,
+			ExecutionRequestsRoot: execRequestsRoot,
+			// INCLUSION_LIST_COMMITTEE_SIZE (16) bits, all set: 2 bytes of 0xFF.
+			InclusionListBits: []byte{0xff, 0xff},
+		}
 
-	signature, err := c.signer.SignExecutionPayloadBid(
-		bid,
-		forkVersion,
-		c.genesis.GenesisValidatorsRoot,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to sign bid: %w", err)
+		c.log.Info("Created Heze execution payload bid")
+
+		// Heze bids are verified against the Heze fork version.
+		var forkVersion phase0.Version
+		if c.chainSpec.HezeForkVersion != nil {
+			forkVersion = *c.chainSpec.HezeForkVersion
+		}
+
+		signature, err := c.signer.SignExecutionPayloadBidHeze(
+			bid,
+			forkVersion,
+			c.genesis.GenesisValidatorsRoot,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to sign bid: %w", err)
+		}
+
+		signedBidJSON, err = json.Marshal(&heze.SignedExecutionPayloadBid{
+			Message:   bid,
+			Signature: signature,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal signed bid: %w", err)
+		}
+	} else {
+		bid := &gloas.ExecutionPayloadBid{
+			ParentBlockHash:       payload.ParentBlockHash,
+			ParentBlockRoot:       payload.ParentBlockRoot,
+			BlockHash:             payload.BlockHash,
+			PrevRandao:            payload.PrevRandao,
+			FeeRecipient:          feeRecipient,
+			GasLimit:              payload.GasLimit,
+			BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
+			Slot:                  payload.Slot,
+			Value:                 phase0.Gwei(bidValue),
+			ExecutionPayment:      0,
+			BlobKZGCommitments:    blobCommitments,
+			ExecutionRequestsRoot: execRequestsRoot,
+		}
+
+		c.log.Info("Created execution payload bid")
+
+		// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
+		var forkVersion phase0.Version
+		if c.chainSpec.GloasForkVersion != nil {
+			forkVersion = *c.chainSpec.GloasForkVersion
+		}
+
+		signature, err := c.signer.SignExecutionPayloadBid(
+			bid,
+			forkVersion,
+			c.genesis.GenesisValidatorsRoot,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to sign bid: %w", err)
+		}
+
+		signedBidJSON, err = json.Marshal(&gloas.SignedExecutionPayloadBid{
+			Message:   bid,
+			Signature: signature,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal signed bid: %w", err)
+		}
 	}
 
 	c.log.Info("Signed bid successfully!")
-
-	// Create signed bid
-	signedBid := &gloas.SignedExecutionPayloadBid{
-		Message:   bid,
-		Signature: signature,
-	}
-
-	// Marshal to JSON for submission
-	signedBidJSON, err := json.Marshal(signedBid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal signed bid: %w", err)
-	}
 
 	logger := c.log.WithFields(logrus.Fields{
 		"slot":              payload.Slot,

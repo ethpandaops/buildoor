@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
+	"github.com/ethpandaops/go-eth2-client/spec/heze"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -32,6 +33,30 @@ func NewSigner(blsSigner *signer.BLSSigner) *Signer {
 // Prysm's verification which uses st.Fork().CurrentVersion.
 func (s *Signer) SignExecutionPayloadBid(
 	bid *gloas.ExecutionPayloadBid,
+	forkVersion phase0.Version,
+	genesisValidatorsRoot phase0.Root,
+) (phase0.BLSSignature, error) {
+	// Compute hash tree root of the bid
+	bidRoot, err := bid.HashTreeRoot()
+	if err != nil {
+		return phase0.BLSSignature{}, fmt.Errorf("failed to compute bid hash tree root: %w", err)
+	}
+
+	var root phase0.Root
+
+	copy(root[:], bidRoot[:])
+
+	domain := signer.ComputeDomain(DomainBeaconBuilder, forkVersion, genesisValidatorsRoot)
+
+	return s.blsSigner.SignWithDomain(root, domain)
+}
+
+// SignExecutionPayloadBidHeze signs a Heze execution payload bid.
+// Identical to SignExecutionPayloadBid but over the Heze bid type, whose hash tree
+// root includes the inclusion_list_bits field (EIP-7805). forkVersion must be the
+// Heze fork version to match the beacon node's verification.
+func (s *Signer) SignExecutionPayloadBidHeze(
+	bid *heze.ExecutionPayloadBid,
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {

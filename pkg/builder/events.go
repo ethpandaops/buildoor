@@ -37,6 +37,7 @@ func (s BuildSource) String() string {
 // Payload, BlobsBundle, and ExecutionRequests are stored typed; marshal to JSON only when sending API responses.
 type PayloadReadyEvent struct {
 	Slot              phase0.Slot
+	Version           string // Fork version from the payload_attributes event (e.g. "gloas", "heze")
 	ParentBlockRoot   phase0.Root
 	ParentBlockHash   phase0.Hash32
 	BlockHash         phase0.Hash32

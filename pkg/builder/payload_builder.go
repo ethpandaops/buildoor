@@ -145,18 +145,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		if targetGasLimit == 0 {
 			targetGasLimit = attrs.TargetGasLimit
 		}
-
-		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
-		// This ensures bids match the proposer's expected fee recipient even when preferences
-		// aren't received via SSE (e.g. same-node P2P broadcast doesn't loop back).
-		if proposerFeeRecipient == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
-			proposerFeeRecipient = attrs.SuggestedFeeRecipient
-			b.log.WithFields(logrus.Fields{
-				"slot":           attrs.ProposalSlot,
-				"proposer_index": attrs.ProposerIndex,
-				"fee_recipient":  proposerFeeRecipient.Hex(),
-			}).Debug("Using suggested fee recipient from payload_attributes")
-		}
 	} else if b.validatorStore != nil {
 		// Pre-Gloas: look up fee recipient from validator registrations.
 		var pubkey phase0.BLSPubKey
@@ -181,12 +169,19 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		}
 	}
 
+	inclusionListTxs := [][]byte{}
+	if attrs.Version == "heze" {
+		inclusionListTxs = attrs.InclusionListTransactions
+	}
+
 	b.log.WithFields(logrus.Fields{
-		"slot":             attrs.ProposalSlot,
-		"timestamp":        attrs.Timestamp,
-		"withdrawal_count": len(engineWithdrawals),
-		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
-		"target_gas_limit": targetGasLimit,
+		"slot":               attrs.ProposalSlot,
+		"timestamp":          attrs.Timestamp,
+		"withdrawal_count":   len(engineWithdrawals),
+		"parent_hash":        fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"target_gas_limit":   targetGasLimit,
+		"inclusion_list_txs": len(inclusionListTxs),
+		"fork_version":       attrs.Version,
 	}).Debug("Building payload from attributes")
 
 	// Request payload build from the EL
@@ -195,14 +190,16 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		headBlockHash,
 		safeBlockHash,
 		finalizedBlockHash,
+		attrs.Version,
 		&engine.PayloadAttributes{
-			Timestamp:             attrs.Timestamp,
-			PrevRandao:            common.BytesToHash(attrs.PrevRandao[:]),
-			SuggestedFeeRecipient: b.feeRecipient,
-			Withdrawals:           engineWithdrawals,
-			ParentBeaconBlockRoot: &parentBeaconRoot,
-			SlotNumber:            uint64(attrs.ProposalSlot),
-			TargetGasLimit:        targetGasLimit,
+			Timestamp:                 attrs.Timestamp,
+			PrevRandao:                common.BytesToHash(attrs.PrevRandao[:]),
+			SuggestedFeeRecipient:     b.feeRecipient,
+			Withdrawals:               engineWithdrawals,
+			ParentBeaconBlockRoot:     &parentBeaconRoot,
+			SlotNumber:                uint64(attrs.ProposalSlot),
+			TargetGasLimit:            targetGasLimit,
+			InclusionListTransactions: inclusionListTxs,
 		},
 	)
 	if err != nil {
@@ -258,6 +255,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	event := &PayloadReadyEvent{
 		Slot:              attrs.ProposalSlot,
+		Version:           attrs.Version,
 		ParentBlockRoot:   attrs.ParentBlockRoot,
 		ParentBlockHash:   phase0.Hash32(headBlockHash),
 		BlockHash:         blockHash,
@@ -328,48 +326,4 @@ func convertWithdrawalsToEngineFormat(clWithdrawals []*capella.Withdrawal) []*ty
 	}
 
 	return result
-}
-
-// BuildContext contains contextual information for building a payload.
-type BuildContext struct {
-	Slot             phase0.Slot
-	HeadBlockHash    common.Hash
-	SafeBlockHash    common.Hash
-	FinalBlockHash   common.Hash
-	ParentBeaconRoot common.Hash
-	Timestamp        uint64
-	PrevRandao       common.Hash
-	Withdrawals      []*types.Withdrawal
-}
-
-// BuildPayloadWithContext builds a payload using explicit context values.
-// This provides more control over the build parameters.
-func (b *PayloadBuilder) BuildPayloadWithContext(
-	ctx context.Context,
-	buildCtx *BuildContext,
-) (*engine.ExecutionPayload, error) {
-	payloadID, err := b.engineClient.RequestPayloadBuild(
-		ctx,
-		buildCtx.HeadBlockHash,
-		buildCtx.SafeBlockHash,
-		buildCtx.FinalBlockHash,
-		&engine.PayloadAttributes{
-			Timestamp:             buildCtx.Timestamp,
-			PrevRandao:            buildCtx.PrevRandao,
-			SuggestedFeeRecipient: b.feeRecipient,
-			Withdrawals:           buildCtx.Withdrawals,
-			ParentBeaconBlockRoot: &buildCtx.ParentBeaconRoot,
-			SlotNumber:            uint64(buildCtx.Slot),
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to request payload build: %w", err)
-	}
-
-	result, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payload: %w", err)
-	}
-
-	return result.ExecutionPayload, nil
 }

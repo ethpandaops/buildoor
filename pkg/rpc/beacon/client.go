@@ -48,6 +48,7 @@ type ChainSpec struct {
 	ElectraForkEpoch   *uint64
 	GloasForkEpoch     *uint64
 	GloasForkVersion   *phase0.Version
+	HezeForkVersion    *phase0.Version
 
 	// Blob schedule (BPO - Blob Parameters Only)
 	BlobSchedule []BlobScheduleEntry
@@ -220,6 +221,10 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 
 	if v, err := parseSpecForkVersion(specData, "GLOAS_FORK_VERSION"); err == nil {
 		cs.GloasForkVersion = &v
+	}
+
+	if v, err := parseSpecForkVersion(specData, "HEZE_FORK_VERSION"); err == nil {
+		cs.HezeForkVersion = &v
 	}
 
 	// Parse ePBS parameters

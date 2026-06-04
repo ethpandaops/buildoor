@@ -55,6 +55,10 @@ type PayloadAttributes struct {
 	ParentBeaconBlockRoot *common.Hash
 	SlotNumber            uint64 // Amsterdam (PayloadAttributesV4); zero before activation
 	TargetGasLimit        uint64 // Amsterdam (PayloadAttributesV4); zero before activation
+	// InclusionListTransactions carries FOCIL inclusion list transactions (EIP-7805,
+	// PayloadAttributesV5). When non-nil, forkchoiceUpdatedV5 is used (Heze fork).
+	// Each entry is a raw RLP-encoded transaction.
+	InclusionListTransactions [][]byte
 }
 
 // ExecutionPayload represents an execution layer payload (typed, with JSON marshal/unmarshal for API).
@@ -415,12 +419,16 @@ type PayloadStatus struct {
 
 // RequestPayloadBuild triggers payload building without changing forkchoice.
 // This uses the current head from the EL state (we don't override it).
+// The fork argument is the consensus fork name (e.g. "gloas", "heze") and selects
+// which engine_forkchoiceUpdated version is called. An empty/unknown fork falls back
+// to the V4→V3 path.
 // Returns payloadID to retrieve the payload later.
 func (c *Client) RequestPayloadBuild(
 	ctx context.Context,
 	headBlockHash common.Hash,
 	safeBlockHash common.Hash,
 	finalizedBlockHash common.Hash,
+	fork string,
 	attrs *PayloadAttributes,
 ) (PayloadID, error) {
 	state := ForkchoiceState{
@@ -481,11 +489,41 @@ func (c *Client) RequestPayloadBuild(
 	}).Info("Payload attributes being sent to forkchoiceUpdated")
 
 	var response ForkchoiceUpdatedResponse
-	err := c.call(ctx, "engine_forkchoiceUpdatedV4", &response, state, attrsV4)
-	if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
-		c.log.Debug("engine_forkchoiceUpdatedV4 unsupported, trying V3")
 
-		err = c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap)
+	var err error
+
+	// Select the engine_forkchoiceUpdated version based on the consensus fork.
+	switch fork {
+	case "heze":
+		// Heze (EIP-7805): forkchoiceUpdatedV5 extends V4 attributes with the
+		// aggregated FOCIL inclusion list transactions.
+		inclusionList := make([]string, len(attrs.InclusionListTransactions))
+		for i, tx := range attrs.InclusionListTransactions {
+			inclusionList[i] = fmt.Sprintf("0x%x", tx)
+		}
+
+		attrsV5 := make(map[string]any, len(attrsV4)+1)
+		maps.Copy(attrsV5, attrsV4)
+		attrsV5["inclusionListTransactions"] = inclusionList
+
+		c.log.WithFields(logrus.Fields{
+			"inclusion_list_tx_count": len(inclusionList),
+		}).Info("Building with engine_forkchoiceUpdatedV5 (Heze)")
+
+		err = c.call(ctx, "engine_forkchoiceUpdatedV5", &response, state, attrsV5)
+
+	case "gloas":
+		// Gloas: forkchoiceUpdatedV4 (slotNumber, targetGasLimit).
+		err = c.call(ctx, "engine_forkchoiceUpdatedV4", &response, state, attrsV4)
+
+	default:
+		// Pre-Gloas (deneb/electra/fulu) and unknown forks: try V4, fall back to V3.
+		err = c.call(ctx, "engine_forkchoiceUpdatedV4", &response, state, attrsV4)
+		if err != nil && strings.Contains(err.Error(), "Unsupported fork") {
+			c.log.Debug("engine_forkchoiceUpdatedV4 unsupported, trying V3")
+
+			err = c.call(ctx, "engine_forkchoiceUpdatedV3", &response, state, attrsMap)
+		}
 	}
 	if err != nil {
 		return PayloadID{}, fmt.Errorf("forkchoiceUpdated failed: %w", err)
