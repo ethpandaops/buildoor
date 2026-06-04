@@ -751,6 +751,10 @@ func getValidatorsFromState(state *spec.VersionedBeaconState) []*phase0.Validato
 		if state.Gloas != nil {
 			return state.Gloas.Validators
 		}
+	case spec.DataVersionHeze:
+		if state.Heze != nil {
+			return state.Heze.Validators
+		}
 	}
 	return nil
 }

@@ -142,6 +142,27 @@ func (s *service) computeEpochStats(state *spec.VersionedBeaconState, epoch phas
 		// Sum pending payments per builder from state
 		applyPendingPayments(stats.Builders, state.Gloas.BuilderPendingPayments)
 
+	case spec.DataVersionHeze:
+		if state.Heze == nil {
+			return nil, fmt.Errorf("heze state is nil")
+		}
+
+		stats.StateSlot = state.Heze.Slot
+		validators = state.Heze.Validators
+		randaoMixes = state.Heze.RANDAOMixes
+		proposerLookahead = state.Heze.ProposerLookahead
+		finalizedCheckpoint = state.Heze.FinalizedCheckpoint
+		// Heze is part of the Gloas (ePBS) family: it keeps the builder registry and
+		// PTC duties, so we treat it as Gloas for downstream duty/fee-recipient logic.
+		isGloas = true
+		stats.IsGloas = true
+
+		stats.Builders = extractBuilders(state.Heze.Builders)
+		stats.BuildersLoaded = true
+
+		// Sum pending payments per builder from state
+		applyPendingPayments(stats.Builders, state.Heze.BuilderPendingPayments)
+
 	default:
 		return nil, fmt.Errorf("unsupported state version: %s", state.Version)
 	}
