@@ -87,6 +87,7 @@ type Server struct {
 	clClient              *beacon.Client             // optional: beacon client used to publish Gloas execution payload envelopes
 	eventBroadcaster      EventBroadcaster           // optional: for broadcasting API events to WebUI
 	bidsWonStore          *BidsWonStore              // in-memory store of successfully delivered blocks
+	builderPrefsStore     *BuilderPreferencesStore   // latest per-validator builder preferences (max_execution_payment)
 	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
 	chainSvc              chain.Service              // optional: used to verify builder is active before serving Gloas bids
 	builderIndex          atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
@@ -117,6 +118,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 		validatorsStore:       store,
 		blsSigner:             blsSigner,
 		bidsWonStore:          NewBidsWonStore(1000),
+		builderPrefsStore:     NewBuilderPreferencesStore(),
 		genesisForkVersion:    genesisForkVersion,
 		forkVersion:           forkVersion,
 		genesisValidatorsRoot: genesisValidatorsRoot,
@@ -176,6 +178,12 @@ func (s *Server) GetBidsWonStore() *BidsWonStore {
 	return s.bidsWonStore
 }
 
+// GetBuilderPreferencesStore returns the store of latest per-validator builder
+// preferences submitted via the submitBuilderPreferences API.
+func (s *Server) GetBuilderPreferencesStore() *BuilderPreferencesStore {
+	return s.builderPrefsStore
+}
+
 // GetRequestStats returns the current request counters.
 func (s *Server) GetRequestStats() RequestStats {
 	return RequestStats{
@@ -211,6 +219,11 @@ func (s *Server) registerRoutes() {
 	).Methods(http.MethodPost)
 	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/beacon_block.yaml
 	builderAPI.HandleFunc("/beacon_block", s.handleSubmitSignedBeaconBlock).Methods(http.MethodPost)
+	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/builder_preferences.yaml
+	builderAPI.HandleFunc(
+		"/builder_preferences/{validator_pubkey}",
+		s.handleSubmitBuilderPreferences,
+	).Methods(http.MethodPost)
 
 	// --- Buildoor API (debug / tooling) ---
 	buildoorAPI := s.router.PathPrefix("/buildoor/v1").Subrouter()
@@ -558,6 +571,15 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	})
 	log.Debug("getExecutionPayloadBid request received")
 
+	pubkeyBytes, hexErr := hex.DecodeString(trimHex(proposerPubkeyStr))
+	if hexErr != nil || len(pubkeyBytes) != 48 {
+		log.WithError(hexErr).Warn("getExecutionPayloadBid: invalid proposer_pubkey for auth verification")
+		writeValidatorError(w, http.StatusBadRequest, "invalid proposer_pubkey: must be 48 bytes hex")
+		return
+	}
+	var proposerPubkey phase0.BLSPubKey
+	copy(proposerPubkey[:], pubkeyBytes)
+
 	slotU64, err := strconv.ParseUint(slotStr, 10, 64)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: invalid slot")
@@ -620,14 +642,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.builder_url does not match this builder's URL")
 			return
 		}
-		pubkeyBytes, hexErr := hex.DecodeString(trimHex(proposerPubkeyStr))
-		if hexErr != nil || len(pubkeyBytes) != 48 {
-			log.WithError(hexErr).Warn("getExecutionPayloadBid: invalid proposer_pubkey for auth verification")
-			writeValidatorError(w, http.StatusBadRequest, "invalid proposer_pubkey: must be 48 bytes hex")
-			return
-		}
-		var proposerPubkey phase0.BLSPubKey
-		copy(proposerPubkey[:], pubkeyBytes)
+
 		if authErr := gloasauth.VerifyRequestAuth(&signedAuth, proposerPubkey, s.genesisForkVersion); authErr != nil {
 			log.WithError(authErr).Warn("getExecutionPayloadBid: SignedRequestAuth signature verification failed")
 			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
@@ -714,6 +729,17 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 
 	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
 
+	// Split the post-subsidy block value between the execution-layer payment and the
+	// trustless on-chain payment (Value). max_execution_payment caps how much the
+	// proposer accepts directly from the builder as an execution payment; it defaults
+	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
+	// execution payment allowed in that case). Anything above the cap is paid
+	// trustlessly on-chain via Value.
+	valueAfterSubsidy := phase0.Gwei(blockValueGwei + 700000000)
+	maxExecutionPayment := s.builderPrefsStore.GetOrDefault(proposerPubkey)
+	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
+	value := valueAfterSubsidy - executionPayment
+
 	bid := &gloas.ExecutionPayloadBid{
 		ParentBlockHash:       event.ParentBlockHash,
 		ParentBlockRoot:       event.ParentBlockRoot,
@@ -723,8 +749,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		GasLimit:              event.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
 		Slot:                  slot,
-		Value:                 0,
-		ExecutionPayment:      phase0.Gwei(blockValueGwei + 700000000),
+		Value:                 value,
+		ExecutionPayment:      executionPayment,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
 	}
@@ -938,6 +964,100 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		"beacon_block_root": "0x" + hex.EncodeToString(blockRoot[:]),
 		"blobs":             len(blobs),
 	}).Info("submitSignedBeaconBlock: published execution payload envelope")
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleSubmitBuilderPreferences handles POST /eth/v1/builder/builder_preferences/{validator_pubkey}.
+//
+// It records the validator's latest max_execution_payment after authenticating
+// the request via the embedded SignedRequestAuthV1. Per the Gloas builder-specs,
+// the builder MUST verify the auth signature against the validator_pubkey path
+// param (401 on failure) and MUST check that auth.message.builder_url matches its
+// own URL (400 on failure). The preference is stored only after both checks pass.
+// On success it returns 202.
+func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.Request) {
+	log := s.log.WithField("path", "/eth/v1/builder/builder_preferences")
+
+	if !s.enabled.Load() {
+		log.Warn("submitBuilderPreferences: 503 — builder API disabled")
+		writeValidatorError(w, http.StatusServiceUnavailable, "builder not ready")
+		return
+	}
+
+	// The builder MUST check auth.message.builder_url against its own URL. Without a
+	// configured URL it cannot perform that mandatory check, so treat it as a server
+	// misconfiguration (500) rather than a client error.
+	if s.cfg.BuilderURL == "" {
+		log.Error("submitBuilderPreferences: 500 — builder URL not configured; cannot verify auth.message.builder_url")
+		writeValidatorError(w, http.StatusInternalServerError, "builder URL not configured")
+		return
+	}
+
+	if r.Header.Get("Content-Type") != "application/json" {
+		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("submitBuilderPreferences: rejected — Content-Type must be application/json")
+		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+
+	pubkeyBytes, hexErr := hex.DecodeString(trimHex(mux.Vars(r)["validator_pubkey"]))
+	if hexErr != nil || len(pubkeyBytes) != 48 {
+		log.WithError(hexErr).Warn("submitBuilderPreferences: invalid validator_pubkey")
+		writeValidatorError(w, http.StatusBadRequest, "invalid validator_pubkey: must be 48 bytes hex")
+		return
+	}
+	var validatorPubkey phase0.BLSPubKey
+	copy(validatorPubkey[:], pubkeyBytes)
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.WithError(err).Warn("submitBuilderPreferences: failed to read body")
+		writeValidatorError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+
+	var req gloas.BuilderPreferencesRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		log.WithError(err).Warn("submitBuilderPreferences: invalid JSON body")
+		writeValidatorError(w, http.StatusBadRequest, "invalid BuilderPreferencesRequestV1: "+err.Error())
+		return
+	}
+	if req.Preferences == nil {
+		log.Warn("submitBuilderPreferences: missing preferences")
+		writeValidatorError(w, http.StatusBadRequest, "invalid BuilderPreferencesRequestV1: preferences is null")
+		return
+	}
+	if req.Auth == nil || req.Auth.Message == nil {
+		log.Warn("submitBuilderPreferences: missing auth")
+		writeValidatorError(w, http.StatusBadRequest, "invalid BuilderPreferencesRequestV1: auth is null")
+		return
+	}
+
+	// Check auth.message.builder_url matches this builder's URL (400 on mismatch).
+	if string(req.Auth.Message.BuilderURL) != s.cfg.BuilderURL {
+		log.WithFields(logrus.Fields{
+			"auth_url":    string(req.Auth.Message.BuilderURL),
+			"builder_url": s.cfg.BuilderURL,
+		}).Warn("submitBuilderPreferences: builder_url mismatch")
+		writeValidatorError(w, http.StatusBadRequest, "auth.message.builder_url does not match this builder's URL")
+		return
+	}
+
+	// Verify the BLS signature against the validator_pubkey path param (401 on failure).
+	// RequestAuth is signed with DOMAIN_REQUEST_AUTH at the genesis fork version — an
+	// application-space domain, not chain-fork bound.
+	if authErr := gloasauth.VerifyRequestAuth(req.Auth, validatorPubkey, s.genesisForkVersion); authErr != nil {
+		log.WithError(authErr).Warn("submitBuilderPreferences: signature verification failed")
+		writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
+		return
+	}
+
+	// Auth validated — record the latest preference (overwrites any previous value).
+	s.builderPrefsStore.Set(validatorPubkey, req.Preferences.MaxExecutionPayment)
+	log.WithFields(logrus.Fields{
+		"validator_pubkey":      "0x" + hex.EncodeToString(validatorPubkey[:]),
+		"max_execution_payment": uint64(req.Preferences.MaxExecutionPayment),
+	}).Info("submitBuilderPreferences: stored builder preference")
 
 	w.WriteHeader(http.StatusAccepted)
 }
