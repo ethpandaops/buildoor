@@ -50,7 +50,11 @@ func (s *BuilderPreferencesStore) Get(pubkey phase0.BLSPubKey) (phase0.Gwei, boo
 func (s *BuilderPreferencesStore) GetOrDefault(pubkey phase0.BLSPubKey) phase0.Gwei {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.prefs[pubkey]
+	prefs, ok := s.prefs[pubkey]
+	if !ok {
+		return 300000000
+	}
+	return prefs
 }
 
 // GetAll returns a snapshot copy of all stored builder preferences, keyed by
