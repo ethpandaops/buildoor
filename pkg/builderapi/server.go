@@ -633,7 +633,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
 			return
 		}
-		log.Debug("getExecutionPayloadBid: SignedRequestAuth verified")
+		log.Info("getExecutionPayloadBid: SignedRequestAuth verified")
 	} else if s.cfg.RequireRequestAuth {
 		log.Warn("getExecutionPayloadBid: missing required SignedRequestAuth")
 		writeValidatorError(w, http.StatusUnauthorized, "missing SignedRequestAuthV1: this builder requires authenticated requests")
