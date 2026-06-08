@@ -16,8 +16,8 @@ const (
 	validatorPrivkeyHex = "1111111111111111111111111111111111111111111111111111111111111111"
 	otherPrivkeyHex     = "2222222222222222222222222222222222222222222222222222222222222222"
 
-	testBuilderURL      = "https://builder.example.com"
-	otherBuilderURL     = "https://other-builder.example.com"
+	testBuilderURL  = "https://builder.example.com"
+	otherBuilderURL = "https://other-builder.example.com"
 )
 
 // signRequestAuth builds and BLS-signs a RequestAuth with the given signer using
