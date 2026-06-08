@@ -70,8 +70,8 @@ type BuilderAPIConfig struct {
 	Port int `yaml:"port" json:"port"`
 
 	// BuilderURL is this builder's publicly reachable URL (e.g. "https://builder.example.com").
-	// Used to verify the builder_url field in SignedRequestAuthV1 messages from proposers.
-	// If empty, builder_url validation is skipped.
+	// Used to verify the auth.message.data field (set to the builder URL) in
+	// SignedRequestAuthV1 messages from proposers. If empty, this validation is skipped.
 	BuilderURL string `yaml:"builder_url" json:"builder_url"`
 
 	// RequireRequestAuth controls whether a SignedRequestAuthV1 body is mandatory on

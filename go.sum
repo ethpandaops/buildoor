@@ -18,8 +18,8 @@ github.com/VictoriaMetrics/fastcache v1.13.0 h1:AW4mheMR5Vd9FkAPUv+NH6Nhw+fmbTMG
 github.com/VictoriaMetrics/fastcache v1.13.0/go.mod h1:hHXhl4DA2fTL2HTZDJFXWgW0LNjo6B+4aj2Wmng3TjU=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/bharath-123/go-eth2-client v0.0.0-20260601061241-d632e50dbf2e h1:s7E7j1NTy0829CsLVVks0ItJYhdMlBCLR3RKy+rM87o=
-github.com/bharath-123/go-eth2-client v0.0.0-20260601061241-d632e50dbf2e/go.mod h1:U3KdR8QSq8vqs9LWSGAF4ETHJpcB62E1DFf0gVMgWv0=
+github.com/bharath-123/go-eth2-client v0.0.0-20260608172317-263cf0813619 h1:RqHIRAnpGvGiRDln0XmJcF/1JJYO/A9bnuRpVf46pJE=
+github.com/bharath-123/go-eth2-client v0.0.0-20260608172317-263cf0813619/go.mod h1:U3KdR8QSq8vqs9LWSGAF4ETHJpcB62E1DFf0gVMgWv0=
 github.com/bits-and-blooms/bitset v1.20.0 h1:2F+rfL86jE2d/bmw7OhqUg2Sj/1rURkBn3MdfoPyRVU=
 github.com/bits-and-blooms/bitset v1.20.0/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/casbin/govaluate v1.10.0 h1:ffGw51/hYH3w3rZcxO/KcaUIDOLP84w7nsidMVgaDG0=

@@ -32,8 +32,8 @@ func signRequestAuth(
 	t.Helper()
 
 	msg := &eth2gloas.RequestAuth{
-		BuilderURL: builderURL,
-		Slot:       slot,
+		Data: builderURL,
+		Slot: slot,
 	}
 
 	root, err := msg.HashTreeRoot()
@@ -101,7 +101,7 @@ func TestVerifyRequestAuth_TamperedBuilderURL(t *testing.T) {
 	genesisForkVersion := phase0.Version{}
 
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 7, genesisForkVersion)
-	signed.Message.BuilderURL = []byte(otherBuilderURL) // tamper
+	signed.Message.Data = []byte(otherBuilderURL) // tamper
 
 	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
 	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
@@ -147,8 +147,8 @@ func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
 
 	signed := &eth2gloas.SignedRequestAuth{
 		Message: &eth2gloas.RequestAuth{
-			BuilderURL: []byte(testBuilderURL),
-			Slot:       1,
+			Data: []byte(testBuilderURL),
+			Slot: 1,
 		},
 		// All-zero signature is not a valid BLS signature.
 		Signature: phase0.BLSSignature{},

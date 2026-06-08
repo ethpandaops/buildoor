@@ -39,8 +39,8 @@ func signBuilderPrefsRequest(
 	t.Helper()
 
 	auth := &eth2gloas.RequestAuth{
-		BuilderURL: []byte(builderURL),
-		Slot:       slot,
+		Data: []byte(builderURL),
+		Slot: slot,
 	}
 	root, err := auth.HashTreeRoot()
 	require.NoError(t, err)

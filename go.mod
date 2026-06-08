@@ -108,4 +108,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-replace github.com/ethpandaops/go-eth2-client => github.com/bharath-123/go-eth2-client v0.0.0-20260601061241-d632e50dbf2e
+replace github.com/ethpandaops/go-eth2-client => github.com/bharath-123/go-eth2-client v0.0.0-20260608172317-263cf0813619

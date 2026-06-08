@@ -634,12 +634,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.slot does not match the requested slot")
 			return
 		}
-		if s.cfg.BuilderURL != "" && string(signedAuth.Message.BuilderURL) != s.cfg.BuilderURL {
+		if s.cfg.BuilderURL != "" && string(signedAuth.Message.Data) != s.cfg.BuilderURL {
 			log.WithFields(logrus.Fields{
-				"auth_url":    string(signedAuth.Message.BuilderURL),
+				"auth_url":    string(signedAuth.Message.Data),
 				"builder_url": s.cfg.BuilderURL,
-			}).Warn("getExecutionPayloadBid: SignedRequestAuth builder_url mismatch")
-			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.builder_url does not match this builder's URL")
+			}).Warn("getExecutionPayloadBid: SignedRequestAuth data (builder_url) mismatch")
+			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.data does not match this builder's URL")
 			return
 		}
 
@@ -1033,13 +1033,13 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Check auth.message.builder_url matches this builder's URL (400 on mismatch).
-	if string(req.Auth.Message.BuilderURL) != s.cfg.BuilderURL {
+	// Check auth.message.data (the builder URL) matches this builder's URL (400 on mismatch).
+	if string(req.Auth.Message.Data) != s.cfg.BuilderURL {
 		log.WithFields(logrus.Fields{
-			"auth_url":    string(req.Auth.Message.BuilderURL),
+			"auth_url":    string(req.Auth.Message.Data),
 			"builder_url": s.cfg.BuilderURL,
 		}).Warn("submitBuilderPreferences: builder_url mismatch")
-		writeValidatorError(w, http.StatusBadRequest, "auth.message.builder_url does not match this builder's URL")
+		writeValidatorError(w, http.StatusBadRequest, "auth.message.data does not match this builder's URL")
 		return
 	}
 
