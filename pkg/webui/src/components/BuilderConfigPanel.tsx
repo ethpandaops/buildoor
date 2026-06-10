@@ -120,12 +120,10 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
           {/* Build Config Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Build Config</div>
-            {!editing && (
+            {canEdit && !editing && (
               <button
                 className="btn btn-sm btn-outline-primary"
                 onClick={() => setEditing(true)}
-                disabled={!canEdit}
-                title={!canEdit ? 'Login required to edit' : ''}
               >
                 <i className="fas fa-pencil-alt"></i>
               </button>
@@ -181,12 +179,10 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
           {/* Schedule Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Schedule</div>
-            {!editingSchedule && (
+            {canEdit && !editingSchedule && (
               <button
                 className="btn btn-sm btn-outline-primary"
                 onClick={() => setEditingSchedule(true)}
-                disabled={!canEdit}
-                title={!canEdit ? 'Login required to edit' : ''}
               >
                 <i className="fas fa-pencil-alt"></i>
               </button>

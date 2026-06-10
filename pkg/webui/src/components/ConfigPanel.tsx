@@ -145,12 +145,10 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
           {/* Timing Config Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Timing Config</div>
-            {!editingTiming && (
+            {canEdit && !editingTiming && (
               <button
                 className="btn btn-sm btn-outline-primary"
                 onClick={() => setEditingTiming(true)}
-                disabled={!canEdit}
-                title={!canEdit ? 'Login required to edit' : ''}
               >
                 <i className="fas fa-pencil-alt"></i>
               </button>
