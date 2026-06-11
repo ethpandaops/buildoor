@@ -119,6 +119,7 @@ func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
 		Timestamp:         event.Timestamp,
 		PrevRandao:        event.PrevRandao,
 		GasLimit:          event.GasLimit,
+		Version:           event.Version,
 	})
 }
 

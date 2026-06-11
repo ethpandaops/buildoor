@@ -18,7 +18,9 @@ type ExecutionPayloadBidResponse struct {
 }
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
-func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
+// consensusVersion must match the fork the bid was built for (e.g. "gloas", "heze") —
+// beacon nodes select the deserialization type from the Eth-Consensus-Version header.
+func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage, consensusVersion string) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bids", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
@@ -26,8 +28,12 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMess
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	if consensusVersion == "" {
+		consensusVersion = "gloas"
+	}
+
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", "gloas")
+	req.Header.Set("Eth-Consensus-Version", consensusVersion)
 
 	httpClient := &http.Client{}
 
@@ -59,7 +65,7 @@ type signedExecutionPayloadEnvelopeContents struct {
 // When blobs and kzg proofs are provided they are wrapped in the
 // SignedExecutionPayloadEnvelopeContents body so the beacon node can derive
 // and broadcast data column sidecars; otherwise the bare signed envelope is sent.
-func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
+func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte, consensusVersion string) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes", c.baseURL)
 
 	var bodyJSON []byte
@@ -91,8 +97,12 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	if consensusVersion == "" {
+		consensusVersion = "gloas"
+	}
+
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", "gloas")
+	req.Header.Set("Eth-Consensus-Version", consensusVersion)
 
 	httpClient := &http.Client{}
 

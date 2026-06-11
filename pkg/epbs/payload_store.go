@@ -25,6 +25,7 @@ type BuiltPayload struct {
 	Timestamp         uint64
 	PrevRandao        phase0.Root
 	GasLimit          uint64
+	Version           string // Consensus fork the payload was built for (e.g. "gloas", "heze")
 }
 
 // PayloadStore stores built execution payloads for later reveal.

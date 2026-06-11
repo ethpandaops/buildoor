@@ -86,7 +86,13 @@ func (c *BidCreator) CreateAndSubmitBid(
 	// Heze (EIP-7805) extends the Gloas bid with inclusion_list_bits.
 	var signedBidJSON []byte
 
+	// Beacon nodes pick the bid deserialization type from the Eth-Consensus-Version
+	// header, so it must match the type marshalled below — a Heze bid parsed as Gloas
+	// drops inclusion_list_bits and fails downstream.
+	consensusVersion := "gloas"
+
 	if payload.Version == "heze" {
+		consensusVersion = "heze"
 		bid := &heze.ExecutionPayloadBid{
 			ParentBlockHash:       payload.ParentBlockHash,
 			ParentBlockRoot:       payload.ParentBlockRoot,
@@ -186,7 +192,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 	logger.Info("Submitting bid")
 
 	// Submit bid
-	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {
+	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON, consensusVersion); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
 	}
 

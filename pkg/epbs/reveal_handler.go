@@ -113,7 +113,7 @@ func (h *RevealHandler) SubmitReveal(
 		}).Info("Including blobs and kzg proofs with envelope publish")
 	}
 
-	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON, blobs, cellProofs); err != nil {
+	if err := h.clClient.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON, blobs, cellProofs, payload.Version); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
 
