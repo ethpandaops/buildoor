@@ -60,7 +60,7 @@ type signedExecutionPayloadEnvelopeContents struct {
 // SignedExecutionPayloadEnvelopeContents body so the beacon node can derive
 // and broadcast data column sidecars; otherwise the bare signed envelope is sent.
 func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes", c.baseURL)
 
 	var bodyJSON []byte
 	var err error
@@ -111,43 +111,6 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 	return nil
 }
 
-// GetExecutionPayloadEnvelopeTemplate fetches an execution payload envelope template.
-func (c *Client) GetExecutionPayloadEnvelopeTemplate(
-	ctx context.Context,
-	slot phase0.Slot,
-) (json.RawMessage, error) {
-	url := fmt.Sprintf("%s/eth/v1/validator/execution_payload_envelope/%d", c.baseURL, slot)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get envelope template: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
-		return nil, fmt.Errorf("failed to get envelope template: status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var response struct {
-		Data json.RawMessage `json:"data"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return response.Data, nil
-}
-
 // PayloadEnvelopeInfo contains key fields from a fetched execution payload envelope.
 type PayloadEnvelopeInfo struct {
 	Slot         phase0.Slot
@@ -162,7 +125,7 @@ func (c *Client) GetExecutionPayloadEnvelope(
 	ctx context.Context,
 	blockID string,
 ) (*PayloadEnvelopeInfo, error) {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope/%s", c.baseURL, blockID)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes/%s", c.baseURL, blockID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
