@@ -8,6 +8,18 @@ const THEME_ICONS: Record<ThemeMode, string> = {
   auto: '#circle-half',
 };
 
+// Close the expanded mobile hamburger menu. Bootstrap's collapse data-API
+// keys off the `show` class, so clearing it directly keeps the toggler in
+// sync for the next tap.
+export function closeMobileNav(): void {
+  const collapse = document.getElementById('navbarSupportedContent');
+  if (!collapse?.classList.contains('show')) return;
+  collapse.classList.remove('show');
+  const toggler = document.querySelector('.navbar-toggler');
+  toggler?.classList.add('collapsed');
+  toggler?.setAttribute('aria-expanded', 'false');
+}
+
 interface BrandHeaderProps {
   title: string;
   brandHref?: string;
@@ -28,6 +40,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
   const handleBrand = onBrandClick
     ? (e: React.MouseEvent<HTMLAnchorElement>) => {
         e.preventDefault();
+        closeMobileNav();
         onBrandClick();
       }
     : undefined;
@@ -124,7 +137,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
               </li>
 
               {endContent && (
-                <li className="nav-item ms-3 d-flex align-items-center">{endContent}</li>
+                <li className="nav-item ms-lg-3 mt-2 mt-lg-0 d-flex align-items-center">{endContent}</li>
               )}
             </ul>
           </div>
