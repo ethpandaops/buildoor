@@ -3,9 +3,9 @@ module github.com/ethpandaops/buildoor
 go 1.25.7
 
 require (
-	github.com/ethereum/go-ethereum v1.17.3-0.20260425183644-2249bebf5e88
-	github.com/ethpandaops/go-eth2-client v0.1.3-0.20260521102012-54a5ac9554c5
-	github.com/ethpandaops/service-authenticatoor v0.0.0-20260430215651-f6b6f69d6711
+	github.com/ethereum/go-ethereum v1.17.3
+	github.com/ethpandaops/go-eth2-client v0.1.3
+	github.com/ethpandaops/service-authenticatoor v0.0.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/mux v1.8.1
 	github.com/herumi/bls-eth-go-binary v1.37.0
@@ -42,7 +42,6 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/emicklei/dot v1.6.2 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
-	github.com/fatih/color v1.16.0 // indirect
 	github.com/ferranbt/fastssz v0.1.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -104,7 +103,6 @@ require (
 	golang.org/x/text v0.33.0 // indirect
 	golang.org/x/time v0.9.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
-	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
