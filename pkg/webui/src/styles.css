@@ -731,6 +731,29 @@ header.header-bar .navbar {
   }
 }
 
+/* Mobile: the header is fixed at 65px, so the expanded hamburger menu
+   overflows it. Render the menu as a solid panel anchored below the
+   header instead of letting nav items float over the page content. */
+@media (max-width: 991.98px) {
+  header.header-bar .navbar-collapse {
+    position: absolute;
+    top: 65px;
+    left: 0;
+    right: 0;
+    background-color: var(--bs-dark);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0.5em 1em rgba(0, 0, 0, 0.35);
+    padding: 0.5rem 1rem 1rem;
+    max-height: calc(100vh - 65px);
+    overflow-y: auto;
+  }
+
+  header.header-bar .navbar-collapse .nav-link {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+}
+
 .colormode-icon {
   width: 1em;
   height: 1em;

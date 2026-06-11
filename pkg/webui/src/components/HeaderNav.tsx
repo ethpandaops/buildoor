@@ -1,6 +1,7 @@
 import React from 'react';
 import { getViewPath, setView, useView, type ViewType } from '../stores/viewStore';
 import { getRuntimeConfig } from '../utils/runtimeConfig';
+import { closeMobileNav } from './BrandHeader';
 
 const NAV_ITEMS: Array<{ view: ViewType; label: string }> = [
   { view: 'dashboard', label: 'Dashboard' },
@@ -32,6 +33,7 @@ export const HeaderNav: React.FC = () => {
             className={`nav-link header-nav-button ${currentView === item.view ? 'active' : ''}`}
             onClick={(e) => {
               e.preventDefault();
+              closeMobileNav();
               setView(item.view);
             }}
           >

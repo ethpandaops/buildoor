@@ -151,9 +151,11 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                 <>
                   <div className="d-flex justify-content-between align-items-center mb-1">
                     <div className="section-header">Configuration</div>
-                    <button className="btn btn-sm btn-outline-primary" onClick={(e) => { e.stopPropagation(); startEditing(); }}>
-                      <i className="fas fa-pencil-alt"></i>
-                    </button>
+                    {isLoggedIn && (
+                      <button className="btn btn-sm btn-outline-primary" onClick={(e) => { e.stopPropagation(); startEditing(); }}>
+                        <i className="fas fa-pencil-alt"></i>
+                      </button>
+                    )}
                   </div>
                   <div className="row g-2">
                     <div className="col-6">
