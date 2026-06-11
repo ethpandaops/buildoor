@@ -11,6 +11,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // Loader handles configuration loading from files and flags.
@@ -48,6 +50,12 @@ func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
 	if val := v.GetString("builder-privkey"); val != "" {
 		cfg.BuilderPrivkey = val
 	}
+
+	if val := v.GetString("builder-mnemonic"); val != "" {
+		cfg.BuilderMnemonic = val
+	}
+
+	cfg.BuilderKeyIndex = v.GetUint64("builder-key-index")
 
 	if val := v.GetString("cl-client"); val != "" {
 		cfg.CLClient = val
@@ -87,7 +95,11 @@ func (l *Loader) LoadConfigFromFlags(v *viper.Viper) (*Config, error) {
 
 // ValidateConfig validates the configuration for consistency and completeness.
 func ValidateConfig(cfg *Config) error {
-	// Builder private key validation (32 bytes hex)
+	// Builder key validation: accept either a raw hex private key or a mnemonic, not both.
+	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {
+		return fmt.Errorf("provide only one of builder_privkey or builder_mnemonic, not both")
+	}
+
 	if cfg.BuilderPrivkey != "" {
 		privkey := strings.TrimPrefix(cfg.BuilderPrivkey, "0x")
 		decoded, err := hex.DecodeString(privkey)
@@ -98,6 +110,12 @@ func ValidateConfig(cfg *Config) error {
 
 		if len(decoded) != 32 {
 			return fmt.Errorf("builder_privkey: must be 32 bytes, got %d", len(decoded))
+		}
+	}
+
+	if cfg.BuilderMnemonic != "" {
+		if _, err := signer.DeriveBLSPrivkeyHex(cfg.BuilderMnemonic, cfg.BuilderKeyIndex); err != nil {
+			return fmt.Errorf("builder_mnemonic: %w", err)
 		}
 	}
 
@@ -178,6 +196,11 @@ func MergeConfigs(base, override *Config) *Config {
 
 	if override.BuilderPrivkey != "" {
 		result.BuilderPrivkey = override.BuilderPrivkey
+	}
+
+	if override.BuilderMnemonic != "" {
+		result.BuilderMnemonic = override.BuilderMnemonic
+		result.BuilderKeyIndex = override.BuilderKeyIndex
 	}
 
 	if override.CLClient != "" {

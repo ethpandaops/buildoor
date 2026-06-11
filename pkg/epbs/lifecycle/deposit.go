@@ -168,28 +168,22 @@ func (s *DepositService) sendDepositTransaction(
 		return fmt.Errorf("failed to build deposit tx data: %w", err)
 	}
 
-	// Send transaction
-	tx, err := s.wallet.BuildAndSend(
+	// Send and confirm. SendAndConfirm sources a fresh nonce and resolves nonce
+	// conflicts/displacement, so several instances can share this funding key safely.
+	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
 		s.contract.Address(),
 		contracts.GweiToWei(amountGwei),
 		txData,
 		400000, // Gas limit
+		5*time.Minute,
 	)
-	if err != nil {
-		return fmt.Errorf("failed to send deposit transaction: %w", err)
-	}
-
-	s.log.WithField("tx_hash", tx.Hash().Hex()).Info("Deposit transaction sent")
-
-	// Wait for confirmation
-	receipt, err := s.wallet.Await(ctx, tx.Hash(), 5*time.Minute)
 	if err != nil {
 		return fmt.Errorf("deposit transaction failed: %w", err)
 	}
 
 	s.log.WithFields(logrus.Fields{
-		"tx_hash":      tx.Hash().Hex(),
+		"tx_hash":      receipt.TxHash.Hex(),
 		"block_number": receipt.BlockNumber.Uint64(),
 	}).Info("Deposit transaction confirmed")
 
