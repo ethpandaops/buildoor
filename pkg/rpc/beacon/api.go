@@ -19,7 +19,7 @@ type ExecutionPayloadBidResponse struct {
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bid", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bids", c.baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
 	if err != nil {
@@ -60,7 +60,7 @@ type signedExecutionPayloadEnvelopeContents struct {
 // SignedExecutionPayloadEnvelopeContents body so the beacon node can derive
 // and broadcast data column sidecars; otherwise the bare signed envelope is sent.
 func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelope", c.baseURL)
+	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes", c.baseURL)
 
 	var bodyJSON []byte
 	var err error
