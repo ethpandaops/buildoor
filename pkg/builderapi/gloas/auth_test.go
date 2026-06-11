@@ -55,6 +55,49 @@ func TestDomainRequestAuthValue(t *testing.T) {
 	require.Equal(t, phase0.DomainType{0x0B, 0x00, 0x00, 0x01}, gloas.DomainRequestAuth)
 }
 
+func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
+	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
+	require.NoError(t, err)
+
+	genesisForkVersion := phase0.Version{}
+
+	msg := &eth2gloas.RequestAuth{
+		Data: []byte(testBuilderURL),
+		Slot: 1234,
+	}
+
+	// Marshal to SSZ.
+	encoded, err := msg.MarshalSSZ()
+	require.NoError(t, err)
+	require.NotEmpty(t, encoded)
+
+	// Unmarshal from SSZ into a fresh value.
+	decoded := &eth2gloas.RequestAuth{}
+	require.NoError(t, decoded.UnmarshalSSZ(encoded))
+
+	// The decoded value must match the original.
+	require.Equal(t, msg.Data, decoded.Data)
+	require.Equal(t, msg.Slot, decoded.Slot)
+
+	// Hash tree roots must match across the round trip.
+	origRoot, err := msg.HashTreeRoot()
+	require.NoError(t, err)
+	decodedRoot, err := decoded.HashTreeRoot()
+	require.NoError(t, err)
+	require.Equal(t, origRoot, decodedRoot)
+
+	// Sign the decoded message and verify the signature is valid.
+	domain := signer.ComputeDomain(gloas.DomainRequestAuth, genesisForkVersion, phase0.Root{})
+	sig, err := validator.SignWithDomain(decodedRoot, domain)
+	require.NoError(t, err)
+
+	signed := &eth2gloas.SignedRequestAuth{
+		Message:   decoded,
+		Signature: sig,
+	}
+	require.NoError(t, gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
+}
+
 func TestVerifyRequestAuth_RoundTrip(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
