@@ -17,7 +17,13 @@ type ValidatorRangesConfig struct {
 
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
-	BuilderPrivkey      string                `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	BuilderPrivkey string `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	// BuilderMnemonic, when set, derives the builder BLS key from this BIP-39 mnemonic and
+	// BuilderKeyIndex using the standard validator key path m/12381/3600/{index}/0/0.
+	// Mutually exclusive with BuilderPrivkey. json:"-" keeps the secret out of every JSON
+	// serialization path (WebUI REST + SSE); YAML config loading is unaffected.
+	BuilderMnemonic     string                `yaml:"builder_mnemonic" json:"-"`
+	BuilderKeyIndex     uint64                `yaml:"builder_key_index" json:"builder_key_index"`
 	CLClient            string                `yaml:"cl_client" json:"cl_client,omitempty"`
 	ELEngineAPI         string                `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
 	ELJWTSecret         string                `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth

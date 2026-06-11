@@ -2,6 +2,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/sirupsen/logrus"
@@ -45,6 +46,8 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file path")
 	rootCmd.PersistentFlags().String("builder-privkey", "", "Builder BLS private key (hex)")
+	rootCmd.PersistentFlags().String("builder-mnemonic", "", "BIP-39 mnemonic to derive the builder BLS key from (path m/12381/3600/{index}/0/0; mutually exclusive with --builder-privkey)")
+	rootCmd.PersistentFlags().Uint64("builder-key-index", 0, "Account index for --builder-mnemonic key derivation")
 	rootCmd.PersistentFlags().String("cl-client", "", "Consensus layer client URL")
 	rootCmd.PersistentFlags().String("el-engine-api", "", "Execution layer engine API URL (JWT-authenticated)")
 	rootCmd.PersistentFlags().String("el-jwt-secret", "", "Path to JWT secret file for engine API authentication")
@@ -144,6 +147,8 @@ func loadConfigFile() {
 func initConfig() error {
 	cfg = &builder.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
+		BuilderMnemonic:   v.GetString("builder-mnemonic"),
+		BuilderKeyIndex:   v.GetUint64("builder-key-index"),
 		CLClient:          v.GetString("cl-client"),
 		ELEngineAPI:       v.GetString("el-engine-api"),
 		ELJWTSecret:       v.GetString("el-jwt-secret"),
@@ -185,6 +190,10 @@ func initConfig() error {
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
 		},
+	}
+
+	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {
+		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
 	}
 
 	return nil

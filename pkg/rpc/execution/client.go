@@ -114,11 +114,22 @@ func (c *Client) GetTransactionReceipt(
 	return receipt, nil
 }
 
-// GetNonce returns the pending nonce for an address.
+// GetNonce returns the pending nonce for an address (includes mempool txs).
 func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, error) {
 	nonce, err := c.ethClient.PendingNonceAt(ctx, address)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get nonce: %w", err)
+	}
+
+	return nonce, nil
+}
+
+// GetConfirmedNonce returns the latest confirmed nonce for an address (excludes
+// mempool txs). Used to detect whether a nonce slot has been filled on-chain.
+func (c *Client) GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error) {
+	nonce, err := c.ethClient.NonceAt(ctx, address, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
 	}
 
 	return nonce, nil
