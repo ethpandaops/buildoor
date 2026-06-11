@@ -15,47 +15,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIsNonceConflictErr(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil", nil, false},
-		{"nonce too low", errors.New("nonce too low"), true},
-		{"already known", errors.New("already known"), true},
-		{"known transaction", errors.New("known transaction: abc123"), true},
-		{"replacement underpriced", errors.New("replacement transaction underpriced"), true},
-		{"mixed case", errors.New("RPC error: Nonce Too Low"), true},
-		{"insufficient funds", errors.New("insufficient funds for gas * price + value"), false},
-		{"generic", errors.New("connection refused"), false},
-	}
+var errNotFound = errors.New("not found")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, isNonceConflictErr(tt.err))
-		})
-	}
-}
-
-// fakeBackend is a programmable walletBackend for exercising SendAndConfirm.
+// fakeBackend models an execution node for SendAndConfirm. It deliberately tracks node
+// state (which txs are known, where the account nonce sits) so the wallet's decisions
+// can be exercised without parsing any send error strings — production code keys purely
+// off this state, and the error returned from SendTransaction is opaque to it.
 type fakeBackend struct {
 	mu sync.Mutex
 
-	pendingNonce   uint64
-	confirmedNonce uint64
+	pendingNonce uint64
+	sendCalls    int
 
-	// sendResults are returned by successive SendTransaction calls (nil = accept).
-	sendResults []error
-	sendCalls   int
-	sentHashes  []common.Hash
+	// known maps an accepted tx hash to its acceptance order (1-based).
+	known    map[common.Hash]int
+	accepted int
 
-	// receipts maps a tx hash to the receipt GetTransactionReceipt should return.
-	receipts map[common.Hash]*types.Receipt
+	// displaceFirstN: the first N accepted txs are dropped before inclusion — their
+	// first receipt poll returns not-found and removes them from the pool, modelling
+	// another instance replacing our tx at the same nonce.
+	displaceFirstN int
+
+	// sendBehavior, given the 1-based send-call number, decides the send result. A
+	// non-nil error rejects the send; bumpNonce models another instance taking the
+	// nonce slot (advances the account's pending nonce).
+	sendBehavior func(call int) (err error, bumpNonce bool)
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{receipts: make(map[common.Hash]*types.Receipt)}
+	return &fakeBackend{known: make(map[common.Hash]int)}
 }
 
 func (f *fakeBackend) GetChainID(context.Context) (*big.Int, error) { return big.NewInt(1337), nil }
@@ -65,13 +53,6 @@ func (f *fakeBackend) GetNonce(context.Context, common.Address) (uint64, error) 
 	defer f.mu.Unlock()
 
 	return f.pendingNonce, nil
-}
-
-func (f *fakeBackend) GetConfirmedNonce(context.Context, common.Address) (uint64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.confirmedNonce, nil
 }
 
 func (f *fakeBackend) GetBalance(context.Context, common.Address) (*big.Int, error) {
@@ -92,17 +73,29 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 
 	f.sendCalls++
 
-	var err error
-	if len(f.sendResults) > 0 {
-		err = f.sendResults[0]
-		f.sendResults = f.sendResults[1:]
+	var (
+		err  error
+		bump bool
+	)
+
+	if f.sendBehavior != nil {
+		err, bump = f.sendBehavior(f.sendCalls)
 	}
 
 	if err != nil {
+		if bump {
+			f.pendingNonce++ // another instance consumed this nonce slot
+		}
+
 		return err
 	}
 
-	f.sentHashes = append(f.sentHashes, tx.Hash())
+	f.accepted++
+	f.known[tx.Hash()] = f.accepted
+
+	if tx.Nonce()+1 > f.pendingNonce {
+		f.pendingNonce = tx.Nonce() + 1
+	}
 
 	return nil
 }
@@ -111,11 +104,26 @@ func (f *fakeBackend) GetTransactionReceipt(_ context.Context, txHash common.Has
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if r, ok := f.receipts[txHash]; ok {
-		return r, nil
+	idx, ok := f.known[txHash]
+	if !ok {
+		return nil, errNotFound
 	}
 
-	return nil, errors.New("not found")
+	if idx <= f.displaceFirstN {
+		delete(f.known, txHash) // dropped from the pool; the nonce slot stays taken
+		return nil, errNotFound
+	}
+
+	return &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(100)}, nil
+}
+
+func (f *fakeBackend) IsTxKnown(_ context.Context, txHash common.Hash) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	_, ok := f.known[txHash]
+
+	return ok, nil
 }
 
 // newTestWallet builds a Wallet wired to the fake backend with fast tx timings.
@@ -139,128 +147,70 @@ func newTestWallet(t *testing.T, backend walletBackend) *Wallet {
 	}
 }
 
-func successReceipt() *types.Receipt {
-	return &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(100)}
-}
+func sendOnce(t *testing.T, w *Wallet) (*types.Receipt, error) {
+	t.Helper()
 
-// arrangeReceiptOnSend records a success receipt for whatever hash gets sent, so the
-// next GetTransactionReceipt poll resolves it. Used after a SendAndConfirm send lands.
-func (f *fakeBackend) markLastSentConfirmed() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if len(f.sentHashes) == 0 {
-		return
-	}
-
-	f.receipts[f.sentHashes[len(f.sentHashes)-1]] = successReceipt()
+	return w.SendAndConfirm(
+		context.Background(), common.Address{}, big.NewInt(1), nil, 21000, 5*time.Second,
+	)
 }
 
 func TestSendAndConfirmHappyPath(t *testing.T) {
 	backend := newFakeBackend()
 	w := newTestWallet(t, backend)
 
-	// Confirm the tx as soon as it is sent by watching in a goroutine.
-	go func() {
-		for {
-			backend.mu.Lock()
-			sent := len(backend.sentHashes) > 0
-			backend.mu.Unlock()
-
-			if sent {
-				backend.markLastSentConfirmed()
-				return
-			}
-
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	receipt, err := w.SendAndConfirm(
-		context.Background(), common.Address{}, big.NewInt(1), nil, 21000, 5*time.Second,
-	)
+	receipt, err := sendOnce(t, w)
 	require.NoError(t, err)
 	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
 	require.Equal(t, 1, backend.sendCalls)
 }
 
+// TestSendAndConfirmNonceConflictThenSuccess reproduces the reported failure: the EL
+// rejects the first send (here with a "nonce too low"-style error) while another
+// instance consumes the nonce. The wallet must NOT treat this as fatal — it should
+// observe the advanced pending nonce and resubmit with a fresh nonce.
 func TestSendAndConfirmNonceConflictThenSuccess(t *testing.T) {
 	backend := newFakeBackend()
-	// First send is rejected as a nonce conflict; second send is accepted.
-	backend.sendResults = []error{errors.New("nonce too low")}
+	backend.sendBehavior = func(call int) (error, bool) {
+		if call == 1 {
+			// Opaque, client-specific phrasing — production code must not parse it.
+			return errors.New("Invalid params: Nonce for account too low"), true
+		}
+
+		return nil, false
+	}
 	w := newTestWallet(t, backend)
 
-	go func() {
-		for {
-			backend.mu.Lock()
-			sent := len(backend.sentHashes) > 0
-			backend.mu.Unlock()
-
-			if sent {
-				backend.markLastSentConfirmed()
-				return
-			}
-
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	receipt, err := w.SendAndConfirm(
-		context.Background(), common.Address{}, big.NewInt(1), nil, 21000, 5*time.Second,
-	)
+	receipt, err := sendOnce(t, w)
 	require.NoError(t, err)
 	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
-	require.Equal(t, 2, backend.sendCalls, "should retry once after the nonce conflict")
+	require.Equal(t, 2, backend.sendCalls, "should resubmit after the nonce was taken")
 }
 
+// TestSendAndConfirmDisplacedThenSuccess covers our tx being accepted into the pool but
+// then dropped/replaced (by another instance) before inclusion.
 func TestSendAndConfirmDisplacedThenSuccess(t *testing.T) {
 	backend := newFakeBackend()
+	backend.displaceFirstN = 1
 	w := newTestWallet(t, backend)
 
-	// Drive the displacement: the first sent tx never gets a receipt, but the confirmed
-	// nonce advances past it (another instance filled the slot). The retry's tx is then
-	// confirmed normally.
-	var once sync.Once
-
-	go func() {
-		for {
-			backend.mu.Lock()
-			calls := backend.sendCalls
-			backend.mu.Unlock()
-
-			switch {
-			case calls == 1:
-				// Simulate our nonce being consumed by someone else.
-				once.Do(func() {
-					backend.mu.Lock()
-					backend.confirmedNonce = backend.pendingNonce + 1
-					backend.mu.Unlock()
-				})
-			case calls >= 2:
-				backend.markLastSentConfirmed()
-				return
-			}
-
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
-	receipt, err := w.SendAndConfirm(
-		context.Background(), common.Address{}, big.NewInt(1), nil, 21000, 5*time.Second,
-	)
+	receipt, err := sendOnce(t, w)
 	require.NoError(t, err)
 	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
-	require.GreaterOrEqual(t, backend.sendCalls, 2, "should resubmit after displacement")
+	require.Equal(t, 2, backend.sendCalls, "should resubmit after displacement")
 }
 
+// TestSendAndConfirmFatalErrorNoRetry covers a genuine failure (e.g. insufficient
+// funds): the send errors, the tx never enters the pool, and the nonce slot stays free.
+// The wallet must surface the error without retrying.
 func TestSendAndConfirmFatalErrorNoRetry(t *testing.T) {
 	backend := newFakeBackend()
-	backend.sendResults = []error{errors.New("insufficient funds for gas * price + value")}
+	backend.sendBehavior = func(int) (error, bool) {
+		return errors.New("insufficient funds for gas * price + value"), false
+	}
 	w := newTestWallet(t, backend)
 
-	_, err := w.SendAndConfirm(
-		context.Background(), common.Address{}, big.NewInt(1), nil, 21000, 5*time.Second,
-	)
+	_, err := sendOnce(t, w)
 	require.Error(t, err)
 	require.Equal(t, 1, backend.sendCalls, "fatal send error must not retry")
 }

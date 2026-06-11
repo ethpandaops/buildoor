@@ -35,12 +35,12 @@ const (
 type walletBackend interface {
 	GetChainID(ctx context.Context) (*big.Int, error)
 	GetNonce(ctx context.Context, address common.Address) (uint64, error)
-	GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error)
 	GetBalance(ctx context.Context, address common.Address) (*big.Int, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
+	IsTxKnown(ctx context.Context, txHash common.Hash) (bool, error)
 }
 
 var _ walletBackend = (*execution.Client)(nil)
@@ -324,15 +324,30 @@ func (w *Wallet) BuildAndSend(
 	return signedTx, nil
 }
 
+// txOutcome is the decision reached after observing chain state for a sent tx.
+type txOutcome int
+
+const (
+	outcomePending  txOutcome = iota // not yet resolved, keep polling
+	outcomeIncluded                  // mined successfully
+	outcomeReverted                  // mined but reverted
+	outcomeRetry                     // our nonce slot was taken (or tx dropped); resubmit fresh
+	outcomeFailed                    // the send genuinely failed; surface the error
+)
+
 // SendAndConfirm builds, signs, sends, and confirms a transaction in a way that is
 // safe when several buildoor instances share this funding key.
 //
-// Each attempt sources a fresh on-chain nonce. If the node rejects the send because
-// another instance already took that nonce ("nonce too low" / "already known" /
-// "replacement transaction underpriced"), it backs off and retries with a fresh nonce.
-// While awaiting confirmation it watches the account's confirmed nonce: if the nonce
-// advances past our transaction without our hash being mined, our transaction was
-// displaced by another instance and we resubmit with the next free nonce.
+// Each attempt sources a fresh on-chain nonce. Crucially, it never parses the send
+// error string (which varies per execution client). Instead it decides what to do by
+// observing node state: whether our specific transaction is known to the node, and
+// where the account's pending nonce sits relative to the nonce we used.
+//
+//   - our tx is known (pending/mined) -> wait for its receipt
+//   - our tx is unknown and the pending nonce has moved past ours -> another tx (likely
+//     another instance) took our slot; resubmit with a fresh nonce
+//   - our tx is unknown, the nonce is still free, and the send errored -> genuine
+//     failure; surface it
 //
 // txMu serializes this process's own submissions so concurrent lifecycle operations
 // (e.g. the startup deposit and a balance top-up) never collide with each other.
@@ -357,54 +372,48 @@ func (w *Wallet) SendAndConfirm(
 
 		nonce := signedTx.Nonce()
 
-		if err := w.rpcClient.SendTransaction(ctx, signedTx); err != nil {
-			if isNonceConflictErr(err) {
-				lastErr = err
-
-				w.log.WithFields(logrus.Fields{
-					"nonce":   nonce,
-					"attempt": attempt,
-					"error":   err.Error(),
-				}).Warn("Nonce conflict on send (another instance?), retrying with fresh nonce")
-
-				if waitErr := sleepCtx(ctx, w.conflictBackoff); waitErr != nil {
-					return nil, waitErr
-				}
-
-				continue
-			}
-
-			return nil, fmt.Errorf("failed to send transaction: %w", err)
+		// Send, but do not branch on the error text. sendErr (if any) only matters as a
+		// tie-breaker once node state shows the tx never entered the pool.
+		sendErr := w.rpcClient.SendTransaction(ctx, signedTx)
+		if sendErr == nil {
+			w.log.WithFields(logrus.Fields{
+				"hash":  signedTx.Hash().Hex(),
+				"nonce": nonce,
+				"to":    to.Hex(),
+				"value": value.String(),
+			}).Info("Transaction sent")
 		}
 
-		w.log.WithFields(logrus.Fields{
-			"hash":  signedTx.Hash().Hex(),
-			"nonce": nonce,
-			"to":    to.Hex(),
-			"value": value.String(),
-		}).Info("Transaction sent")
+		receipt, outcome, err := w.resolve(ctx, signedTx.Hash(), nonce, sendErr, timeout)
 
-		receipt, displaced, err := w.awaitOrDisplaced(ctx, signedTx.Hash(), nonce, timeout)
-		if displaced {
-			lastErr = fmt.Errorf("transaction displaced at nonce %d", nonce)
+		switch outcome {
+		case outcomeIncluded:
+			return receipt, nil
+		case outcomeReverted:
+			return receipt, err
+		case outcomeRetry:
+			lastErr = err
 
 			w.log.WithFields(logrus.Fields{
 				"hash":    signedTx.Hash().Hex(),
 				"nonce":   nonce,
 				"attempt": attempt,
-			}).Warn("Transaction displaced by another tx at this nonce, resubmitting")
+			}).Warn("Nonce slot taken by another tx, resubmitting with a fresh nonce")
+
+			if waitErr := sleepCtx(ctx, w.conflictBackoff); waitErr != nil {
+				return nil, waitErr
+			}
 
 			continue
+		case outcomeFailed:
+			return nil, fmt.Errorf("send transaction (nonce %d): %w", nonce, err)
+		case outcomePending:
+			// resolve only returns terminal outcomes; treat as failure defensively.
+			return nil, fmt.Errorf("send transaction (nonce %d): %w", nonce, err)
 		}
-
-		if err != nil {
-			return receipt, err
-		}
-
-		return receipt, nil
 	}
 
-	return nil, fmt.Errorf("transaction failed after %d attempts: %w", txMaxAttempts, lastErr)
+	return nil, fmt.Errorf("transaction failed after %d attempts: %w", w.maxAttempts, lastErr)
 }
 
 // buildAndSign builds a transaction with a fresh nonce and signs it.
@@ -423,18 +432,16 @@ func (w *Wallet) buildAndSign(
 	return w.SignTransaction(tx)
 }
 
-// awaitOrDisplaced polls for the transaction receipt while watching the account's
-// confirmed nonce. It returns:
-//   - (receipt, false, nil)        on successful inclusion
-//   - (receipt, false, err)        if the transaction was included but reverted
-//   - (nil, true, nil)             if the nonce was consumed by another tx (displaced)
-//   - (nil, false, err)            on timeout
-func (w *Wallet) awaitOrDisplaced(
+// resolve polls node state until it can decide the fate of a sent transaction, without
+// parsing the send error. It returns a terminal txOutcome (never outcomePending) plus,
+// where relevant, the receipt and/or the error to surface.
+func (w *Wallet) resolve(
 	ctx context.Context,
 	txHash common.Hash,
 	nonce uint64,
+	sendErr error,
 	timeout time.Duration,
-) (*types.Receipt, bool, error) {
+) (*types.Receipt, txOutcome, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -444,13 +451,17 @@ func (w *Wallet) awaitOrDisplaced(
 	for {
 		select {
 		case <-timeoutCtx.Done():
-			return nil, false, fmt.Errorf("transaction confirmation timeout: %w", timeoutCtx.Err())
+			if sendErr != nil {
+				return nil, outcomeFailed, sendErr
+			}
+
+			return nil, outcomeFailed, fmt.Errorf("transaction confirmation timeout: %w", timeoutCtx.Err())
 
 		case <-ticker.C:
-			receipt, err := w.rpcClient.GetTransactionReceipt(ctx, txHash)
-			if err == nil {
+			// 1. Mined?
+			if receipt, err := w.rpcClient.GetTransactionReceipt(ctx, txHash); err == nil {
 				if receipt.Status == types.ReceiptStatusFailed {
-					return receipt, false, fmt.Errorf("transaction reverted")
+					return receipt, outcomeReverted, fmt.Errorf("transaction reverted")
 				}
 
 				w.log.WithFields(logrus.Fields{
@@ -459,15 +470,38 @@ func (w *Wallet) awaitOrDisplaced(
 					"gasUsed":     receipt.GasUsed,
 				}).Info("Transaction confirmed")
 
-				return receipt, false, nil
+				return receipt, outcomeIncluded, nil
 			}
 
-			// No receipt yet: if the confirmed nonce has moved past ours, another
-			// transaction filled this nonce slot and ours will never be mined.
-			confirmedNonce, nerr := w.rpcClient.GetConfirmedNonce(ctx, w.address)
-			if nerr == nil && confirmedNonce > nonce {
-				return nil, true, nil
+			// 2. Is our specific tx still known to the node (pending in the mempool)?
+			//    If so, it is alive and we simply keep waiting for it.
+			known, err := w.rpcClient.IsTxKnown(ctx, txHash)
+			if err != nil {
+				continue // transient lookup error; retry on next tick
 			}
+
+			if known {
+				continue
+			}
+
+			// 3. Our tx is not known. Decide by where the account nonce now sits.
+			pendingNonce, err := w.rpcClient.GetNonce(ctx, w.address)
+			if err != nil {
+				continue
+			}
+
+			if pendingNonce > nonce {
+				// Some other transaction occupies our nonce; ours can never land. Resubmit.
+				return nil, outcomeRetry, fmt.Errorf("nonce %d consumed by another transaction", nonce)
+			}
+
+			// 4. Nonce is still free and our tx is gone. If the send errored, it never
+			//    entered the pool -> genuine failure. Otherwise it was dropped -> resubmit.
+			if sendErr != nil {
+				return nil, outcomeFailed, sendErr
+			}
+
+			return nil, outcomeRetry, fmt.Errorf("transaction at nonce %d dropped before inclusion", nonce)
 		}
 	}
 }
@@ -483,22 +517,6 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
-}
-
-// isNonceConflictErr reports whether a send error indicates the chosen nonce was
-// already taken (typically by another instance sharing this funding key), meaning a
-// retry with a freshly fetched nonce is worthwhile.
-func isNonceConflictErr(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	msg := strings.ToLower(err.Error())
-
-	return strings.Contains(msg, "nonce too low") ||
-		strings.Contains(msg, "already known") ||
-		strings.Contains(msg, "known transaction") ||
-		strings.Contains(msg, "replacement transaction underpriced")
 }
 
 // GetRPCClient returns the underlying concrete RPC client.

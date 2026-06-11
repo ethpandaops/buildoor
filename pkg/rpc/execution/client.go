@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -124,15 +125,21 @@ func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, 
 	return nonce, nil
 }
 
-// GetConfirmedNonce returns the latest confirmed nonce for an address (excludes
-// mempool txs). Used to detect whether a nonce slot has been filled on-chain.
-func (c *Client) GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error) {
-	nonce, err := c.ethClient.NonceAt(ctx, address, nil)
+// IsTxKnown reports whether the node currently knows the transaction (pending in the
+// mempool or already mined). Returns false (without error) when the tx is unknown.
+// This lets callers reason about transaction acceptance from node state rather than
+// by parsing client-specific send error strings.
+func (c *Client) IsTxKnown(ctx context.Context, txHash common.Hash) (bool, error) {
+	_, _, err := c.ethClient.TransactionByHash(ctx, txHash)
 	if err != nil {
-		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
+		if errors.Is(err, ethereum.NotFound) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("failed to look up transaction: %w", err)
 	}
 
-	return nonce, nil
+	return true, nil
 }
 
 // GetBalance returns the balance for an address.
