@@ -38,7 +38,7 @@ func (m *mockPayloadCacheProvider) GetPayloadCache() *builder.PayloadCache {
 
 func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -53,7 +53,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 }
 
 func TestRegisterValidators_EmptyArray(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -68,7 +68,7 @@ func TestRegisterValidators_EmptyArray(t *testing.T) {
 }
 
 func TestRegisterValidators_InvalidJSON(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -120,7 +120,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 	body, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -138,7 +138,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 }
 
 func TestRegisterValidators_MissingContentType(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -153,7 +153,7 @@ func TestRegisterValidators_MissingContentType(t *testing.T) {
 
 // TestGetHeader_NoPayload returns 204 when builderSvc is nil (no payload cache).
 func TestGetHeader_NoPayload(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestGetHeader_NoPayload(t *testing.T) {
 
 // TestGetHeader_InvalidSlot returns 400 for non-numeric slot when builder and signer are set.
 func TestGetHeader_InvalidSlot(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
@@ -216,7 +216,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	regs, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0, BlockValueSubsidyGwei: 1_000_000}
+	cfg := &config.BuilderAPIConfig{BlockValueSubsidyGwei: 1_000_000}
 	log := logrus.New()
 	cache := builder.NewPayloadCache(10)
 	parentHash := phase0.Hash32(common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"))
@@ -273,7 +273,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 
 // TestSubmitBlindedBlockV2_InvalidJSON returns 400 for invalid JSON body.
 func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -287,7 +287,7 @@ func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 
 // TestSubmitBlindedBlockV2_MissingContentType returns 415 when Content-Type is not application/json.
 func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 
@@ -312,7 +312,7 @@ func (m *mockFuluPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1fu
 
 // TestSubmitBlindedBlockV2_NoMatchingPayload returns 400 when no payload in cache matches block_hash.
 func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
 	srv := NewServer(cfg, log, mock, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
@@ -339,7 +339,7 @@ const randaoReveal96Hex = "0x000000000000000000000000000000000000000000000000000
 // TestSubmitBlindedBlockV2_Success_UnblindAndPublish returns 202 and calls the publisher with unblinded contents
 // when the cache has a matching payload (block_hash from builder-specs Fulu examples).
 func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0}
+	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	cache := builder.NewPayloadCache(10)
 	mockCache := &mockPayloadCacheProvider{cache: cache}

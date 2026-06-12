@@ -64,7 +64,7 @@ type UpdateEPBSRequest struct {
 	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
 	BidInterval       *int64  `json:"bid_interval,omitempty"`
 	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
-	BidSubsidy     *uint64 `json:"bid_subsidy,omitempty"`
+	BidSubsidy        *uint64 `json:"bid_subsidy,omitempty"`
 }
 
 // UpdateBuilderConfigRequest is the request for updating shared builder config.
@@ -567,7 +567,6 @@ func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 // BuilderAPIStatusResponse is the response for GetBuilderAPIStatus.
 type BuilderAPIStatusResponse struct {
 	Enabled               bool   `json:"enabled"`
-	Port                  int    `json:"port"`
 	ValidatorCount        int    `json:"validator_count"`
 	BlockValueSubsidyGwei uint64 `json:"block_value_subsidy_gwei"`
 }
@@ -590,7 +589,6 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 
 	status := BuilderAPIStatusResponse{
 		Enabled:               cfg.BuilderAPIEnabled,
-		Port:                  cfg.BuilderAPI.Port,
 		ValidatorCount:        validatorCount,
 		BlockValueSubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}

@@ -11,7 +11,6 @@ func DefaultConfig() *Config {
 		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{
-			Port:                  0,      // Default 0 = disabled; set > 0 to enable Builder API availability
 			BlockValueSubsidyGwei: 100000, // 100k Gwei
 		},
 		DepositAmount:  50000000000, // 50 ETH in Gwei
@@ -24,10 +23,10 @@ func DefaultConfig() *Config {
 		EPBS: EPBSConfig{
 			// Timing fields: 0 = auto-compute from slot time (see ApplySlotDefaults).
 			// Explicit non-zero values override the auto-computed defaults.
-			BidMinAmount:  1000000,   // 1M gwei = 0.001 ETH
-			BidIncrease:   100000,    // 100k gwei per subsequent bid
-			BidInterval:   250,       // 250ms between bids
-			BidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
+			BidMinAmount: 1000000,   // 1M gwei = 0.001 ETH
+			BidIncrease:  100000,    // 100k gwei per subsequent bid
+			BidInterval:  250,       // 250ms between bids
+			BidSubsidy:   500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
 		},
 		ValidateWithdrawals: false,
 	}

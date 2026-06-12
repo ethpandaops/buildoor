@@ -48,6 +48,11 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	// init router
 	router := mux.NewRouter()
 
+	// Builder API routes (served on same port as the webui)
+	if builderAPISvc != nil {
+		builderAPISvc.RegisterRoutes(router)
+	}
+
 	// API routes
 	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges)
 	apiRouter := router.PathPrefix("/api").Subrouter()

@@ -59,8 +59,7 @@ func init() {
 	rootCmd.PersistentFlags().String("overview-url", "", "Optional URL of the multi-instance overview UI. When set, the dashboard renders an Overview entry as the first top-nav item so navigation stays consistent across instances.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
-	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (requires --builder-api-port > 0)")
-	rootCmd.PersistentFlags().Int("builder-api-port", defaults.BuilderAPI.Port, "Builder API HTTP port")
+	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Block value subsidy added to bids in Gwei")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
@@ -162,7 +161,6 @@ func initConfig() error {
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
 		BuilderAPI: builder.BuilderAPIConfig{
-			Port:                  v.GetInt("builder-api-port"),
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 		},
 		DepositAmount:  v.GetUint64("deposit-amount"),
