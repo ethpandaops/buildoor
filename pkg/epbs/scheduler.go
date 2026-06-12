@@ -214,7 +214,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Calculate bid value.
 	// Start from block value with BidMinAmount as a floor.
-	// BlockValue is in wei; BidMinAmount/BidIncrease/P2PBidSubsidy are in gwei.
+	// BlockValue is in wei; BidMinAmount/BidIncrease/BidSubsidy are in gwei.
 	bidBase := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
@@ -225,10 +225,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
 	}
 
-	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
-	// P2P bid, using self-build" when their local EL build is worth more than ours.
-	// Configurable via --p2p-bid-subsidy (gwei).
-	bidValue += s.cfg.P2PBidSubsidy
+	// Bid subsidy: the proposer's BN rejects our bid and self-builds when its local EL
+	// build is worth more than ours. The subsidy pads the bid to clear that threshold.
+	// Configurable via --epbs-bid-subsidy (gwei).
+	bidValue += s.cfg.BidSubsidy
 
 	s.mu.Unlock()
 

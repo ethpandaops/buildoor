@@ -108,9 +108,9 @@ type EPBSConfig struct {
 	// BidInterval is milliseconds between bids. 0 means single bid.
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
 
-	// P2PBidSubsidy is added to every bid in gwei so the gossiped bid clears the
-	// validator BN's local-EL threshold ("Local EL value exceeds P2P bid").
-	P2PBidSubsidy uint64 `yaml:"p2p_bid_subsidy" json:"p2p_bid_subsidy"`
+	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
+	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
+	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

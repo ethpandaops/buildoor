@@ -27,7 +27,7 @@ func DefaultConfig() *Config {
 			BidMinAmount:  1000000,   // 1M gwei = 0.001 ETH
 			BidIncrease:   100000,    // 100k gwei per subsequent bid
 			BidInterval:   250,       // 250ms between bids
-			P2PBidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
+			BidSubsidy: 500000000, // 500M gwei = 0.5 ETH; clears validator local-EL threshold
 		},
 		ValidateWithdrawals: false,
 	}

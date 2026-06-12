@@ -285,8 +285,8 @@ func MergeConfigs(base, override *Config) *Config {
 		result.EPBS.BidInterval = override.EPBS.BidInterval
 	}
 
-	if override.EPBS.P2PBidSubsidy != 0 {
-		result.EPBS.P2PBidSubsidy = override.EPBS.P2PBidSubsidy
+	if override.EPBS.BidSubsidy != 0 {
+		result.EPBS.BidSubsidy = override.EPBS.BidSubsidy
 	}
 
 	return &result

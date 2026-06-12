@@ -1017,7 +1017,7 @@ const docTemplate = `{
                 "build_start_time": {
                     "type": "integer"
                 },
-                "p2p_bid_subsidy": {
+                "bid_subsidy": {
                     "type": "integer"
                 },
                 "payload_build_delay": {

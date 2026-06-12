@@ -23,6 +23,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     bid_min_amount: 0,
     bid_increase: 0,
     bid_interval: 0,
+    bid_subsidy: 0,
   });
 
   // Sync timing form state when not editing
@@ -50,6 +51,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
           bid_min_amount: timingForm.bid_min_amount,
           bid_increase: timingForm.bid_increase,
           bid_interval: timingForm.bid_interval,
+          bid_subsidy: timingForm.bid_subsidy,
         }),
       });
       const result = await response.json();
@@ -193,6 +195,12 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                   <div className="config-item-value">{epbs?.bid_interval || 0} ms</div>
                 </div>
               </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Bid Subsidy</div>
+                  <div className="config-item-value">{epbs?.bid_subsidy || 0} gwei</div>
+                </div>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleTimingSave}>
@@ -255,6 +263,20 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                   onChange={(e) => setTimingForm({ ...timingForm, bid_interval: parseInt(e.target.value) || 0 })}
                   required
                 />
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Bid Subsidy (gwei)</label>
+                <input
+                  type="number"
+                  className="form-control form-control-sm"
+                  value={timingForm.bid_subsidy}
+                  onChange={(e) => setTimingForm({ ...timingForm, bid_subsidy: parseInt(e.target.value) || 0 })}
+                  required
+                />
+                <div className="form-text">
+                  Flat gwei added to every bid so it clears the proposer's local-EL
+                  threshold. Set to 0 to bid the real block value.
+                </div>
               </div>
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>
