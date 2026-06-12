@@ -35,7 +35,7 @@ type Config struct {
 	OverviewURL         string                `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
 	LifecycleEnabled    bool                  `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
 	EPBSEnabled         bool                  `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
-	BuilderAPIEnabled   bool                  `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API (service available if port > 0)
+	BuilderAPIEnabled   bool                  `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
 	BuilderAPI          BuilderAPIConfig      `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
 	DepositAmount       uint64                `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
 	TopupThreshold      uint64                `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
@@ -71,10 +71,6 @@ const (
 
 // BuilderAPIConfig defines configuration for the traditional Builder API (pre-ePBS).
 type BuilderAPIConfig struct {
-	// Port is the HTTP port for the Builder API server.
-	// Default: 9000.
-	Port int `yaml:"port" json:"port"`
-
 	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 }

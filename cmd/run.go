@@ -201,7 +201,7 @@ and begins building blocks according to configuration.`,
 		defer validatorIndexCache.Stop()
 
 		var validatorStore *validators.Store
-		builderAPIAvailable := cfg.BuilderAPI.Port > 0
+		builderAPIAvailable := cfg.APIPort > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
 		}
@@ -231,7 +231,7 @@ and begins building blocks according to configuration.`,
 			epbsSvc.SetEnabled(cfg.EPBSEnabled)
 		}
 
-		// 8a. Start Builder API server (if port configured)
+		// 8a. Initialize Builder API server (routes served on --api-port via the shared server)
 		var builderAPISrv *builderapi.Server
 
 		if builderAPIAvailable {
@@ -260,10 +260,6 @@ and begins building blocks according to configuration.`,
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
-			if err := builderAPISrv.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start Builder API server: %w", err)
-			}
-			defer builderAPISrv.Stop() //nolint:errcheck // cleanup
 		}
 
 		// Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.

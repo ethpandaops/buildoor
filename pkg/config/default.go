@@ -11,7 +11,6 @@ func DefaultConfig() *Config {
 		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{
-			Port:                  0,      // Default 0 = disabled; set > 0 to enable Builder API availability
 			BlockValueSubsidyGwei: 100000, // 100k Gwei
 		},
 		DepositAmount:  50000000000, // 50 ETH in Gwei

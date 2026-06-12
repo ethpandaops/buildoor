@@ -567,7 +567,6 @@ func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 // BuilderAPIStatusResponse is the response for GetBuilderAPIStatus.
 type BuilderAPIStatusResponse struct {
 	Enabled               bool   `json:"enabled"`
-	Port                  int    `json:"port"`
 	ValidatorCount        int    `json:"validator_count"`
 	BlockValueSubsidyGwei uint64 `json:"block_value_subsidy_gwei"`
 }
@@ -590,7 +589,6 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 
 	status := BuilderAPIStatusResponse{
 		Enabled:               cfg.BuilderAPIEnabled,
-		Port:                  cfg.BuilderAPI.Port,
 		ValidatorCount:        validatorCount,
 		BlockValueSubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}
