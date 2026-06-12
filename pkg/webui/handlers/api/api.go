@@ -64,7 +64,7 @@ type UpdateEPBSRequest struct {
 	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
 	BidInterval       *int64  `json:"bid_interval,omitempty"`
 	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
-	BidSubsidy     *uint64 `json:"bid_subsidy,omitempty"`
+	BidSubsidy        *uint64 `json:"bid_subsidy,omitempty"`
 }
 
 // UpdateBuilderConfigRequest is the request for updating shared builder config.
