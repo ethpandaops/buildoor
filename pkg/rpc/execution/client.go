@@ -125,6 +125,19 @@ func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, 
 	return nonce, nil
 }
 
+// GetConfirmedNonce returns the account nonce at the latest block (state at head,
+// excluding the mempool). It is reliable even on clients whose "pending" nonce is
+// buggy: ethrex has been observed returning a pending nonce *below* the latest one,
+// which would otherwise cause us to build an already-used ("too low") nonce.
+func (c *Client) GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error) {
+	nonce, err := c.ethClient.NonceAt(ctx, address, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
+	}
+
+	return nonce, nil
+}
+
 // IsTxKnown reports whether the node currently knows the transaction (pending in the
 // mempool or already mined). Returns false (without error) when the tx is unknown.
 // This lets callers reason about transaction acceptance from node state rather than

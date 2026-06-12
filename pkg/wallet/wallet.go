@@ -35,6 +35,7 @@ const (
 type walletBackend interface {
 	GetChainID(ctx context.Context) (*big.Int, error)
 	GetNonce(ctx context.Context, address common.Address) (uint64, error)
+	GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error)
 	GetBalance(ctx context.Context, address common.Address) (*big.Int, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
@@ -205,10 +206,16 @@ func (w *Wallet) BuildTransaction(
 	gasFeeCap.Add(gasFeeCap, gasTipCap)
 
 	// Always read the next free nonce straight from the node on every build — never
-	// cached or tracked internally. This is the only source of truth for the nonce.
-	nonce, err := w.rpcClient.GetNonce(ctx, w.address)
+	// cached or tracked internally.
+	//
+	// Use max(pending, latest): normally the pending nonce already includes in-flight
+	// mempool txs and is >= latest. But ethrex has been observed returning a pending
+	// nonce *below* the latest (confirmed) nonce, which would make us stamp an
+	// already-used nonce and get "nonce too low". The latest nonce is the authoritative
+	// floor, so taking the larger of the two is correct on every client.
+	nonce, err := w.nextNonce(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get nonce: %w", err)
+		return nil, err
 	}
 
 	w.log.WithFields(logrus.Fields{
@@ -228,6 +235,28 @@ func (w *Wallet) BuildTransaction(
 	})
 
 	return tx, nil
+}
+
+// nextNonce returns the next usable nonce by reading the node fresh: the larger of the
+// pending nonce and the latest (confirmed) nonce. The latest nonce is an authoritative
+// floor that protects against clients (e.g. ethrex) whose pending nonce can lag below
+// it; the pending nonce covers legitimate in-flight mempool txs on correct clients.
+func (w *Wallet) nextNonce(ctx context.Context) (uint64, error) {
+	pending, err := w.rpcClient.GetNonce(ctx, w.address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pending nonce: %w", err)
+	}
+
+	confirmed, err := w.rpcClient.GetConfirmedNonce(ctx, w.address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
+	}
+
+	if confirmed > pending {
+		return confirmed, nil
+	}
+
+	return pending, nil
 }
 
 // SignTransaction signs a transaction with the wallet's private key.
@@ -488,13 +517,15 @@ func (w *Wallet) resolve(
 				continue
 			}
 
-			// 3. Our tx is not known. Decide by where the node's next nonce now sits.
-			pendingNonce, perr := w.rpcClient.GetNonce(ctx, w.address)
-			if perr != nil {
+			// 3. Our tx is not known. Decide by where the node's next nonce now sits, using
+			//    the same max(pending, confirmed) the build uses so a buggy pending nonce
+			//    (ethrex) doesn't hide that our slot was already consumed.
+			next, nerr := w.nextNonce(ctx)
+			if nerr != nil {
 				continue
 			}
 
-			if pendingNonce > nonce {
+			if next > nonce {
 				// Our nonce slot was consumed (by another instance/process); ours can never
 				// land. Resubmit with a fresh, higher nonce.
 				return nil, outcomeRetry, fmt.Errorf("nonce %d consumed by another transaction", nonce)

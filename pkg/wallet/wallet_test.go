@@ -24,9 +24,10 @@ var errNotFound = errors.New("not found")
 type fakeBackend struct {
 	mu sync.Mutex
 
-	pendingNonce uint64
-	sendCalls    int
-	lastNonce    uint64 // nonce of the most recently accepted tx
+	pendingNonce   uint64
+	confirmedNonce uint64
+	sendCalls      int
+	lastNonce      uint64 // nonce of the most recently accepted tx
 
 	// known maps an accepted tx hash to its acceptance order (1-based).
 	known    map[common.Hash]int
@@ -54,6 +55,13 @@ func (f *fakeBackend) GetNonce(context.Context, common.Address) (uint64, error) 
 	defer f.mu.Unlock()
 
 	return f.pendingNonce, nil
+}
+
+func (f *fakeBackend) GetConfirmedNonce(context.Context, common.Address) (uint64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.confirmedNonce, nil
 }
 
 func (f *fakeBackend) GetBalance(context.Context, common.Address) (*big.Int, error) {
@@ -85,7 +93,9 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 
 	if err != nil {
 		if bump {
-			f.pendingNonce++ // another instance/process consumed this nonce slot
+			// Another instance/process consumed this nonce slot and it mined.
+			f.pendingNonce++
+			f.confirmedNonce++
 		}
 
 		return err
@@ -97,6 +107,10 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 
 	if tx.Nonce()+1 > f.pendingNonce {
 		f.pendingNonce = tx.Nonce() + 1
+	}
+
+	if tx.Nonce()+1 > f.confirmedNonce {
+		f.confirmedNonce = tx.Nonce() + 1
 	}
 
 	return nil
@@ -183,10 +197,28 @@ func TestBuildTransactionAlwaysReadsNonceFromRPC(t *testing.T) {
 
 	// A subsequent send picks up the node's new next nonce with no internal carry-over.
 	backend.pendingNonce = 92
+	backend.confirmedNonce = 92
 
 	_, err = sendOnce(t, w)
 	require.NoError(t, err)
 	require.Equal(t, uint64(92), backend.lastNonce)
+}
+
+// TestSendAndConfirmEthrexStalePendingNonce reproduces the observed ethrex behaviour:
+// the pending nonce (0x51 = 81) is reported *below* the latest/confirmed nonce
+// (0x59 = 89). Building off the pending nonce alone stamps an already-used "too low"
+// nonce; the wallet must floor at the confirmed nonce and send 89 on the first attempt.
+func TestSendAndConfirmEthrexStalePendingNonce(t *testing.T) {
+	backend := newFakeBackend()
+	backend.pendingNonce = 81   // ethrex's stale/broken pending nonce
+	backend.confirmedNonce = 89 // authoritative latest nonce
+	w := newTestWallet(t, backend)
+
+	receipt, err := sendOnce(t, w)
+	require.NoError(t, err)
+	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+	require.Equal(t, 1, backend.sendCalls, "should succeed on first attempt")
+	require.Equal(t, uint64(89), backend.lastNonce, "must build off the confirmed nonce, not the stale pending nonce")
 }
 
 // TestSendAndConfirmNonceConflictThenSuccess reproduces the reported failure: the EL
