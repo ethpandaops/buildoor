@@ -26,6 +26,7 @@ type fakeBackend struct {
 
 	pendingNonce uint64
 	sendCalls    int
+	lastNonce    uint64 // nonce of the most recently accepted tx
 
 	// known maps an accepted tx hash to its acceptance order (1-based).
 	known    map[common.Hash]int
@@ -84,7 +85,7 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 
 	if err != nil {
 		if bump {
-			f.pendingNonce++ // another instance consumed this nonce slot
+			f.pendingNonce++ // another instance/process consumed this nonce slot
 		}
 
 		return err
@@ -92,6 +93,7 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 
 	f.accepted++
 	f.known[tx.Hash()] = f.accepted
+	f.lastNonce = tx.Nonce()
 
 	if tx.Nonce()+1 > f.pendingNonce {
 		f.pendingNonce = tx.Nonce() + 1
@@ -163,6 +165,28 @@ func TestSendAndConfirmHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
 	require.Equal(t, 1, backend.sendCalls)
+}
+
+// TestBuildTransactionAlwaysReadsNonceFromRPC asserts the nonce is taken straight from
+// the node on every build (never cached/tracked): whatever the node reports as the next
+// nonce is exactly what gets stamped.
+func TestBuildTransactionAlwaysReadsNonceFromRPC(t *testing.T) {
+	backend := newFakeBackend()
+	w := newTestWallet(t, backend)
+
+	backend.pendingNonce = 88
+
+	receipt, err := sendOnce(t, w)
+	require.NoError(t, err)
+	require.Equal(t, types.ReceiptStatusSuccessful, receipt.Status)
+	require.Equal(t, uint64(88), backend.lastNonce, "must build with the nonce the node reports")
+
+	// A subsequent send picks up the node's new next nonce with no internal carry-over.
+	backend.pendingNonce = 92
+
+	_, err = sendOnce(t, w)
+	require.NoError(t, err)
+	require.Equal(t, uint64(92), backend.lastNonce)
 }
 
 // TestSendAndConfirmNonceConflictThenSuccess reproduces the reported failure: the EL

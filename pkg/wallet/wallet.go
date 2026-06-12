@@ -204,13 +204,17 @@ func (w *Wallet) BuildTransaction(
 	gasFeeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	gasFeeCap.Add(gasFeeCap, gasTipCap)
 
-	// Source the nonce fresh from the chain (pending, includes mempool) on every build.
-	// This keeps multiple instances sharing this funding key from stamping stale nonces;
-	// genuine collisions are resolved by SendAndConfirm.
+	// Always read the next free nonce straight from the node on every build — never
+	// cached or tracked internally. This is the only source of truth for the nonce.
 	nonce, err := w.rpcClient.GetNonce(ctx, w.address)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get nonce: %w", err)
 	}
+
+	w.log.WithFields(logrus.Fields{
+		"address": w.address.Hex(),
+		"nonce":   nonce,
+	}).Debug("Fetched next nonce from RPC for transaction build")
 
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   w.chainID,
@@ -484,14 +488,15 @@ func (w *Wallet) resolve(
 				continue
 			}
 
-			// 3. Our tx is not known. Decide by where the account nonce now sits.
-			pendingNonce, err := w.rpcClient.GetNonce(ctx, w.address)
-			if err != nil {
+			// 3. Our tx is not known. Decide by where the node's next nonce now sits.
+			pendingNonce, perr := w.rpcClient.GetNonce(ctx, w.address)
+			if perr != nil {
 				continue
 			}
 
 			if pendingNonce > nonce {
-				// Some other transaction occupies our nonce; ours can never land. Resubmit.
+				// Our nonce slot was consumed (by another instance/process); ours can never
+				// land. Resubmit with a fresh, higher nonce.
 				return nil, outcomeRetry, fmt.Errorf("nonce %d consumed by another transaction", nonce)
 			}
 
