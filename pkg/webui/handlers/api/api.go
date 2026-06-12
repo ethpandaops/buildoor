@@ -8,8 +8,9 @@ import (
 	"strconv"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
-	"github.com/ethpandaops/buildoor/pkg/builderapi"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -245,29 +246,25 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := h.builderSvc.GetConfig()
-	cfg.Schedule.Mode = builder.ScheduleMode(req.Mode)
+	updates := map[string]json.RawMessage{}
+	if req.Mode != "" {
+		updates[settings.KeyScheduleMode] = mustJSON(req.Mode)
+	}
 
 	if req.EveryNth > 0 {
-		cfg.Schedule.EveryNth = req.EveryNth
+		updates[settings.KeyScheduleEveryNth] = mustJSON(req.EveryNth)
 	}
 
 	if req.NextN > 0 {
-		cfg.Schedule.NextN = req.NextN
+		updates[settings.KeyScheduleNextN] = mustJSON(req.NextN)
 	}
 
 	if req.StartSlot != nil {
-		cfg.Schedule.StartSlot = *req.StartSlot
+		updates[settings.KeyScheduleStartSlot] = mustJSON(*req.StartSlot)
 	}
 
-	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if !h.applySettings(w, r, token, "config.schedule", req, updates) {
 		return
-	}
-
-	// Broadcast config update to connected clients
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -301,57 +298,45 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := h.builderSvc.GetConfig()
-
+	updates := map[string]json.RawMessage{}
 	if req.BuildStartTime != nil {
-		cfg.EPBS.BuildStartTime = *req.BuildStartTime
+		updates[settings.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
 	}
 
 	if req.BidStartTime != nil {
-		cfg.EPBS.BidStartTime = *req.BidStartTime
+		updates[settings.KeyEPBSBidStartTime] = mustJSON(*req.BidStartTime)
 	}
 
 	if req.BidEndTime != nil {
-		cfg.EPBS.BidEndTime = *req.BidEndTime
+		updates[settings.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
 	}
 
 	if req.RevealTime != nil {
-		cfg.EPBS.RevealTime = *req.RevealTime
+		updates[settings.KeyEPBSRevealTime] = mustJSON(*req.RevealTime)
 	}
 
 	if req.BidMinAmount != nil {
-		cfg.EPBS.BidMinAmount = *req.BidMinAmount
+		updates[settings.KeyEPBSBidMinAmount] = mustJSON(*req.BidMinAmount)
 	}
 
 	if req.BidIncrease != nil {
-		cfg.EPBS.BidIncrease = *req.BidIncrease
+		updates[settings.KeyEPBSBidIncrease] = mustJSON(*req.BidIncrease)
 	}
 
 	if req.BidInterval != nil {
-		cfg.EPBS.BidInterval = *req.BidInterval
+		updates[settings.KeyEPBSBidInterval] = mustJSON(*req.BidInterval)
 	}
 
 	if req.PayloadBuildDelay != nil {
-		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
+		updates[settings.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
 	}
 
 	if req.BidSubsidy != nil {
-		cfg.EPBS.BidSubsidy = *req.BidSubsidy
+		updates[settings.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
 	}
 
-	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
 		return
-	}
-
-	// Also update EPBS service if available
-	if h.epbsSvc != nil {
-		h.epbsSvc.UpdateConfig(&cfg.EPBS)
-	}
-
-	// Broadcast config update to connected clients
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -436,9 +421,13 @@ func (h *APIHandler) PostDeposit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.lifecycleMgr.EnsureBuilderRegistered(context.Background()); err != nil {
+		h.audit(r, token, "lifecycle.deposit", "", req, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
+
 		return
 	}
+
+	h.audit(r, token, "lifecycle.deposit", "", req, "ok")
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deposit initiated"})
 }
@@ -470,9 +459,13 @@ func (h *APIHandler) PostTopup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.lifecycleMgr.CheckAndTopup(context.Background()); err != nil {
+		h.audit(r, token, "lifecycle.topup", "", nil, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
+
 		return
 	}
+
+	h.audit(r, token, "lifecycle.topup", "", nil, "ok")
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "topup initiated"})
 }
@@ -505,9 +498,13 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.lifecycleMgr.InitiateExit(context.Background()); err != nil {
+		h.audit(r, token, "lifecycle.exit", "", nil, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
+
 		return
 	}
+
+	h.audit(r, token, "lifecycle.exit", "", nil, "ok")
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "exit initiated"})
 }
@@ -609,24 +606,17 @@ func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	cfg := h.builderSvc.GetConfig()
-
+	updates := map[string]json.RawMessage{}
 	if req.BuildStartTime != nil {
-		cfg.EPBS.BuildStartTime = *req.BuildStartTime
+		updates[settings.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
 	}
 
 	if req.PayloadBuildDelay != nil {
-		cfg.PayloadBuildTime = uint64(*req.PayloadBuildDelay)
+		updates[settings.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
 	}
 
-	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if !h.applySettings(w, r, token, "config.builder", req, updates) {
 		return
-	}
-
-	// Broadcast config update to connected clients
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -646,20 +636,13 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	cfg := h.builderSvc.GetConfig()
-
+	updates := map[string]json.RawMessage{}
 	if req.BlockValueSubsidyGwei != nil {
-		cfg.BuilderAPI.BlockValueSubsidyGwei = *req.BlockValueSubsidyGwei
+		updates[settings.KeyBuilderAPISubsidy] = mustJSON(*req.BlockValueSubsidyGwei)
 	}
 
-	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if !h.applySettings(w, r, token, "config.builder-api", req, updates) {
 		return
-	}
-
-	// Broadcast config update to connected clients
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -679,23 +662,17 @@ func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cfg := h.builderSvc.GetConfig()
-
+	updates := map[string]json.RawMessage{}
 	if req.TopupThreshold != nil {
-		cfg.TopupThreshold = *req.TopupThreshold
+		updates[settings.KeyTopupThreshold] = mustJSON(*req.TopupThreshold)
 	}
 
 	if req.TopupAmount != nil {
-		cfg.TopupAmount = *req.TopupAmount
+		updates[settings.KeyTopupAmount] = mustJSON(*req.TopupAmount)
 	}
 
-	if err := h.builderSvc.UpdateConfig(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+	if !h.applySettings(w, r, token, "config.lifecycle", req, updates) {
 		return
-	}
-
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -722,17 +699,32 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The enable flags are ordinary settings; persist them through the settings
+	// service (which triggers the module SetEnabled callbacks via OnChange).
+	// Only toggle modules that are actually available.
+	updates := map[string]json.RawMessage{}
 	if req.EPBSEnabled != nil && h.epbsSvc != nil {
-		h.epbsSvc.SetEnabled(*req.EPBSEnabled)
+		updates[settings.KeyEPBSEnabled] = mustJSON(*req.EPBSEnabled)
 	}
 
 	if req.BuilderAPIEnabled != nil && h.builderAPISvc != nil {
-		h.builderAPISvc.SetEnabled(*req.BuilderAPIEnabled)
+		updates[settings.KeyBuilderAPIEnabled] = mustJSON(*req.BuilderAPIEnabled)
 	}
 
 	if req.LifecycleEnabled != nil && h.lifecycleMgr != nil {
-		h.lifecycleMgr.SetEnabled(*req.LifecycleEnabled)
+		updates[settings.KeyLifecycleEnabled] = mustJSON(*req.LifecycleEnabled)
 	}
+
+	if len(updates) > 0 {
+		if err := h.settingsSvc.SetMany(updates, actorFromToken(token)); err != nil {
+			h.audit(r, token, "services.toggle", "", req, "error: "+err.Error())
+			writeError(w, http.StatusBadRequest, err.Error())
+
+			return
+		}
+	}
+
+	h.audit(r, token, "services.toggle", "", req, "ok")
 
 	// Broadcast updated status to all connected clients
 	if h.eventStreamMgr != nil {
@@ -759,10 +751,10 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 
 // BidsWonResponse is the response for GetBidsWon.
 type BidsWonResponse struct {
-	BidsWon []builderapi.BidWonEntry `json:"bids_won"`
-	Total   int                      `json:"total"`
-	Offset  int                      `json:"offset"`
-	Limit   int                      `json:"limit"`
+	BidsWon []db.WonBlock `json:"bids_won"`
+	Total   int           `json:"total"`
+	Offset  int           `json:"offset"`
+	Limit   int           `json:"limit"`
 }
 
 // GetBidsWon godoc
@@ -789,26 +781,45 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 
-	// Get data from store
-	var bidsWon []builderapi.BidWonEntry
-	var total int
+	bidsWon := []db.WonBlock{}
+	total := 0
 
-	if h.builderAPISvc != nil && h.builderAPISvc.GetBidsWonStore() != nil {
-		bidsWon, total = h.builderAPISvc.GetBidsWonStore().GetPage(offset, limit)
-	} else {
-		bidsWon = []builderapi.BidWonEntry{}
-		total = 0
+	switch {
+	case h.stateDB.Enabled():
+		// DB-backed: unified across Builder API and ePBS, survives restarts.
+		blocks, t, err := h.stateDB.GetWonBlocks(offset, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		bidsWon = blocks
+		total = t
+	case h.builderAPISvc != nil && h.builderAPISvc.GetBidsWonStore() != nil:
+		// In-memory fallback (Builder API only) when no state-db is configured.
+		page, t := h.builderAPISvc.GetBidsWonStore().GetPage(offset, limit)
+		total = t
+
+		for _, e := range page {
+			bidsWon = append(bidsWon, db.WonBlock{
+				Source:          db.WonBlockSourceBuilderAPI,
+				Slot:            e.Slot,
+				BlockHash:       e.BlockHash,
+				NumTransactions: e.NumTransactions,
+				NumBlobs:        e.NumBlobs,
+				ValueWei:        e.ValueWei,
+				ValueETH:        e.ValueETH,
+				Timestamp:       e.Timestamp,
+			})
+		}
 	}
 
-	// Build response
-	response := BidsWonResponse{
+	writeJSON(w, http.StatusOK, BidsWonResponse{
 		BidsWon: bidsWon,
 		Total:   total,
 		Offset:  offset,
 		Limit:   limit,
-	}
-
-	writeJSON(w, http.StatusOK, response)
+	})
 }
 
 // ProposerPreferencesEntry represents a single cached proposer preference for the API response.

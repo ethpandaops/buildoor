@@ -18,12 +18,15 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
+	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -115,8 +118,8 @@ and begins building blocks according to configuration.`,
 			logger.WithField("wallet", w.Address().Hex()).Info("Wallet loaded")
 		}
 
-		// 5. Initialize chain service (epoch-level state management)
-		// Retry fetching spec and genesis until the beacon node is ready.
+		// 5. Fetch chain spec & genesis (wait for the beacon node), then apply
+		// slot-time timing defaults. Retry until the beacon node is ready.
 		logger.Info("Waiting for beacon node to serve chain spec and genesis...")
 
 		var chainSpec *beacon.ChainSpec
@@ -165,13 +168,38 @@ and begins building blocks according to configuration.`,
 			"bid_end_time":       cfg.EPBS.BidEndTime,
 		}).Info("Timing defaults applied")
 
+		// 6. Open the optional state-db and build the central settings service.
+		// The settings service applies persisted UI overrides (and detects CLI
+		// changes) into cfg in place BEFORE any service reads it, so every
+		// module starts from the effective configuration.
+		stateDB := db.NewDatabase(&db.Config{File: cfg.StateDBPath}, logger)
+		if err := stateDB.Init(); err != nil {
+			return fmt.Errorf("failed to init state-db: %w", err)
+		}
+		defer stateDB.Close() //nolint:errcheck // cleanup
+
+		defaults := config.DefaultConfig()
+		defaults.ApplySlotDefaults(slotTimeMs)
+
+		// Only operator-supplied keys (flag/env/config) form the CLI layer.
+		supplied := make(map[string]bool)
+		for _, f := range settings.Fields() {
+			supplied[f.Key] = v.IsSet(f.FlagKey)
+		}
+
+		settingsSvc, err := settings.New(cfg, defaults, supplied, stateDB, logger)
+		if err != nil {
+			return fmt.Errorf("failed to init settings service: %w", err)
+		}
+
+		// 7. Start chain service (epoch-level state management)
 		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
-		// 6. Initialize lifecycle manager (if prerequisites available)
+		// 8. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
 
 		if lifecycleAvailable {
@@ -183,7 +211,7 @@ and begins building blocks according to configuration.`,
 			lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
 		}
 
-		// 7. Initialize builder service (standalone block building)
+		// 9. Initialize builder service (standalone block building)
 		logger.Info("Initializing builder service...")
 
 		// Get fee recipient from wallet or use default address
@@ -204,13 +232,14 @@ and begins building blocks according to configuration.`,
 		builderAPIAvailable := cfg.APIPort > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
+			validatorStore.SetStateDB(stateDB, logger)
 		}
 		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
-		// 8. Initialize ePBS service (if Gloas fork is scheduled)
+		// 10. Initialize ePBS service (if Gloas fork is scheduled)
 		var epbsSvc *epbs.Service
 		epbsAvailable := chainSpec.GloasForkEpoch != nil && *chainSpec.GloasForkEpoch < math.MaxUint64
 
@@ -229,9 +258,10 @@ and begins building blocks according to configuration.`,
 			}
 
 			epbsSvc.SetEnabled(cfg.EPBSEnabled)
+			epbsSvc.SetStateDB(stateDB)
 		}
 
-		// 8a. Initialize Builder API server (routes served on --api-port via the shared server)
+		// 11. Initialize Builder API server (routes served on --api-port via the shared server)
 		var builderAPISrv *builderapi.Server
 
 		if builderAPIAvailable {
@@ -260,22 +290,47 @@ and begins building blocks according to configuration.`,
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+			builderAPISrv.SetStateDB(stateDB)
 		}
 
-		// Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
+		// 12. Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
 		var propPrefSvc *proposerpreferences.Service
 
 		if epbsAvailable {
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
+			propPrefSvc.GetCache().SetStateDB(stateDB, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
-		// Initialize and start validator ranges resolver.
+		// 13. Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
 
-		// 9. Start API server (if configured)
+		// 14. Register settings OnChange subscribers: route changes through the
+		// modules. The settings service has already mutated cfg in place; these
+		// callbacks trigger module-side resets (schedule counters, scheduler) and
+		// sync the enable flags.
+		settingsSvc.OnChange(func() {
+			if err := builderSvc.UpdateConfig(cfg); err != nil {
+				logger.WithError(err).Warn("failed to apply builder config update")
+			}
+
+			if epbsSvc != nil {
+				epbsSvc.UpdateConfig(&cfg.EPBS)
+				epbsSvc.SetEnabled(cfg.EPBSEnabled)
+			}
+
+			if builderAPISrv != nil {
+				builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+			}
+
+			if lifecycleMgr != nil {
+				lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
+			}
+		})
+
+		// 15. Start WebUI/API server (if configured)
 		if cfg.APIPort > 0 {
 			logger.WithField("port", cfg.APIPort).Info("Starting API server...")
 
@@ -290,7 +345,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
@@ -302,7 +357,7 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
-		// 10. Start lifecycle manager callbacks (if enabled)
+		// 16. Wire lifecycle manager callbacks to ePBS (if both present)
 		if lifecycleMgr != nil && epbsSvc != nil {
 			lifecycleMgr.SetDepositPendingCallback(func() {
 				epbsSvc.SetRegistrationPending()
@@ -312,7 +367,7 @@ and begins building blocks according to configuration.`,
 			})
 		}
 
-		// 11. Start builder service
+		// 17. Start builder service
 		logger.Info("Starting builder service...")
 
 		if err := builderSvc.Start(ctx); err != nil {
@@ -320,7 +375,7 @@ and begins building blocks according to configuration.`,
 		}
 		defer builderSvc.Stop()
 
-		// 12. Start ePBS service (if enabled)
+		// 18. Start ePBS service (if available)
 		if epbsSvc != nil {
 			logger.Info("Starting ePBS service...")
 
@@ -330,7 +385,7 @@ and begins building blocks according to configuration.`,
 			defer epbsSvc.Stop()
 		}
 
-		// 13. Start lifecycle manager (after ePBS so bid tracker is available)
+		// 19. Start lifecycle manager (after ePBS so bid tracker is available)
 		if lifecycleMgr != nil {
 			if epbsSvc != nil {
 				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
@@ -342,7 +397,7 @@ and begins building blocks according to configuration.`,
 			defer lifecycleMgr.Stop()
 		}
 
-		// 14. Start proposer preferences service (if initialized)
+		// 20. Start proposer preferences service (if initialized)
 		if propPrefSvc != nil {
 			if err := propPrefSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start proposer preferences service: %w", err)
@@ -354,7 +409,7 @@ and begins building blocks according to configuration.`,
 
 		logger.Info("Builder is running. Press Ctrl+C to stop.")
 
-		// 13. Wait for shutdown signal
+		// 21. Wait for shutdown signal
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 

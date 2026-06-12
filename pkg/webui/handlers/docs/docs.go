@@ -15,6 +15,68 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/buildoor/audit-log": {
+            "get": {
+                "description": "Returns a paginated list of authenticated mutating actions. Empty when no state-db is configured.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get the audit log",
+                "operationId": "getAuditLog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 0,
+                        "description": "Offset for pagination",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Limit for pagination (max 100)",
+                        "name": "limit",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.AuditLogResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/bids-won": {
             "get": {
                 "description": "Returns a paginated list of bids won via Builder API with transaction counts, blob counts, and values.",
@@ -687,13 +749,33 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "api.AuditLogResponse": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/db.AuditLog"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.BidsWonResponse": {
             "type": "object",
             "properties": {
                 "bids_won": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/builderapi.BidWonEntry"
+                        "$ref": "#/definitions/db.WonBlock"
                     }
                 },
                 "limit": {
@@ -715,9 +797,6 @@ const docTemplate = `{
                 },
                 "enabled": {
                     "type": "boolean"
-                },
-                "port": {
-                    "type": "integer"
                 },
                 "validator_count": {
                     "type": "integer"
@@ -888,13 +967,16 @@ const docTemplate = `{
         "api.ProposerPreferencesEntry": {
             "type": "object",
             "properties": {
+                "client_name": {
+                    "type": "string"
+                },
                 "fee_recipient": {
                     "type": "string"
                 },
-                "gas_limit": {
+                "slot": {
                     "type": "integer"
                 },
-                "slot": {
+                "target_gas_limit": {
                     "type": "integer"
                 },
                 "validator_index": {
@@ -1014,10 +1096,10 @@ const docTemplate = `{
                 "bid_start_time": {
                     "type": "integer"
                 },
-                "build_start_time": {
+                "bid_subsidy": {
                     "type": "integer"
                 },
-                "bid_subsidy": {
+                "build_start_time": {
                     "type": "integer"
                 },
                 "payload_build_delay": {
@@ -1067,7 +1149,36 @@ const docTemplate = `{
                 }
             }
         },
-        "builderapi.BidWonEntry": {
+        "db.AuditLog": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string"
+                },
+                "actor": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "remote_addr": {
+                    "type": "string"
+                },
+                "result": {
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "integer"
+                }
+            }
+        },
+        "db.WonBlock": {
             "type": "object",
             "properties": {
                 "block_hash": {
@@ -1082,17 +1193,17 @@ const docTemplate = `{
                 "slot": {
                     "type": "integer"
                 },
+                "source": {
+                    "type": "string"
+                },
                 "timestamp": {
-                    "description": "Unix timestamp in milliseconds",
                     "type": "integer"
                 },
                 "value_eth": {
-                    "description": "Formatted as ETH string for precision",
                     "type": "string"
                 },
                 "value_wei": {
-                    "description": "Stored in wei for sorting",
-                    "type": "integer"
+                    "type": "string"
                 }
             }
         }

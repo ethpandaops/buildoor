@@ -1,9 +1,22 @@
 definitions:
+  api.AuditLogResponse:
+    properties:
+      entries:
+        items:
+          $ref: '#/definitions/db.AuditLog'
+        type: array
+      limit:
+        type: integer
+      offset:
+        type: integer
+      total:
+        type: integer
+    type: object
   api.BidsWonResponse:
     properties:
       bids_won:
         items:
-          $ref: '#/definitions/builderapi.BidWonEntry'
+          $ref: '#/definitions/db.WonBlock'
         type: array
       limit:
         type: integer
@@ -18,8 +31,6 @@ definitions:
         type: integer
       enabled:
         type: boolean
-      port:
-        type: integer
       validator_count:
         type: integer
     type: object
@@ -130,11 +141,13 @@ definitions:
     type: object
   api.ProposerPreferencesEntry:
     properties:
+      client_name:
+        type: string
       fee_recipient:
         type: string
-      gas_limit:
-        type: integer
       slot:
+        type: integer
+      target_gas_limit:
         type: integer
       validator_index:
         type: integer
@@ -213,9 +226,9 @@ definitions:
         type: integer
       bid_start_time:
         type: integer
-      build_start_time:
-        type: integer
       bid_subsidy:
+        type: integer
+      build_start_time:
         type: integer
       payload_build_delay:
         type: integer
@@ -250,7 +263,26 @@ definitions:
         description: Unix timestamp
         type: integer
     type: object
-  builderapi.BidWonEntry:
+  db.AuditLog:
+    properties:
+      action:
+        type: string
+      actor:
+        type: string
+      detail:
+        type: string
+      id:
+        type: integer
+      remote_addr:
+        type: string
+      result:
+        type: string
+      target:
+        type: string
+      timestamp:
+        type: integer
+    type: object
+  db.WonBlock:
     properties:
       block_hash:
         type: string
@@ -260,19 +292,61 @@ definitions:
         type: integer
       slot:
         type: integer
+      source:
+        type: string
       timestamp:
-        description: Unix timestamp in milliseconds
         type: integer
       value_eth:
-        description: Formatted as ETH string for precision
         type: string
       value_wei:
-        description: Stored in wei for sorting
-        type: integer
+        type: string
     type: object
 info:
   contact: {}
 paths:
+  /api/buildoor/audit-log:
+    get:
+      description: Returns a paginated list of authenticated mutating actions. Empty
+        when no state-db is configured.
+      operationId: getAuditLog
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - default: 0
+        description: Offset for pagination
+        in: query
+        name: offset
+        type: integer
+      - default: 20
+        description: Limit for pagination (max 100)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.AuditLogResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the audit log
+      tags:
+      - Buildoor
   /api/buildoor/bids-won:
     get:
       description: Returns a paginated list of bids won via Builder API with transaction
