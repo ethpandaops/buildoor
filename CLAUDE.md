@@ -262,20 +262,29 @@ is in-memory-only as before. Repository methods early-return; never nil-check th
 
 ### Startup Sequence
 
-The application initializes services in this order (see `cmd/run.go`):
-1. CL client connection
-2. Engine API connection
-3. BLS signer initialization
-4. Chain spec + genesis fetch, `ApplySlotDefaults`
-5. State-db open (`--state-db`) + Settings Service init (applies overrides into `cfg` in place before any module reads it)
-6. Chain Service start
-7. Lifecycle Manager initialization (if enabled)
-8. Builder Service initialization
-9. ePBS Service initialization (if enabled)
-10. Builder API Server start (if enabled); `SetStateDB` wired for won-block persistence
-11. Settings `OnChange` subscribers registered (push to modules)
-12. WebUI HTTP server start (if APIPort > 0)
-13. Service starts (Lifecycle → Builder → ePBS)
+The application initializes services in this order (see `cmd/run.go`; the
+numbered step comments there match this list 1:1):
+1. Initialize CL client
+2. Initialize Engine API client
+3. Initialize BLS signer
+4. Initialize RPC client and wallet (if lifecycle available)
+5. Fetch chain spec & genesis (wait for the beacon node), apply slot-time timing defaults
+6. Open the state-db (`--state-db`) and initialize the central Settings Service (applies persisted overrides into `cfg` in place before any module reads it)
+7. Start chain service
+8. Initialize lifecycle manager (if prerequisites available)
+9. Initialize builder service
+10. Initialize ePBS service (if Gloas fork is scheduled)
+11. Initialize Builder API server (if `--api-port` set)
+12. Initialize proposer preferences service (if ePBS available)
+13. Initialize and start validator ranges resolver
+14. Register settings `OnChange` subscribers (push changes to modules)
+15. Start WebUI/API server (if APIPort > 0)
+16. Wire lifecycle manager callbacks to ePBS (if both present)
+17. Start builder service
+18. Start ePBS service (if available)
+19. Start lifecycle manager (after ePBS so the bid tracker is available)
+20. Start proposer preferences service (if initialized)
+21. Wait for shutdown signal
 
 ### RPC Clients
 

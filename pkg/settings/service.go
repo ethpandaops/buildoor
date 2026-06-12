@@ -337,7 +337,7 @@ func (s *Service) persist(f Field, ks *keyState, actor string) {
 
 // validateValue performs light per-field validation of incoming UI values.
 func validateValue(key string, v any) error {
-	if key == "schedule.mode" {
+	if key == KeyScheduleMode {
 		mode, _ := v.(config.ScheduleMode)
 		switch mode {
 		case config.ScheduleModeAll, config.ScheduleModeEveryN, config.ScheduleModeNextN:

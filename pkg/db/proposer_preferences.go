@@ -47,7 +47,7 @@ func (d *Database) PutProposerPreference(p ProposerPreference) error {
 // (highest slot first). Returns an empty slice when the database is disabled.
 func (d *Database) GetProposerPreferences(limit int) ([]ProposerPreference, error) {
 	if !d.enabled {
-		return nil, nil
+		return []ProposerPreference{}, nil
 	}
 
 	if limit <= 0 {

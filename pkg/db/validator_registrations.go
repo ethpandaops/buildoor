@@ -38,7 +38,7 @@ func (d *Database) PutValidatorRegistration(reg ValidatorRegistration) error {
 // Returns an empty slice when the database is disabled.
 func (d *Database) GetValidatorRegistrations() ([]ValidatorRegistration, error) {
 	if !d.enabled {
-		return nil, nil
+		return []ValidatorRegistration{}, nil
 	}
 
 	regs := []ValidatorRegistration{}

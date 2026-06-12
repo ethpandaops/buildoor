@@ -28,7 +28,7 @@ type SettingRow struct {
 // the database is disabled.
 func (d *Database) GetSettings() ([]SettingRow, error) {
 	if !d.enabled {
-		return nil, nil
+		return []SettingRow{}, nil
 	}
 
 	rows := []SettingRow{}
