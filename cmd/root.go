@@ -65,6 +65,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
 
 	// Schedule flags
 	rootCmd.PersistentFlags().String("schedule-mode", string(defaults.Schedule.Mode), "Schedule mode: all, every_nth, next_n")
@@ -188,6 +189,7 @@ func initConfig() error {
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
 		},
+		StateDBPath: v.GetString("state-db"),
 	}
 
 	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {

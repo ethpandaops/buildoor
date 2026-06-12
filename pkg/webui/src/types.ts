@@ -241,6 +241,25 @@ export interface BidsWonResponse {
   limit: number;
 }
 
+// Audit log types (populated only when --state-db is configured)
+export interface AuditLogEntry {
+  id: number;
+  timestamp: number;
+  actor: string;
+  remote_addr: string;
+  action: string;
+  target: string;
+  detail: string;
+  result: string;
+}
+
+export interface AuditLogResponse {
+  entries: AuditLogEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
 // Proposer preferences types
 export interface ProposerPreference {
   slot: number;

@@ -18,12 +18,15 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
+	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -165,6 +168,30 @@ and begins building blocks according to configuration.`,
 			"bid_end_time":       cfg.EPBS.BidEndTime,
 		}).Info("Timing defaults applied")
 
+		// 5a. Open the optional state-db and build the central settings service.
+		// The settings service applies persisted UI overrides (and detects CLI
+		// changes) into cfg in place BEFORE any service reads it, so every
+		// module starts from the effective configuration.
+		stateDB := db.NewDatabase(&db.Config{File: cfg.StateDBPath}, logger)
+		if err := stateDB.Init(); err != nil {
+			return fmt.Errorf("failed to init state-db: %w", err)
+		}
+		defer stateDB.Close() //nolint:errcheck // cleanup
+
+		defaults := config.DefaultConfig()
+		defaults.ApplySlotDefaults(slotTimeMs)
+
+		// Only operator-supplied keys (flag/env/config) form the CLI layer.
+		supplied := make(map[string]bool)
+		for _, f := range settings.Fields() {
+			supplied[f.Key] = v.IsSet(f.FlagKey)
+		}
+
+		settingsSvc, err := settings.New(cfg, defaults, supplied, stateDB, logger)
+		if err != nil {
+			return fmt.Errorf("failed to init settings service: %w", err)
+		}
+
 		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
@@ -204,6 +231,7 @@ and begins building blocks according to configuration.`,
 		builderAPIAvailable := cfg.APIPort > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
+			validatorStore.SetStateDB(stateDB, logger)
 		}
 		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
 		if err != nil {
@@ -229,6 +257,7 @@ and begins building blocks according to configuration.`,
 			}
 
 			epbsSvc.SetEnabled(cfg.EPBSEnabled)
+			epbsSvc.SetStateDB(stateDB)
 		}
 
 		// 8a. Initialize Builder API server (routes served on --api-port via the shared server)
@@ -260,6 +289,7 @@ and begins building blocks according to configuration.`,
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+			builderAPISrv.SetStateDB(stateDB)
 		}
 
 		// Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
@@ -267,6 +297,7 @@ and begins building blocks according to configuration.`,
 
 		if epbsAvailable {
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
+			propPrefSvc.GetCache().SetStateDB(stateDB, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
@@ -274,6 +305,28 @@ and begins building blocks according to configuration.`,
 		// Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
+
+		// Route all settings changes through the modules. The settings service
+		// has already mutated cfg in place; these callbacks trigger module-side
+		// resets (schedule counters, scheduler) and sync the enable flags.
+		settingsSvc.OnChange(func() {
+			if err := builderSvc.UpdateConfig(cfg); err != nil {
+				logger.WithError(err).Warn("failed to apply builder config update")
+			}
+
+			if epbsSvc != nil {
+				epbsSvc.UpdateConfig(&cfg.EPBS)
+				epbsSvc.SetEnabled(cfg.EPBSEnabled)
+			}
+
+			if builderAPISrv != nil {
+				builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+			}
+
+			if lifecycleMgr != nil {
+				lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
+			}
+		})
 
 		// 9. Start API server (if configured)
 		if cfg.APIPort > 0 {
@@ -290,7 +343,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

@@ -221,6 +221,44 @@ Key config sections:
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`, `--epbs-reveal-time`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`
+- **State persistence**: `--state-db <path>` (optional SQLite; see below)
+
+### Settings Service & State Persistence (`--state-db`)
+
+The **Settings Service** (`pkg/settings`) is the central authority for all *mutable*
+runtime config. It owns the single effective `config.Config` that every module reads
+and is the only writer. Setting values resolve from three layers:
+
+```
+hardcoded defaults  <  CLI-supplied (flag/env/config)  <  UI override
+```
+
+CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
+- A CLI value that *changed* since the last run wins over an older UI override.
+- An *unchanged* CLI flag lets a newer UI override win.
+- A CLI "change" is detected by diffing the operator-supplied value against the
+  last-seen one persisted in the state-db. Only keys where `viper.IsSet` is true
+  form the CLI layer, so bumping a *hardcoded default* in a new release never
+  clobbers a UI override.
+
+The mutable-setting registry lives in `pkg/settings/fields.go` (keys in `keys.go`);
+the per-module enable flags (`epbs_enabled`, `builder_api_enabled`,
+`lifecycle_enabled`) are ordinary settings too. Write handlers call
+`settingsSvc.SetMany`, which mutates the shared config in place, persists overrides,
+and fires `OnChange` callbacks (registered in `cmd/run.go`) that trigger module
+resets (`builder.UpdateConfig`, `epbs.UpdateConfig`) and `SetEnabled` syncs.
+
+The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sqlx`
++ goose migrations) persists across restarts when `--state-db <path>` is set:
+- `settings` — the 3-way (cli/ui + seq) override state
+- `won_blocks` — unified Builder API + ePBS won blocks (source-tagged)
+- `validator_registrations` — Builder API registrations (load on start, write-through)
+- `proposer_preferences` — Gloas gossip prefs (best-effort)
+- `audit_log` — every authenticated mutating action (actor from JWT subject)
+
+When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
+is in-memory-only as before. Repository methods early-return; never nil-check the
+`*db.Database` at call sites.
 
 ### Startup Sequence
 
@@ -228,13 +266,16 @@ The application initializes services in this order (see `cmd/run.go`):
 1. CL client connection
 2. Engine API connection
 3. BLS signer initialization
-4. Chain Service start
-5. Lifecycle Manager initialization (if enabled)
-6. Builder Service initialization
-7. ePBS Service initialization (if enabled)
-8. Builder API Server start (if enabled)
-9. WebUI HTTP server start (if APIPort > 0)
-10. Service starts (Lifecycle → Builder → ePBS)
+4. Chain spec + genesis fetch, `ApplySlotDefaults`
+5. State-db open (`--state-db`) + Settings Service init (applies overrides into `cfg` in place before any module reads it)
+6. Chain Service start
+7. Lifecycle Manager initialization (if enabled)
+8. Builder Service initialization
+9. ePBS Service initialization (if enabled)
+10. Builder API Server start (if enabled); `SetStateDB` wired for won-block persistence
+11. Settings `OnChange` subscribers registered (push to modules)
+12. WebUI HTTP server start (if APIPort > 0)
+13. Service starts (Lifecycle → Builder → ePBS)
 
 ### RPC Clients
 
@@ -262,6 +303,10 @@ buildoor/
 │   │   └── ...
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
+│   ├── db/                # Optional SQLite state-db (settings, won_blocks, audit, ...)
+│   │   ├── database.go    # Database struct, Init, migrations, disabled no-op mode
+│   │   └── schema/        # Embedded goose migrations
+│   ├── settings/          # Central settings service (3-way default<cli<ui resolution)
 │   ├── epbs/              # ePBS bidding and revealing
 │   ├── lifecycle/         # Deposit/exit/balance management
 │   ├── rpc/

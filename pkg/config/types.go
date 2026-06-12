@@ -47,6 +47,11 @@ type Config struct {
 	ValidateWithdrawals bool                  `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
 	PayloadBuildTime    uint64                `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	ValidatorRanges     ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+	// StateDBPath, when set, enables the optional SQLite state-db at this path.
+	// It persists UI setting overrides, won blocks, validator registrations,
+	// proposer preferences and an audit log across restarts. Startup-only and
+	// never itself persisted. Empty disables persistence (in-memory only).
+	StateDBPath string `yaml:"state_db" json:"state_db,omitempty"`
 }
 
 // ScheduleConfig defines when the builder should build blocks.

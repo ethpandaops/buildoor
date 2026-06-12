@@ -3,10 +3,15 @@
 package proposerpreferences
 
 import (
+	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/db"
 )
 
 // Cache stores proposer preferences by slot. Thread-safe.
@@ -14,6 +19,8 @@ import (
 type Cache struct {
 	mu          sync.RWMutex
 	preferences map[phase0.Slot]*gloas.SignedProposerPreferences
+	stateDB     *db.Database
+	log         logrus.FieldLogger
 }
 
 // NewCache creates an empty proposer preferences cache.
@@ -23,19 +30,83 @@ func NewCache() *Cache {
 	}
 }
 
+// SetStateDB attaches an optional state-db for best-effort write-through
+// persistence and loads any previously-persisted preferences into the cache.
+func (c *Cache) SetStateDB(stateDB *db.Database, log logrus.FieldLogger) {
+	c.mu.Lock()
+	c.stateDB = stateDB
+	c.log = log.WithField("component", "proposer-preferences-cache")
+	c.mu.Unlock()
+
+	c.loadFromDB()
+}
+
+// loadFromDB rehydrates cached preferences from the state-db.
+func (c *Cache) loadFromDB() {
+	if !c.stateDB.Enabled() {
+		return
+	}
+
+	prefs, err := c.stateDB.GetProposerPreferences(0)
+	if err != nil {
+		c.log.WithError(err).Warn("failed to load proposer preferences from state-db")
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, p := range prefs {
+		var sp gloas.SignedProposerPreferences
+		if err := json.Unmarshal([]byte(p.Raw), &sp); err != nil {
+			continue
+		}
+
+		c.preferences[phase0.Slot(p.Slot)] = &sp
+	}
+}
+
 // Add stores proposer preferences for a slot. If the slot already exists,
 // the existing value is kept and false is returned.
 func (c *Cache) Add(slot phase0.Slot, prefs *gloas.SignedProposerPreferences) bool {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if _, ok := c.preferences[slot]; ok {
+		c.mu.Unlock()
 		return false
 	}
 
 	c.preferences[slot] = prefs
+	stateDB := c.stateDB
+	c.mu.Unlock()
+
+	if stateDB != nil {
+		c.persist(slot, prefs)
+	}
 
 	return true
+}
+
+// persist write-through stores a preference to the state-db (best-effort).
+func (c *Cache) persist(slot phase0.Slot, prefs *gloas.SignedProposerPreferences) {
+	if prefs == nil || prefs.Message == nil {
+		return
+	}
+
+	raw, err := json.Marshal(prefs)
+	if err != nil {
+		return
+	}
+
+	if err := c.stateDB.PutProposerPreference(db.ProposerPreference{
+		Slot:           uint64(slot),
+		ValidatorIndex: uint64(prefs.Message.ValidatorIndex),
+		FeeRecipient:   fmt.Sprintf("0x%x", prefs.Message.FeeRecipient),
+		TargetGasLimit: prefs.Message.TargetGasLimit,
+		Raw:            string(raw),
+	}); err != nil && c.log != nil {
+		c.log.WithError(err).Debug("failed to persist proposer preference")
+	}
 }
 
 // Get returns proposer preferences for a slot.

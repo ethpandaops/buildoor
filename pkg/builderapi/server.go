@@ -29,6 +29,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -70,6 +71,7 @@ type Server struct {
 	fuluPublisher         FuluBlockPublisher   // optional: for publishing unblinded blocks (submitBlindedBlockV2)
 	eventBroadcaster      EventBroadcaster     // optional: for broadcasting API events to WebUI
 	bidsWonStore          *BidsWonStore        // in-memory store of successfully delivered blocks
+	stateDB               *db.Database         // optional: persistent won-block store (may be nil/disabled)
 	enabled               atomic.Bool          // runtime toggle for enabling/disabling the builder API
 	headersRequested      atomic.Uint64        // count of getHeader requests received
 	blocksPublished       atomic.Uint64        // count of successfully published blocks
@@ -100,6 +102,12 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 		forkVersion:           forkVersion,
 		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
+}
+
+// SetStateDB sets the optional state-db used to persist won blocks. When unset
+// (or disabled), won blocks are only kept in the in-memory store.
+func (s *Server) SetStateDB(stateDB *db.Database) {
+	s.stateDB = stateDB
 }
 
 // SetEnabled sets the enabled state of the Builder API server.
@@ -559,6 +567,22 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.bidsWonStore.Add(entry)
+
+	// Persist to the state-db so won blocks survive restarts (no-op when disabled).
+	if s.stateDB != nil {
+		if err := s.stateDB.AddWonBlock(db.WonBlock{
+			Source:          db.WonBlockSourceBuilderAPI,
+			Slot:            entry.Slot,
+			BlockHash:       entry.BlockHash,
+			NumTransactions: entry.NumTransactions,
+			NumBlobs:        entry.NumBlobs,
+			ValueWei:        entry.ValueWei,
+			ValueETH:        entry.ValueETH,
+			Timestamp:       entry.Timestamp,
+		}); err != nil {
+			log.WithError(err).Warn("failed to persist won block to state-db")
+		}
+	}
 
 	// Broadcast bid won event to WebUI
 	if s.eventBroadcaster != nil {
