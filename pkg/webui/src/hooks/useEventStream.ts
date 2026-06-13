@@ -167,13 +167,15 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_ready': {
-          const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
+          // block_value is the EL's MEV value as a wei decimal string; convert to
+          // gwei so it matches the gwei-based formatGwei display used elsewhere.
+          const data = event.data as { slot: number; block_hash: string; block_value: string; ready_at: number };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
-            payloadBlockValue: data.block_value
+            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0
           });
           break;
         }
