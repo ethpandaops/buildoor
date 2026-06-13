@@ -494,19 +494,27 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               );
             })}
 
-            {/* Reveal */}
-            {state.revealSentAt && genesisTime > 0 && renderEventDot(
-              state.revealFailed ? 'reveal-failed' : 'reveal-sent',
-              state.revealSentAt - slotStartTime,
-              {
-                title: 'Payload Reveal',
-                items: [
-                  { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
-                  { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
-                ]
-              },
-              'reveal'
-            )}
+            {/* Reveal attempts — one dot per attempt so each retry/error is visible */}
+            {genesisTime > 0 && state.revealAttempts?.map((att, idx) => {
+              const failed = !att.success && !att.skipped;
+              const status = att.success ? 'Success' : (att.skipped ? 'Skipped' : 'Failed');
+              const title = att.attempt && att.maxAttempts
+                ? `Payload Reveal (attempt ${att.attempt}/${att.maxAttempts})`
+                : 'Payload Reveal';
+              return renderEventDot(
+                failed ? 'reveal-failed' : 'reveal-sent',
+                att.time - slotStartTime,
+                {
+                  title,
+                  items: [
+                    { label: 'Time', value: `${att.time - slotStartTime}ms` },
+                    { label: 'Status', value: status },
+                    ...(att.error ? [{ label: 'Error', value: att.error }] : [])
+                  ]
+                },
+                `reveal-${idx}`
+              );
+            })}
           </div>
         )}
 

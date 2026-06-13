@@ -103,12 +103,15 @@ type HeadReceivedEvent struct {
 	ReceivedAt int64  `json:"received_at"`
 }
 
-// RevealStreamEvent is sent when we submit or skip a reveal.
+// RevealStreamEvent is sent when we submit or skip a reveal (one per attempt).
 type RevealStreamEvent struct {
-	Slot      uint64 `json:"slot"`
-	Success   bool   `json:"success"`
-	Skipped   bool   `json:"skipped"`
-	Timestamp int64  `json:"timestamp"`
+	Slot        uint64 `json:"slot"`
+	Success     bool   `json:"success"`
+	Skipped     bool   `json:"skipped"`
+	Error       string `json:"error,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
+	Timestamp   int64  `json:"timestamp"`
 }
 
 // BidStreamEvent represents a bid from any builder.
@@ -388,7 +391,7 @@ func (m *EventStreamManager) Start() {
 
 			case event, ok := <-revealChan:
 				if ok {
-					m.BroadcastReveal(uint64(event.Slot), event.Success, event.Skipped)
+					m.BroadcastReveal(event)
 				}
 
 			case event, ok := <-bidIncludedChan:
@@ -1145,28 +1148,33 @@ func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, v
 	})
 }
 
-// BroadcastReveal broadcasts a reveal event.
-func (m *EventStreamManager) BroadcastReveal(slot uint64, success, skipped bool) {
+// BroadcastReveal broadcasts a reveal event (one per attempt, success or failure).
+func (m *EventStreamManager) BroadcastReveal(event *epbs.RevealEvent) {
+	slot := uint64(event.Slot)
+
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeReveal,
 		Timestamp: time.Now().UnixMilli(),
 		Data: RevealStreamEvent{
-			Slot:      slot,
-			Success:   success,
-			Skipped:   skipped,
-			Timestamp: time.Now().UnixMilli(),
+			Slot:        slot,
+			Success:     event.Success,
+			Skipped:     event.Skipped,
+			Error:       event.Error,
+			Attempt:     event.Attempt,
+			MaxAttempts: event.MaxAttempts,
+			Timestamp:   time.Now().UnixMilli(),
 		},
 	})
 
 	// Update slot state
 	m.slotStatesMu.Lock()
-	state, ok := m.slotStates[phase0.Slot(slot)]
+	state, ok := m.slotStates[event.Slot]
 	if ok {
-		state.Revealed = success
+		state.Revealed = event.Success
 	}
 	m.slotStatesMu.Unlock()
 
-	m.broadcastSlotState(phase0.Slot(slot))
+	m.broadcastSlotState(event.Slot)
 }
 
 // BroadcastConfigUpdate broadcasts a config update event.

@@ -140,7 +140,20 @@ export interface RevealEvent {
   slot: number;
   success: boolean;
   skipped: boolean;
+  error?: string;
+  attempt?: number;
+  max_attempts?: number;
   timestamp: number;
+}
+
+// A single payload reveal attempt (the reveal may be retried on failure).
+export interface RevealAttempt {
+  time: number;
+  success: boolean;
+  skipped: boolean;
+  error?: string;
+  attempt: number;
+  maxAttempts: number;
 }
 
 export interface HeadVoteDataPoint {
@@ -175,6 +188,7 @@ export interface SlotState {
   revealSkipped?: boolean;
   revealFailed?: boolean;
   revealSentAt?: number;
+  revealAttempts?: RevealAttempt[];
   headVotes?: HeadVoteDataPoint[];
   getHeaderReceivedAt?: number;
   getHeaderDeliveredAt?: number;

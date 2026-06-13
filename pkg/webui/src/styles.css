@@ -537,6 +537,7 @@
 .event-bid-failed { border-left: 3px solid #dc3545; }
 .event-head { border-left: 3px solid #fd7e14; }
 .event-reveal { border-left: 3px solid #6f42c1; }
+.event-reveal-failed { border-left: 3px solid #dc3545; }
 .event-bid-seen { border-left: 3px solid var(--bs-secondary); }
 .event-envelope { border-left: 3px solid #20c997; }
 .event-lifecycle { border-left: 3px solid #0dcaf0; }

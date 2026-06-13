@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -220,14 +220,39 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean };
-          const revealMsg = data.skipped ? 'Reveal skipped' : (data.success ? 'Reveal successful' : 'Reveal failed');
-          addEvent('reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
-          updateSlotState(data.slot, {
-            revealed: data.success,
-            revealSkipped: data.skipped,
-            revealFailed: !data.success && !data.skipped,
-            revealSentAt: event.timestamp
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; error?: string; attempt?: number; max_attempts?: number };
+          const failed = !data.success && !data.skipped;
+          const attempt = data.attempt || 0;
+          const maxAttempts = data.max_attempts || 0;
+          const revealMsg = data.skipped
+            ? 'Reveal skipped'
+            : data.success
+              ? 'Reveal successful'
+              : `Reveal failed${attempt ? ` (attempt ${attempt}/${maxAttempts})` : ''}${data.error ? `: ${data.error}` : ''}`;
+          addEvent(failed ? 'reveal_failed' : 'reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
+          setSlotStates(prev => {
+            const st = prev[data.slot] || { slot: data.slot };
+            const revealAttempts: RevealAttempt[] = st.revealAttempts ? [...st.revealAttempts] : [];
+            revealAttempts.push({
+              time: event.timestamp,
+              success: data.success,
+              skipped: data.skipped,
+              error: data.error,
+              attempt,
+              maxAttempts
+            });
+            return {
+              ...prev,
+              [data.slot]: {
+                ...st,
+                slot: data.slot,
+                revealAttempts,
+                revealed: data.success,
+                revealSkipped: data.skipped,
+                revealFailed: failed,
+                revealSentAt: event.timestamp
+              }
+            };
           });
           break;
         }
