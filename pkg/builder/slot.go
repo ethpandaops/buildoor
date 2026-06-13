@@ -11,15 +11,13 @@ type SlotManager struct {
 	cfg         *Config
 	currentSlot phase0.Slot
 	slotsBuilt  uint64
-	startSlot   phase0.Slot
 	mu          sync.Mutex
 }
 
 // NewSlotManager creates a new slot manager.
 func NewSlotManager(cfg *Config) *SlotManager {
 	return &SlotManager{
-		cfg:       cfg,
-		startSlot: phase0.Slot(cfg.Schedule.StartSlot),
+		cfg: cfg,
 	}
 }
 
@@ -28,8 +26,11 @@ func (m *SlotManager) ShouldBuildForSlot(slot phase0.Slot) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Read the start slot live from config so UI overrides take effect immediately.
+	startSlot := phase0.Slot(m.cfg.Schedule.StartSlot)
+
 	// Check start slot
-	if m.startSlot > 0 && slot < m.startSlot {
+	if startSlot > 0 && slot < startSlot {
 		return false
 	}
 
@@ -44,8 +45,8 @@ func (m *SlotManager) ShouldBuildForSlot(slot phase0.Slot) bool {
 
 		// Calculate slots since start
 		var slotsSinceStart uint64
-		if m.startSlot > 0 {
-			slotsSinceStart = uint64(slot - m.startSlot)
+		if startSlot > 0 {
+			slotsSinceStart = uint64(slot - startSlot)
 		} else {
 			slotsSinceStart = uint64(slot)
 		}
@@ -79,11 +80,6 @@ func (m *SlotManager) UpdateConfig(cfg *Config) {
 	defer m.mu.Unlock()
 
 	m.cfg = cfg
-
-	// Update start slot if changed
-	if cfg.Schedule.StartSlot > 0 {
-		m.startSlot = phase0.Slot(cfg.Schedule.StartSlot)
-	}
 
 	// Reset slots built if mode changed to next_n
 	if cfg.Schedule.Mode == ScheduleModeNextN {

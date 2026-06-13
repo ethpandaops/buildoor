@@ -40,6 +40,7 @@ export function getEventTypeClass(type: string): string {
     'bid_failed': 'event-bid-failed',
     'head_received': 'event-head',
     'reveal': 'event-reveal',
+    'reveal_failed': 'event-reveal-failed',
     'bid_event': 'event-bid-seen',
     'payload_available': 'event-envelope',
     'lifecycle': 'event-lifecycle',

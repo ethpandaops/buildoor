@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -148,14 +148,34 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'payload_build_started': {
+          const data = event.data as { slot: number; started_at: number };
+          addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { payloadBuildStartedAt: data.started_at });
+          break;
+        }
+
+        case 'payload_build_failed': {
+          const data = event.data as { slot: number; error: string; failed_at: number };
+          addEvent('payload_build_failed', `Payload build failed for slot ${data.slot}: ${data.error}`, event.timestamp);
+          updateSlotState(data.slot, {
+            payloadBuildFailed: true,
+            payloadBuildFailedAt: data.failed_at,
+            payloadBuildError: data.error
+          });
+          break;
+        }
+
         case 'payload_ready': {
-          const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
+          // block_value is the EL's MEV value as a wei decimal string; convert to
+          // gwei so it matches the gwei-based formatGwei display used elsewhere.
+          const data = event.data as { slot: number; block_hash: string; block_value: string; ready_at: number };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
-            payloadBlockValue: data.block_value
+            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0
           });
           break;
         }
@@ -200,14 +220,39 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean };
-          const revealMsg = data.skipped ? 'Reveal skipped' : (data.success ? 'Reveal successful' : 'Reveal failed');
-          addEvent('reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
-          updateSlotState(data.slot, {
-            revealed: data.success,
-            revealSkipped: data.skipped,
-            revealFailed: !data.success && !data.skipped,
-            revealSentAt: event.timestamp
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; error?: string; attempt?: number; max_attempts?: number };
+          const failed = !data.success && !data.skipped;
+          const attempt = data.attempt || 0;
+          const maxAttempts = data.max_attempts || 0;
+          const revealMsg = data.skipped
+            ? 'Reveal skipped'
+            : data.success
+              ? 'Reveal successful'
+              : `Reveal failed${attempt ? ` (attempt ${attempt}/${maxAttempts})` : ''}${data.error ? `: ${data.error}` : ''}`;
+          addEvent(failed ? 'reveal_failed' : 'reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
+          setSlotStates(prev => {
+            const st = prev[data.slot] || { slot: data.slot };
+            const revealAttempts: RevealAttempt[] = st.revealAttempts ? [...st.revealAttempts] : [];
+            revealAttempts.push({
+              time: event.timestamp,
+              success: data.success,
+              skipped: data.skipped,
+              error: data.error,
+              attempt,
+              maxAttempts
+            });
+            return {
+              ...prev,
+              [data.slot]: {
+                ...st,
+                slot: data.slot,
+                revealAttempts,
+                revealed: data.success,
+                revealSkipped: data.skipped,
+                revealFailed: failed,
+                revealSentAt: event.timestamp
+              }
+            };
           });
           break;
         }

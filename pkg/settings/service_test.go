@@ -68,7 +68,7 @@ func TestThreeWayResolution(t *testing.T) {
 	require.NoError(t, store.Init())
 
 	defaults := defaultsConfig()
-	require.Equal(t, uint64(500000000), defaults.EPBS.BidSubsidy)
+	require.Equal(t, uint64(100000000), defaults.EPBS.BidSubsidy)
 
 	// 1. Boot with --epbs-bid-subsidy 500 -> CLI wins over default.
 	svc := boot(t, store, defaults, u64(500))

@@ -68,9 +68,12 @@ type BidSubmissionEvent struct {
 
 // RevealEvent represents a payload reveal (success or failure).
 type RevealEvent struct {
-	Slot    phase0.Slot
-	Success bool
-	Skipped bool
+	Slot        phase0.Slot
+	Success     bool
+	Skipped     bool
+	Error       string // Failure reason (when Success is false)
+	Attempt     int    // 1-based attempt number for this reveal
+	MaxAttempts int    // Total attempts allowed before giving up
 }
 
 // BidIncludedEvent is fired when the beacon block includes our bid.
