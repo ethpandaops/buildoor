@@ -154,6 +154,10 @@ export interface SlotState {
   slot: number;
   scheduled?: boolean;
   slotStartTime?: number;
+  payloadBuildStartedAt?: number;
+  payloadBuildFailed?: boolean;
+  payloadBuildFailedAt?: number;
+  payloadBuildError?: string;
   payloadReady?: boolean;
   payloadCreatedAt?: number;
   payloadBlockHash?: string;

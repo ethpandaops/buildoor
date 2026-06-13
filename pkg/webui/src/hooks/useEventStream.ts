@@ -148,6 +148,24 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'payload_build_started': {
+          const data = event.data as { slot: number; started_at: number };
+          addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { payloadBuildStartedAt: data.started_at });
+          break;
+        }
+
+        case 'payload_build_failed': {
+          const data = event.data as { slot: number; error: string; failed_at: number };
+          addEvent('payload_build_failed', `Payload build failed for slot ${data.slot}: ${data.error}`, event.timestamp);
+          updateSlotState(data.slot, {
+            payloadBuildFailed: true,
+            payloadBuildFailedAt: data.failed_at,
+            payloadBuildError: data.error
+          });
+          break;
+        }
+
         case 'payload_ready': {
           const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);

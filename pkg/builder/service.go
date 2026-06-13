@@ -18,6 +18,10 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
+// buildCallTimeout is the margin added on top of the configured PayloadBuildTime
+// for the engine getPayload and finality lookups that run after the build wait.
+const buildCallTimeout = 10 * time.Second
+
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
 //
@@ -39,6 +43,8 @@ type Service struct {
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
+	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
+	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
 	slotManager            *SlotManager
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
@@ -93,6 +99,8 @@ func NewService(
 		validatorIndexCache:    validatorIndexCache,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
+		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
+		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		buildStartedSlots:      make(map[phase0.Slot]bool),
@@ -114,7 +122,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.clClient,
 		s.engineClient,
 		s.feeRecipient,
-		s.cfg.PayloadBuildTime,
+		s.cfg,
 		s.log,
 		s.validatorStore,
 		s.validatorIndexCache,
@@ -277,6 +285,22 @@ func (s *Service) SubscribePayloadReady(capacity int) *utils.Subscription[*Paylo
 	return s.payloadReadyDispatcher.Subscribe(capacity, false)
 }
 
+// SubscribePayloadBuildStarted subscribes to payload build started events.
+// Consumers (like the WebUI) use this to render builds as in-progress.
+func (s *Service) SubscribePayloadBuildStarted(
+	capacity int,
+) *utils.Subscription[*PayloadBuildStartedEvent] {
+	return s.buildStartedDispatcher.Subscribe(capacity, false)
+}
+
+// SubscribePayloadBuildFailed subscribes to payload build failed events.
+// Consumers (like the WebUI) use this to mark in-progress builds as failed.
+func (s *Service) SubscribePayloadBuildFailed(
+	capacity int,
+) *utils.Subscription[*PayloadBuildFailedEvent] {
+	return s.buildFailedDispatcher.Subscribe(capacity, false)
+}
+
 // GetPayloadCache returns the payload cache for direct access.
 func (s *Service) GetPayloadCache() *PayloadCache {
 	return s.payloadCache
@@ -430,7 +454,18 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 	}).Info("Starting payload build")
 
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	// Notify subscribers that building has started so the build can be rendered
+	// as in-progress before the payload is ready.
+	s.buildStartedDispatcher.Fire(&PayloadBuildStartedEvent{
+		Slot:      slot,
+		StartedAt: time.Now(),
+	})
+
+	// Size the build deadline to the configured build time plus a margin for the
+	// engine getPayload and finality lookups, so a long PayloadBuildTime doesn't
+	// make the getPayload call time out spuriously.
+	buildTimeout := time.Duration(s.cfg.PayloadBuildTime)*time.Millisecond + buildCallTimeout
+	ctx, cancel := context.WithTimeout(s.ctx, buildTimeout)
 	defer cancel()
 
 	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
@@ -438,6 +473,15 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		s.log.WithError(err).WithField("slot", slot).Error(
 			"Failed to build payload from attributes",
 		)
+
+		// Notify subscribers so the in-progress build is marked failed rather than
+		// left rendered as perpetually building.
+		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
+			Slot:     slot,
+			Error:    err.Error(),
+			FailedAt: time.Now(),
+		})
+
 		return
 	}
 

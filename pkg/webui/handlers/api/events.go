@@ -25,6 +25,8 @@ const (
 	EventTypeConfig                      EventType = "config"
 	EventTypeStatus                      EventType = "status"
 	EventTypeSlotStart                   EventType = "slot_start"
+	EventTypePayloadBuildStarted         EventType = "payload_build_started"
+	EventTypePayloadBuildFailed          EventType = "payload_build_failed"
 	EventTypePayloadReady                EventType = "payload_ready"
 	EventTypeBidSubmitted                EventType = "bid_submitted"
 	EventTypeHeadReceived                EventType = "head_received"
@@ -56,6 +58,21 @@ type StreamEvent struct {
 type SlotStartEvent struct {
 	Slot          uint64 `json:"slot"`
 	SlotStartTime int64  `json:"slot_start_time"`
+}
+
+// PayloadBuildStartedStreamEvent is sent when payload building begins, before
+// the payload is ready, so the WebUI can render the build as in-progress.
+type PayloadBuildStartedStreamEvent struct {
+	Slot      uint64 `json:"slot"`
+	StartedAt int64  `json:"started_at"`
+}
+
+// PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
+// can mark the in-progress build as failed.
+type PayloadBuildFailedStreamEvent struct {
+	Slot     uint64 `json:"slot"`
+	Error    string `json:"error"`
+	FailedAt int64  `json:"failed_at"`
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
@@ -267,6 +284,12 @@ func (m *EventStreamManager) Start() {
 	// Subscribe to payload ready events
 	payloadSub := m.builderSvc.SubscribePayloadReady(16)
 
+	// Subscribe to payload build started events (in-progress rendering)
+	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16)
+
+	// Subscribe to payload build failed events (mark builds as failed)
+	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16)
+
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
 	bidSub := m.builderSvc.GetCLClient().Events().SubscribeBids()
@@ -318,6 +341,8 @@ func (m *EventStreamManager) Start() {
 	go func() {
 		defer m.wg.Done()
 		defer payloadSub.Unsubscribe()
+		defer buildStartedSub.Unsubscribe()
+		defer buildFailedSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
@@ -335,6 +360,12 @@ func (m *EventStreamManager) Start() {
 
 			case event := <-payloadSub.Channel():
 				m.handlePayloadReady(event)
+
+			case event := <-buildStartedSub.Channel():
+				m.handlePayloadBuildStarted(event)
+
+			case event := <-buildFailedSub.Channel():
+				m.handlePayloadBuildFailed(event)
 
 			case event := <-headSub.Channel():
 				m.handleHeadEvent(event)
@@ -454,6 +485,29 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 
 	// Cleanup old states
 	m.cleanupOldSlots(slot)
+}
+
+func (m *EventStreamManager) handlePayloadBuildStarted(event *builder.PayloadBuildStartedEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadBuildStarted,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadBuildStartedStreamEvent{
+			Slot:      uint64(event.Slot),
+			StartedAt: event.StartedAt.UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuildFailedEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadBuildFailed,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadBuildFailedStreamEvent{
+			Slot:     uint64(event.Slot),
+			Error:    event.Error,
+			FailedAt: event.FailedAt.UnixMilli(),
+		},
+	})
 }
 
 func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent) {
