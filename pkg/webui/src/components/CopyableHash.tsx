@@ -9,9 +9,11 @@ interface CopyableHashProps {
   value: string;
   chars?: number;
   className?: string;
+  // When set, the full value is shown untruncated (still copyable on click).
+  full?: boolean;
 }
 
-export const CopyableHash: React.FC<CopyableHashProps> = ({ value, chars = 8, className = '' }) => {
+export const CopyableHash: React.FC<CopyableHashProps> = ({ value, chars = 8, className = '', full = false }) => {
   const [copied, setCopied] = useState(false);
 
   const handleClick = () => {
@@ -33,7 +35,7 @@ export const CopyableHash: React.FC<CopyableHashProps> = ({ value, chars = 8, cl
       style={{ cursor: 'pointer' }}
       className={`${copied ? 'text-success' : ''} ${className}`.trim()}
     >
-      {copied ? 'Copied!' : truncate(value, chars)}
+      {copied ? 'Copied!' : full ? value : truncate(value, chars)}
     </span>
   );
 };

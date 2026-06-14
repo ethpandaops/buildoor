@@ -335,36 +335,79 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
 
         {/* Chain + payload events row (always on top) */}
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
-          {/* Build delay line: from build start to payload ready (animates live while building) */}
-          {epbsConfig && buildActive && genesisTime > 0 && buildStartX < 100 && (
+          {/* Build delay line: from build start to payload ready (animates live while building).
+              On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
+          {epbsConfig && buildActive && !buildFailed && genesisTime > 0 && buildStartX < 100 && (
             <BuildDelayLine
               leftPct={buildStartX}
               slotStartTime={slotStartTime}
               rangeStart={rangeStart}
               totalRange={totalRange}
               endAt={buildEndAt}
-              failed={buildFailed}
               expectedEndAt={expectedBuildEndAt}
               onClick={(e) => showPopover(e, {
-                title: buildFailed ? 'Build Failed' : 'Build Delay',
-                items: buildFailed
+                title: 'Build Delay',
+                items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
-                      ...(state.payloadBuildFailedAt ? [{ label: 'Failed At', value: `${state.payloadBuildFailedAt - slotStartTime}ms` }] : []),
-                      { label: 'Error', value: state.payloadBuildError || 'unknown error' }
+                      { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                      { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
                     ]
-                  : state.payloadCreatedAt
-                    ? [
-                        { label: 'Build Start', value: `${buildStartMs}ms` },
-                        { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
-                        { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
-                      ]
-                    : [
-                        { label: 'Build Start', value: `${buildStartMs}ms` },
-                        { label: 'Status', value: 'Building…' }
-                      ]
+                  : [
+                      { label: 'Build Start', value: `${buildStartMs}ms` },
+                      { label: 'Status', value: 'Building…' }
+                    ]
               })}
             />
+          )}
+
+          {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
+          {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
+            'build-failed',
+            (state.payloadBuildFailedAt ?? (slotStartTime + buildStartMs)) - slotStartTime,
+            {
+              title: 'Build Failed',
+              items: [
+                { label: 'Build Start', value: `${buildStartMs}ms` },
+                ...(state.payloadBuildFailedAt ? [{ label: 'Failed At', value: `${state.payloadBuildFailedAt - slotStartTime}ms` }] : []),
+                { label: 'Error', value: state.payloadBuildError || 'unknown error' }
+              ]
+            },
+            'build-failed'
+          )}
+
+          {/* Payload attributes for the next slot — arrives during this slot, so
+              it is rendered here (on the parent slot's graph) with details on click. */}
+          {state.nextSlotAttributes && genesisTime > 0 && renderEventDot(
+            'payload-attributes',
+            state.nextSlotAttributes.receivedAt - slotStartTime,
+            {
+              title: `Payload Attributes (slot ${state.nextSlotAttributes.proposalSlot})`,
+              items: [
+                { label: 'For Slot', value: `${state.nextSlotAttributes.proposalSlot}` },
+                { label: 'Proposer', value: `${state.nextSlotAttributes.proposerIndex}` },
+                { label: 'Received', value: `${state.nextSlotAttributes.receivedAt - slotStartTime}ms` },
+                {
+                  label: 'Parent Hash',
+                  value: truncateHash(state.nextSlotAttributes.parentBlockHash),
+                  copyValue: state.nextSlotAttributes.parentBlockHash
+                },
+                {
+                  label: 'Parent Root',
+                  value: truncateHash(state.nextSlotAttributes.parentBlockRoot),
+                  copyValue: state.nextSlotAttributes.parentBlockRoot
+                },
+                { label: 'Parent Block #', value: `${state.nextSlotAttributes.parentBlockNumber}` },
+                { label: 'Gas Limit', value: `${state.nextSlotAttributes.targetGasLimit}` },
+                { label: 'Withdrawals', value: `${state.nextSlotAttributes.withdrawalsCount}` },
+                {
+                  label: 'Fee Recipient',
+                  value: truncateHash(state.nextSlotAttributes.feeRecipient),
+                  copyValue: state.nextSlotAttributes.feeRecipient
+                }
+              ]
+            },
+            'payload-attributes'
           )}
 
           {/* Payload created */}

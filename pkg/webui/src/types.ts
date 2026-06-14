@@ -197,6 +197,22 @@ export interface SlotState {
   submitBlindedReceivedAt?: number;
   submitBlindedDeliveredAt?: number;
   submitBlindedBlockHash?: string;
+  // payload_attributes event targeting the NEXT slot (this.slot + 1). It arrives
+  // before the slot it targets, so it is rendered on this (parent) slot's graph.
+  nextSlotAttributes?: PayloadAttributesInfo;
+}
+
+export interface PayloadAttributesInfo {
+  proposalSlot: number;
+  proposerIndex: number;
+  parentBlockHash: string;
+  parentBlockRoot: string;
+  parentBlockNumber: number;
+  timestamp: number;
+  feeRecipient: string;
+  targetGasLimit: number;
+  withdrawalsCount: number;
+  receivedAt: number;
 }
 
 export interface OurBid {
@@ -216,6 +232,7 @@ export interface ExternalBid {
 }
 
 export interface LogEvent {
+  id: number;
   type: string;
   message: string;
   timestamp: number;
