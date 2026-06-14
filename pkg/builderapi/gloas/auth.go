@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	eth2gloas "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -36,7 +36,7 @@ var (
 //
 // Returns nil on success, or one of the package's sentinel errors on failure.
 func VerifyRequestAuth(
-	signed *eth2gloas.SignedRequestAuth,
+	signed *buildergloas.SignedRequestAuthV1,
 	validatorPubkey phase0.BLSPubKey,
 	genesisForkVersion phase0.Version,
 ) error {
@@ -55,7 +55,7 @@ func VerifyRequestAuth(
 	domain := signer.ComputeDomain(DomainRequestAuth, genesisForkVersion, phase0.Root{})
 	signingRoot := signer.ComputeSigningRoot(msgRoot, domain)
 
-	if !signer.VerifyBLSSignature(validatorPubkey, signingRoot[:], signed.Signature) {
+	if !signer.VerifyBLSSignature(validatorPubkey, signingRoot[:], phase0.BLSSignature(signed.Signature)) {
 		return ErrInvalidRequestAuthSignature
 	}
 	return nil

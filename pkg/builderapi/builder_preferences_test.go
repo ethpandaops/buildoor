@@ -8,7 +8,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	eth2gloas "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
+	// attphase0 is the attestantio phase0 used by go-builder-client's builder-API
+	// types. Buildoor uses ethpandaops/go-eth2-client everywhere; this import exists
+	// ONLY so tests can populate buildergloas struct fields (Slot/Gwei/Signature),
+	// which are attestantio-typed. Production code converts at the boundary and never
+	// imports attestantio. Prefer ethpandaops/go-eth2-client outside of this.
+	attphase0 "github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -38,9 +44,9 @@ func signBuilderPrefsRequest(
 ) []byte {
 	t.Helper()
 
-	auth := &eth2gloas.RequestAuth{
+	auth := &buildergloas.RequestAuthV1{
 		Data: []byte(builderURL),
-		Slot: slot,
+		Slot: attphase0.Slot(slot),
 	}
 	root, err := auth.HashTreeRoot()
 	require.NoError(t, err)
@@ -49,11 +55,11 @@ func signBuilderPrefsRequest(
 	sig, err := s.SignWithDomain(phase0.Root(root), domain)
 	require.NoError(t, err)
 
-	req := &eth2gloas.BuilderPreferencesRequest{
-		Preferences: &eth2gloas.BuilderPreferences{MaxExecutionPayment: maxPayment},
-		Auth: &eth2gloas.SignedRequestAuth{
+	req := &buildergloas.BuilderPreferencesRequestV1{
+		Preferences: &buildergloas.BuilderPreferencesV1{MaxExecutionPayment: attphase0.Gwei(maxPayment)},
+		Auth: &buildergloas.SignedRequestAuthV1{
 			Message:   auth,
-			Signature: sig,
+			Signature: attphase0.BLSSignature(sig),
 		},
 	}
 	body, err := json.Marshal(req)
@@ -104,7 +110,7 @@ func TestSubmitBuilderPreferences_Success(t *testing.T) {
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -128,7 +134,7 @@ func TestSubmitBuilderPreferences_LatestOverwrites(t *testing.T) {
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 	pk := blsSigner.PublicKey()
@@ -152,7 +158,7 @@ func TestSubmitBuilderPreferences_WrongBuilderURL(t *testing.T) {
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -178,7 +184,7 @@ func TestSubmitBuilderPreferences_BadSignature(t *testing.T) {
 	other, err := signer.NewBLSSigner(testOtherPrivkey)
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -202,7 +208,7 @@ func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{Port: 0} // BuilderURL empty
+	cfg := &config.BuilderAPIConfig{} // BuilderURL empty
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -219,7 +225,7 @@ func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 }
 
 func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -233,7 +239,7 @@ func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
 }
 
 func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 	srv.SetEnabled(true)
 
@@ -246,7 +252,7 @@ func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
 }
 
 func TestSubmitBuilderPreferences_Disabled(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{Port: 0, BuilderURL: testBuilderURL}
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
 	// not enabled
 

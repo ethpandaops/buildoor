@@ -4,7 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	eth2gloas "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
+	// attphase0 is the attestantio phase0 used by go-builder-client's builder-API
+	// types. Buildoor uses ethpandaops/go-eth2-client everywhere; this import exists
+	// ONLY so tests can populate buildergloas struct fields (Slot/Signature), which
+	// are attestantio-typed. Production code converts at the boundary and never
+	// imports attestantio. Prefer ethpandaops/go-eth2-client outside of this.
+	attphase0 "github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/require"
 
@@ -28,12 +34,12 @@ func signRequestAuth(
 	builderURL []byte,
 	slot phase0.Slot,
 	genesisForkVersion phase0.Version,
-) *eth2gloas.SignedRequestAuth {
+) *buildergloas.SignedRequestAuthV1 {
 	t.Helper()
 
-	msg := &eth2gloas.RequestAuth{
+	msg := &buildergloas.RequestAuthV1{
 		Data: builderURL,
-		Slot: slot,
+		Slot: attphase0.Slot(slot),
 	}
 
 	root, err := msg.HashTreeRoot()
@@ -44,9 +50,9 @@ func signRequestAuth(
 	sig, err := s.SignWithDomain(root, domain)
 	require.NoError(t, err)
 
-	return &eth2gloas.SignedRequestAuth{
+	return &buildergloas.SignedRequestAuthV1{
 		Message:   msg,
-		Signature: sig,
+		Signature: attphase0.BLSSignature(sig),
 	}
 }
 
@@ -61,7 +67,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 
 	genesisForkVersion := phase0.Version{}
 
-	msg := &eth2gloas.RequestAuth{
+	msg := &buildergloas.RequestAuthV1{
 		Data: []byte(testBuilderURL),
 		Slot: 1234,
 	}
@@ -72,7 +78,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 	require.NotEmpty(t, encoded)
 
 	// Unmarshal from SSZ into a fresh value.
-	decoded := &eth2gloas.RequestAuth{}
+	decoded := &buildergloas.RequestAuthV1{}
 	require.NoError(t, decoded.UnmarshalSSZ(encoded))
 
 	// The decoded value must match the original.
@@ -91,9 +97,9 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 	sig, err := validator.SignWithDomain(decodedRoot, domain)
 	require.NoError(t, err)
 
-	signed := &eth2gloas.SignedRequestAuth{
+	signed := &buildergloas.SignedRequestAuthV1{
 		Message:   decoded,
-		Signature: sig,
+		Signature: attphase0.BLSSignature(sig),
 	}
 	require.NoError(t, gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
 }
@@ -175,9 +181,9 @@ func TestVerifyRequestAuth_NilMessage(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
 
-	signed := &eth2gloas.SignedRequestAuth{
+	signed := &buildergloas.SignedRequestAuthV1{
 		Message:   nil,
-		Signature: phase0.BLSSignature{},
+		Signature: attphase0.BLSSignature{},
 	}
 
 	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
@@ -188,13 +194,13 @@ func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
 
-	signed := &eth2gloas.SignedRequestAuth{
-		Message: &eth2gloas.RequestAuth{
+	signed := &buildergloas.SignedRequestAuthV1{
+		Message: &buildergloas.RequestAuthV1{
 			Data: []byte(testBuilderURL),
 			Slot: 1,
 		},
 		// All-zero signature is not a valid BLS signature.
-		Signature: phase0.BLSSignature{},
+		Signature: attphase0.BLSSignature{},
 	}
 
 	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})

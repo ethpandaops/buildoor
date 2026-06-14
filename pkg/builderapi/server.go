@@ -22,6 +22,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
+	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
@@ -618,7 +619,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if len(authBody) > 0 {
-		var signedAuth gloas.SignedRequestAuth
+		var signedAuth buildergloas.SignedRequestAuthV1
 		if jsonErr := json.Unmarshal(authBody, &signedAuth); jsonErr != nil {
 			log.WithError(jsonErr).Warn("getExecutionPayloadBid: invalid SignedRequestAuth body")
 			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: "+jsonErr.Error())
@@ -629,7 +630,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: message is null")
 			return
 		}
-		if signedAuth.Message.Slot != slot {
+		if phase0.Slot(signedAuth.Message.Slot) != slot {
 			log.WithFields(logrus.Fields{
 				"auth_slot":    signedAuth.Message.Slot,
 				"request_slot": slot,
@@ -1019,7 +1020,7 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var req gloas.BuilderPreferencesRequest
+	var req buildergloas.BuilderPreferencesRequestV1
 	if err := json.Unmarshal(body, &req); err != nil {
 		log.WithError(err).Warn("submitBuilderPreferences: invalid JSON body")
 		writeValidatorError(w, http.StatusBadRequest, "invalid BuilderPreferencesRequestV1: "+err.Error())
@@ -1056,7 +1057,7 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 	}
 
 	// Auth validated — record the latest preference (overwrites any previous value).
-	s.builderPrefsStore.Set(validatorPubkey, req.Preferences.MaxExecutionPayment)
+	s.builderPrefsStore.Set(validatorPubkey, phase0.Gwei(req.Preferences.MaxExecutionPayment))
 	log.WithFields(logrus.Fields{
 		"validator_pubkey":      "0x" + hex.EncodeToString(validatorPubkey[:]),
 		"max_execution_payment": uint64(req.Preferences.MaxExecutionPayment),
