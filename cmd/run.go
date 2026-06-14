@@ -156,6 +156,13 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
+		// Configure the global dynssz instance with this network's spec so the
+		// go-eth2-client SSZ codecs (block.Root(), envelope HashTreeRoot, ...)
+		// compute correct hash-tree-roots on non-mainnet presets (e.g. minimal).
+		if err := clClient.InitGlobalSSZSpecs(ctx); err != nil {
+			return fmt.Errorf("failed to init global SSZ specs: %w", err)
+		}
+
 		// Apply slot-relative timing defaults now that we know the slot duration
 		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
 		cfg.ApplySlotDefaults(slotTimeMs)
