@@ -25,6 +25,7 @@ const (
 	EventTypeConfig                      EventType = "config"
 	EventTypeStatus                      EventType = "status"
 	EventTypeSlotStart                   EventType = "slot_start"
+	EventTypePayloadAttributes           EventType = "payload_attributes"
 	EventTypePayloadBuildStarted         EventType = "payload_build_started"
 	EventTypePayloadBuildFailed          EventType = "payload_build_failed"
 	EventTypePayloadReady                EventType = "payload_ready"
@@ -65,6 +66,22 @@ type SlotStartEvent struct {
 type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
 	StartedAt int64  `json:"started_at"`
+}
+
+// PayloadAttributesStreamEvent is sent when a payload_attributes event is
+// received from the beacon node. It arrives before the slot it targets
+// (ProposalSlot), so the WebUI renders it on the parent slot's graph.
+type PayloadAttributesStreamEvent struct {
+	ProposalSlot      uint64 `json:"proposal_slot"`
+	ProposerIndex     uint64 `json:"proposer_index"`
+	ParentBlockHash   string `json:"parent_block_hash"`
+	ParentBlockRoot   string `json:"parent_block_root"`
+	ParentBlockNumber uint64 `json:"parent_block_number"`
+	Timestamp         uint64 `json:"timestamp"`
+	FeeRecipient      string `json:"fee_recipient"`
+	TargetGasLimit    uint64 `json:"target_gas_limit"`
+	WithdrawalsCount  int    `json:"withdrawals_count"`
+	ReceivedAt        int64  `json:"received_at"`
 }
 
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
@@ -297,6 +314,7 @@ func (m *EventStreamManager) Start() {
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
 	bidSub := m.builderSvc.GetCLClient().Events().SubscribeBids()
 	payloadAvailSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAvailable()
+	payloadAttrSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAttributes()
 
 	// Subscribe to bid submission events from ePBS service (if available)
 	var bidSubmitChan <-chan *epbs.BidSubmissionEvent
@@ -349,6 +367,7 @@ func (m *EventStreamManager) Start() {
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
+		defer payloadAttrSub.Unsubscribe()
 
 		// Slot tracking ticker
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -378,6 +397,9 @@ func (m *EventStreamManager) Start() {
 
 			case event := <-payloadAvailSub.Channel():
 				m.handlePayloadAvailableEvent(event)
+
+			case event := <-payloadAttrSub.Channel():
+				m.handlePayloadAttributesEvent(event)
 
 			case event, ok := <-bidSubmitChan:
 				if ok {
@@ -497,6 +519,25 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *builder.PayloadBui
 		Data: PayloadBuildStartedStreamEvent{
 			Slot:      uint64(event.Slot),
 			StartedAt: event.StartedAt.UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadAttributes,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadAttributesStreamEvent{
+			ProposalSlot:      uint64(event.ProposalSlot),
+			ProposerIndex:     uint64(event.ProposerIndex),
+			ParentBlockHash:   fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockRoot:   fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
+			ParentBlockNumber: event.ParentBlockNumber,
+			Timestamp:         event.Timestamp,
+			FeeRecipient:      event.SuggestedFeeRecipient.Hex(),
+			TargetGasLimit:    event.TargetGasLimit,
+			WithdrawalsCount:  len(event.Withdrawals),
+			ReceivedAt:        time.Now().UnixMilli(),
 		},
 	})
 }

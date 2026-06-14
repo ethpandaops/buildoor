@@ -35,6 +35,7 @@ export function isSlotScheduled(slot: number, schedule: ScheduleConfig | undefin
 export function getEventTypeClass(type: string): string {
   const classes: Record<string, string> = {
     'slot_start': 'event-slot-start',
+    'payload_attributes': 'event-payload-attributes',
     'payload_ready': 'event-payload',
     'bid_submitted': 'event-bid',
     'bid_failed': 'event-bid-failed',

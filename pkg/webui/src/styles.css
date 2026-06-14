@@ -236,6 +236,11 @@
 }
 
 /* Builder event colors */
+.payload-attributes {
+  background: #e83e8c;
+  border: 2px solid #c2255c;
+}
+
 .payload-created {
   background: #17a2b8;
   border: 2px solid #138496;
@@ -483,6 +488,7 @@
 .bg-block-received { background: #fd7e14; }
 .bg-payload-received { background: #20c997; }
 .bg-external-bid { background: #6c757d; width: 6px; height: 6px; }
+.bg-payload-attributes { background: #e83e8c; }
 .bg-payload-created { background: #17a2b8; }
 .bg-build-failed { background: #dc3545; }
 .bg-bid-submitted { background: #28a745; }
@@ -526,6 +532,7 @@
 }
 
 .event-slot-start { border-left: 3px solid var(--bs-info); }
+.event-payload-attributes { border-left: 3px solid #e83e8c; }
 .event-payload { border-left: 3px solid #17a2b8; }
 .event-bid { border-left: 3px solid #28a745; }
 .event-bid-failed { border-left: 3px solid #dc3545; }

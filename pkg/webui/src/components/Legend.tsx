@@ -11,6 +11,7 @@ export const Legend: React.FC = () => {
         <span className="legend-section ms-2">Network:</span>
         <span><span className="legend-dot bg-head-votes"></span> Head Votes</span>
         <span className="legend-section ms-2">Builder:</span>
+        <span><span className="legend-dot bg-payload-attributes"></span> Payload Attributes</span>
         <span><span className="legend-dot bg-payload-created"></span> Payload Created</span>
         <span><span className="legend-dot bg-build-failed"></span> Build Failed</span>
         <span><span className="legend-dot bg-bid-submitted"></span> Bid Submitted</span>

@@ -148,6 +148,39 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'payload_attributes': {
+          const data = event.data as {
+            proposal_slot: number;
+            proposer_index: number;
+            parent_block_hash: string;
+            parent_block_root: string;
+            parent_block_number: number;
+            timestamp: number;
+            fee_recipient: string;
+            target_gas_limit: number;
+            withdrawals_count: number;
+            received_at: number;
+          };
+          addEvent('payload_attributes', `Payload attributes received for slot ${data.proposal_slot}`, event.timestamp);
+          // The attributes target proposal_slot but arrive before it, so render
+          // them on the parent slot's graph (proposal_slot - 1).
+          updateSlotState(data.proposal_slot - 1, {
+            nextSlotAttributes: {
+              proposalSlot: data.proposal_slot,
+              proposerIndex: data.proposer_index,
+              parentBlockHash: data.parent_block_hash,
+              parentBlockRoot: data.parent_block_root,
+              parentBlockNumber: data.parent_block_number,
+              timestamp: data.timestamp,
+              feeRecipient: data.fee_recipient,
+              targetGasLimit: data.target_gas_limit,
+              withdrawalsCount: data.withdrawals_count,
+              receivedAt: data.received_at
+            }
+          });
+          break;
+        }
+
         case 'payload_build_started': {
           const data = event.data as { slot: number; started_at: number };
           addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);

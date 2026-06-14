@@ -376,6 +376,40 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             'build-failed'
           )}
 
+          {/* Payload attributes for the next slot — arrives during this slot, so
+              it is rendered here (on the parent slot's graph) with details on click. */}
+          {state.nextSlotAttributes && genesisTime > 0 && renderEventDot(
+            'payload-attributes',
+            state.nextSlotAttributes.receivedAt - slotStartTime,
+            {
+              title: `Payload Attributes (slot ${state.nextSlotAttributes.proposalSlot})`,
+              items: [
+                { label: 'For Slot', value: `${state.nextSlotAttributes.proposalSlot}` },
+                { label: 'Proposer', value: `${state.nextSlotAttributes.proposerIndex}` },
+                { label: 'Received', value: `${state.nextSlotAttributes.receivedAt - slotStartTime}ms` },
+                {
+                  label: 'Parent Hash',
+                  value: truncateHash(state.nextSlotAttributes.parentBlockHash),
+                  copyValue: state.nextSlotAttributes.parentBlockHash
+                },
+                {
+                  label: 'Parent Root',
+                  value: truncateHash(state.nextSlotAttributes.parentBlockRoot),
+                  copyValue: state.nextSlotAttributes.parentBlockRoot
+                },
+                { label: 'Parent Block #', value: `${state.nextSlotAttributes.parentBlockNumber}` },
+                { label: 'Gas Limit', value: `${state.nextSlotAttributes.targetGasLimit}` },
+                { label: 'Withdrawals', value: `${state.nextSlotAttributes.withdrawalsCount}` },
+                {
+                  label: 'Fee Recipient',
+                  value: truncateHash(state.nextSlotAttributes.feeRecipient),
+                  copyValue: state.nextSlotAttributes.feeRecipient
+                }
+              ]
+            },
+            'payload-attributes'
+          )}
+
           {/* Payload created */}
           {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
             'payload-created',
