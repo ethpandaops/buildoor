@@ -10,6 +10,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -67,7 +68,9 @@ func (c *BidCreator) CreateAndSubmitBid(
 		}
 		execRequests = parsed
 	}
-	execRequestsRoot, err := execRequests.HashTreeRoot()
+	// Use dynssz so preset-dependent list limits resolve from the global spec
+	// (matches the node's computation on non-mainnet presets).
+	execRequestsRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(execRequests)
 	if err != nil {
 		return fmt.Errorf("failed to compute execution requests root: %w", err)
 	}

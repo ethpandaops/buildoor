@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	dynssz "github.com/pk910/dynamic-ssz"
 
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -35,8 +36,10 @@ func (s *Signer) SignExecutionPayloadBid(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
-	// Compute hash tree root of the bid
-	bidRoot, err := bid.HashTreeRoot()
+	// Compute hash tree root of the bid via dynssz so preset-dependent sizes
+	// (resolved from the global spec) are honoured rather than the static
+	// mainnet-preset sizes baked into the generated HashTreeRoot().
+	bidRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(bid)
 	if err != nil {
 		return phase0.BLSSignature{}, fmt.Errorf("failed to compute bid hash tree root: %w", err)
 	}
@@ -57,8 +60,10 @@ func (s *Signer) SignExecutionPayloadEnvelope(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
-	// Compute hash tree root of the envelope
-	envelopeRoot, err := envelope.HashTreeRoot()
+	// Compute hash tree root of the envelope via dynssz so preset-dependent
+	// sizes (resolved from the global spec) are honoured rather than the static
+	// mainnet-preset sizes baked into the generated HashTreeRoot().
+	envelopeRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(envelope)
 	if err != nil {
 		return phase0.BLSSignature{}, fmt.Errorf("failed to compute envelope hash tree root: %w", err)
 	}
