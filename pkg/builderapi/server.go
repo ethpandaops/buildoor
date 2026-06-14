@@ -19,10 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
@@ -38,9 +38,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -97,7 +97,7 @@ type Server struct {
 	genesisForkVersion    phase0.Version             // genesis fork version for builder domain (mev-boost-relay style)
 	forkVersion           phase0.Version             // current fork version for chain-specific verification
 	genesisValidatorsRoot phase0.Root                // genesis validators root for chain-specific verification
-	stateDB               *db.Database         // optional: persistent won-block store (may be nil/disabled)
+	stateDB               *db.Database               // optional: persistent won-block store (may be nil/disabled)
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
