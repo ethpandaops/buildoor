@@ -37,8 +37,12 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+<<<<<<< HEAD
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+=======
+	"github.com/ethpandaops/buildoor/pkg/db"
+>>>>>>> b3457431de24b35073a09fdb6e786721197f017a
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -78,8 +82,6 @@ type RequestStats struct {
 type Server struct {
 	cfg                   *config.BuilderAPIConfig
 	log                   *logrus.Logger
-	server                *http.Server
-	router                *mux.Router
 	builderSvc            PayloadCacheProvider       // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
 	validatorsStore       *validators.Store          // in-memory validator registrations
 	blsSigner             *signer.BLSSigner          // optional: for signing Fulu builder bids (getHeader)
@@ -90,7 +92,7 @@ type Server struct {
 	builderPrefsStore     *BuilderPreferencesStore   // latest per-validator builder preferences (max_execution_payment)
 	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
 	chainSvc              chain.Service              // optional: used to verify builder is active before serving Gloas bids
-	builderIndex          atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
+	stateDB               *db.Database         // optional: persistent won-block store (may be nil/disabled)
 	enabled               atomic.Bool                // runtime toggle for enabling/disabling the builder API
 	headersRequested      atomic.Uint64              // count of getHeader requests received
 	blocksPublished       atomic.Uint64              // count of successfully published blocks
@@ -110,10 +112,9 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 	if store == nil {
 		store = validators.NewStore()
 	}
-	s := &Server{
+	return &Server{
 		cfg:                   cfg,
 		log:                   log,
-		router:                mux.NewRouter(),
 		builderSvc:            builderSvc,
 		validatorsStore:       store,
 		blsSigner:             blsSigner,
@@ -123,10 +124,12 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc Payl
 		forkVersion:           forkVersion,
 		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
+}
 
-	s.registerRoutes()
-
-	return s
+// SetStateDB sets the optional state-db used to persist won blocks. When unset
+// (or disabled), won blocks are only kept in the in-memory store.
+func (s *Server) SetStateDB(stateDB *db.Database) {
+	s.stateDB = stateDB
 }
 
 // SetEnabled sets the enabled state of the Builder API server.
@@ -193,22 +196,17 @@ func (s *Server) GetRequestStats() RequestStats {
 	}
 }
 
-// Handler returns the HTTP handler for tests.
-func (s *Server) Handler() http.Handler {
-	return s.router
-}
-
-// registerRoutes sets up Builder API and Buildoor API routes.
-func (s *Server) registerRoutes() {
+// RegisterRoutes registers Builder API and Buildoor API routes onto the given router.
+func (s *Server) RegisterRoutes(router *mux.Router) {
 	// --- Builder API (standard spec) ---
 	// https://github.com/ethereum/builder-specs
-	builderAPI := s.router.PathPrefix("/eth/v1/builder").Subrouter()
+	builderAPI := router.PathPrefix("/eth/v1/builder").Subrouter()
 	builderAPI.HandleFunc("/status", s.handleBuilderStatus).Methods(http.MethodGet)
 	builderAPI.HandleFunc("/validators", s.handleRegisterValidators).Methods(http.MethodPost)
 	builderAPI.HandleFunc("/header/{slot}/{parent_hash}/{pubkey}", s.handleGetHeader).Methods(http.MethodGet)
 
 	// --- Builder API v2 (Fulu blinded blocks) ---
-	builderAPIv2 := s.router.PathPrefix("/eth/v2/builder").Subrouter()
+	builderAPIv2 := router.PathPrefix("/eth/v2/builder").Subrouter()
 	builderAPIv2.HandleFunc("/blinded_blocks", s.handleSubmitBlindedBlockV2).Methods(http.MethodPost)
 
 	// --- Builder API (Gloas) ---
@@ -226,9 +224,16 @@ func (s *Server) registerRoutes() {
 	).Methods(http.MethodPost)
 
 	// --- Buildoor API (debug / tooling) ---
-	buildoorAPI := s.router.PathPrefix("/buildoor/v1").Subrouter()
+	buildoorAPI := router.PathPrefix("/buildoor/v1").Subrouter()
 	buildoorAPI.HandleFunc("/payloads/{slot}", s.handleGetPayloadBySlot).Methods(http.MethodGet)
 	buildoorAPI.HandleFunc("/validators", s.handleGetValidators).Methods(http.MethodGet)
+}
+
+// Handler returns an HTTP handler with routes registered; used in tests.
+func (s *Server) Handler() http.Handler {
+	r := mux.NewRouter()
+	s.RegisterRoutes(r)
+	return r
 }
 
 // handleBuilderStatus handles GET /eth/v1/builder/status
@@ -1175,6 +1180,22 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 
 	s.bidsWonStore.Add(entry)
 
+	// Persist to the state-db so won blocks survive restarts (no-op when disabled).
+	if s.stateDB != nil {
+		if err := s.stateDB.AddWonBlock(db.WonBlock{
+			Source:          db.WonBlockSourceBuilderAPI,
+			Slot:            entry.Slot,
+			BlockHash:       entry.BlockHash,
+			NumTransactions: entry.NumTransactions,
+			NumBlobs:        entry.NumBlobs,
+			ValueWei:        entry.ValueWei,
+			ValueETH:        entry.ValueETH,
+			Timestamp:       entry.Timestamp,
+		}); err != nil {
+			log.WithError(err).Warn("failed to persist won block to state-db")
+		}
+	}
+
 	// Broadcast bid won event to WebUI
 	if s.eventBroadcaster != nil {
 		s.eventBroadcaster.BroadcastBidWon(uint64(slot), blockHashHex, numTxs, numBlobs, valueETH, event.BlockValue.String())
@@ -1182,41 +1203,4 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-}
-
-// Start starts the Builder API HTTP server.
-func (s *Server) Start(ctx context.Context) error {
-	addr := fmt.Sprintf("0.0.0.0:%d", s.cfg.Port)
-
-	s.server = &http.Server{
-		Addr:         addr,
-		Handler:      s.router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-
-	s.log.WithField("addr", addr).Info("Starting Builder API server")
-
-	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			s.log.WithError(err).Error("Builder API server error")
-		}
-	}()
-
-	return nil
-}
-
-// Stop gracefully shuts down the Builder API server.
-func (s *Server) Stop() error {
-	if s.server == nil {
-		return nil
-	}
-
-	s.log.Info("Stopping Builder API server")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	return s.server.Shutdown(ctx)
 }

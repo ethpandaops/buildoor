@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 
@@ -114,7 +115,7 @@ func (c *Client) GetTransactionReceipt(
 	return receipt, nil
 }
 
-// GetNonce returns the pending nonce for an address.
+// GetNonce returns the pending nonce for an address (includes mempool txs).
 func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, error) {
 	nonce, err := c.ethClient.PendingNonceAt(ctx, address)
 	if err != nil {
@@ -122,6 +123,36 @@ func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, 
 	}
 
 	return nonce, nil
+}
+
+// GetConfirmedNonce returns the account nonce at the latest block (state at head,
+// excluding the mempool). It is reliable even on clients whose "pending" nonce is
+// buggy: ethrex has been observed returning a pending nonce *below* the latest one,
+// which would otherwise cause us to build an already-used ("too low") nonce.
+func (c *Client) GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error) {
+	nonce, err := c.ethClient.NonceAt(ctx, address, nil)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
+	}
+
+	return nonce, nil
+}
+
+// IsTxKnown reports whether the node currently knows the transaction (pending in the
+// mempool or already mined). Returns false (without error) when the tx is unknown.
+// This lets callers reason about transaction acceptance from node state rather than
+// by parsing client-specific send error strings.
+func (c *Client) IsTxKnown(ctx context.Context, txHash common.Hash) (bool, error) {
+	_, _, err := c.ethClient.TransactionByHash(ctx, txHash)
+	if err != nil {
+		if errors.Is(err, ethereum.NotFound) {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("failed to look up transaction: %w", err)
+	}
+
+	return true, nil
 }
 
 // GetBalance returns the balance for an address.

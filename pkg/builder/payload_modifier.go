@@ -306,10 +306,7 @@ func buildHeaderFromPayload(
 		slotNumber = &sn
 
 		balBytes := engine.DecodeBlockAccessList(payload.BlockAccessList)
-		if len(balBytes) == 0 {
-			h := types.EmptyBlockAccessListHash
-			blockAccessListHash = &h
-		} else {
+		if len(balBytes) > 0 {
 			h := crypto.Keccak256Hash(balBytes)
 			blockAccessListHash = &h
 		}

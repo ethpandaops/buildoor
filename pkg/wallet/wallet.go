@@ -19,16 +19,54 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 )
 
+// Transaction submission tuning for the multi-instance-safe send path.
+const (
+	// txPollInterval is how often SendAndConfirm polls for a receipt / nonce progress.
+	txPollInterval = 2 * time.Second
+	// txMaxAttempts bounds nonce-conflict / displacement retries within a single send.
+	txMaxAttempts = 8
+	// txConflictBackoff is the pause before refetching the nonce after a conflict.
+	txConflictBackoff = 500 * time.Millisecond
+)
+
+// walletBackend is the subset of execution-RPC operations the wallet depends on.
+// It is satisfied by *execution.Client and lets transaction-submission logic be
+// exercised against a fake in tests.
+type walletBackend interface {
+	GetChainID(ctx context.Context) (*big.Int, error)
+	GetNonce(ctx context.Context, address common.Address) (uint64, error)
+	GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error)
+	GetBalance(ctx context.Context, address common.Address) (*big.Int, error)
+	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
+	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
+	SendTransaction(ctx context.Context, tx *types.Transaction) error
+	GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
+	IsTxKnown(ctx context.Context, txHash common.Hash) (bool, error)
+}
+
+var _ walletBackend = (*execution.Client)(nil)
+
 // Wallet manages an Ethereum wallet for transaction operations.
+//
+// The wallet is safe to use when multiple independent buildoor instances share the
+// same funding key: each transaction sources a fresh on-chain nonce, txMu serializes
+// this process's own submissions, and SendAndConfirm resolves cross-process nonce
+// conflicts (refetch + retry) and detects its tx being displaced by another instance.
 type Wallet struct {
-	privkey      *ecdsa.PrivateKey
-	address      common.Address
-	rpcClient    *execution.Client
-	chainID      *big.Int
-	mu           sync.Mutex
-	pendingNonce uint64
-	balance      *big.Int
-	log          logrus.FieldLogger
+	privkey    *ecdsa.PrivateKey
+	address    common.Address
+	rpcClient  walletBackend
+	execClient *execution.Client // concrete handle exposed via GetRPCClient (e.g. for contract bindings)
+	chainID    *big.Int
+	mu         sync.Mutex // protects balance
+	txMu       sync.Mutex // serializes this process's transaction submissions
+	balance    *big.Int
+	log        logrus.FieldLogger
+
+	// Transaction confirmation tuning (defaults from the tx* consts; overridable in tests).
+	pollInterval    time.Duration
+	conflictBackoff time.Duration
+	maxAttempts     int
 }
 
 // NewWallet creates a new wallet from a hex-encoded private key.
@@ -58,10 +96,14 @@ func NewWallet(
 	address := crypto.PubkeyToAddress(privkey.PublicKey)
 
 	return &Wallet{
-		privkey:   privkey,
-		address:   address,
-		rpcClient: rpcClient,
-		log:       walletLog,
+		privkey:         privkey,
+		address:         address,
+		rpcClient:       rpcClient,
+		execClient:      rpcClient,
+		log:             walletLog,
+		pollInterval:    txPollInterval,
+		conflictBackoff: txConflictBackoff,
+		maxAttempts:     txMaxAttempts,
 	}, nil
 }
 
@@ -106,15 +148,13 @@ func (w *Wallet) Sync(ctx context.Context) error {
 		w.chainID = chainID
 	}
 
-	// Sync nonce
+	// Fetch the current nonce for visibility only. The nonce is always sourced fresh
+	// from the chain at send time (see BuildTransaction / SendAndConfirm), so it is not
+	// cached here — that is what keeps multiple instances sharing this key consistent.
 	nonce, err := w.GetNonce(ctx)
 	if err != nil {
 		return err
 	}
-
-	w.mu.Lock()
-	w.pendingNonce = nonce
-	w.mu.Unlock()
 
 	// Sync balance
 	if _, err := w.GetBalance(ctx); err != nil {
@@ -165,11 +205,23 @@ func (w *Wallet) BuildTransaction(
 	gasFeeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	gasFeeCap.Add(gasFeeCap, gasTipCap)
 
-	// Get nonce
-	w.mu.Lock()
-	nonce := w.pendingNonce
-	w.pendingNonce++
-	w.mu.Unlock()
+	// Always read the next free nonce straight from the node on every build — never
+	// cached or tracked internally.
+	//
+	// Use max(pending, latest): normally the pending nonce already includes in-flight
+	// mempool txs and is >= latest. But ethrex has been observed returning a pending
+	// nonce *below* the latest (confirmed) nonce, which would make us stamp an
+	// already-used nonce and get "nonce too low". The latest nonce is the authoritative
+	// floor, so taking the larger of the two is correct on every client.
+	nonce, err := w.nextNonce(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	w.log.WithFields(logrus.Fields{
+		"address": w.address.Hex(),
+		"nonce":   nonce,
+	}).Debug("Fetched next nonce from RPC for transaction build")
 
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   w.chainID,
@@ -183,6 +235,28 @@ func (w *Wallet) BuildTransaction(
 	})
 
 	return tx, nil
+}
+
+// nextNonce returns the next usable nonce by reading the node fresh: the larger of the
+// pending nonce and the latest (confirmed) nonce. The latest nonce is an authoritative
+// floor that protects against clients (e.g. ethrex) whose pending nonce can lag below
+// it; the pending nonce covers legitimate in-flight mempool txs on correct clients.
+func (w *Wallet) nextNonce(ctx context.Context) (uint64, error) {
+	pending, err := w.rpcClient.GetNonce(ctx, w.address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get pending nonce: %w", err)
+	}
+
+	confirmed, err := w.rpcClient.GetConfirmedNonce(ctx, w.address)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get confirmed nonce: %w", err)
+	}
+
+	if confirmed > pending {
+		return confirmed, nil
+	}
+
+	return pending, nil
 }
 
 // SignTransaction signs a transaction with the wallet's private key.
@@ -283,7 +357,205 @@ func (w *Wallet) BuildAndSend(
 	return signedTx, nil
 }
 
-// GetRPCClient returns the underlying RPC client.
+// txOutcome is the decision reached after observing chain state for a sent tx.
+type txOutcome int
+
+const (
+	outcomePending  txOutcome = iota // not yet resolved, keep polling
+	outcomeIncluded                  // mined successfully
+	outcomeReverted                  // mined but reverted
+	outcomeRetry                     // our nonce slot was taken (or tx dropped); resubmit fresh
+	outcomeFailed                    // the send genuinely failed; surface the error
+)
+
+// SendAndConfirm builds, signs, sends, and confirms a transaction in a way that is
+// safe when several buildoor instances share this funding key.
+//
+// Each attempt sources a fresh on-chain nonce. Crucially, it never parses the send
+// error string (which varies per execution client). Instead it decides what to do by
+// observing node state: whether our specific transaction is known to the node, and
+// where the account's pending nonce sits relative to the nonce we used.
+//
+//   - our tx is known (pending/mined) -> wait for its receipt
+//   - our tx is unknown and the pending nonce has moved past ours -> another tx (likely
+//     another instance) took our slot; resubmit with a fresh nonce
+//   - our tx is unknown, the nonce is still free, and the send errored -> genuine
+//     failure; surface it
+//
+// txMu serializes this process's own submissions so concurrent lifecycle operations
+// (e.g. the startup deposit and a balance top-up) never collide with each other.
+func (w *Wallet) SendAndConfirm(
+	ctx context.Context,
+	to common.Address,
+	value *big.Int,
+	data []byte,
+	gasLimit uint64,
+	timeout time.Duration,
+) (*types.Receipt, error) {
+	w.txMu.Lock()
+	defer w.txMu.Unlock()
+
+	var lastErr error
+
+	for attempt := 1; attempt <= w.maxAttempts; attempt++ {
+		signedTx, err := w.buildAndSign(ctx, to, value, data, gasLimit)
+		if err != nil {
+			return nil, err
+		}
+
+		nonce := signedTx.Nonce()
+
+		// Send, but do not branch on the error text. sendErr (if any) only matters as a
+		// tie-breaker once node state shows the tx never entered the pool.
+		sendErr := w.rpcClient.SendTransaction(ctx, signedTx)
+		if sendErr == nil {
+			w.log.WithFields(logrus.Fields{
+				"hash":  signedTx.Hash().Hex(),
+				"nonce": nonce,
+				"to":    to.Hex(),
+				"value": value.String(),
+			}).Info("Transaction sent")
+		}
+
+		receipt, outcome, err := w.resolve(ctx, signedTx.Hash(), nonce, sendErr, timeout)
+
+		switch outcome {
+		case outcomeIncluded:
+			return receipt, nil
+		case outcomeReverted:
+			return receipt, err
+		case outcomeRetry:
+			lastErr = err
+
+			w.log.WithFields(logrus.Fields{
+				"hash":    signedTx.Hash().Hex(),
+				"nonce":   nonce,
+				"attempt": attempt,
+			}).Warn("Nonce slot taken by another tx, resubmitting with a fresh nonce")
+
+			if waitErr := sleepCtx(ctx, w.conflictBackoff); waitErr != nil {
+				return nil, waitErr
+			}
+
+			continue
+		case outcomeFailed:
+			return nil, fmt.Errorf("send transaction (nonce %d): %w", nonce, err)
+		case outcomePending:
+			// resolve only returns terminal outcomes; treat as failure defensively.
+			return nil, fmt.Errorf("send transaction (nonce %d): %w", nonce, err)
+		}
+	}
+
+	return nil, fmt.Errorf("transaction failed after %d attempts: %w", w.maxAttempts, lastErr)
+}
+
+// buildAndSign builds a transaction with a fresh nonce and signs it.
+func (w *Wallet) buildAndSign(
+	ctx context.Context,
+	to common.Address,
+	value *big.Int,
+	data []byte,
+	gasLimit uint64,
+) (*types.Transaction, error) {
+	tx, err := w.BuildTransaction(ctx, to, value, data, gasLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	return w.SignTransaction(tx)
+}
+
+// resolve polls node state until it can decide the fate of a sent transaction, without
+// parsing the send error. It returns a terminal txOutcome (never outcomePending) plus,
+// where relevant, the receipt and/or the error to surface.
+func (w *Wallet) resolve(
+	ctx context.Context,
+	txHash common.Hash,
+	nonce uint64,
+	sendErr error,
+	timeout time.Duration,
+) (*types.Receipt, txOutcome, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(w.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			if sendErr != nil {
+				return nil, outcomeFailed, sendErr
+			}
+
+			return nil, outcomeFailed, fmt.Errorf("transaction confirmation timeout: %w", timeoutCtx.Err())
+
+		case <-ticker.C:
+			// 1. Mined?
+			if receipt, err := w.rpcClient.GetTransactionReceipt(ctx, txHash); err == nil {
+				if receipt.Status == types.ReceiptStatusFailed {
+					return receipt, outcomeReverted, fmt.Errorf("transaction reverted")
+				}
+
+				w.log.WithFields(logrus.Fields{
+					"hash":        txHash.Hex(),
+					"blockNumber": receipt.BlockNumber.Uint64(),
+					"gasUsed":     receipt.GasUsed,
+				}).Info("Transaction confirmed")
+
+				return receipt, outcomeIncluded, nil
+			}
+
+			// 2. Is our specific tx still known to the node (pending in the mempool)?
+			//    If so, it is alive and we simply keep waiting for it.
+			known, err := w.rpcClient.IsTxKnown(ctx, txHash)
+			if err != nil {
+				continue // transient lookup error; retry on next tick
+			}
+
+			if known {
+				continue
+			}
+
+			// 3. Our tx is not known. Decide by where the node's next nonce now sits, using
+			//    the same max(pending, confirmed) the build uses so a buggy pending nonce
+			//    (ethrex) doesn't hide that our slot was already consumed.
+			next, nerr := w.nextNonce(ctx)
+			if nerr != nil {
+				continue
+			}
+
+			if next > nonce {
+				// Our nonce slot was consumed (by another instance/process); ours can never
+				// land. Resubmit with a fresh, higher nonce.
+				return nil, outcomeRetry, fmt.Errorf("nonce %d consumed by another transaction", nonce)
+			}
+
+			// 4. Nonce is still free and our tx is gone. If the send errored, it never
+			//    entered the pool -> genuine failure. Otherwise it was dropped -> resubmit.
+			if sendErr != nil {
+				return nil, outcomeFailed, sendErr
+			}
+
+			return nil, outcomeRetry, fmt.Errorf("transaction at nonce %d dropped before inclusion", nonce)
+		}
+	}
+}
+
+// sleepCtx sleeps for d or returns early if ctx is cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// GetRPCClient returns the underlying concrete RPC client.
 func (w *Wallet) GetRPCClient() *execution.Client {
-	return w.rpcClient
+	return w.execClient
 }

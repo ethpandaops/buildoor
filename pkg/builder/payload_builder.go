@@ -31,7 +31,7 @@ type PayloadBuilder struct {
 	validatorIndexCache *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
 	propPrefCache       *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
 	isGloas             func() bool                // returns true when on the Gloas fork
-	payloadBuildTime    uint64
+	cfg                 *Config                    // shared config; mutable settings are read live, never cached
 	log                 logrus.FieldLogger
 
 	// Active build tracking
@@ -47,6 +47,7 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
+// cfg is the shared config pointer; mutable settings (e.g. PayloadBuildTime) are read live from it.
 // When validatorStore is set (pre-Gloas), fee recipient is taken from the proposer's validator registration.
 // When propPrefCache is set and isGloas returns true, fee recipient and gas limit come from proposer preferences instead.
 // validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
@@ -54,7 +55,7 @@ func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
-	payloadBuildTime uint64,
+	cfg *Config,
 	log logrus.FieldLogger,
 	validatorStore *validators.Store,
 	validatorIndexCache *chain.ValidatorIndexCache,
@@ -69,7 +70,7 @@ func NewPayloadBuilder(
 		validatorIndexCache: validatorIndexCache,
 		propPrefCache:       propPrefCache,
 		isGloas:             isGloas,
-		payloadBuildTime:    payloadBuildTime,
+		cfg:                 cfg,
 		log:                 log.WithField("component", "payload-builder"),
 	}
 }
@@ -220,8 +221,22 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
-	b.log.Infof("Allowing payload to build for: %dms", b.payloadBuildTime)
-	time.Sleep(time.Duration(b.payloadBuildTime) * time.Millisecond)
+	// Read the build time live from config so UI overrides take effect immediately.
+	payloadBuildTime := b.cfg.PayloadBuildTime
+
+	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
+
+	// Wait for the EL to accumulate transactions, but abort early (with an error)
+	// if the build is cancelled by a newer slot or the context deadline is hit,
+	// rather than sleeping into a doomed getPayload call.
+	buildTimer := time.NewTimer(time.Duration(payloadBuildTime) * time.Millisecond)
+	defer buildTimer.Stop()
+
+	select {
+	case <-buildCtx.Done():
+		return nil, fmt.Errorf("build aborted while waiting for payload: %w", buildCtx.Err())
+	case <-buildTimer.C:
+	}
 
 	// Get the built payload with all components (blobs, execution requests) as typed values
 	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)

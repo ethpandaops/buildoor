@@ -17,7 +17,13 @@ type ValidatorRangesConfig struct {
 
 // Config represents the complete configuration for the buildoor application.
 type Config struct {
-	BuilderPrivkey      string                `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	BuilderPrivkey string `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	// BuilderMnemonic, when set, derives the builder BLS key from this BIP-39 mnemonic and
+	// BuilderKeyIndex using the standard validator key path m/12381/3600/{index}/0/0.
+	// Mutually exclusive with BuilderPrivkey. json:"-" keeps the secret out of every JSON
+	// serialization path (WebUI REST + SSE); YAML config loading is unaffected.
+	BuilderMnemonic     string                `yaml:"builder_mnemonic" json:"-"`
+	BuilderKeyIndex     uint64                `yaml:"builder_key_index" json:"builder_key_index"`
 	CLClient            string                `yaml:"cl_client" json:"cl_client,omitempty"`
 	ELEngineAPI         string                `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
 	ELJWTSecret         string                `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
@@ -29,7 +35,7 @@ type Config struct {
 	OverviewURL         string                `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
 	LifecycleEnabled    bool                  `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
 	EPBSEnabled         bool                  `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
-	BuilderAPIEnabled   bool                  `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API (service available if port > 0)
+	BuilderAPIEnabled   bool                  `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
 	BuilderAPI          BuilderAPIConfig      `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
 	DepositAmount       uint64                `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
 	TopupThreshold      uint64                `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
@@ -41,6 +47,11 @@ type Config struct {
 	ValidateWithdrawals bool                  `yaml:"validate_withdrawals" json:"validate_withdrawals"` // Validate expected vs actual withdrawals
 	PayloadBuildTime    uint64                `yaml:"payload_build_time" json:"payload_build_time"`     // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	ValidatorRanges     ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+	// StateDBPath, when set, enables the optional SQLite state-db at this path.
+	// It persists UI setting overrides, won blocks, validator registrations,
+	// proposer preferences and an audit log across restarts. Startup-only and
+	// never itself persisted. Empty disables persistence (in-memory only).
+	StateDBPath string `yaml:"state_db" json:"state_db,omitempty"`
 }
 
 // ScheduleConfig defines when the builder should build blocks.
@@ -65,10 +76,6 @@ const (
 
 // BuilderAPIConfig defines configuration for the traditional Builder API (pre-ePBS).
 type BuilderAPIConfig struct {
-	// Port is the HTTP port for the Builder API server.
-	// Default: 9000.
-	Port int `yaml:"port" json:"port"`
-
 	// BuilderURL is this builder's publicly reachable URL (e.g. "https://builder.example.com").
 	// Used to verify the auth.message.data field (set to the builder URL) in
 	// SignedRequestAuthV1 messages from proposers. If empty, this validation is skipped.
@@ -117,9 +124,9 @@ type EPBSConfig struct {
 	// BidInterval is milliseconds between bids. 0 means single bid.
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
 
-	// P2PBidSubsidy is added to every bid in gwei so the gossiped bid clears the
-	// validator BN's local-EL threshold ("Local EL value exceeds P2P bid").
-	P2PBidSubsidy uint64 `yaml:"p2p_bid_subsidy" json:"p2p_bid_subsidy"`
+	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
+	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
+	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

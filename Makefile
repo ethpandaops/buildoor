@@ -51,8 +51,7 @@ devnet-run: devnet
 		--el-jwt-secret "$${JWT_SECRET}" \
 		--el-rpc "$${EXECUTION_API}" \
 		--wallet-privkey "04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59" \
-		--api-port 8082 \
-		--builder-api-port 9000 \
+		--api-port 8086 \
 		--lifecycle \
 		--epbs-enabled \
 		--log-level debug
@@ -60,7 +59,7 @@ devnet-run: devnet
 devnet-run-docker: devnet
 	docker build --file ./Dockerfile -t buildoor:devnet-run --build-arg userid=$(CURRENT_UID) --build-arg groupid=$(CURRENT_GID) .
 	@. .hack/devnet/generated-vars-docker.env && \
-	docker run --rm -v $${JWT_SECRET}:/jwtsecret -p 8082:8080 -u $(CURRENT_UID):$(CURRENT_GID) --network kt-buildoor --hostname buildoor -it buildoor:devnet-run \
+	docker run --rm -v $${JWT_SECRET}:/jwtsecret -p 8086:8080 -u $(CURRENT_UID):$(CURRENT_GID) --network kt-buildoor --hostname buildoor -it buildoor:devnet-run \
 		run \
 		--builder-privkey "607a11b45a7219cc61a3d9c5fd08c7eebd602a6a19a977f8d3771d5711a550f2" \
 		--cl-client "$${BEACON_API}" \
@@ -69,7 +68,6 @@ devnet-run-docker: devnet
 		--el-rpc "$${EXECUTION_API}" \
 		--wallet-privkey "04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59" \
 		--api-port 8080 \
-		--builder-api-port 9000 \
 		--log-level debug
 
 devnet-clean:

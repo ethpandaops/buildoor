@@ -23,8 +23,8 @@ var depositCmd = &cobra.Command{
 		ctx := context.Background()
 
 		// Validate required config
-		if cfg.BuilderPrivkey == "" {
-			return fmt.Errorf("--builder-privkey is required")
+		if cfg.BuilderPrivkey == "" && cfg.BuilderMnemonic == "" {
+			return fmt.Errorf("--builder-privkey or --builder-mnemonic is required")
 		}
 
 		if cfg.CLClient == "" {
@@ -53,8 +53,8 @@ var depositCmd = &cobra.Command{
 		}
 		defer rpcClient.Close()
 
-		// Initialize BLS signer
-		blsSigner, err := signer.NewBLSSigner(cfg.BuilderPrivkey)
+		// Initialize BLS signer (raw hex key or mnemonic-derived)
+		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)
 		if err != nil {
 			return fmt.Errorf("invalid builder key: %w", err)
 		}

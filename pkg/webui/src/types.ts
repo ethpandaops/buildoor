@@ -43,6 +43,7 @@ export interface EPBSConfig {
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
+  bid_subsidy: number;
   payload_build_delay?: number;
 }
 
@@ -139,7 +140,20 @@ export interface RevealEvent {
   slot: number;
   success: boolean;
   skipped: boolean;
+  error?: string;
+  attempt?: number;
+  max_attempts?: number;
   timestamp: number;
+}
+
+// A single payload reveal attempt (the reveal may be retried on failure).
+export interface RevealAttempt {
+  time: number;
+  success: boolean;
+  skipped: boolean;
+  error?: string;
+  attempt: number;
+  maxAttempts: number;
 }
 
 export interface HeadVoteDataPoint {
@@ -153,6 +167,10 @@ export interface SlotState {
   slot: number;
   scheduled?: boolean;
   slotStartTime?: number;
+  payloadBuildStartedAt?: number;
+  payloadBuildFailed?: boolean;
+  payloadBuildFailedAt?: number;
+  payloadBuildError?: string;
   payloadReady?: boolean;
   payloadCreatedAt?: number;
   payloadBlockHash?: string;
@@ -170,6 +188,7 @@ export interface SlotState {
   revealSkipped?: boolean;
   revealFailed?: boolean;
   revealSentAt?: number;
+  revealAttempts?: RevealAttempt[];
   headVotes?: HeadVoteDataPoint[];
   getHeaderReceivedAt?: number;
   getHeaderDeliveredAt?: number;
@@ -178,6 +197,23 @@ export interface SlotState {
   submitBlindedReceivedAt?: number;
   submitBlindedDeliveredAt?: number;
   submitBlindedBlockHash?: string;
+  // payload_attributes events targeting the NEXT slot (this.slot + 1). They
+  // arrive before the slot they target (the CL re-emits one per head update),
+  // so they are rendered on this (parent) slot's graph — one dot each.
+  nextSlotAttributes?: PayloadAttributesInfo[];
+}
+
+export interface PayloadAttributesInfo {
+  proposalSlot: number;
+  proposerIndex: number;
+  parentBlockHash: string;
+  parentBlockRoot: string;
+  parentBlockNumber: number;
+  timestamp: number;
+  feeRecipient: string;
+  targetGasLimit: number;
+  withdrawalsCount: number;
+  receivedAt: number;
 }
 
 export interface OurBid {
@@ -197,6 +233,7 @@ export interface ExternalBid {
 }
 
 export interface LogEvent {
+  id: number;
   type: string;
   message: string;
   timestamp: number;
@@ -235,6 +272,25 @@ export interface BidWonEntry {
 
 export interface BidsWonResponse {
   bids_won: BidWonEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+// Audit log types (populated only when --state-db is configured)
+export interface AuditLogEntry {
+  id: number;
+  timestamp: number;
+  actor: string;
+  remote_addr: string;
+  action: string;
+  target: string;
+  detail: string;
+  result: string;
+}
+
+export interface AuditLogResponse {
+  entries: AuditLogEntry[];
   total: number;
   offset: number;
   limit: number;
