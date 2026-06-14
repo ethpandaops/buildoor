@@ -236,6 +236,11 @@
 }
 
 /* Builder event colors */
+.payload-attributes {
+  background: #e83e8c;
+  border: 2px solid #c2255c;
+}
+
 .payload-created {
   background: #17a2b8;
   border: 2px solid #138496;
@@ -261,6 +266,11 @@
   border: 2px solid #bd2130;
 }
 
+.build-failed {
+  background: #dc3545;
+  border: 2px solid #bd2130;
+}
+
 .event-dot-crown {
   position: absolute;
   top: -10px;
@@ -270,6 +280,18 @@
   color: #ffc107;
   text-shadow: 0 0 2px rgba(0,0,0,0.8);
   pointer-events: none;
+}
+
+/* In light mode the dark blur glow turns into a fuzzy halo and the gold
+   washes out. Use a deeper gold with a crisp white outline instead. */
+[data-bs-theme="light"] .event-dot-crown {
+  top: -9px;
+  color: #d39e00;
+  text-shadow:
+    -0.5px -0.5px 0 #fff,
+     0.5px -0.5px 0 #fff,
+    -0.5px  0.5px 0 #fff,
+     0.5px  0.5px 0 #fff;
 }
 
 /* Build delay line - horizontal line from FCU to payload ready */
@@ -287,6 +309,18 @@
 .build-delay-line:hover {
   background: linear-gradient(90deg, rgba(23, 162, 184, 0.6), rgba(23, 162, 184, 1));
   height: 5px;
+}
+
+/* In-progress build: pulsing leading edge while the payload is still building */
+.build-delay-line-active {
+  background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.9));
+  box-shadow: 0 0 6px rgba(23, 162, 184, 0.7);
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
+@keyframes build-delay-pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
 }
 
 /* Builder API event colors */
@@ -466,7 +500,9 @@
 .bg-block-received { background: #fd7e14; }
 .bg-payload-received { background: #20c997; }
 .bg-external-bid { background: #6c757d; width: 6px; height: 6px; }
+.bg-payload-attributes { background: #e83e8c; }
 .bg-payload-created { background: #17a2b8; }
+.bg-build-failed { background: #dc3545; }
 .bg-bid-submitted { background: #28a745; }
 .bg-bid-failed { background: #dc3545; }
 .bg-reveal-sent { background: #6f42c1; }
@@ -489,11 +525,16 @@
   overflow-y: auto;
   font-family: monospace;
   font-size: 11px;
+  /* We manage scroll position manually (virtualized list); disable the browser's
+     own scroll anchoring so it doesn't fight us when rows are added/removed. */
+  overflow-anchor: none;
 }
 
 .event-item {
   padding: 3px 10px;
   border-bottom: 1px solid var(--bs-border-color);
+  /* Transparent base keeps text aligned whether or not an item is coloured. */
+  border-left: 3px solid transparent;
   display: flex;
   gap: 10px;
 }
@@ -505,20 +546,90 @@
 
 .event-message {
   flex: 1;
+  min-width: 0;
 }
 
-.event-slot-start { border-left: 3px solid var(--bs-info); }
-.event-payload { border-left: 3px solid #17a2b8; }
-.event-bid { border-left: 3px solid #28a745; }
-.event-bid-failed { border-left: 3px solid #dc3545; }
-.event-head { border-left: 3px solid #fd7e14; }
-.event-reveal { border-left: 3px solid #6f42c1; }
-.event-bid-seen { border-left: 3px solid var(--bs-secondary); }
-.event-envelope { border-left: 3px solid #20c997; }
-.event-lifecycle { border-left: 3px solid #0dcaf0; }
-.event-lifecycle-success { border-left: 3px solid #198754; }
-.event-lifecycle-warning { border-left: 3px solid #ffc107; }
-.event-lifecycle-error { border-left: 3px solid #dc3545; }
+/* Full hashes/roots shown inline; wrap rather than truncate when space is tight. */
+.event-hash {
+  word-break: break-all;
+}
+
+/* Per-row copy icon at the end of each log line. */
+.event-row-copy {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  cursor: pointer;
+  color: var(--bs-secondary-color);
+  opacity: 0.45;
+  font-size: 10px;
+  padding-top: 1px;
+}
+
+.event-row-copy:hover {
+  opacity: 1;
+}
+
+/* Log filter flyout anchored to the filter button */
+.event-filter-anchor {
+  position: relative;
+}
+
+.event-filter-flyout {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 1050;
+  width: 240px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  text-align: left;
+}
+
+.event-filter-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.event-filter-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+/* Event log colours mirror the slot-graph element colours. */
+.event-color-block-received { border-left-color: #fd7e14; }
+.event-color-payload-attributes { border-left-color: #e83e8c; }
+.event-color-build { border-left-color: #17a2b8; }
+.event-color-bid { border-left-color: #28a745; }
+.event-color-external-bid { border-left-color: #6c757d; }
+.event-color-payload-available { border-left-color: #20c997; }
+.event-color-reveal { border-left-color: #6f42c1; }
+.event-color-bid-won { border-left-color: #ffc107; }
+.event-color-builder-api { border-left-color: #0d6efd; }
+
+/* Errors: a wider red block plus a faint red wash for extra emphasis. */
+.event-error {
+  border-left-width: 6px;
+  border-left-color: #dc3545;
+  background: rgba(220, 53, 69, 0.08);
+}
+
+/* Warnings: a wider yellow block, same size as errors, for emphasis. */
+.event-warning {
+  border-left-width: 6px;
+  border-left-color: #ffc107;
+  background: rgba(255, 193, 7, 0.08);
+}
 
 /* Stats - compact horizontal layout */
 .stat-item {
@@ -728,6 +839,29 @@ header.header-bar .navbar {
 
   header .navbar-collapse {
     flex-grow: initial;
+  }
+}
+
+/* Mobile: the header is fixed at 65px, so the expanded hamburger menu
+   overflows it. Render the menu as a solid panel anchored below the
+   header instead of letting nav items float over the page content. */
+@media (max-width: 991.98px) {
+  header.header-bar .navbar-collapse {
+    position: absolute;
+    top: 65px;
+    left: 0;
+    right: 0;
+    background-color: var(--bs-dark);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0.5em 1em rgba(0, 0, 0, 0.35);
+    padding: 0.5rem 1rem 1rem;
+    max-height: calc(100vh - 65px);
+    overflow-y: auto;
+  }
+
+  header.header-bar .navbar-collapse .nav-link {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
   }
 }
 

@@ -12,9 +12,11 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
+	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
@@ -36,7 +38,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
+func StartHttpServer(config *types.FrontendConfig, settingsSvc *settings.Service, stateDB *db.Database, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), config.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
@@ -48,8 +50,13 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	// init router
 	router := mux.NewRouter()
 
+	// Builder API routes (served on same port as the webui)
+	if builderAPISvc != nil {
+		builderAPISvc.RegisterRoutes(router)
+	}
+
 	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges)
+	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)
@@ -79,6 +86,7 @@ func StartHttpServer(config *types.FrontendConfig, builderSvc *builder.Service, 
 	apiRouter.HandleFunc("/buildoor/overview", apiHandler.GetOverview).Methods(http.MethodGet, http.MethodOptions)
 	apiRouter.HandleFunc("/buildoor/proposer-preferences", apiHandler.GetProposerPreferences).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/builder-preferences", apiHandler.GetBuilderPreferences).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/audit-log", apiHandler.GetAuditLog).Methods(http.MethodGet)
 
 	// Lifecycle endpoints (if manager available)
 	apiRouter.HandleFunc("/lifecycle/status", apiHandler.GetLifecycleStatus).Methods(http.MethodGet)

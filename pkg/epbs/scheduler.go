@@ -16,15 +16,26 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
+const (
+	// maxRevealAttempts bounds how many times we retry a failed payload reveal
+	// before giving up, so a persistent failure doesn't spin the tick loop and
+	// spam the beacon node.
+	maxRevealAttempts = 3
+	// revealRetryDelay is the wait between successive reveal attempts.
+	revealRetryDelay = 500 * time.Millisecond
+)
+
 // SlotState tracks the state for a single slot's bidding/revealing.
 type SlotState struct {
-	LastBidTime     time.Time
-	LastBidHash     phase0.Hash32
-	BidCount        int
-	BidsClosed      bool              // Block received, no more bids possible
-	BidIncluded     bool              // Our bid was picked
-	IncludedInBlock *beacon.BlockInfo // Block that included our bid
-	Revealed        bool
+	LastBidTime       time.Time
+	LastBidHash       phase0.Hash32
+	BidCount          int
+	BidsClosed        bool              // Block received, no more bids possible
+	BidIncluded       bool              // Our bid was picked
+	IncludedInBlock   *beacon.BlockInfo // Block that included our bid
+	Revealed          bool
+	RevealAttempts    int       // Number of reveal attempts made (success or failure)
+	LastRevealAttempt time.Time // Time of the most recent reveal attempt
 }
 
 // Scheduler handles time-based bid and reveal scheduling.
@@ -219,7 +230,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Calculate bid value.
 	// Start from block value with BidMinAmount as a floor.
-	// BlockValue is in wei; BidMinAmount/BidIncrease/P2PBidSubsidy are in gwei.
+	// BlockValue is in wei; BidMinAmount/BidIncrease/BidSubsidy are in gwei.
 	bidBase := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	if s.cfg.BidMinAmount > bidBase {
 		bidBase = s.cfg.BidMinAmount
@@ -230,10 +241,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
 	}
 
-	// P2P subsidy: validator BNs reject our gossiped bid with "Local EL value exceeds
-	// P2P bid, using self-build" when their local EL build is worth more than ours.
-	// Configurable via --p2p-bid-subsidy (gwei).
-	bidValue += s.cfg.P2PBidSubsidy
+	// Bid subsidy: the proposer's BN rejects our bid and self-builds when its local EL
+	// build is worth more than ours. The subsidy pads the bid to clear that threshold.
+	// Configurable via --epbs-bid-subsidy (gwei).
+	bidValue += s.cfg.BidSubsidy
 
 	s.mu.Unlock()
 
@@ -331,18 +342,64 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 		return
 	}
 
+	// Stop once we've exhausted our retry budget — don't spin the tick loop.
+	if state.RevealAttempts >= maxRevealAttempts {
+		s.mu.Unlock()
+		return
+	}
+
+	// Space retries out so a failing reveal doesn't hammer the beacon node.
+	if state.RevealAttempts > 0 && now.Sub(state.LastRevealAttempt) < revealRetryDelay {
+		s.mu.Unlock()
+		return
+	}
+
 	blockInfo := state.IncludedInBlock
+	state.RevealAttempts++
+	state.LastRevealAttempt = now
+	attempt := state.RevealAttempts
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
 		"ms_into_slot": msIntoSlot,
+		"attempt":      attempt,
+		"max_attempts": maxRevealAttempts,
 	}).Info("Revealing payload")
+
+	// fireRevealFailure logs the error, surfaces it to the UI, and notes when the
+	// retry budget is exhausted.
+	fireRevealFailure := func(err error) {
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":         slot,
+			"attempt":      attempt,
+			"max_attempts": maxRevealAttempts,
+		}).Error("Failed to submit reveal")
+
+		if s.service != nil {
+			s.service.FireReveal(&RevealEvent{
+				Slot:        slot,
+				Success:     false,
+				Error:       err.Error(),
+				Attempt:     attempt,
+				MaxAttempts: maxRevealAttempts,
+			})
+		}
+
+		// Count one logical failure per slot once the retry budget is spent.
+		if attempt >= maxRevealAttempts {
+			s.log.WithField("slot", slot).Error("Giving up on reveal after max attempts")
+
+			if s.service != nil && s.service.builderSvc != nil {
+				s.service.builderSvc.IncrementRevealsFailed()
+			}
+		}
+	}
 
 	// Get payload for reveal
 	payload := s.payloadStore.Get(slot)
 	if payload == nil {
-		s.log.WithField("slot", slot).Error("No payload found for reveal")
+		fireRevealFailure(fmt.Errorf("no payload found for reveal"))
 		return
 	}
 
@@ -352,16 +409,12 @@ func (s *Scheduler) checkSlotForReveal(ctx context.Context, slot phase0.Slot, no
 		"parent_root":  fmt.Sprintf("%x", blockInfo.ParentRoot[:8]),
 		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msIntoSlot,
+		"attempt":      attempt,
 	}).Info("Submitting reveal")
 
 	err := s.revealHandler.SubmitReveal(ctx, payload, blockInfo)
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit reveal")
-
-		if s.service != nil {
-			s.service.FireReveal(&RevealEvent{Slot: slot, Success: false})
-		}
-
+		fireRevealFailure(err)
 		return
 	}
 

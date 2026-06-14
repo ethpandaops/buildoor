@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -28,6 +28,7 @@ export function useEventStream(): UseEventStreamResult {
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
   const [slotServiceStatuses, setSlotServiceStatuses] = useState<Record<number, ServiceStatus>>({});
   const [events, setEvents] = useState<LogEvent[]>([]);
+  const eventIdRef = useRef(0);
 
   // Use refs to access current values in event handlers without causing reconnection
   const configRef = useRef<Config | null>(null);
@@ -72,8 +73,10 @@ export function useEventStream(): UseEventStreamResult {
   useEffect(() => {
     const addEvent = (type: string, message: string, timestamp: number) => {
       setEvents(prev => {
-        const newEvents = [{ type, message, timestamp }, ...prev];
-        return newEvents.slice(0, 100);
+        const newEvents = [{ id: eventIdRef.current++, type, message, timestamp }, ...prev];
+        // Hard cap to bound memory; must be >= the EventLog max scrollback
+        // (10000) so the configured scrollback can actually be reached.
+        return newEvents.slice(0, 10000);
       });
     };
 
@@ -148,14 +151,77 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'payload_attributes': {
+          const data = event.data as {
+            proposal_slot: number;
+            proposer_index: number;
+            parent_block_hash: string;
+            parent_block_root: string;
+            parent_block_number: number;
+            timestamp: number;
+            fee_recipient: string;
+            target_gas_limit: number;
+            withdrawals_count: number;
+            received_at: number;
+          };
+          addEvent('payload_attributes', `Payload attributes received for slot ${data.proposal_slot}`, event.timestamp);
+          // The attributes target proposal_slot but arrive before it, so render
+          // them on the parent slot's graph (proposal_slot - 1). The CL emits one
+          // per head update, so append each rather than overwriting — every one
+          // is rendered as its own dot.
+          {
+            const parentSlot = data.proposal_slot - 1;
+            const info = {
+              proposalSlot: data.proposal_slot,
+              proposerIndex: data.proposer_index,
+              parentBlockHash: data.parent_block_hash,
+              parentBlockRoot: data.parent_block_root,
+              parentBlockNumber: data.parent_block_number,
+              timestamp: data.timestamp,
+              feeRecipient: data.fee_recipient,
+              targetGasLimit: data.target_gas_limit,
+              withdrawalsCount: data.withdrawals_count,
+              receivedAt: data.received_at
+            };
+            setSlotStates(prev => {
+              const state = prev[parentSlot] || { slot: parentSlot };
+              const list = state.nextSlotAttributes ? [...state.nextSlotAttributes, info] : [info];
+              // Defensive cap so a misbehaving CL can't grow this unbounded.
+              if (list.length > 64) list.splice(0, list.length - 64);
+              return { ...prev, [parentSlot]: { ...state, slot: parentSlot, nextSlotAttributes: list } };
+            });
+          }
+          break;
+        }
+
+        case 'payload_build_started': {
+          const data = event.data as { slot: number; started_at: number };
+          addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { payloadBuildStartedAt: data.started_at });
+          break;
+        }
+
+        case 'payload_build_failed': {
+          const data = event.data as { slot: number; error: string; failed_at: number };
+          addEvent('payload_build_failed', `Payload build failed for slot ${data.slot}: ${data.error}`, event.timestamp);
+          updateSlotState(data.slot, {
+            payloadBuildFailed: true,
+            payloadBuildFailedAt: data.failed_at,
+            payloadBuildError: data.error
+          });
+          break;
+        }
+
         case 'payload_ready': {
-          const data = event.data as { slot: number; block_hash: string; block_value: number; ready_at: number };
-          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
+          // block_value is the EL's MEV value as a wei decimal string; convert to
+          // gwei so it matches the gwei-based formatGwei display used elsewhere.
+          const data = event.data as { slot: number; block_hash: string; block_value: string; ready_at: number };
+          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
-            payloadBlockValue: data.block_value
+            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0
           });
           break;
         }
@@ -193,21 +259,46 @@ export function useEventStream(): UseEventStreamResult {
         case 'head_received': {
           const data = event.data as { slot: number; block_root: string; received_at: number };
           let headMsg = `Block received for slot ${data.slot}`;
-          if (data.block_root) headMsg += ` (root: ${data.block_root.substring(0, 10)}...)`;
+          if (data.block_root) headMsg += ` (root: ${data.block_root})`;
           addEvent('head_received', headMsg, event.timestamp);
           updateSlotState(data.slot, { blockReceivedAt: data.received_at, blockRoot: data.block_root, bidsClosed: true });
           break;
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean };
-          const revealMsg = data.skipped ? 'Reveal skipped' : (data.success ? 'Reveal successful' : 'Reveal failed');
-          addEvent('reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
-          updateSlotState(data.slot, {
-            revealed: data.success,
-            revealSkipped: data.skipped,
-            revealFailed: !data.success && !data.skipped,
-            revealSentAt: event.timestamp
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; error?: string; attempt?: number; max_attempts?: number };
+          const failed = !data.success && !data.skipped;
+          const attempt = data.attempt || 0;
+          const maxAttempts = data.max_attempts || 0;
+          const revealMsg = data.skipped
+            ? 'Reveal skipped'
+            : data.success
+              ? 'Reveal successful'
+              : `Reveal failed${attempt ? ` (attempt ${attempt}/${maxAttempts})` : ''}${data.error ? `: ${data.error}` : ''}`;
+          addEvent(failed ? 'reveal_failed' : 'reveal', `${revealMsg} for slot ${data.slot}`, event.timestamp);
+          setSlotStates(prev => {
+            const st = prev[data.slot] || { slot: data.slot };
+            const revealAttempts: RevealAttempt[] = st.revealAttempts ? [...st.revealAttempts] : [];
+            revealAttempts.push({
+              time: event.timestamp,
+              success: data.success,
+              skipped: data.skipped,
+              error: data.error,
+              attempt,
+              maxAttempts
+            });
+            return {
+              ...prev,
+              [data.slot]: {
+                ...st,
+                slot: data.slot,
+                revealAttempts,
+                revealed: data.success,
+                revealSkipped: data.skipped,
+                revealFailed: failed,
+                revealSentAt: event.timestamp
+              }
+            };
           });
           break;
         }

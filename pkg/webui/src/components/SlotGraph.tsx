@@ -3,6 +3,7 @@ import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoi
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
 import { Popover, PopoverData } from './Popover';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
+import { BuildDelayLine } from './BuildDelayLine';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -152,11 +153,28 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
   const revealX = epbsConfig ? calculatePosition(epbsConfig.reveal_time, rangeStart, totalRange) : 0;
 
-  // Build delay line: from build_start_time to payloadCreatedAt
-  const buildStartX = epbsConfig ? calculatePosition(epbsConfig.build_start_time, rangeStart, totalRange) : 0;
-  const payloadCreatedX = state.payloadCreatedAt
-    ? calculatePosition(state.payloadCreatedAt - slotStartTime, rangeStart, totalRange)
-    : 0;
+  // Build delay line: from build start to payloadCreatedAt (or live "now" while building).
+  // Prefer the actual build-started time (accurate even when building immediately);
+  // fall back to the configured build_start_time for slots without a start event.
+  const buildStartMs = state.payloadBuildStartedAt !== undefined
+    ? state.payloadBuildStartedAt - slotStartTime
+    : (epbsConfig ? epbsConfig.build_start_time : 0);
+  const buildStartX = calculatePosition(buildStartMs, rangeStart, totalRange);
+  const buildFailed = state.payloadBuildFailed === true;
+  // The build span finalizes at the payload-ready time (success) or the failure time.
+  const buildEndAt = state.payloadCreatedAt ?? state.payloadBuildFailedAt;
+  const buildActive = state.payloadBuildStartedAt !== undefined
+    || state.payloadCreatedAt !== undefined
+    || buildFailed;
+
+  // While a build is in progress, the line grows toward "now" but is capped at the
+  // expected completion (build start + payload_build_time) so a stuck/timed-out build
+  // shows a bounded bar instead of creeping to the slot end. payload_build_time lives
+  // at the root of the SSE config object.
+  const payloadBuildTime = (config as unknown as Record<string, unknown>)?.payload_build_time;
+  const expectedBuildEndAt = typeof payloadBuildTime === 'number'
+    ? slotStartTime + buildStartMs + payloadBuildTime
+    : undefined;
 
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
@@ -317,24 +335,82 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
 
         {/* Chain + payload events row (always on top) */}
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
-          {/* Build delay line: from build_start_time to payload ready */}
-          {epbsConfig && state.payloadCreatedAt && genesisTime > 0 && buildStartX < 100 && payloadCreatedX > 0 && (
-            <div
-              className="build-delay-line"
-              style={{
-                left: `${Math.max(0, buildStartX)}%`,
-                width: `${Math.min(100, payloadCreatedX) - Math.max(0, buildStartX)}%`
-              }}
+          {/* Build delay line: from build start to payload ready (animates live while building).
+              On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
+          {epbsConfig && buildActive && !buildFailed && genesisTime > 0 && buildStartX < 100 && (
+            <BuildDelayLine
+              leftPct={buildStartX}
+              slotStartTime={slotStartTime}
+              rangeStart={rangeStart}
+              totalRange={totalRange}
+              endAt={buildEndAt}
+              expectedEndAt={expectedBuildEndAt}
               onClick={(e) => showPopover(e, {
                 title: 'Build Delay',
-                items: [
-                  { label: 'Build Start', value: `${epbsConfig.build_start_time}ms` },
-                  { label: 'Payload Ready', value: `${state.payloadCreatedAt! - slotStartTime}ms` },
-                  { label: 'Duration', value: `${(state.payloadCreatedAt! - slotStartTime) - epbsConfig.build_start_time}ms` }
-                ]
+                items: state.payloadCreatedAt
+                  ? [
+                      { label: 'Build Start', value: `${buildStartMs}ms` },
+                      { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                      { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
+                    ]
+                  : [
+                      { label: 'Build Start', value: `${buildStartMs}ms` },
+                      { label: 'Status', value: 'Building…' }
+                    ]
               })}
             />
           )}
+
+          {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
+          {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
+            'build-failed',
+            (state.payloadBuildFailedAt ?? (slotStartTime + buildStartMs)) - slotStartTime,
+            {
+              title: 'Build Failed',
+              items: [
+                { label: 'Build Start', value: `${buildStartMs}ms` },
+                ...(state.payloadBuildFailedAt ? [{ label: 'Failed At', value: `${state.payloadBuildFailedAt - slotStartTime}ms` }] : []),
+                { label: 'Error', value: state.payloadBuildError || 'unknown error' }
+              ]
+            },
+            'build-failed'
+          )}
+
+          {/* Payload attributes for the next slot — each arrives during this slot
+              (the CL re-emits one per head update), so render one dot per event
+              here (on the parent slot's graph) with details on click. */}
+          {genesisTime > 0 && state.nextSlotAttributes?.map((attr, i) => renderEventDot(
+            'payload-attributes',
+            attr.receivedAt - slotStartTime,
+            {
+              title: `Payload Attributes (slot ${attr.proposalSlot})`,
+              items: [
+                { label: 'For Slot', value: `${attr.proposalSlot}` },
+                { label: 'Update', value: `${i + 1} of ${state.nextSlotAttributes!.length}` },
+                { label: 'Proposer', value: `${attr.proposerIndex}` },
+                { label: 'Received', value: `${attr.receivedAt - slotStartTime}ms` },
+                {
+                  label: 'Parent Hash',
+                  value: truncateHash(attr.parentBlockHash),
+                  copyValue: attr.parentBlockHash
+                },
+                {
+                  label: 'Parent Root',
+                  value: truncateHash(attr.parentBlockRoot),
+                  copyValue: attr.parentBlockRoot
+                },
+                { label: 'Parent Block #', value: `${attr.parentBlockNumber}` },
+                { label: 'Gas Limit', value: `${attr.targetGasLimit}` },
+                { label: 'Withdrawals', value: `${attr.withdrawalsCount}` },
+                {
+                  label: 'Fee Recipient',
+                  value: truncateHash(attr.feeRecipient),
+                  copyValue: attr.feeRecipient
+                }
+              ]
+            },
+            `payload-attributes-${i}`
+          ))}
 
           {/* Payload created */}
           {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
@@ -463,19 +539,27 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               );
             })}
 
-            {/* Reveal */}
-            {state.revealSentAt && genesisTime > 0 && renderEventDot(
-              state.revealFailed ? 'reveal-failed' : 'reveal-sent',
-              state.revealSentAt - slotStartTime,
-              {
-                title: 'Payload Reveal',
-                items: [
-                  { label: 'Time', value: `${state.revealSentAt - slotStartTime}ms` },
-                  { label: 'Status', value: state.revealFailed ? 'Failed' : (state.revealSkipped ? 'Skipped' : 'Success') }
-                ]
-              },
-              'reveal'
-            )}
+            {/* Reveal attempts — one dot per attempt so each retry/error is visible */}
+            {genesisTime > 0 && state.revealAttempts?.map((att, idx) => {
+              const failed = !att.success && !att.skipped;
+              const status = att.success ? 'Success' : (att.skipped ? 'Skipped' : 'Failed');
+              const title = att.attempt && att.maxAttempts
+                ? `Payload Reveal (attempt ${att.attempt}/${att.maxAttempts})`
+                : 'Payload Reveal';
+              return renderEventDot(
+                failed ? 'reveal-failed' : 'reveal-sent',
+                att.time - slotStartTime,
+                {
+                  title,
+                  items: [
+                    { label: 'Time', value: `${att.time - slotStartTime}ms` },
+                    { label: 'Status', value: status },
+                    ...(att.error ? [{ label: 'Error', value: att.error }] : [])
+                  ]
+                },
+                `reveal-${idx}`
+              );
+            })}
           </div>
         )}
 

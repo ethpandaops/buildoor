@@ -13,6 +13,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -67,9 +68,12 @@ type BidSubmissionEvent struct {
 
 // RevealEvent represents a payload reveal (success or failure).
 type RevealEvent struct {
-	Slot    phase0.Slot
-	Success bool
-	Skipped bool
+	Slot        phase0.Slot
+	Success     bool
+	Skipped     bool
+	Error       string // Failure reason (when Success is false)
+	Attempt     int    // 1-based attempt number for this reveal
+	MaxAttempts int    // Total attempts allowed before giving up
 }
 
 // BidIncludedEvent is fired when the beacon block includes our bid.
@@ -108,10 +112,17 @@ type Service struct {
 
 	enabled           atomic.Bool
 	registrationState atomic.Int32
+	stateDB           *db.Database // optional: persistent won-block store (may be nil/disabled)
 	ctx               context.Context
 	cancel            context.CancelFunc
 	log               logrus.FieldLogger
 	wg                sync.WaitGroup
+}
+
+// SetStateDB sets the optional state-db used to persist won blocks. When unset
+// (or disabled), ePBS won blocks are not persisted.
+func (s *Service) SetStateDB(stateDB *db.Database) {
+	s.stateDB = stateDB
 }
 
 // NewService creates a new ePBS service.
@@ -513,6 +524,58 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 		BlockHash: blockInfo.ExecutionBlockHash,
 		BidValue:  new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64(),
 	})
+
+	// Persist the won block so it survives restarts (no-op when disabled).
+	s.persistWonBlock(payload, blockInfo.ExecutionBlockHash)
+}
+
+// persistWonBlock records an included ePBS payload to the state-db.
+func (s *Service) persistWonBlock(payload *BuiltPayload, blockHash phase0.Hash32) {
+	if s.stateDB == nil {
+		return
+	}
+
+	numTxs := 0
+	if payload.ExecutionPayload != nil {
+		numTxs = len(payload.ExecutionPayload.Transactions)
+	}
+
+	numBlobs := 0
+	if payload.BlobsBundle != nil {
+		numBlobs = len(payload.BlobsBundle.Commitments)
+	}
+
+	valueWei := "0"
+	valueETH := "0.000000000000000000"
+
+	if payload.BidValue != nil {
+		valueWei = payload.BidValue.String()
+		valueETH = weiToETHString(payload.BidValue)
+	}
+
+	if err := s.stateDB.AddWonBlock(db.WonBlock{
+		Source:          db.WonBlockSourceEPBS,
+		Slot:            uint64(payload.Slot),
+		BlockHash:       fmt.Sprintf("%#x", blockHash),
+		NumTransactions: numTxs,
+		NumBlobs:        numBlobs,
+		ValueWei:        valueWei,
+		ValueETH:        valueETH,
+		Timestamp:       time.Now().UnixMilli(),
+	}); err != nil {
+		s.log.WithError(err).Warn("failed to persist won block to state-db")
+	}
+}
+
+// weiToETHString converts wei to an 18-decimal ETH string.
+func weiToETHString(wei *big.Int) string {
+	if wei == nil {
+		return "0.000000000000000000"
+	}
+
+	eth := new(big.Float).Quo(new(big.Float).SetInt(wei), big.NewFloat(1e18))
+
+	return eth.Text('f', 18)
 }
 
 // GetRegistrationState returns the current registration state.

@@ -25,6 +25,9 @@ const (
 	EventTypeConfig                      EventType = "config"
 	EventTypeStatus                      EventType = "status"
 	EventTypeSlotStart                   EventType = "slot_start"
+	EventTypePayloadAttributes           EventType = "payload_attributes"
+	EventTypePayloadBuildStarted         EventType = "payload_build_started"
+	EventTypePayloadBuildFailed          EventType = "payload_build_failed"
 	EventTypePayloadReady                EventType = "payload_ready"
 	EventTypeBidSubmitted                EventType = "bid_submitted"
 	EventTypeHeadReceived                EventType = "head_received"
@@ -58,6 +61,37 @@ type SlotStartEvent struct {
 	SlotStartTime int64  `json:"slot_start_time"`
 }
 
+// PayloadBuildStartedStreamEvent is sent when payload building begins, before
+// the payload is ready, so the WebUI can render the build as in-progress.
+type PayloadBuildStartedStreamEvent struct {
+	Slot      uint64 `json:"slot"`
+	StartedAt int64  `json:"started_at"`
+}
+
+// PayloadAttributesStreamEvent is sent when a payload_attributes event is
+// received from the beacon node. It arrives before the slot it targets
+// (ProposalSlot), so the WebUI renders it on the parent slot's graph.
+type PayloadAttributesStreamEvent struct {
+	ProposalSlot      uint64 `json:"proposal_slot"`
+	ProposerIndex     uint64 `json:"proposer_index"`
+	ParentBlockHash   string `json:"parent_block_hash"`
+	ParentBlockRoot   string `json:"parent_block_root"`
+	ParentBlockNumber uint64 `json:"parent_block_number"`
+	Timestamp         uint64 `json:"timestamp"`
+	FeeRecipient      string `json:"fee_recipient"`
+	TargetGasLimit    uint64 `json:"target_gas_limit"`
+	WithdrawalsCount  int    `json:"withdrawals_count"`
+	ReceivedAt        int64  `json:"received_at"`
+}
+
+// PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
+// can mark the in-progress build as failed.
+type PayloadBuildFailedStreamEvent struct {
+	Slot     uint64 `json:"slot"`
+	Error    string `json:"error"`
+	FailedAt int64  `json:"failed_at"`
+}
+
 // PayloadReadyStreamEvent is sent when a payload becomes available.
 type PayloadReadyStreamEvent struct {
 	Slot            uint64 `json:"slot"`
@@ -86,12 +120,15 @@ type HeadReceivedEvent struct {
 	ReceivedAt int64  `json:"received_at"`
 }
 
-// RevealStreamEvent is sent when we submit or skip a reveal.
+// RevealStreamEvent is sent when we submit or skip a reveal (one per attempt).
 type RevealStreamEvent struct {
-	Slot      uint64 `json:"slot"`
-	Success   bool   `json:"success"`
-	Skipped   bool   `json:"skipped"`
-	Timestamp int64  `json:"timestamp"`
+	Slot        uint64 `json:"slot"`
+	Success     bool   `json:"success"`
+	Skipped     bool   `json:"skipped"`
+	Error       string `json:"error,omitempty"`
+	Attempt     int    `json:"attempt,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
+	Timestamp   int64  `json:"timestamp"`
 }
 
 // BidStreamEvent represents a bid from any builder.
@@ -267,10 +304,17 @@ func (m *EventStreamManager) Start() {
 	// Subscribe to payload ready events
 	payloadSub := m.builderSvc.SubscribePayloadReady(16)
 
+	// Subscribe to payload build started events (in-progress rendering)
+	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16)
+
+	// Subscribe to payload build failed events (mark builds as failed)
+	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16)
+
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
 	bidSub := m.builderSvc.GetCLClient().Events().SubscribeBids()
 	payloadAvailSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAvailable()
+	payloadAttrSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAttributes()
 
 	// Subscribe to bid submission events from ePBS service (if available)
 	var bidSubmitChan <-chan *epbs.BidSubmissionEvent
@@ -318,9 +362,12 @@ func (m *EventStreamManager) Start() {
 	go func() {
 		defer m.wg.Done()
 		defer payloadSub.Unsubscribe()
+		defer buildStartedSub.Unsubscribe()
+		defer buildFailedSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
+		defer payloadAttrSub.Unsubscribe()
 
 		// Slot tracking ticker
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -336,6 +383,12 @@ func (m *EventStreamManager) Start() {
 			case event := <-payloadSub.Channel():
 				m.handlePayloadReady(event)
 
+			case event := <-buildStartedSub.Channel():
+				m.handlePayloadBuildStarted(event)
+
+			case event := <-buildFailedSub.Channel():
+				m.handlePayloadBuildFailed(event)
+
 			case event := <-headSub.Channel():
 				m.handleHeadEvent(event)
 
@@ -344,6 +397,9 @@ func (m *EventStreamManager) Start() {
 
 			case event := <-payloadAvailSub.Channel():
 				m.handlePayloadAvailableEvent(event)
+
+			case event := <-payloadAttrSub.Channel():
+				m.handlePayloadAttributesEvent(event)
 
 			case event, ok := <-bidSubmitChan:
 				if ok {
@@ -357,7 +413,7 @@ func (m *EventStreamManager) Start() {
 
 			case event, ok := <-revealChan:
 				if ok {
-					m.BroadcastReveal(uint64(event.Slot), event.Success, event.Skipped)
+					m.BroadcastReveal(event)
 				}
 
 			case event, ok := <-bidIncludedChan:
@@ -456,6 +512,48 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	m.cleanupOldSlots(slot)
 }
 
+func (m *EventStreamManager) handlePayloadBuildStarted(event *builder.PayloadBuildStartedEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadBuildStarted,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadBuildStartedStreamEvent{
+			Slot:      uint64(event.Slot),
+			StartedAt: event.StartedAt.UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadAttributes,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadAttributesStreamEvent{
+			ProposalSlot:      uint64(event.ProposalSlot),
+			ProposerIndex:     uint64(event.ProposerIndex),
+			ParentBlockHash:   fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockRoot:   fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
+			ParentBlockNumber: event.ParentBlockNumber,
+			Timestamp:         event.Timestamp,
+			FeeRecipient:      event.SuggestedFeeRecipient.Hex(),
+			TargetGasLimit:    event.TargetGasLimit,
+			WithdrawalsCount:  len(event.Withdrawals),
+			ReceivedAt:        time.Now().UnixMilli(),
+		},
+	})
+}
+
+func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuildFailedEvent) {
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypePayloadBuildFailed,
+		Timestamp: time.Now().UnixMilli(),
+		Data: PayloadBuildFailedStreamEvent{
+			Slot:     uint64(event.Slot),
+			Error:    event.Error,
+			FailedAt: event.FailedAt.UnixMilli(),
+		},
+	})
+}
+
 func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent) {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypePayloadReady,
@@ -541,9 +639,10 @@ func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
 }
 
 func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
-	// Determine if this is our bid
-	isOurs := false
-	// We'd need epbsSvc here to check builder index, for now just broadcast all
+	// Determine if this is our own bid. The beacon node echoes our submitted bid
+	// back over the SSE stream, so without this it would be shown as an external
+	// bid. Match on builder index, the same way the ePBS service classifies bids.
+	isOurs := m.epbsSvc != nil && event.BuilderIndex == m.epbsSvc.GetBuilderIndex()
 
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeBidEvent,
@@ -1091,28 +1190,33 @@ func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, v
 	})
 }
 
-// BroadcastReveal broadcasts a reveal event.
-func (m *EventStreamManager) BroadcastReveal(slot uint64, success, skipped bool) {
+// BroadcastReveal broadcasts a reveal event (one per attempt, success or failure).
+func (m *EventStreamManager) BroadcastReveal(event *epbs.RevealEvent) {
+	slot := uint64(event.Slot)
+
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeReveal,
 		Timestamp: time.Now().UnixMilli(),
 		Data: RevealStreamEvent{
-			Slot:      slot,
-			Success:   success,
-			Skipped:   skipped,
-			Timestamp: time.Now().UnixMilli(),
+			Slot:        slot,
+			Success:     event.Success,
+			Skipped:     event.Skipped,
+			Error:       event.Error,
+			Attempt:     event.Attempt,
+			MaxAttempts: event.MaxAttempts,
+			Timestamp:   time.Now().UnixMilli(),
 		},
 	})
 
 	// Update slot state
 	m.slotStatesMu.Lock()
-	state, ok := m.slotStates[phase0.Slot(slot)]
+	state, ok := m.slotStates[event.Slot]
 	if ok {
-		state.Revealed = success
+		state.Revealed = event.Success
 	}
 	m.slotStatesMu.Unlock()
 
-	m.broadcastSlotState(phase0.Slot(slot))
+	m.broadcastSlotState(event.Slot)
 }
 
 // BroadcastConfigUpdate broadcasts a config update event.

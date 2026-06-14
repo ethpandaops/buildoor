@@ -221,20 +221,70 @@ Key config sections:
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`, `--epbs-reveal-time`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`
+- **State persistence**: `--state-db <path>` (optional SQLite; see below)
+
+### Settings Service & State Persistence (`--state-db`)
+
+The **Settings Service** (`pkg/settings`) is the central authority for all *mutable*
+runtime config. It owns the single effective `config.Config` that every module reads
+and is the only writer. Setting values resolve from three layers:
+
+```
+hardcoded defaults  <  CLI-supplied (flag/env/config)  <  UI override
+```
+
+CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
+- A CLI value that *changed* since the last run wins over an older UI override.
+- An *unchanged* CLI flag lets a newer UI override win.
+- A CLI "change" is detected by diffing the operator-supplied value against the
+  last-seen one persisted in the state-db. Only keys where `viper.IsSet` is true
+  form the CLI layer, so bumping a *hardcoded default* in a new release never
+  clobbers a UI override.
+
+The mutable-setting registry lives in `pkg/settings/fields.go` (keys in `keys.go`);
+the per-module enable flags (`epbs_enabled`, `builder_api_enabled`,
+`lifecycle_enabled`) are ordinary settings too. Write handlers call
+`settingsSvc.SetMany`, which mutates the shared config in place, persists overrides,
+and fires `OnChange` callbacks (registered in `cmd/run.go`) that trigger module
+resets (`builder.UpdateConfig`, `epbs.UpdateConfig`) and `SetEnabled` syncs.
+
+The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sqlx`
++ goose migrations) persists across restarts when `--state-db <path>` is set:
+- `settings` — the 3-way (cli/ui + seq) override state
+- `won_blocks` — unified Builder API + ePBS won blocks (source-tagged)
+- `validator_registrations` — Builder API registrations (load on start, write-through)
+- `proposer_preferences` — Gloas gossip prefs (best-effort)
+- `audit_log` — every authenticated mutating action (actor from JWT subject)
+
+When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
+is in-memory-only as before. Repository methods early-return; never nil-check the
+`*db.Database` at call sites.
 
 ### Startup Sequence
 
-The application initializes services in this order (see `cmd/run.go`):
-1. CL client connection
-2. Engine API connection
-3. BLS signer initialization
-4. Chain Service start
-5. Lifecycle Manager initialization (if enabled)
-6. Builder Service initialization
-7. ePBS Service initialization (if enabled)
-8. Builder API Server start (if enabled)
-9. WebUI HTTP server start (if APIPort > 0)
-10. Service starts (Lifecycle → Builder → ePBS)
+The application initializes services in this order (see `cmd/run.go`; the
+numbered step comments there match this list 1:1):
+1. Initialize CL client
+2. Initialize Engine API client
+3. Initialize BLS signer
+4. Initialize RPC client and wallet (if lifecycle available)
+5. Fetch chain spec & genesis (wait for the beacon node), apply slot-time timing defaults
+6. Open the state-db (`--state-db`) and initialize the central Settings Service (applies persisted overrides into `cfg` in place before any module reads it)
+7. Start chain service
+8. Initialize lifecycle manager (if prerequisites available)
+9. Initialize builder service
+10. Initialize ePBS service (if Gloas fork is scheduled)
+11. Initialize Builder API server (if `--api-port` set)
+12. Initialize proposer preferences service (if ePBS available)
+13. Initialize and start validator ranges resolver
+14. Register settings `OnChange` subscribers (push changes to modules)
+15. Start WebUI/API server (if APIPort > 0)
+16. Wire lifecycle manager callbacks to ePBS (if both present)
+17. Start builder service
+18. Start ePBS service (if available)
+19. Start lifecycle manager (after ePBS so the bid tracker is available)
+20. Start proposer preferences service (if initialized)
+21. Wait for shutdown signal
 
 ### RPC Clients
 
@@ -262,6 +312,10 @@ buildoor/
 │   │   └── ...
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
+│   ├── db/                # Optional SQLite state-db (settings, won_blocks, audit, ...)
+│   │   ├── database.go    # Database struct, Init, migrations, disabled no-op mode
+│   │   └── schema/        # Embedded goose migrations
+│   ├── settings/          # Central settings service (3-way default<cli<ui resolution)
 │   ├── epbs/              # ePBS bidding and revealing
 │   ├── lifecycle/         # Deposit/exit/balance management
 │   ├── rpc/

@@ -18,7 +18,10 @@ import (
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/http"
 	"github.com/ethpandaops/go-eth2-client/spec"
+	"github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
+	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
 )
@@ -252,6 +255,28 @@ func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
 	}
 
 	return cs, nil
+}
+
+// InitGlobalSSZSpecs configures the global dynssz instance with this network's
+// spec values. The go-eth2-client SSZ codecs (e.g. block.Root()) route through
+// dynssz.GetGlobalDynSsz(), which otherwise defaults to mainnet preset sizes —
+// producing wrong hash-tree-roots on minimal-preset networks. We reuse the spec
+// map go-eth2-client already parses (SpecProvider.Spec), which is directly
+// compatible with dynssz.SetGlobalSpecs.
+func (c *Client) InitGlobalSSZSpecs(ctx context.Context) error {
+	provider, ok := c.client.(eth2client.SpecProvider)
+	if !ok {
+		return fmt.Errorf("client does not support spec provider")
+	}
+
+	resp, err := provider.Spec(ctx, &api.SpecOpts{})
+	if err != nil {
+		return fmt.Errorf("failed to get spec: %w", err)
+	}
+
+	dynssz.SetGlobalSpecs(resp.Data)
+
+	return nil
 }
 
 // fetchSpecDirect fetches /eth/v1/config/spec via direct HTTP, bypassing go-eth2-client.
@@ -529,57 +554,69 @@ type FinalityInfo struct {
 }
 
 // GetBlockInfo fetches beacon block info at the given block ID.
+//
+// It uses the fork-agnostic block type and computes the block root via dynssz,
+// which honours the network's spec (set via InitGlobalSSZSpecs). The versioned
+// type's Root() routes through fastssz code generated for mainnet preset sizes,
+// so it returns wrong roots on non-mainnet presets (e.g. minimal).
 func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, error) {
 	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
 	if !ok {
 		return nil, fmt.Errorf("client does not support signed beacon block provider")
 	}
 
-	resp, err := provider.SignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
+	resp, err := provider.AgnosticSignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
 		Block: blockID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get beacon block: %w", err)
 	}
 
-	if resp.Data == nil {
+	if resp.Data == nil || resp.Data.Message == nil || resp.Data.Message.Body == nil {
 		return nil, fmt.Errorf("beacon block response is nil")
 	}
 
-	block := resp.Data
+	msg := resp.Data.Message
 
-	slot, err := block.Slot()
+	root, err := dynssz.GetGlobalDynSsz().HashTreeRoot(msg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get slot: %w", err)
+		return nil, fmt.Errorf("failed to compute block root: %w", err)
 	}
 
-	execBlockHash, err := block.ExecutionBlockHash()
+	execBlockHash, err := agnosticExecutionBlockHash(msg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution block hash: %w", err)
 	}
 
-	parentRoot, err := block.ParentRoot()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get parent root: %w", err)
-	}
-
-	stateRoot, err := block.StateRoot()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get state root: %w", err)
-	}
-
-	root, err := block.Root()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get block root: %w", err)
-	}
-
 	return &BlockInfo{
-		Slot:               slot,
+		Slot:               msg.Slot,
 		Root:               root,
 		ExecutionBlockHash: execBlockHash,
-		ParentRoot:         parentRoot,
-		StateRoot:          stateRoot,
+		ParentRoot:         msg.ParentRoot,
+		StateRoot:          msg.StateRoot,
 	}, nil
+}
+
+// agnosticExecutionBlockHash extracts the execution block hash from a
+// fork-agnostic beacon block. Pre-Gloas the payload is embedded in the block;
+// from Gloas on the block carries only the builder's bid, so the committed
+// block hash comes from the bid instead.
+func agnosticExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32, error) {
+	body := msg.Body
+
+	if msg.Version >= version.DataVersionGloas {
+		if body.SignedExecutionPayloadBid == nil || body.SignedExecutionPayloadBid.Message == nil {
+			return phase0.Hash32{}, fmt.Errorf("no execution payload bid in block")
+		}
+
+		return body.SignedExecutionPayloadBid.Message.BlockHash, nil
+	}
+
+	if body.ExecutionPayload == nil {
+		return phase0.Hash32{}, fmt.Errorf("no execution payload in block")
+	}
+
+	return body.ExecutionPayload.BlockHash, nil
 }
 
 // GetFinalityInfo fetches finality checkpoints and returns execution block hashes.

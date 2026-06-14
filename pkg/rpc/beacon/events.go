@@ -146,22 +146,26 @@ type payloadAvailableEventJSON struct {
 }
 
 // bidEventJSON is used for JSON unmarshaling of bid events.
-// The beacon node sends bids in SignedExecutionPayloadBid format with a message/signature wrapper.
+// The beacon node wraps the SignedExecutionPayloadBid (message/signature) in a
+// {"data": ..., "version": ...} envelope, like the other versioned SSE events.
 type bidEventJSON struct {
-	Message struct {
-		Slot               string   `json:"slot"`
-		ParentBlockHash    string   `json:"parent_block_hash"`
-		ParentBlockRoot    string   `json:"parent_block_root"`
-		BlockHash          string   `json:"block_hash"`
-		PrevRandao         string   `json:"prev_randao"`
-		FeeRecipient       string   `json:"fee_recipient"`
-		GasLimit           string   `json:"gas_limit"`
-		BuilderIndex       string   `json:"builder_index"`
-		Value              string   `json:"value"`
-		ExecutionPayment   string   `json:"execution_payment"`
-		BlobKZGCommitments []string `json:"blob_kzg_commitments"`
-	} `json:"message"`
-	Signature string `json:"signature"`
+	Version string `json:"version"`
+	Data    struct {
+		Message struct {
+			Slot               string   `json:"slot"`
+			ParentBlockHash    string   `json:"parent_block_hash"`
+			ParentBlockRoot    string   `json:"parent_block_root"`
+			BlockHash          string   `json:"block_hash"`
+			PrevRandao         string   `json:"prev_randao"`
+			FeeRecipient       string   `json:"fee_recipient"`
+			GasLimit           string   `json:"gas_limit"`
+			BuilderIndex       string   `json:"builder_index"`
+			Value              string   `json:"value"`
+			ExecutionPayment   string   `json:"execution_payment"`
+			BlobKZGCommitments []string `json:"blob_kzg_commitments"`
+		} `json:"message"`
+		Signature string `json:"signature"`
+	} `json:"data"`
 }
 
 // EventStream manages SSE connections to the beacon node event stream.
@@ -563,7 +567,7 @@ func parseHeadEvent(raw *headEventJSON) (*HeadEvent, error) {
 
 // parseBidEvent converts a raw JSON bid event to the typed BidEvent.
 func parseBidEvent(raw *bidEventJSON) (*BidEvent, error) {
-	msg := &raw.Message
+	msg := &raw.Data.Message
 
 	slot, err := strconv.ParseUint(msg.Slot, 10, 64)
 	if err != nil {
@@ -615,7 +619,7 @@ func parseBidEvent(raw *bidEventJSON) (*BidEvent, error) {
 		blobCommitments = append(blobCommitments, b)
 	}
 
-	signature, err := parseSignature(raw.Signature)
+	signature, err := parseSignature(raw.Data.Signature)
 	if err != nil {
 		return nil, fmt.Errorf("invalid signature: %w", err)
 	}

@@ -52,6 +52,23 @@ type PayloadReadyEvent struct {
 	ReadyAt           time.Time   // When the payload became ready
 }
 
+// PayloadBuildStartedEvent is emitted when payload building begins for a slot,
+// before the build has completed. Subscribers (e.g. the WebUI) use it to render
+// the build as in-progress rather than waiting for the payload to be ready.
+type PayloadBuildStartedEvent struct {
+	Slot      phase0.Slot
+	StartedAt time.Time // When the build started
+}
+
+// PayloadBuildFailedEvent is emitted when a payload build fails. Subscribers
+// (e.g. the WebUI) use it to mark the in-progress build as failed instead of
+// leaving it rendered as perpetually building.
+type PayloadBuildFailedEvent struct {
+	Slot     phase0.Slot
+	Error    string    // Failure reason
+	FailedAt time.Time // When the build failed
+}
+
 // PayloadReadyDispatcher dispatches payload ready events to subscribers.
 type PayloadReadyDispatcher struct {
 	*utils.Dispatcher[*PayloadReadyEvent]
