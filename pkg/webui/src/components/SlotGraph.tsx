@@ -376,39 +376,41 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             'build-failed'
           )}
 
-          {/* Payload attributes for the next slot — arrives during this slot, so
-              it is rendered here (on the parent slot's graph) with details on click. */}
-          {state.nextSlotAttributes && genesisTime > 0 && renderEventDot(
+          {/* Payload attributes for the next slot — each arrives during this slot
+              (the CL re-emits one per head update), so render one dot per event
+              here (on the parent slot's graph) with details on click. */}
+          {genesisTime > 0 && state.nextSlotAttributes?.map((attr, i) => renderEventDot(
             'payload-attributes',
-            state.nextSlotAttributes.receivedAt - slotStartTime,
+            attr.receivedAt - slotStartTime,
             {
-              title: `Payload Attributes (slot ${state.nextSlotAttributes.proposalSlot})`,
+              title: `Payload Attributes (slot ${attr.proposalSlot})`,
               items: [
-                { label: 'For Slot', value: `${state.nextSlotAttributes.proposalSlot}` },
-                { label: 'Proposer', value: `${state.nextSlotAttributes.proposerIndex}` },
-                { label: 'Received', value: `${state.nextSlotAttributes.receivedAt - slotStartTime}ms` },
+                { label: 'For Slot', value: `${attr.proposalSlot}` },
+                { label: 'Update', value: `${i + 1} of ${state.nextSlotAttributes!.length}` },
+                { label: 'Proposer', value: `${attr.proposerIndex}` },
+                { label: 'Received', value: `${attr.receivedAt - slotStartTime}ms` },
                 {
                   label: 'Parent Hash',
-                  value: truncateHash(state.nextSlotAttributes.parentBlockHash),
-                  copyValue: state.nextSlotAttributes.parentBlockHash
+                  value: truncateHash(attr.parentBlockHash),
+                  copyValue: attr.parentBlockHash
                 },
                 {
                   label: 'Parent Root',
-                  value: truncateHash(state.nextSlotAttributes.parentBlockRoot),
-                  copyValue: state.nextSlotAttributes.parentBlockRoot
+                  value: truncateHash(attr.parentBlockRoot),
+                  copyValue: attr.parentBlockRoot
                 },
-                { label: 'Parent Block #', value: `${state.nextSlotAttributes.parentBlockNumber}` },
-                { label: 'Gas Limit', value: `${state.nextSlotAttributes.targetGasLimit}` },
-                { label: 'Withdrawals', value: `${state.nextSlotAttributes.withdrawalsCount}` },
+                { label: 'Parent Block #', value: `${attr.parentBlockNumber}` },
+                { label: 'Gas Limit', value: `${attr.targetGasLimit}` },
+                { label: 'Withdrawals', value: `${attr.withdrawalsCount}` },
                 {
                   label: 'Fee Recipient',
-                  value: truncateHash(state.nextSlotAttributes.feeRecipient),
-                  copyValue: state.nextSlotAttributes.feeRecipient
+                  value: truncateHash(attr.feeRecipient),
+                  copyValue: attr.feeRecipient
                 }
               ]
             },
-            'payload-attributes'
-          )}
+            `payload-attributes-${i}`
+          ))}
 
           {/* Payload created */}
           {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(

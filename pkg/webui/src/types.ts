@@ -197,9 +197,10 @@ export interface SlotState {
   submitBlindedReceivedAt?: number;
   submitBlindedDeliveredAt?: number;
   submitBlindedBlockHash?: string;
-  // payload_attributes event targeting the NEXT slot (this.slot + 1). It arrives
-  // before the slot it targets, so it is rendered on this (parent) slot's graph.
-  nextSlotAttributes?: PayloadAttributesInfo;
+  // payload_attributes events targeting the NEXT slot (this.slot + 1). They
+  // arrive before the slot they target (the CL re-emits one per head update),
+  // so they are rendered on this (parent) slot's graph — one dot each.
+  nextSlotAttributes?: PayloadAttributesInfo[];
 }
 
 export interface PayloadAttributesInfo {
