@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -19,7 +20,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
@@ -619,10 +619,14 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if len(authBody) > 0 {
-		var signedAuth buildergloas.SignedRequestAuthV1
-		if jsonErr := json.Unmarshal(authBody, &signedAuth); jsonErr != nil {
-			log.WithError(jsonErr).Warn("getExecutionPayloadBid: invalid SignedRequestAuth body")
-			writeValidatorError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: "+jsonErr.Error())
+		signedAuth, parseErr := parseSignedRequestAuth(authBody, r.Header.Get("Content-Type"))
+		if parseErr != nil {
+			code := http.StatusBadRequest
+			if errors.Is(parseErr, errUnsupportedContentType) {
+				code = http.StatusUnsupportedMediaType
+			}
+			log.WithError(parseErr).Warn("getExecutionPayloadBid: invalid SignedRequestAuth body")
+			writeValidatorError(w, code, "invalid SignedRequestAuthV1: "+parseErr.Error())
 			return
 		}
 		if signedAuth.Message == nil {
@@ -647,7 +651,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			return
 		}
 
-		if authErr := gloasauth.VerifyRequestAuth(&signedAuth, proposerPubkey, s.genesisForkVersion); authErr != nil {
+		if authErr := gloasauth.VerifyRequestAuth(signedAuth, proposerPubkey, s.genesisForkVersion); authErr != nil {
 			log.WithError(authErr).Warn("getExecutionPayloadBid: SignedRequestAuth signature verification failed")
 			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
 			return
@@ -998,12 +1002,6 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if r.Header.Get("Content-Type") != "application/json" {
-		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("submitBuilderPreferences: rejected — Content-Type must be application/json")
-		writeValidatorError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
-		return
-	}
-
 	pubkeyBytes, hexErr := hex.DecodeString(trimHex(mux.Vars(r)["validator_pubkey"]))
 	if hexErr != nil || len(pubkeyBytes) != 48 {
 		log.WithError(hexErr).Warn("submitBuilderPreferences: invalid validator_pubkey")
@@ -1020,10 +1018,14 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	var req buildergloas.BuilderPreferencesRequestV1
-	if err := json.Unmarshal(body, &req); err != nil {
-		log.WithError(err).Warn("submitBuilderPreferences: invalid JSON body")
-		writeValidatorError(w, http.StatusBadRequest, "invalid BuilderPreferencesRequestV1: "+err.Error())
+	req, parseErr := parseBuilderPreferencesRequest(body, r.Header.Get("Content-Type"))
+	if parseErr != nil {
+		code := http.StatusBadRequest
+		if errors.Is(parseErr, errUnsupportedContentType) {
+			code = http.StatusUnsupportedMediaType
+		}
+		log.WithError(parseErr).Warn("submitBuilderPreferences: invalid request body")
+		writeValidatorError(w, code, "invalid BuilderPreferencesRequestV1: "+parseErr.Error())
 		return
 	}
 	if req.Preferences == nil {

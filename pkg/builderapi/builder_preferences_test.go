@@ -129,6 +129,63 @@ func TestSubmitBuilderPreferences_Success(t *testing.T) {
 	assert.Equal(t, phase0.Gwei(5_000_000_000), got)
 }
 
+func TestSubmitBuilderPreferences_SuccessSSZ(t *testing.T) {
+	gfv := phase0.Version{}
+	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
+	require.NoError(t, err)
+
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
+	srv := NewServer(cfg, logrus.New(), nil, nil, nil, gfv, phase0.Version{}, phase0.Root{})
+	srv.SetEnabled(true)
+
+	// Build the same signed request as the JSON path, but submit it SSZ-encoded.
+	jsonBody := signBuilderPrefsRequest(t, blsSigner, testBuilderURL, 100, 5_000_000_000, gfv)
+	var prefsReq buildergloas.BuilderPreferencesRequestV1
+	require.NoError(t, json.Unmarshal(jsonBody, &prefsReq))
+	sszBody, err := prefsReq.MarshalSSZ()
+	require.NoError(t, err)
+
+	pk := blsSigner.PublicKey()
+	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(pk[:])
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(sszBody))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	got, ok := srv.builderPrefsStore.Get(pk)
+	require.True(t, ok, "preference should be stored after successful SSZ-decoded auth")
+	assert.Equal(t, phase0.Gwei(5_000_000_000), got)
+}
+
+func TestSubmitBuilderPreferences_MalformedSSZ(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
+	srv := NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv.SetEnabled(true)
+
+	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader([]byte{0x01, 0x02, 0x03}))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestSubmitBuilderPreferences_UnknownContentType(t *testing.T) {
+	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
+	srv := NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv.SetEnabled(true)
+
+	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+}
+
 func TestSubmitBuilderPreferences_LatestOverwrites(t *testing.T) {
 	gfv := phase0.Version{}
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
