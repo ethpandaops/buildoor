@@ -232,6 +232,7 @@ export interface ExternalBid {
 }
 
 export interface LogEvent {
+  id: number;
   type: string;
   message: string;
   timestamp: number;

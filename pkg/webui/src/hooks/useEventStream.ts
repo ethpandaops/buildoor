@@ -28,6 +28,7 @@ export function useEventStream(): UseEventStreamResult {
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
   const [slotServiceStatuses, setSlotServiceStatuses] = useState<Record<number, ServiceStatus>>({});
   const [events, setEvents] = useState<LogEvent[]>([]);
+  const eventIdRef = useRef(0);
 
   // Use refs to access current values in event handlers without causing reconnection
   const configRef = useRef<Config | null>(null);
@@ -72,8 +73,10 @@ export function useEventStream(): UseEventStreamResult {
   useEffect(() => {
     const addEvent = (type: string, message: string, timestamp: number) => {
       setEvents(prev => {
-        const newEvents = [{ type, message, timestamp }, ...prev];
-        return newEvents.slice(0, 100);
+        const newEvents = [{ id: eventIdRef.current++, type, message, timestamp }, ...prev];
+        // Hard cap to bound memory; must be >= the EventLog max scrollback
+        // (10000) so the configured scrollback can actually be reached.
+        return newEvents.slice(0, 10000);
       });
     };
 
@@ -203,7 +206,7 @@ export function useEventStream(): UseEventStreamResult {
           // block_value is the EL's MEV value as a wei decimal string; convert to
           // gwei so it matches the gwei-based formatGwei display used elsewhere.
           const data = event.data as { slot: number; block_hash: string; block_value: string; ready_at: number };
-          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash.substring(0, 10)}...)`, event.timestamp);
+          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
@@ -246,7 +249,7 @@ export function useEventStream(): UseEventStreamResult {
         case 'head_received': {
           const data = event.data as { slot: number; block_root: string; received_at: number };
           let headMsg = `Block received for slot ${data.slot}`;
-          if (data.block_root) headMsg += ` (root: ${data.block_root.substring(0, 10)}...)`;
+          if (data.block_root) headMsg += ` (root: ${data.block_root})`;
           addEvent('head_received', headMsg, event.timestamp);
           updateSlotState(data.slot, { blockReceivedAt: data.received_at, blockRoot: data.block_root, bidsClosed: true });
           break;
