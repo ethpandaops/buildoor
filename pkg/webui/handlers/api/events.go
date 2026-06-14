@@ -639,9 +639,10 @@ func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
 }
 
 func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
-	// Determine if this is our bid
-	isOurs := false
-	// We'd need epbsSvc here to check builder index, for now just broadcast all
+	// Determine if this is our own bid. The beacon node echoes our submitted bid
+	// back over the SSE stream, so without this it would be shown as an external
+	// bid. Match on builder index, the same way the ePBS service classifies bids.
+	isOurs := m.epbsSvc != nil && event.BuilderIndex == m.epbsSvc.GetBuilderIndex()
 
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeBidEvent,
