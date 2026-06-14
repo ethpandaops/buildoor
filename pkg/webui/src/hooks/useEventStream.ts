@@ -166,9 +166,12 @@ export function useEventStream(): UseEventStreamResult {
           };
           addEvent('payload_attributes', `Payload attributes received for slot ${data.proposal_slot}`, event.timestamp);
           // The attributes target proposal_slot but arrive before it, so render
-          // them on the parent slot's graph (proposal_slot - 1).
-          updateSlotState(data.proposal_slot - 1, {
-            nextSlotAttributes: {
+          // them on the parent slot's graph (proposal_slot - 1). The CL emits one
+          // per head update, so append each rather than overwriting — every one
+          // is rendered as its own dot.
+          {
+            const parentSlot = data.proposal_slot - 1;
+            const info = {
               proposalSlot: data.proposal_slot,
               proposerIndex: data.proposer_index,
               parentBlockHash: data.parent_block_hash,
@@ -179,8 +182,15 @@ export function useEventStream(): UseEventStreamResult {
               targetGasLimit: data.target_gas_limit,
               withdrawalsCount: data.withdrawals_count,
               receivedAt: data.received_at
-            }
-          });
+            };
+            setSlotStates(prev => {
+              const state = prev[parentSlot] || { slot: parentSlot };
+              const list = state.nextSlotAttributes ? [...state.nextSlotAttributes, info] : [info];
+              // Defensive cap so a misbehaving CL can't grow this unbounded.
+              if (list.length > 64) list.splice(0, list.length - 64);
+              return { ...prev, [parentSlot]: { ...state, slot: parentSlot, nextSlotAttributes: list } };
+            });
+          }
           break;
         }
 
