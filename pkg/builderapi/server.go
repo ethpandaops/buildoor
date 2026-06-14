@@ -37,12 +37,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
-<<<<<<< HEAD
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-=======
-	"github.com/ethpandaops/buildoor/pkg/db"
->>>>>>> b3457431de24b35073a09fdb6e786721197f017a
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -91,14 +88,15 @@ type Server struct {
 	bidsWonStore          *BidsWonStore              // in-memory store of successfully delivered blocks
 	builderPrefsStore     *BuilderPreferencesStore   // latest per-validator builder preferences (max_execution_payment)
 	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
-	chainSvc              chain.Service              // optional: used to verify builder is active before serving Gloas bids
-	stateDB               *db.Database         // optional: persistent won-block store (may be nil/disabled)
-	enabled               atomic.Bool                // runtime toggle for enabling/disabling the builder API
-	headersRequested      atomic.Uint64              // count of getHeader requests received
-	blocksPublished       atomic.Uint64              // count of successfully published blocks
-	genesisForkVersion    phase0.Version             // genesis fork version for builder domain (mev-boost-relay style)
-	forkVersion           phase0.Version             // current fork version for chain-specific verification
-	genesisValidatorsRoot phase0.Root                // genesis validators root for chain-specific verification
+	builderIndex          atomic.Int64
+	chainSvc              chain.Service  // optional: used to verify builder is active before serving Gloas bids
+	stateDB               *db.Database   // optional: persistent won-block store (may be nil/disabled)
+	enabled               atomic.Bool    // runtime toggle for enabling/disabling the builder API
+	headersRequested      atomic.Uint64  // count of getHeader requests received
+	blocksPublished       atomic.Uint64  // count of successfully published blocks
+	genesisForkVersion    phase0.Version // genesis fork version for builder domain (mev-boost-relay style)
+	forkVersion           phase0.Version // current fork version for chain-specific verification
+	genesisValidatorsRoot phase0.Root    // genesis validators root for chain-specific verification
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
@@ -173,7 +171,7 @@ func (s *Server) SetChainService(c chain.Service) {
 // SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
 // Called from the lifecycle manager once registration is observed.
 func (s *Server) SetBuilderIndex(index uint64) {
-	s.builderIndex.Store(index)
+	s.builderIndex.Store(int64(index))
 }
 
 // GetBidsWonStore returns the bids won store.
@@ -740,7 +738,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
 	// execution payment allowed in that case). Anything above the cap is paid
 	// trustlessly on-chain via Value.
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + 700000000)
+	valueAfterSubsidy := phase0.Gwei(blockValueGwei + s.cfg.GloasBuilderApiSubsidy)
 	maxExecutionPayment := s.builderPrefsStore.GetOrDefault(proposerPubkey)
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment

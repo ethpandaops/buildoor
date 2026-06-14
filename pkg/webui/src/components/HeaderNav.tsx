@@ -10,6 +10,7 @@ const NAV_ITEMS: Array<{ view: ViewType; label: string; requiresAuth?: boolean }
   { view: 'bids-won', label: 'Bids Won' },
   { view: 'validators', label: 'Validators' },
   { view: 'proposer-preferences', label: 'Proposer Prefs' },
+  { view: 'builder-preferences', label: 'Builder Prefs' },
   { view: 'audit-log', label: 'Audit Log', requiresAuth: true },
   { view: 'api-docs', label: 'API' },
 ];

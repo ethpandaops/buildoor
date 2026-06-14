@@ -299,9 +299,6 @@ and begins building blocks according to configuration.`,
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 			builderAPISrv.SetChainService(chainSvc)
-			if err := builderAPISrv.Start(ctx); err != nil {
-				return fmt.Errorf("failed to start Builder API server: %w", err)
-			}
 			builderAPISrv.SetStateDB(stateDB)
 		}
 
