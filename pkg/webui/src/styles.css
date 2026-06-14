@@ -261,6 +261,11 @@
   border: 2px solid #bd2130;
 }
 
+.build-failed {
+  background: #dc3545;
+  border: 2px solid #bd2130;
+}
+
 .event-dot-crown {
   position: absolute;
   top: -10px;
@@ -299,18 +304,6 @@
 @keyframes build-delay-pulse {
   0%, 100% { opacity: 0.65; }
   50% { opacity: 1; }
-}
-
-/* Failed build: static red line, no pulse */
-.build-delay-line-failed {
-  background: linear-gradient(90deg, rgba(220, 53, 69, 0.5), rgba(220, 53, 69, 0.9));
-  box-shadow: 0 0 5px rgba(220, 53, 69, 0.6);
-  animation: none;
-}
-
-.build-delay-line-failed:hover {
-  background: linear-gradient(90deg, rgba(220, 53, 69, 0.7), rgba(220, 53, 69, 1));
-  height: 5px;
 }
 
 /* Builder API event colors */
@@ -491,6 +484,7 @@
 .bg-payload-received { background: #20c997; }
 .bg-external-bid { background: #6c757d; width: 6px; height: 6px; }
 .bg-payload-created { background: #17a2b8; }
+.bg-build-failed { background: #dc3545; }
 .bg-bid-submitted { background: #28a745; }
 .bg-bid-failed { background: #dc3545; }
 .bg-reveal-sent { background: #6f42c1; }

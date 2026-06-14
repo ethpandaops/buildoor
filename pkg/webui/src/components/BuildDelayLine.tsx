@@ -5,8 +5,7 @@ interface BuildDelayLineProps {
   slotStartTime: number;
   rangeStart: number;
   totalRange: number;
-  endAt?: number;             // absolute ms; when set, the line is finalized (success or failure)
-  failed?: boolean;           // render as failed (red, no pulse)
+  endAt?: number;             // absolute ms; when set, the line is finalized (success)
   expectedEndAt?: number;     // absolute ms; caps the in-progress right edge
   onClick: (e: React.MouseEvent) => void;
 }
@@ -14,15 +13,15 @@ interface BuildDelayLineProps {
 // BuildDelayLine renders the payload build span on the slot timeline.
 // While the build is in progress (endAt unset) it animates its right edge toward
 // the current time via requestAnimationFrame, so the build is visible as it
-// progresses. Once the build finalizes (payload ready or failed) it renders a
-// static line from build start to the end time.
+// progresses. Once the build finalizes (payload ready) it renders a static line
+// from build start to the end time. Build failures are rendered as a red dot by
+// the parent instead — a thin line is too hard to see and click.
 export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   leftPct,
   slotStartTime,
   rangeStart,
   totalRange,
   endAt,
-  failed,
   expectedEndAt,
   onClick
 }) => {
@@ -71,12 +70,8 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
     };
   }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt]);
 
-  // Styling: failed (red) > finalized (plain) > in-progress (pulsing).
-  const stateClass = failed
-    ? ' build-delay-line-failed'
-    : endAt
-      ? ''
-      : ' build-delay-line-active';
+  // Styling: finalized (plain) vs in-progress (pulsing).
+  const stateClass = endAt ? '' : ' build-delay-line-active';
 
   return (
     <div
