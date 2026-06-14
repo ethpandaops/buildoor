@@ -9,13 +9,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
 var (
 	cfgFile string
-	cfg     *builder.Config
+	cfg     *config.Config
 	logger  *logrus.Logger
 	v       *viper.Viper
 )
@@ -145,7 +144,7 @@ func loadConfigFile() {
 }
 
 func initConfig() error {
-	cfg = &builder.Config{
+	cfg = &config.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
 		BuilderMnemonic:   v.GetString("builder-mnemonic"),
 		BuilderKeyIndex:   v.GetUint64("builder-key-index"),
@@ -161,19 +160,19 @@ func initConfig() error {
 		LifecycleEnabled:  v.GetBool("lifecycle"),
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
-		BuilderAPI: builder.BuilderAPIConfig{
+		BuilderAPI: config.BuilderAPIConfig{
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 		},
 		DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),
 		TopupAmount:    v.GetUint64("topup-amount"),
-		Schedule: builder.ScheduleConfig{
-			Mode:      builder.ScheduleMode(v.GetString("schedule-mode")),
+		Schedule: config.ScheduleConfig{
+			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
 			NextN:     v.GetUint64("schedule-next-n"),
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
-		EPBS: builder.EPBSConfig{
+		EPBS: config.EPBSConfig{
 			BuildStartTime: v.GetInt64("build-start-time"),
 			BidStartTime:   v.GetInt64("epbs-bid-start"),
 			BidEndTime:     v.GetInt64("epbs-bid-end"),
@@ -185,7 +184,7 @@ func initConfig() error {
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
 		PayloadBuildTime:    v.GetUint64("payload-build-time"),
-		ValidatorRanges: builder.ValidatorRangesConfig{
+		ValidatorRanges: config.ValidatorRangesConfig{
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
 		},
@@ -200,7 +199,7 @@ func initConfig() error {
 }
 
 // GetConfig returns the current configuration.
-func GetConfig() *builder.Config {
+func GetConfig() *config.Config {
 	return cfg
 }
 

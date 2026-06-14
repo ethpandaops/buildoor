@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/settings"
@@ -875,7 +875,7 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 }
 
 // configToMap returns the config as a map with sensitive fields redacted.
-func configToMap(cfg *builder.Config) map[string]any {
+func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil
 	}

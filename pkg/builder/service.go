@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -32,7 +33,7 @@ const buildCallTimeout = 10 * time.Second
 // Building is triggered by payload_attributes events from the beacon node,
 // which contain all the information needed to build a payload.
 type Service struct {
-	cfg                    *Config
+	cfg                    *config.Config
 	clClient               *beacon.Client
 	chainSvc               chain.Service
 	engineClient           *engine.Client
@@ -78,7 +79,7 @@ type Service struct {
 // If no registration exists for a proposer, the build is skipped for that slot.
 // validatorIndexCache is optional; when set, proposer index→pubkey is read from cache instead of querying beacon state every build.
 func NewService(
-	cfg *Config,
+	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	engineClient *engine.Client,
@@ -229,12 +230,12 @@ func (s *Service) GetStats() BuilderStats {
 }
 
 // GetConfig returns the current configuration.
-func (s *Service) GetConfig() *Config {
+func (s *Service) GetConfig() *config.Config {
 	return s.cfg
 }
 
 // UpdateConfig updates the service configuration at runtime.
-func (s *Service) UpdateConfig(cfg *Config) error {
+func (s *Service) UpdateConfig(cfg *config.Config) error {
 	s.cfg = cfg
 	s.slotManager.UpdateConfig(cfg)
 
@@ -586,51 +587,5 @@ func (s *Service) markPayloadWon(blockHash phase0.Hash32, slot phase0.Slot) {
 
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.BlocksIncluded++
-	})
-}
-
-// incrementStat safely increments statistics.
-func (s *Service) incrementStat(fn func(*BuilderStats)) {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-
-	fn(s.stats)
-}
-
-// IncrementBidsSubmitted increments the bids submitted counter.
-// Called by the ePBS service when a bid is submitted.
-func (s *Service) IncrementBidsSubmitted() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.BidsSubmitted++
-	})
-}
-
-// IncrementBlocksIncluded increments the blocks included and bids won counters.
-// Called by the ePBS service when our payload is included in a beacon block.
-func (s *Service) IncrementBlocksIncluded() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.BlocksIncluded++
-		stats.BidsWon++
-	})
-}
-
-// IncrementRevealsSuccess increments the successful reveals counter.
-func (s *Service) IncrementRevealsSuccess() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsSuccess++
-	})
-}
-
-// IncrementRevealsFailed increments the failed reveals counter.
-func (s *Service) IncrementRevealsFailed() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsFailed++
-	})
-}
-
-// IncrementRevealsSkipped increments the skipped reveals counter.
-func (s *Service) IncrementRevealsSkipped() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsSkipped++
 	})
 }

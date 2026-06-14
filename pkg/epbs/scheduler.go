@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -39,7 +40,7 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg                    *builder.EPBSConfig
+	cfg                    *config.EPBSConfig
 	chainSpec              *beacon.ChainSpec
 	genesis                *beacon.Genesis
 	bidCreator             *BidCreator
@@ -59,7 +60,7 @@ type Scheduler struct {
 
 // NewScheduler creates a new scheduler.
 func NewScheduler(
-	cfg *builder.EPBSConfig,
+	cfg *config.EPBSConfig,
 	chainSpec *beacon.ChainSpec,
 	genesis *beacon.Genesis,
 	bidCreator *BidCreator,
@@ -448,7 +449,7 @@ func (s *Scheduler) Cleanup(olderThan phase0.Slot) {
 }
 
 // UpdateConfig updates the scheduler configuration.
-func (s *Scheduler) UpdateConfig(cfg *builder.EPBSConfig) {
+func (s *Scheduler) UpdateConfig(cfg *config.EPBSConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
@@ -31,7 +32,7 @@ type PayloadBuilder struct {
 	validatorIndexCache *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
 	propPrefCache       *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
 	isGloas             func() bool                // returns true when on the Gloas fork
-	cfg                 *Config                    // shared config; mutable settings are read live, never cached
+	cfg                 *config.Config             // shared config; mutable settings are read live, never cached
 	log                 logrus.FieldLogger
 
 	// Active build tracking
@@ -55,7 +56,7 @@ func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
 	feeRecipient common.Address,
-	cfg *Config,
+	cfg *config.Config,
 	log logrus.FieldLogger,
 	validatorStore *validators.Store,
 	validatorIndexCache *chain.ValidatorIndexCache,

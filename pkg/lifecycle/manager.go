@@ -11,8 +11,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -28,12 +28,12 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg          *builder.Config
+	cfg          *config.Config
 	clClient     *beacon.Client
 	chainSvc     chain.Service
 	signer       *signer.BLSSigner
 	wallet       *wallet.Wallet
-	builderState *builder.BuilderState
+	builderState *BuilderState
 	stateMu      sync.RWMutex
 	depositSvc   *DepositService
 	balanceSvc   *BalanceService
@@ -52,7 +52,7 @@ type Manager struct {
 
 // NewManager creates a new lifecycle manager.
 func NewManager(
-	cfg *builder.Config,
+	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
@@ -67,7 +67,7 @@ func NewManager(
 		chainSvc:     chainSvc,
 		signer:       blsSigner,
 		wallet:       w,
-		builderState: &builder.BuilderState{},
+		builderState: &BuilderState{},
 		log:          managerLog,
 		stopCh:       make(chan struct{}),
 	}
@@ -142,7 +142,7 @@ func (m *Manager) Stop() {
 }
 
 // GetBuilderState returns the current builder state.
-func (m *Manager) GetBuilderState() *builder.BuilderState {
+func (m *Manager) GetBuilderState() *BuilderState {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 
@@ -259,7 +259,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 			info := m.chainSvc.GetBuilderByPubkey(pubkey)
 			if info != nil {
 				m.stateMu.Lock()
-				m.builderState = &builder.BuilderState{
+				m.builderState = &BuilderState{
 					Pubkey:            pubkey[:],
 					Index:             info.Index,
 					IsRegistered:      true,
@@ -468,7 +468,7 @@ func (m *Manager) refreshBuilderState() {
 
 	m.stateMu.Lock()
 	oldBalance := m.builderState.Balance
-	m.builderState = &builder.BuilderState{
+	m.builderState = &BuilderState{
 		Pubkey:            pubkey[:],
 		Index:             info.Index,
 		IsRegistered:      true,

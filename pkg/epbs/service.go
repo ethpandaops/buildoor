@@ -13,6 +13,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -86,7 +87,7 @@ type BidIncludedEvent struct {
 // Service is the main ePBS orchestrator that handles time-scheduled bidding and revealing.
 // It subscribes to builder payload events and handles the ePBS protocol.
 type Service struct {
-	cfg                   *builder.EPBSConfig
+	cfg                   *config.EPBSConfig
 	signer                *Signer
 	scheduler             *Scheduler
 	bidCreator            *BidCreator
@@ -126,7 +127,7 @@ func (s *Service) SetStateDB(stateDB *db.Database) {
 
 // NewService creates a new ePBS service.
 func NewService(
-	cfg *builder.EPBSConfig,
+	cfg *config.EPBSConfig,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
@@ -714,7 +715,7 @@ func (s *Service) GetBuilderPubkey() phase0.BLSPubKey {
 }
 
 // UpdateConfig updates the service configuration at runtime.
-func (s *Service) UpdateConfig(cfg *builder.EPBSConfig) {
+func (s *Service) UpdateConfig(cfg *config.EPBSConfig) {
 	s.cfg = cfg
 	if s.scheduler != nil {
 		s.scheduler.UpdateConfig(cfg)
