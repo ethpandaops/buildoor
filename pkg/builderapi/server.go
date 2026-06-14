@@ -738,7 +738,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
 	// execution payment allowed in that case). Anything above the cap is paid
 	// trustlessly on-chain via Value.
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + 700000000)
+	valueAfterSubsidy := phase0.Gwei(blockValueGwei + s.cfg.GloasBuilderApiSubsidy)
 	maxExecutionPayment := s.builderPrefsStore.GetOrDefault(proposerPubkey)
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment
