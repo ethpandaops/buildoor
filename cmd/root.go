@@ -61,6 +61,9 @@ func init() {
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Block value subsidy added to bids in Gwei")
+	rootCmd.PersistentFlags().Uint64("gloas-builder-api-subsidy", defaults.BuilderAPI.GloasBuilderApiSubsidy, "Gwei added to block value to form ExecutionPayment in Gloas Builder API bids")
+	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
+	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -162,7 +165,10 @@ func initConfig() error {
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
 		BuilderAPI: builder.BuilderAPIConfig{
-			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
+			BuilderURL:             v.GetString("builder-api-url"),
+			RequireRequestAuth:     v.GetBool("builder-api-require-auth"),
+			BlockValueSubsidyGwei:  v.GetUint64("builder-api-subsidy"),
+			GloasBuilderApiSubsidy: v.GetUint64("gloas-builder-api-subsidy"),
 		},
 		DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),
