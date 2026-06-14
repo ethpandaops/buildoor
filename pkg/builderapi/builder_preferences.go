@@ -52,7 +52,7 @@ func (s *BuilderPreferencesStore) GetOrDefault(pubkey phase0.BLSPubKey) phase0.G
 	defer s.mu.RUnlock()
 	prefs, ok := s.prefs[pubkey]
 	if !ok {
-		return 0
+		return 400000000
 	}
 	return prefs
 }
