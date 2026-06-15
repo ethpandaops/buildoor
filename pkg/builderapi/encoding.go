@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
 )
 
 // Wire formats accepted on Gloas builder-API request bodies. The builder-spec
@@ -33,8 +33,8 @@ func normalizeContentType(ct string) string {
 // by contentType. The Content-Type must be set explicitly to one of the two
 // supported media types; an empty or unrecognized type returns
 // errUnsupportedContentType (which handlers map to 415).
-func parseSignedRequestAuth(data []byte, contentType string) (*buildergloas.SignedRequestAuthV1, error) {
-	var v buildergloas.SignedRequestAuthV1
+func parseSignedRequestAuth(data []byte, contentType string) (*gloastypes.SignedRequestAuthV1, error) {
+	var v gloastypes.SignedRequestAuthV1
 	switch normalizeContentType(contentType) {
 	case contentTypeSSZ:
 		if err := v.UnmarshalSSZ(data); err != nil {
@@ -53,8 +53,8 @@ func parseSignedRequestAuth(data []byte, contentType string) (*buildergloas.Sign
 // parseBuilderPreferencesRequest decodes a BuilderPreferencesRequestV1 from JSON
 // or SSZ selected by contentType, following the same rules as
 // parseSignedRequestAuth.
-func parseBuilderPreferencesRequest(data []byte, contentType string) (*buildergloas.BuilderPreferencesRequestV1, error) {
-	var v buildergloas.BuilderPreferencesRequestV1
+func parseBuilderPreferencesRequest(data []byte, contentType string) (*gloastypes.BuilderPreferencesRequestV1, error) {
+	var v gloastypes.BuilderPreferencesRequestV1
 	switch normalizeContentType(contentType) {
 	case contentTypeSSZ:
 		if err := v.UnmarshalSSZ(data); err != nil {

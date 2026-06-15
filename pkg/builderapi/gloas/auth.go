@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -36,7 +36,7 @@ var (
 //
 // Returns nil on success, or one of the package's sentinel errors on failure.
 func VerifyRequestAuth(
-	signed *buildergloas.SignedRequestAuthV1,
+	signed *gloastypes.SignedRequestAuthV1,
 	validatorPubkey phase0.BLSPubKey,
 	genesisForkVersion phase0.Version,
 ) error {

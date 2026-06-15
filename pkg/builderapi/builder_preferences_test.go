@@ -8,19 +8,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
-	// attphase0 is the attestantio phase0 used by go-builder-client's builder-API
-	// types. Buildoor uses ethpandaops/go-eth2-client everywhere; this import exists
-	// ONLY so tests can populate buildergloas struct fields (Slot/Gwei/Signature),
-	// which are attestantio-typed. Production code converts at the boundary and never
-	// imports attestantio. Prefer ethpandaops/go-eth2-client outside of this.
-	attphase0 "github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	gloasauth "github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -44,9 +38,9 @@ func signBuilderPrefsRequest(
 ) []byte {
 	t.Helper()
 
-	auth := &buildergloas.RequestAuthV1{
+	auth := &gloastypes.RequestAuthV1{
 		Data: []byte(builderURL),
-		Slot: attphase0.Slot(slot),
+		Slot: slot,
 	}
 	root, err := auth.HashTreeRoot()
 	require.NoError(t, err)
@@ -55,11 +49,11 @@ func signBuilderPrefsRequest(
 	sig, err := s.SignWithDomain(phase0.Root(root), domain)
 	require.NoError(t, err)
 
-	req := &buildergloas.BuilderPreferencesRequestV1{
-		Preferences: &buildergloas.BuilderPreferencesV1{MaxExecutionPayment: attphase0.Gwei(maxPayment)},
-		Auth: &buildergloas.SignedRequestAuthV1{
+	req := &gloastypes.BuilderPreferencesRequestV1{
+		Preferences: &gloastypes.BuilderPreferencesV1{MaxExecutionPayment: maxPayment},
+		Auth: &gloastypes.SignedRequestAuthV1{
 			Message:   auth,
-			Signature: attphase0.BLSSignature(sig),
+			Signature: sig,
 		},
 	}
 	body, err := json.Marshal(req)
@@ -140,7 +134,7 @@ func TestSubmitBuilderPreferences_SuccessSSZ(t *testing.T) {
 
 	// Build the same signed request as the JSON path, but submit it SSZ-encoded.
 	jsonBody := signBuilderPrefsRequest(t, blsSigner, testBuilderURL, 100, 5_000_000_000, gfv)
-	var prefsReq buildergloas.BuilderPreferencesRequestV1
+	var prefsReq gloastypes.BuilderPreferencesRequestV1
 	require.NoError(t, json.Unmarshal(jsonBody, &prefsReq))
 	sszBody, err := prefsReq.MarshalSSZ()
 	require.NoError(t, err)
