@@ -11,7 +11,9 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 const (
@@ -48,7 +50,8 @@ type Scheduler struct {
 	payloadStore           *PayloadStore
 	payloadCache           *builder.PayloadCache
 	service                *Service // Reference to parent service for firing events
-	isBuilderActive        func() bool
+	chainSvc               chain.Service
+	blsSigner              *signer.BLSSigner
 	hasProposerPreferences func(phase0.Slot) bool
 	log                    logrus.FieldLogger
 
@@ -68,7 +71,8 @@ func NewScheduler(
 	payloadStore *PayloadStore,
 	payloadCache *builder.PayloadCache,
 	service *Service,
-	isBuilderActive func() bool,
+	chainSvc chain.Service,
+	blsSigner *signer.BLSSigner,
 	hasProposerPreferences func(phase0.Slot) bool,
 	log logrus.FieldLogger,
 ) *Scheduler {
@@ -82,7 +86,8 @@ func NewScheduler(
 		payloadStore:           payloadStore,
 		payloadCache:           payloadCache,
 		service:                service,
-		isBuilderActive:        isBuilderActive,
+		chainSvc:               chainSvc,
+		blsSigner:              blsSigner,
 		hasProposerPreferences: hasProposerPreferences,
 		slotStates:             make(map[phase0.Slot]*SlotState),
 		log:                    log.WithField("component", "scheduler"),
@@ -168,7 +173,7 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	}
 
 	// Don't bid if the builder is not active on-chain.
-	if s.isBuilderActive != nil && !s.isBuilderActive() {
+	if !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
 		// Still check reveals — we may have bids from before deactivation.
 		s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
 		return

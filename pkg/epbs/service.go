@@ -88,6 +88,7 @@ type BidIncludedEvent struct {
 type Service struct {
 	cfg                   *builder.EPBSConfig
 	signer                *Signer
+	blsSigner             *signer.BLSSigner
 	scheduler             *Scheduler
 	bidCreator            *BidCreator
 	revealHandler         *RevealHandler
@@ -140,6 +141,7 @@ func NewService(
 	s := &Service{
 		cfg:                   cfg,
 		signer:                epbsSigner,
+		blsSigner:             blsSigner,
 		clClient:              clClient,
 		chainSvc:              chainSvc,
 		builderPubkey:         blsSigner.PublicKey(),
@@ -242,16 +244,6 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.builderIndex,
 		s.log,
 	)
-	// isBuilderActive checks that the builder's deposit is finalized and it hasn't exited.
-	isBuilderActive := func() bool {
-		info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
-		if info == nil {
-			return false
-		}
-		finalizedEpoch := s.chainSvc.GetFinalizedEpoch()
-		return info.DepositEpoch < uint64(finalizedEpoch) && info.WithdrawableEpoch == chain.FarFutureEpoch
-	}
-
 	// hasProposerPreferences checks whether we have cached preferences for a slot.
 	// Without them the BN's gossip validator will silently reject the bid.
 	hasProposerPreferences := func(slot phase0.Slot) bool {
@@ -272,7 +264,8 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 		s.payloadStore,
 		builderSvc.GetPayloadCache(),
 		s,
-		isBuilderActive,
+		s.chainSvc,
+		s.blsSigner,
 		hasProposerPreferences,
 		s.log,
 	)

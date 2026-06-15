@@ -281,7 +281,7 @@ and begins building blocks according to configuration.`,
 			}
 
 			genesisForkVersion := g.GenesisForkVersion
-			genesisValidatorsRoot := phase0.Root{}
+			genesisValidatorsRoot := g.GenesisValidatorsRoot
 
 			logger.WithFields(logrus.Fields{
 				"genesis_fork_version":    fmt.Sprintf("0x%x", genesisForkVersion[:]),
@@ -296,7 +296,9 @@ and begins building blocks according to configuration.`,
 
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
 			builderAPISrv.SetFuluPublisher(clClient)
+			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+			builderAPISrv.SetChainService(chainSvc)
 			builderAPISrv.SetStateDB(stateDB)
 		}
 
@@ -307,6 +309,9 @@ and begins building blocks according to configuration.`,
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
 			propPrefSvc.GetCache().SetStateDB(stateDB, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			if builderAPISrv != nil {
+				builderAPISrv.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			}
 			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
@@ -371,6 +376,9 @@ and begins building blocks according to configuration.`,
 			})
 			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
 				epbsSvc.SetBuilderRegistered(index)
+				if builderAPISrv != nil {
+					builderAPISrv.SetBuilderIndex(index)
+				}
 			})
 		}
 
