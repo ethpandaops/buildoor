@@ -874,6 +874,44 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 	writeJSON(w, http.StatusOK, ProposerPreferencesResponse{Preferences: result})
 }
 
+// BuilderPreferencesEntry represents a single cached builder preference for the API response.
+type BuilderPreferencesEntry struct {
+	ValidatorPubkey     string `json:"validator_pubkey"`
+	MaxExecutionPayment uint64 `json:"max_execution_payment"`
+}
+
+// BuilderPreferencesResponse is the response for GetBuilderPreferences.
+type BuilderPreferencesResponse struct {
+	Preferences []BuilderPreferencesEntry `json:"preferences"`
+}
+
+// GetBuilderPreferences godoc
+// @Id getBuilderPreferences
+// @Summary Get cached builder preferences
+// @Tags Buildoor
+// @Description Returns all builder preferences currently in the cache, submitted by proposers via the submitBuilderPreferences API.
+// @Produce json
+// @Success 200 {object} BuilderPreferencesResponse "Success"
+// @Failure 404 {object} map[string]string "Builder API not enabled"
+// @Router /api/buildoor/builder-preferences [get]
+func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Request) {
+	if h.builderAPISvc == nil || h.builderAPISvc.GetBuilderPreferencesStore() == nil {
+		writeError(w, http.StatusNotFound, "builder API not enabled")
+		return
+	}
+
+	entries := h.builderAPISvc.GetBuilderPreferencesStore().GetAll()
+	result := make([]BuilderPreferencesEntry, 0, len(entries))
+	for pubkey, maxPayment := range entries {
+		result = append(result, BuilderPreferencesEntry{
+			ValidatorPubkey:     fmt.Sprintf("0x%x", pubkey[:]),
+			MaxExecutionPayment: uint64(maxPayment),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, BuilderPreferencesResponse{Preferences: result})
+}
+
 // configToMap returns the config as a map with sensitive fields redacted.
 func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {

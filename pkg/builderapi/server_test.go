@@ -40,7 +40,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(validators.BuilderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -55,7 +55,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 func TestRegisterValidators_EmptyArray(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	req.Header.Set("Content-Type", "application/json")
@@ -70,7 +70,7 @@ func TestRegisterValidators_EmptyArray(t *testing.T) {
 func TestRegisterValidators_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -122,7 +122,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -140,7 +140,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 func TestRegisterValidators_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	// no Content-Type
@@ -157,7 +157,7 @@ func TestGetHeader_NoPayload(t *testing.T) {
 	log := logrus.New()
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
-	srv := NewServer(cfg, log, nil, blsSigner, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, blsSigner, nil)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -174,7 +174,7 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	log := logrus.New()
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
-	srv := NewServer(cfg, log, mock, blsSigner, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, mock, blsSigner, nil)
 	srv.SetEnabled(true)
 
 	pk := blsSigner.PublicKey()
@@ -244,7 +244,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	}
 	cache.Store(event)
 	mock := &mockPayloadCacheProvider{cache: cache}
-	srv := NewServer(cfg, log, mock, blsSigner, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, mock, blsSigner, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))
@@ -275,7 +275,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -289,7 +289,7 @@ func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("{}")))
 	rec := httptest.NewRecorder()
@@ -315,7 +315,7 @@ func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
-	srv := NewServer(cfg, log, mock, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, mock, nil, nil)
 
 	// Minimal Fulu (Electra-shaped) blinded block body: message.body.execution_payload_header.block_hash that won't be in cache
 	body := `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"0x00","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xffff000000000000000000000000000000000000000000000000000000000000","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000","blob_gas_used":"0","excess_blob_gas":"0"}},"signature":"0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}`
@@ -344,7 +344,7 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	cache := builder.NewPayloadCache(10)
 	mockCache := &mockPayloadCacheProvider{cache: cache}
 	publisher := &mockFuluPublisher{}
-	srv := NewServer(cfg, log, mockCache, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := NewServer(cfg, log, &mockChainService{}, mockCache, nil, nil)
 	srv.SetFuluPublisher(publisher)
 
 	// Seed cache with a payload matching builder-specs Fulu example block_hash.

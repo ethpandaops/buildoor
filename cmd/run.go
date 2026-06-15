@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -275,21 +274,16 @@ and begins building blocks according to configuration.`,
 			}
 
 			genesisForkVersion := g.GenesisForkVersion
-			genesisValidatorsRoot := phase0.Root{}
+			genesisValidatorsRoot := g.GenesisValidatorsRoot
 
 			logger.WithFields(logrus.Fields{
 				"genesis_fork_version":    fmt.Sprintf("0x%x", genesisForkVersion[:]),
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			// Get current fork version from chain service (for chain-specific verification)
-			var forkVersion phase0.Version
-			if fv, err := chainSvc.GetForkVersion(); err == nil {
-				forkVersion = fv
-			}
-
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, builderSvc, blsSigner, validatorStore, genesisForkVersion, forkVersion, genesisValidatorsRoot)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, builderSvc, blsSigner, validatorStore)
 			builderAPISrv.SetFuluPublisher(clClient)
+			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 			builderAPISrv.SetStateDB(stateDB)
 		}
@@ -301,6 +295,9 @@ and begins building blocks according to configuration.`,
 			propPrefSvc = proposerpreferences.NewService(clClient, logger)
 			propPrefSvc.GetCache().SetStateDB(stateDB, logger)
 			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			if builderAPISrv != nil {
+				builderAPISrv.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			}
 			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
@@ -365,6 +362,9 @@ and begins building blocks according to configuration.`,
 			})
 			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
 				epbsSvc.SetBuilderRegistered(index)
+				if builderAPISrv != nil {
+					builderAPISrv.SetBuilderIndex(index)
+				}
 			})
 		}
 

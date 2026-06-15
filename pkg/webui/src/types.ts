@@ -308,3 +308,13 @@ export interface ProposerPreference {
 export interface ProposerPreferencesResponse {
   preferences: ProposerPreference[];
 }
+
+// Builder preferences types
+export interface BuilderPreference {
+  validator_pubkey: string;
+  max_execution_payment: number; // Gwei
+}
+
+export interface BuilderPreferencesResponse {
+  preferences: BuilderPreference[];
+}
