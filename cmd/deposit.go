@@ -66,7 +66,15 @@ var depositCmd = &cobra.Command{
 		}
 
 		// Get chain spec and genesis
-		chainSpec, err := clClient.GetChainSpec(ctx)
+		specData, rawData, err := clClient.GetRawSpecData(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
+
+		chainSpec, err := chain.ParseChainSpec(specData, rawData)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to get chain spec: %w", err)
 		}

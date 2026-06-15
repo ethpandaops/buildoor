@@ -39,7 +39,6 @@ type Service struct {
 	engineClient           *engine.Client
 	feeRecipient           common.Address
 	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
-	validatorIndexCache    *chain.ValidatorIndexCache // optional: index→pubkey cache so we don't query beacon every build
 	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
@@ -85,7 +84,6 @@ func NewService(
 	engineClient *engine.Client,
 	feeRecipient common.Address,
 	validatorStore *validators.Store,
-	validatorIndexCache *chain.ValidatorIndexCache,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "builder-service")
@@ -97,7 +95,6 @@ func NewService(
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		validatorStore:         validatorStore,
-		validatorIndexCache:    validatorIndexCache,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
@@ -122,13 +119,12 @@ func (s *Service) Start(ctx context.Context) error {
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
+		s.chainSvc,
 		s.feeRecipient,
 		s.cfg,
 		s.log,
 		s.validatorStore,
-		s.validatorIndexCache,
 		s.propPrefCache,
-		s.chainSvc.IsGloas,
 	)
 
 	// Start event stream
@@ -250,7 +246,7 @@ func (s *Service) GetCurrentSlot() phase0.Slot {
 }
 
 // GetChainSpec returns the chain specification.
-func (s *Service) GetChainSpec() *beacon.ChainSpec {
+func (s *Service) GetChainSpec() *chain.ChainSpec {
 	return s.chainSvc.GetChainSpec()
 }
 
@@ -262,11 +258,6 @@ func (s *Service) GetGenesis() *beacon.Genesis {
 // GetCLClient returns the consensus layer client.
 func (s *Service) GetCLClient() *beacon.Client {
 	return s.clClient
-}
-
-// IsGloas returns whether we're on the Gloas fork.
-func (s *Service) IsGloas() bool {
-	return s.chainSvc.IsGloas()
 }
 
 // GetProposerPreferencesCache returns the proposer preferences cache.
@@ -341,7 +332,7 @@ func (s *Service) run() {
 func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"head_slot": event.Slot,
-		"is_gloas":  s.chainSvc.IsGloas(),
+		"fork":      s.chainSvc.GetCurrentFork().String(),
 	}).Debug("Head event received")
 
 	go s.checkPayloadInclusion(event)

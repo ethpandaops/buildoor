@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -39,13 +40,8 @@ func NewExitService(
 func (s *ExitService) CreateVoluntaryExit(ctx context.Context, builderIndex uint64) error {
 	s.log.WithField("builder_index", builderIndex).Info("Creating voluntary exit")
 
-	// Get current epoch
-	currentEpoch, err := s.chainSvc.GetCurrentEpoch(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current epoch: %w", err)
-	}
-
 	// Build exit message
+	currentEpoch := s.chainSvc.GetCurrentEpoch()
 	exitMsg := s.buildExitMessage(builderIndex, currentEpoch)
 
 	// Sign exit message
@@ -78,19 +74,18 @@ func (s *ExitService) buildExitMessage(builderIndex uint64, epoch phase0.Epoch) 
 // signExitMessage signs a voluntary exit message.
 func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.SignedVoluntaryExit, error) {
 	// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
-	capellaForkVersion := s.chainSvc.GetChainSpec().CapellaForkVersion
-	if capellaForkVersion == nil {
+	capellaForkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionCapella)
+	if err != nil {
 		return nil, fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 	}
 
-	forkVersion := *capellaForkVersion
 	genesis := s.chainSvc.GetGenesis()
 
 	// Sign the exit
 	signature, err := s.signer.SignVoluntaryExit(
 		exit.Epoch,
 		exit.ValidatorIndex,
-		forkVersion,
+		capellaForkVersion,
 		genesis.GenesisValidatorsRoot,
 	)
 	if err != nil {

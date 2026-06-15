@@ -7,8 +7,6 @@ import (
 	"fmt"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 const (
@@ -84,7 +82,7 @@ func splitOffset(listSize, chunks, index uint64) uint64 {
 }
 
 // getRandaoMix returns the RANDAO mix for the given epoch from state.
-func getRandaoMix(spec *beacon.ChainSpec, state *DutyState, epoch phase0.Epoch) phase0.Hash32 {
+func getRandaoMix(spec *ChainSpec, state *DutyState, epoch phase0.Epoch) phase0.Hash32 {
 	randaoMixes := state.GetRandaoMixes()
 	index := int(epoch % phase0.Epoch(spec.EpochsPerHistoricalVector))
 
@@ -93,7 +91,7 @@ func getRandaoMix(spec *beacon.ChainSpec, state *DutyState, epoch phase0.Epoch) 
 
 // getSeed computes the seed for the given epoch and domain type.
 func getSeed(
-	spec *beacon.ChainSpec,
+	spec *ChainSpec,
 	state *DutyState,
 	epoch phase0.Epoch,
 	domainType phase0.DomainType,
@@ -125,7 +123,7 @@ func getSeed(
 
 // getAttesterDuties computes attester committee assignments for all slots in an epoch.
 func getAttesterDuties(
-	spec *beacon.ChainSpec,
+	spec *ChainSpec,
 	state *DutyState,
 	epoch phase0.Epoch,
 ) ([][][]ActiveIndiceIndex, error) {
@@ -170,7 +168,7 @@ func getAttesterDuties(
 }
 
 // slotCommitteeCount returns the number of committees per slot.
-func slotCommitteeCount(spec *beacon.ChainSpec, activeValidatorCount uint64) uint64 {
+func slotCommitteeCount(spec *ChainSpec, activeValidatorCount uint64) uint64 {
 	committeesPerSlot := activeValidatorCount / spec.SlotsPerEpoch / spec.TargetCommitteeSize
 
 	if committeesPerSlot > spec.MaxCommitteesPerSlot {
@@ -186,7 +184,7 @@ func slotCommitteeCount(spec *beacon.ChainSpec, activeValidatorCount uint64) uin
 
 // unshuffleList un-shuffles the list by running backwards through the round count.
 func unshuffleList(
-	spec *beacon.ChainSpec,
+	spec *ChainSpec,
 	input []ActiveIndiceIndex,
 	seed [32]byte,
 ) ([]ActiveIndiceIndex, error) {
@@ -195,7 +193,7 @@ func unshuffleList(
 
 // innerShuffleList shuffles or unshuffles, shuffle=false to un-shuffle.
 func innerShuffleList(
-	spec *beacon.ChainSpec,
+	spec *ChainSpec,
 	input []ActiveIndiceIndex,
 	seed [32]byte,
 	shuffle bool,
@@ -295,7 +293,7 @@ func swapOrNot(
 // getPtcDuties returns the Payload Timeliness Committee (PTC) members for a given slot.
 // The PTC is selected from the concatenated attestation committees using balance-weighted selection.
 func getPtcDuties(
-	spec *beacon.ChainSpec,
+	spec *ChainSpec,
 	state *DutyState,
 	attesterDuties [][]ActiveIndiceIndex,
 	slot phase0.Slot,

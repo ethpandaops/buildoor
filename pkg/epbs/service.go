@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -198,16 +199,8 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.builderSvc = builderSvc
 
-	// Get chain spec and genesis from builder service
-	chainSpec := builderSvc.GetChainSpec()
-	genesis := builderSvc.GetGenesis()
-
-	if chainSpec == nil || genesis == nil {
-		return fmt.Errorf("builder service not initialized (missing chainspec or genesis)")
-	}
-
 	// Load builder index from chain service and determine initial registration state
-	if !s.chainSvc.HasBuildersLoaded() {
+	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {
 		s.log.Info("No builders in beacon state (pre-Gloas), waiting for registration")
 		s.builderIndex = 0
 		s.registrationState.Store(RegistrationStateWaitingGloas)
@@ -226,20 +219,18 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 	}
 
 	// Initialize components
-	s.bidTracker = NewBidTracker(s.builderIndex, chainSpec, s.log)
+	s.bidTracker = NewBidTracker(s.builderIndex, s.chainSvc, s.log)
 	s.bidCreator = NewBidCreator(
 		s.signer,
 		s.clClient,
-		genesis,
-		chainSpec,
+		s.chainSvc,
 		s.builderIndex,
 		s.log,
 	)
 	s.revealHandler = NewRevealHandler(
 		s.signer,
 		s.clClient,
-		genesis,
-		chainSpec,
+		s.chainSvc,
 		s.builderIndex,
 		s.log,
 	)
@@ -265,8 +256,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error 
 
 	s.scheduler = NewScheduler(
 		s.cfg,
-		chainSpec,
-		genesis,
+		s.chainSvc,
 		s.bidCreator,
 		s.revealHandler,
 		s.bidTracker,

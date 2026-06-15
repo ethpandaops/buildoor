@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"math"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
@@ -122,11 +122,16 @@ and begins building blocks according to configuration.`,
 		// slot-time timing defaults. Retry until the beacon node is ready.
 		logger.Info("Waiting for beacon node to serve chain spec and genesis...")
 
-		var chainSpec *beacon.ChainSpec
+		var chainSpec *chain.ChainSpec
 
 		for {
-			chainSpec, err = clClient.GetChainSpec(ctx)
+			specData, rawData, err := clClient.GetRawSpecData(ctx)
 			if err == nil {
+				chainSpec, err = chain.ParseChainSpec(specData, rawData)
+				if err != nil {
+					return fmt.Errorf("failed to parse chain spec: %w", err)
+				}
+
 				break
 			}
 
@@ -229,35 +234,24 @@ and begins building blocks according to configuration.`,
 
 		// Validator store and index cache when Builder API is available (port > 0)
 		// (fee recipient from registrations; cache avoids beacon state lookup every build)
-		validatorIndexCache := chain.NewValidatorIndexCache(clClient, chainSvc, logger)
-		if err := validatorIndexCache.Start(ctx); err != nil {
-			return fmt.Errorf("failed to start validator index cache: %w", err)
-		}
-		defer validatorIndexCache.Stop()
-
 		var validatorStore *validators.Store
 		builderAPIAvailable := cfg.APIPort > 0
 		if builderAPIAvailable {
 			validatorStore = validators.NewStore()
 			validatorStore.SetStateDB(stateDB, logger)
 		}
-		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, validatorIndexCache, logger)
+		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
 		// 10. Initialize ePBS service (if Gloas fork is scheduled)
 		var epbsSvc *epbs.Service
-		epbsAvailable := chainSpec.GloasForkEpoch != nil && *chainSpec.GloasForkEpoch < math.MaxUint64
-
-		if chainSpec.GloasForkEpoch != nil {
-			logger.WithField("gloas_fork_epoch", *chainSpec.GloasForkEpoch).Info("Gloas fork epoch detected")
-		} else {
-			logger.Info("Gloas fork epoch not found in chain spec, ePBS not available")
-		}
+		epbsAvailable := chainSpec.IsForkScheduled(version.DataVersionGloas)
 
 		if epbsAvailable {
-			logger.Info("Initializing ePBS service...")
+			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
+			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing ePBS service...")
 
 			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
 			if err != nil {
@@ -290,7 +284,7 @@ and begins building blocks according to configuration.`,
 
 			// Get current fork version from chain service (for chain-specific verification)
 			var forkVersion phase0.Version
-			if fv, err := chainSvc.GetForkVersion(ctx); err == nil {
+			if fv, err := chainSvc.GetForkVersion(); err == nil {
 				forkVersion = fv
 			}
 

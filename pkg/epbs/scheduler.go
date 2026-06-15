@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
@@ -41,8 +43,7 @@ type SlotState struct {
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
 	cfg                    *config.EPBSConfig
-	chainSpec              *beacon.ChainSpec
-	genesis                *beacon.Genesis
+	chainSvc               chain.Service
 	bidCreator             *BidCreator
 	revealHandler          *RevealHandler
 	bidTracker             *BidTracker
@@ -61,8 +62,7 @@ type Scheduler struct {
 // NewScheduler creates a new scheduler.
 func NewScheduler(
 	cfg *config.EPBSConfig,
-	chainSpec *beacon.ChainSpec,
-	genesis *beacon.Genesis,
+	chainSvc chain.Service,
 	bidCreator *BidCreator,
 	revealHandler *RevealHandler,
 	bidTracker *BidTracker,
@@ -75,8 +75,7 @@ func NewScheduler(
 ) *Scheduler {
 	return &Scheduler{
 		cfg:                    cfg,
-		chainSpec:              chainSpec,
-		genesis:                genesis,
+		chainSvc:               chainSvc,
 		bidCreator:             bidCreator,
 		revealHandler:          revealHandler,
 		bidTracker:             bidTracker,
@@ -152,20 +151,18 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	now := time.Now()
 
 	// Calculate current slot and position within slot
-	if now.Before(s.genesis.GenesisTime) {
+	genesisTime := s.chainSvc.GetGenesis().GenesisTime
+	if now.Before(genesisTime) {
 		return
 	}
 
-	elapsed := now.Sub(s.genesis.GenesisTime)
-	currentSlot := phase0.Slot(elapsed / s.chainSpec.SecondsPerSlot)
-	msIntoSlot := (elapsed % s.chainSpec.SecondsPerSlot).Milliseconds()
+	elapsed := now.Sub(genesisTime)
+	currentSlot := s.chainSvc.TimeToSlot(now)
+	msIntoSlot := elapsed.Milliseconds()
 
 	// ePBS bids are only valid from the Gloas fork onwards.
-	if s.chainSpec.GloasForkEpoch != nil {
-		currentEpoch := uint64(currentSlot) / s.chainSpec.SlotsPerEpoch
-		if currentEpoch < *s.chainSpec.GloasForkEpoch {
-			return
-		}
+	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {
+		return
 	}
 
 	// Don't bid if the builder is not active on-chain.
@@ -177,7 +174,7 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 
 	// Check slots that might need bidding (current slot + next slot for negative bid start times)
 	s.checkSlotForBidding(ctx, currentSlot, now, msIntoSlot)
-	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
+	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSvc.GetChainSpec().SecondsPerSlot.Milliseconds()))
 
 	// Check for reveals
 	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)

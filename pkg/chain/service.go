@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
@@ -20,13 +21,15 @@ type Service interface {
 	Stop() error
 
 	// Chain state accessors
-	GetChainSpec() *beacon.ChainSpec
+	GetChainSpec() *ChainSpec
 	GetGenesis() *beacon.Genesis
 	SlotToTime(slot phase0.Slot) time.Time
 	TimeToSlot(t time.Time) phase0.Slot
-	GetCurrentEpoch(ctx context.Context) (phase0.Epoch, error)
-	GetForkVersion(ctx context.Context) (phase0.Version, error)
-	IsGloas() bool
+	GetCurrentEpoch() phase0.Epoch
+	GetCurrentSlot() phase0.Slot
+	GetCurrentFork() version.DataVersion
+	GetForkVersion() (phase0.Version, error)
+	GetEpochOfSlot(slot phase0.Slot) phase0.Epoch
 
 	// Epoch stats access
 	GetCurrentEpochStats() *EpochStats
@@ -45,7 +48,9 @@ type Service interface {
 	GetBuilderByIndex(index uint64) *BuilderInfo
 	GetBuilderByPubkey(pubkey phase0.BLSPubKey) *BuilderInfo
 	GetBuilders() []*BuilderInfo
-	HasBuildersLoaded() bool
+
+	// Validator access
+	GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey
 
 	// RefreshBuilders re-fetches the beacon state to pick up new builder registrations.
 	RefreshBuilders(ctx context.Context) error
@@ -61,15 +66,15 @@ var _ Service = (*service)(nil)
 // service is the implementation of Service.
 type service struct {
 	clClient  *beacon.Client
-	chainSpec *beacon.ChainSpec
+	chainSpec *ChainSpec
 	genesis   *beacon.Genesis
 	log       logrus.FieldLogger
 
 	// State cache (keeps latest 2 epochs)
-	stateCache     map[phase0.Epoch]*EpochStats
-	currentEpoch   phase0.Epoch
-	buildersLoaded bool
-	cacheMu        sync.RWMutex
+	stateCache          map[phase0.Epoch]*EpochStats
+	validatorIndexCache []phase0.BLSPubKey
+	currentEpoch        phase0.Epoch
+	cacheMu             sync.RWMutex
 
 	// Head vote tracking
 	headVoteTracker *HeadVoteTracker
@@ -89,7 +94,7 @@ type service struct {
 // NewService creates a new chain service.
 func NewService(
 	clClient *beacon.Client,
-	chainSpec *beacon.ChainSpec,
+	chainSpec *ChainSpec,
 	genesis *beacon.Genesis,
 	log logrus.FieldLogger,
 ) Service {
@@ -170,6 +175,21 @@ func (s *service) GetEpochStats(epoch phase0.Epoch) *EpochStats {
 	return s.stateCache[epoch]
 }
 
+// GetCurrentFork returns the current fork version.
+func (s *service) GetCurrentFork() version.DataVersion {
+	currentEpoch := s.GetCurrentEpoch()
+	latestFork := version.DataVersionPhase0
+	for _, forkSchedule := range s.chainSpec.ForkSchedule {
+		if forkSchedule.Epoch <= currentEpoch {
+			latestFork = forkSchedule.Fork
+		} else {
+			break
+		}
+	}
+
+	return latestFork
+}
+
 // SubscribeEpochStats returns a subscription for epoch stats updates.
 func (s *service) SubscribeEpochStats() *utils.Subscription[*EpochStats] {
 	return s.epochStatsDispatcher.Subscribe(4, false)
@@ -215,16 +235,17 @@ func (s *service) GetBuilders() []*BuilderInfo {
 	return stats.Builders
 }
 
-// HasBuildersLoaded returns whether builders have been loaded.
-func (s *service) HasBuildersLoaded() bool {
-	s.cacheMu.RLock()
-	defer s.cacheMu.RUnlock()
+// GetValidatorPubkeyByIndex returns the public key for a validator by index from the current epoch stats.
+func (s *service) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey {
+	if index >= phase0.ValidatorIndex(len(s.validatorIndexCache)) {
+		return nil
+	}
 
-	return s.buildersLoaded
+	return &s.validatorIndexCache[index]
 }
 
 // GetChainSpec returns the chain specification.
-func (s *service) GetChainSpec() *beacon.ChainSpec {
+func (s *service) GetChainSpec() *ChainSpec {
 	return s.chainSpec
 }
 
@@ -235,37 +256,41 @@ func (s *service) GetGenesis() *beacon.Genesis {
 
 // SlotToTime converts a slot number to a timestamp.
 func (s *service) SlotToTime(slot phase0.Slot) time.Time {
-	return SlotToTime(s.genesis, s.chainSpec, slot)
+	slotDuration := time.Duration(uint64(slot)) * s.chainSpec.SecondsPerSlot
+	return s.genesis.GenesisTime.Add(slotDuration)
 }
 
 // TimeToSlot converts a timestamp to a slot number.
 func (s *service) TimeToSlot(t time.Time) phase0.Slot {
-	return TimeToSlot(s.genesis, s.chainSpec, t)
+	if t.Before(s.genesis.GenesisTime) {
+		return 0
+	}
+
+	elapsed := t.Sub(s.genesis.GenesisTime)
+
+	return phase0.Slot(elapsed / s.chainSpec.SecondsPerSlot)
 }
 
 // GetCurrentEpoch calculates the current epoch from the head slot.
-func (s *service) GetCurrentEpoch(ctx context.Context) (phase0.Epoch, error) {
-	slot, err := s.clClient.GetHeadSlot(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get head slot: %w", err)
-	}
+func (s *service) GetCurrentEpoch() phase0.Epoch {
+	currentSlot := s.TimeToSlot(time.Now())
+	return phase0.Epoch(uint64(currentSlot) / s.chainSpec.SlotsPerEpoch)
+}
 
-	return phase0.Epoch(uint64(slot) / s.chainSpec.SlotsPerEpoch), nil
+// GetCurrentSlot calculates the current slot from the current time.
+func (s *service) GetCurrentSlot() phase0.Slot {
+	currentSlot := s.TimeToSlot(time.Now())
+	return currentSlot
+}
+
+// GetEpochOfSlot calculates the epoch of a given slot.
+func (s *service) GetEpochOfSlot(slot phase0.Slot) phase0.Epoch {
+	return phase0.Epoch(uint64(slot) / s.chainSpec.SlotsPerEpoch)
 }
 
 // GetForkVersion returns the current fork version from the beacon node.
-func (s *service) GetForkVersion(ctx context.Context) (phase0.Version, error) {
-	return s.clClient.GetForkVersion(ctx)
-}
-
-// IsGloas returns whether the chain is running the Gloas fork.
-func (s *service) IsGloas() bool {
-	stats := s.GetCurrentEpochStats()
-	if stats == nil {
-		return false
-	}
-
-	return stats.IsGloas
+func (s *service) GetForkVersion() (phase0.Version, error) {
+	return s.chainSpec.GetForkVersion(s.GetCurrentFork())
 }
 
 // GetHeadVoteTracker returns the head vote tracker.
@@ -293,9 +318,6 @@ func (s *service) RefreshBuilders(ctx context.Context) error {
 
 	s.cacheMu.Lock()
 	s.stateCache[s.currentEpoch] = stats
-	if stats.BuildersLoaded {
-		s.buildersLoaded = true
-	}
 	s.cacheMu.Unlock()
 
 	return nil
@@ -376,16 +398,12 @@ func (s *service) handleHeadEvent(event *beacon.HeadEvent) {
 // fetchCurrentEpochState fetches the state for the current epoch at startup.
 func (s *service) fetchCurrentEpochState(ctx context.Context) error {
 	// Get current slot to determine epoch
-	headSlot, err := s.clClient.GetHeadSlot(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get head slot: %w", err)
-	}
-
-	epoch := phase0.Epoch(uint64(headSlot) / s.chainSpec.SlotsPerEpoch)
+	currentSlot := s.GetCurrentSlot()
+	epoch := phase0.Epoch(uint64(currentSlot) / s.chainSpec.SlotsPerEpoch)
 
 	s.log.WithFields(logrus.Fields{
-		"head_slot": headSlot,
-		"epoch":     epoch,
+		"slot":  currentSlot,
+		"epoch": epoch,
 	}).Info("Fetching initial epoch state")
 
 	// Use "head" as state ID at startup - the head block always exists
@@ -415,9 +433,6 @@ func (s *service) fetchAndCacheEpochState(ctx context.Context, stateID string, e
 
 	s.cacheMu.Lock()
 	s.stateCache[epoch] = stats
-	if stats.BuildersLoaded {
-		s.buildersLoaded = true
-	}
 	s.cacheMu.Unlock()
 
 	s.log.WithFields(logrus.Fields{

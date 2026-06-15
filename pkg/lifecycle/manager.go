@@ -17,6 +17,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 )
 
 // LifecycleEvent represents a lifecycle action for UI logging.
@@ -310,7 +311,7 @@ func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 	}
 
 	// Step 1: Wait for Gloas fork activation if not yet active
-	if !m.chainSvc.IsGloas() {
+	if m.chainSvc.GetCurrentFork() < version.DataVersionGloas {
 		m.log.Info("Waiting for Gloas fork activation before builder registration")
 		m.fireEvent("waiting_gloas", "Waiting for Gloas fork activation before builder registration", "info")
 
@@ -375,7 +376,7 @@ func (m *Manager) waitForGloas(ctx context.Context) bool {
 				return false
 			}
 
-			if stats.IsGloas {
+			if stats.Version >= version.DataVersionGloas {
 				return true
 			}
 		}

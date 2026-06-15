@@ -7,10 +7,10 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -18,8 +18,7 @@ import (
 type RevealHandler struct {
 	signer       *Signer
 	clClient     *beacon.Client
-	genesis      *beacon.Genesis
-	chainSpec    *beacon.ChainSpec
+	chainSvc     chain.Service
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -28,16 +27,14 @@ type RevealHandler struct {
 func NewRevealHandler(
 	signer *Signer,
 	clClient *beacon.Client,
-	genesis *beacon.Genesis,
-	chainSpec *beacon.ChainSpec,
+	chainSvc chain.Service,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *RevealHandler {
 	return &RevealHandler{
 		signer:       signer,
 		clClient:     clClient,
-		genesis:      genesis,
-		chainSpec:    chainSpec,
+		chainSvc:     chainSvc,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "reveal-handler"),
 	}
@@ -76,15 +73,15 @@ func (h *RevealHandler) SubmitReveal(
 		ParentBeaconBlockRoot: blockInfo.ParentRoot,
 	}
 
-	var forkVersion phase0.Version
-	if h.chainSpec.GloasForkVersion != nil {
-		forkVersion = *h.chainSpec.GloasForkVersion
+	forkVersion, err := h.chainSvc.GetForkVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get current fork version: %w", err)
 	}
 
 	signature, err := h.signer.SignExecutionPayloadEnvelope(
 		envelope,
 		forkVersion,
-		h.genesis.GenesisValidatorsRoot,
+		h.chainSvc.GetGenesis().GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to sign envelope: %w", err)

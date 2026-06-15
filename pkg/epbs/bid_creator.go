@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -22,8 +23,7 @@ import (
 type BidCreator struct {
 	signer       *Signer
 	clClient     *beacon.Client
-	genesis      *beacon.Genesis
-	chainSpec    *beacon.ChainSpec
+	chainSvc     chain.Service
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -32,16 +32,14 @@ type BidCreator struct {
 func NewBidCreator(
 	signer *Signer,
 	clClient *beacon.Client,
-	genesis *beacon.Genesis,
-	chainSpec *beacon.ChainSpec,
+	chainSvc chain.Service,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *BidCreator {
 	return &BidCreator{
 		signer:       signer,
 		clClient:     clClient,
-		genesis:      genesis,
-		chainSpec:    chainSpec,
+		chainSvc:     chainSvc,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "bid-creator"),
 	}
@@ -105,15 +103,15 @@ func (c *BidCreator) CreateAndSubmitBid(
 	c.log.Info("Signing bid before submitting")
 	// Sign the bid using proper domain.
 	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
-	var forkVersion phase0.Version
-	if c.chainSpec.GloasForkVersion != nil {
-		forkVersion = *c.chainSpec.GloasForkVersion
+	forkVersion, err := c.chainSvc.GetForkVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get Gloas fork version: %w", err)
 	}
 
 	signature, err := c.signer.SignExecutionPayloadBid(
 		bid,
 		forkVersion,
-		c.genesis.GenesisValidatorsRoot,
+		c.chainSvc.GetGenesis().GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to sign bid: %w", err)

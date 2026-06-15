@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
@@ -25,48 +24,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/sirupsen/logrus"
 )
-
-// ChainSpec holds chain specification parameters.
-type ChainSpec struct {
-	SecondsPerSlot time.Duration
-	SlotsPerEpoch  uint64
-
-	// Duty calculation parameters
-	ShuffleRoundCount          uint64
-	TargetCommitteeSize        uint64
-	MaxCommitteesPerSlot       uint64
-	MaxEffectiveBalance        uint64
-	MaxEffectiveBalanceElectra uint64
-	EpochsPerHistoricalVector  uint64
-	MinSeedLookahead           uint64
-
-	// Domain types
-	DomainBeaconProposer      phase0.DomainType
-	DomainBeaconAttester      phase0.DomainType
-	DomainPtcAttester         phase0.DomainType
-	DomainProposerPreferences phase0.DomainType
-
-	// Fork epochs and versions (nil if not configured)
-	CapellaForkVersion *phase0.Version
-	ElectraForkEpoch   *uint64
-	GloasForkEpoch     *uint64
-	GloasForkVersion   *phase0.Version
-
-	// Blob schedule (BPO - Blob Parameters Only)
-	BlobSchedule []BlobScheduleEntry
-
-	// ePBS parameters
-	PtcSize uint64
-
-	// Deposit contract
-	DepositContractAddress *common.Address
-}
-
-// BlobScheduleEntry represents a single entry in the BLOB_SCHEDULE.
-type BlobScheduleEntry struct {
-	Epoch            uint64
-	MaxBlobsPerBlock uint64
-}
 
 // Genesis holds genesis information.
 type Genesis struct {
@@ -128,135 +85,6 @@ func (c *Client) GetBaseURL() string {
 	return c.baseURL
 }
 
-// GetChainSpec fetches the chain specification from the beacon node via direct HTTP.
-// This bypasses go-eth2-client's active check so it works before the node is fully ready.
-func (c *Client) GetChainSpec(ctx context.Context) (*ChainSpec, error) {
-	specData, rawData, err := c.fetchSpecDirect(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get spec: %w", err)
-	}
-
-	secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
-	if !ok {
-		return nil, fmt.Errorf("SECONDS_PER_SLOT not found")
-	}
-
-	secondsPerSlot, err := strconv.ParseUint(secondsPerSlotStr, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
-	}
-
-	slotsPerEpochStr, ok := specData["SLOTS_PER_EPOCH"]
-	if !ok {
-		return nil, fmt.Errorf("SLOTS_PER_EPOCH not found")
-	}
-
-	slotsPerEpoch, err := strconv.ParseUint(slotsPerEpochStr, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SLOTS_PER_EPOCH: %w", err)
-	}
-
-	cs := &ChainSpec{
-		SecondsPerSlot: time.Duration(secondsPerSlot) * time.Second,
-		SlotsPerEpoch:  slotsPerEpoch,
-	}
-
-	// Parse duty calculation parameters (use defaults if not present)
-	if v, err := parseSpecUint64(specData, "SHUFFLE_ROUND_COUNT"); err == nil {
-		cs.ShuffleRoundCount = v
-	}
-
-	if v, err := parseSpecUint64(specData, "TARGET_COMMITTEE_SIZE"); err == nil {
-		cs.TargetCommitteeSize = v
-	}
-
-	if v, err := parseSpecUint64(specData, "MAX_COMMITTEES_PER_SLOT"); err == nil {
-		cs.MaxCommitteesPerSlot = v
-	}
-
-	if v, err := parseSpecUint64(specData, "MAX_EFFECTIVE_BALANCE"); err == nil {
-		cs.MaxEffectiveBalance = v
-	}
-
-	if v, err := parseSpecUint64(specData, "MAX_EFFECTIVE_BALANCE_ELECTRA"); err == nil {
-		cs.MaxEffectiveBalanceElectra = v
-	}
-
-	if v, err := parseSpecUint64(specData, "EPOCHS_PER_HISTORICAL_VECTOR"); err == nil {
-		cs.EpochsPerHistoricalVector = v
-	}
-
-	if v, err := parseSpecUint64(specData, "MIN_SEED_LOOKAHEAD"); err == nil {
-		cs.MinSeedLookahead = v
-	}
-
-	// Parse domain types
-	if v, err := parseSpecDomainType(specData, "DOMAIN_BEACON_PROPOSER"); err == nil {
-		cs.DomainBeaconProposer = v
-	}
-
-	if v, err := parseSpecDomainType(specData, "DOMAIN_BEACON_ATTESTER"); err == nil {
-		cs.DomainBeaconAttester = v
-	}
-
-	if v, err := parseSpecDomainType(specData, "DOMAIN_PTC_ATTESTER"); err == nil {
-		cs.DomainPtcAttester = v
-	}
-
-	if v, err := parseSpecDomainType(specData, "DOMAIN_PROPOSER_PREFERENCES"); err == nil {
-		cs.DomainProposerPreferences = v
-	}
-
-	// Parse fork versions
-	if v, err := parseSpecForkVersion(specData, "CAPELLA_FORK_VERSION"); err == nil {
-		cs.CapellaForkVersion = &v
-	}
-
-	// Parse fork epochs
-	if v, err := parseSpecUint64(specData, "ELECTRA_FORK_EPOCH"); err == nil {
-		cs.ElectraForkEpoch = &v
-	}
-
-	if v, err := parseSpecUint64(specData, "GLOAS_FORK_EPOCH"); err == nil {
-		cs.GloasForkEpoch = &v
-	}
-
-	if v, err := parseSpecForkVersion(specData, "GLOAS_FORK_VERSION"); err == nil {
-		cs.GloasForkVersion = &v
-	}
-
-	// Parse ePBS parameters
-	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
-		cs.PtcSize = v
-	}
-
-	// Parse deposit contract address
-	if addrStr, ok := specData["DEPOSIT_CONTRACT_ADDRESS"]; ok {
-		addr := common.HexToAddress(addrStr)
-		cs.DepositContractAddress = &addr
-	}
-
-	// Parse blob schedule (BPO)
-	if raw, ok := rawData["BLOB_SCHEDULE"]; ok {
-		var entries []struct {
-			Epoch            string `json:"EPOCH"`
-			MaxBlobsPerBlock string `json:"MAX_BLOBS_PER_BLOCK"`
-		}
-		if err := json.Unmarshal(raw, &entries); err == nil {
-			for _, e := range entries {
-				epoch, _ := strconv.ParseUint(e.Epoch, 10, 64)
-				maxBlobs, _ := strconv.ParseUint(e.MaxBlobsPerBlock, 10, 64)
-				cs.BlobSchedule = append(cs.BlobSchedule, BlobScheduleEntry{
-					Epoch:            epoch,
-					MaxBlobsPerBlock: maxBlobs,
-				})
-			}
-		}
-	}
-
-	return cs, nil
-}
-
 // InitGlobalSSZSpecs configures the global dynssz instance with this network's
 // spec values. The go-eth2-client SSZ codecs (e.g. block.Root()) route through
 // dynssz.GetGlobalDynSsz(), which otherwise defaults to mainnet preset sizes —
@@ -279,9 +107,9 @@ func (c *Client) InitGlobalSSZSpecs(ctx context.Context) error {
 	return nil
 }
 
-// fetchSpecDirect fetches /eth/v1/config/spec via direct HTTP, bypassing go-eth2-client.
+// GetRawSpecData fetches /eth/v1/config/spec via direct HTTP, bypassing go-eth2-client.
 // Returns both a string map (for simple values) and the raw JSON map (for complex values like BLOB_SCHEDULE).
-func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, map[string]json.RawMessage, error) {
+func (c *Client) GetRawSpecData(ctx context.Context) (map[string]string, map[string]json.RawMessage, error) {
 	url := fmt.Sprintf("%s/eth/v1/config/spec", c.baseURL)
 
 	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
@@ -317,60 +145,6 @@ func (c *Client) fetchSpecDirect(ctx context.Context) (map[string]string, map[st
 	}
 
 	return out, result.Data, nil
-}
-
-// parseSpecUint64 parses a uint64 value from the spec data map.
-func parseSpecUint64(data map[string]string, key string) (uint64, error) {
-	s, ok := data[key]
-	if !ok {
-		return 0, fmt.Errorf("%s not found", key)
-	}
-
-	return strconv.ParseUint(s, 10, 64)
-}
-
-// parseSpecForkVersion parses a 4-byte fork version from the spec data map (hex with 0x prefix).
-func parseSpecForkVersion(data map[string]string, key string) (phase0.Version, error) {
-	s, ok := data[key]
-	if !ok {
-		return phase0.Version{}, fmt.Errorf("%s not found", key)
-	}
-
-	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
-	if err != nil {
-		return phase0.Version{}, err
-	}
-
-	if len(b) != 4 {
-		return phase0.Version{}, fmt.Errorf("invalid fork version length: %d", len(b))
-	}
-
-	var v phase0.Version
-	copy(v[:], b)
-
-	return v, nil
-}
-
-// parseSpecDomainType parses a 4-byte domain type from the spec data map (hex with 0x prefix).
-func parseSpecDomainType(data map[string]string, key string) (phase0.DomainType, error) {
-	s, ok := data[key]
-	if !ok {
-		return phase0.DomainType{}, fmt.Errorf("%s not found", key)
-	}
-
-	b, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
-	if err != nil {
-		return phase0.DomainType{}, err
-	}
-
-	if len(b) != 4 {
-		return phase0.DomainType{}, fmt.Errorf("invalid domain type length: %d", len(b))
-	}
-
-	var dt phase0.DomainType
-	copy(dt[:], b)
-
-	return dt, nil
 }
 
 // GetGenesis fetches genesis information from the beacon node via direct HTTP.
@@ -430,23 +204,6 @@ func (c *Client) GetGenesis(ctx context.Context) (*Genesis, error) {
 		GenesisValidatorsRoot: validatorsRoot,
 		GenesisForkVersion:    forkVersion,
 	}, nil
-}
-
-// GetHeadSlot fetches the current head slot.
-func (c *Client) GetHeadSlot(ctx context.Context) (phase0.Slot, error) {
-	provider, ok := c.client.(eth2client.BeaconBlockHeadersProvider)
-	if !ok {
-		return 0, fmt.Errorf("client does not support block headers provider")
-	}
-
-	resp, err := provider.BeaconBlockHeader(ctx, &api.BeaconBlockHeaderOpts{
-		Block: "head",
-	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to get head block header: %w", err)
-	}
-
-	return resp.Data.Header.Message.Slot, nil
 }
 
 // GetForkVersion returns the current fork version.
@@ -679,37 +436,6 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 		SafeExecutionBlockHash:      safeBlockHash,
 		FinalizedExecutionBlockHash: finalizedBlockHash,
 	}, nil
-}
-
-// GetValidatorPubkeyByIndex fetches the validator pubkey at the given index from the beacon state.
-// stateID is typically "head" or a slot/block root. Used to resolve proposer index to pubkey for fee recipient lookup.
-func (c *Client) GetValidatorPubkeyByIndex(ctx context.Context, stateID string, index phase0.ValidatorIndex) (phase0.BLSPubKey, error) {
-	provider, ok := c.client.(eth2client.BeaconStateProvider)
-	if !ok {
-		return phase0.BLSPubKey{}, fmt.Errorf("client does not support beacon state provider")
-	}
-
-	resp, err := provider.BeaconState(ctx, &api.BeaconStateOpts{
-		State: stateID,
-	})
-	if err != nil {
-		return phase0.BLSPubKey{}, fmt.Errorf("failed to get beacon state: %w", err)
-	}
-
-	if resp.Data == nil {
-		return phase0.BLSPubKey{}, fmt.Errorf("beacon state response is nil")
-	}
-
-	validators := getValidatorsFromState(resp.Data)
-	if validators == nil {
-		return phase0.BLSPubKey{}, fmt.Errorf("beacon state has no validators")
-	}
-
-	if uint64(index) >= uint64(len(validators)) {
-		return phase0.BLSPubKey{}, fmt.Errorf("validator index %d out of range (len=%d)", index, len(validators))
-	}
-
-	return validators[index].PublicKey, nil
 }
 
 // GetValidatorIndexToPubkeyMap fetches the beacon state once and returns a map of validator index to pubkey.

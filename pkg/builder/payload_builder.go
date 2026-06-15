@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
@@ -26,14 +27,13 @@ import (
 type PayloadBuilder struct {
 	clClient     *beacon.Client
 	engineClient *engine.Client
+	chainSvc     chain.Service
 	feeRecipient common.Address
 
-	validatorStore      *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
-	validatorIndexCache *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
-	propPrefCache       *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
-	isGloas             func() bool                // returns true when on the Gloas fork
-	cfg                 *config.Config             // shared config; mutable settings are read live, never cached
-	log                 logrus.FieldLogger
+	validatorStore *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
+	propPrefCache  *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
+	cfg            *config.Config             // shared config; mutable settings are read live, never cached
+	log            logrus.FieldLogger
 
 	// Active build tracking
 	activeBuild *activeBuild
@@ -55,24 +55,22 @@ type activeBuild struct {
 func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient *engine.Client,
+	chainSvc chain.Service,
 	feeRecipient common.Address,
 	cfg *config.Config,
 	log logrus.FieldLogger,
 	validatorStore *validators.Store,
-	validatorIndexCache *chain.ValidatorIndexCache,
 	propPrefCache *proposerpreferences.Cache,
-	isGloas func() bool,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
-		clClient:            clClient,
-		engineClient:        engineClient,
-		feeRecipient:        feeRecipient,
-		validatorStore:      validatorStore,
-		validatorIndexCache: validatorIndexCache,
-		propPrefCache:       propPrefCache,
-		isGloas:             isGloas,
-		cfg:                 cfg,
-		log:                 log.WithField("component", "payload-builder"),
+		clClient:       clClient,
+		chainSvc:       chainSvc,
+		engineClient:   engineClient,
+		feeRecipient:   feeRecipient,
+		validatorStore: validatorStore,
+		propPrefCache:  propPrefCache,
+		cfg:            cfg,
+		log:            log.WithField("component", "payload-builder"),
 	}
 }
 
@@ -131,7 +129,8 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	proposerFeeRecipient := b.feeRecipient
 	var targetGasLimit uint64
 
-	if b.isGloas != nil && b.isGloas() {
+	buildEpoch := b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)
+	if b.chainSvc.GetChainSpec().IsForkActive(version.DataVersionGloas, buildEpoch) {
 		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
@@ -163,12 +162,10 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		// Pre-Gloas: look up fee recipient from validator registrations.
 		var pubkey phase0.BLSPubKey
 		var ok bool
-		if b.validatorIndexCache != nil {
-			pubkey, ok = b.validatorIndexCache.Get(attrs.ProposerIndex)
-		} else {
-			var err error
-			pubkey, err = b.clClient.GetValidatorPubkeyByIndex(buildCtx, "head", attrs.ProposerIndex)
-			ok = (err == nil)
+		pubkeyPtr := b.chainSvc.GetValidatorPubkeyByIndex(attrs.ProposerIndex)
+		if pubkeyPtr != nil {
+			pubkey = *pubkeyPtr
+			ok = true
 		}
 		if ok {
 			reg := b.validatorStore.Get(pubkey)
