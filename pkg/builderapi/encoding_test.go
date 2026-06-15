@@ -4,19 +4,18 @@ import (
 	"encoding/json"
 	"testing"
 
-	buildergloas "github.com/attestantio/go-builder-client/api/gloas"
-	// attphase0 is the attestantio phase0 used by go-builder-client's builder-API
-	// types; imported here ONLY to populate buildergloas struct fields in tests.
-	attphase0 "github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
 )
 
-func sampleSignedRequestAuth() *buildergloas.SignedRequestAuthV1 {
-	var sig attphase0.BLSSignature
+func sampleSignedRequestAuth() *gloastypes.SignedRequestAuthV1 {
+	var sig phase0.BLSSignature
 	sig[0] = 0xaa
-	return &buildergloas.SignedRequestAuthV1{
-		Message:   &buildergloas.RequestAuthV1{Data: []byte("https://builder.example.com"), Slot: 42},
+	return &gloastypes.SignedRequestAuthV1{
+		Message:   &gloastypes.RequestAuthV1{Data: []byte("https://builder.example.com"), Slot: 42},
 		Signature: sig,
 	}
 }
@@ -38,7 +37,7 @@ func TestParseSignedRequestAuth_JSONAndSSZRoundTrip(t *testing.T) {
 	fromJSONParam, err := parseSignedRequestAuth(jsonBody, "application/json; charset=utf-8")
 	require.NoError(t, err)
 
-	for _, got := range []*buildergloas.SignedRequestAuthV1{fromJSON, fromSSZ, fromJSONParam} {
+	for _, got := range []*gloastypes.SignedRequestAuthV1{fromJSON, fromSSZ, fromJSONParam} {
 		require.NotNil(t, got.Message)
 		assert.Equal(t, orig.Message.Slot, got.Message.Slot)
 		assert.Equal(t, orig.Message.Data, got.Message.Data)
@@ -66,8 +65,8 @@ func TestParseSignedRequestAuth_Errors(t *testing.T) {
 }
 
 func TestParseBuilderPreferencesRequest_SSZRoundTrip(t *testing.T) {
-	orig := &buildergloas.BuilderPreferencesRequestV1{
-		Preferences: &buildergloas.BuilderPreferencesV1{MaxExecutionPayment: 5_000_000_000},
+	orig := &gloastypes.BuilderPreferencesRequestV1{
+		Preferences: &gloastypes.BuilderPreferencesV1{MaxExecutionPayment: 5_000_000_000},
 		Auth:        sampleSignedRequestAuth(),
 	}
 
