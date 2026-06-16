@@ -11,30 +11,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/utils"
 )
-
-// BuildSource indicates how a payload was built.
-type BuildSource int
-
-const (
-	// BuildSourceBlock indicates the payload was built on a parent block.
-	BuildSourceBlock BuildSource = iota
-	// BuildSourcePayload indicates the payload was built on a parent payload (slot-2 fallback).
-	BuildSourcePayload
-)
-
-// String returns a string representation of the build source.
-func (s BuildSource) String() string {
-	switch s {
-	case BuildSourceBlock:
-		return "block"
-	case BuildSourcePayload:
-		return "payload"
-	default:
-		return "unknown"
-	}
-}
 
 // PayloadReadyEvent is emitted when a new payload is built. It carries the
 // high-level build objects plus the build metadata that isn't part of them.
@@ -54,7 +31,6 @@ type PayloadReadyEvent struct {
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
 	FeeRecipient common.Address // resolved proposer fee recipient for the bid
 	BlockValue   *big.Int       // EL-reported block value (wei)
-	BuildSource  BuildSource    // how the payload was built
 	ReadyAt      time.Time      // when the payload became ready
 }
 
@@ -73,23 +49,4 @@ type PayloadBuildFailedEvent struct {
 	Slot     phase0.Slot
 	Error    string    // Failure reason
 	FailedAt time.Time // When the build failed
-}
-
-// PayloadReadyDispatcher dispatches payload ready events to subscribers.
-type PayloadReadyDispatcher struct {
-	*utils.Dispatcher[*PayloadReadyEvent]
-}
-
-// NewPayloadReadyDispatcher creates a new payload ready dispatcher.
-func NewPayloadReadyDispatcher() *PayloadReadyDispatcher {
-	return &PayloadReadyDispatcher{
-		Dispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
-	}
-}
-
-// SubscribePayloadReady subscribes to payload ready events.
-func (d *PayloadReadyDispatcher) SubscribePayloadReady(
-	capacity int,
-) *utils.Subscription[*PayloadReadyEvent] {
-	return d.Subscribe(capacity, false)
 }

@@ -121,12 +121,29 @@ func buildHeaderFromPayload(
 		txs = append(txs, tx)
 	}
 
-	txRoot := types.DeriveSha(txs, trie.NewStackTrie(nil))
+	var bloom types.Bloom
+	copy(bloom[:], p.LogsBloom[:])
 
-	// Withdrawals are present (possibly empty) for Shanghai+; derive their root
-	// whenever the payload carries the field so empty lists hash correctly.
-	var withdrawalsHash *common.Hash
+	header := &types.Header{
+		ParentHash:  common.Hash(p.ParentHash),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.Address(p.FeeRecipient),
+		Root:        common.Hash(p.StateRoot),
+		TxHash:      types.DeriveSha(txs, trie.NewStackTrie(nil)),
+		ReceiptHash: common.Hash(p.ReceiptsRoot),
+		Bloom:       bloom,
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(p.BlockNumber),
+		GasLimit:    p.GasLimit,
+		GasUsed:     p.GasUsed,
+		Time:        p.Timestamp,
+		Extra:       p.ExtraData,
+		MixDigest:   common.Hash(p.PrevRandao),
+		Nonce:       types.BlockNonce{},
+		BaseFee:     baseFee,
+	}
 
+	// add shanghai specific fields
 	if p.Version >= enginev.DataVersionShanghai {
 		ws := make(types.Withdrawals, len(p.Withdrawals))
 		for i, w := range p.Withdrawals {
@@ -139,73 +156,36 @@ func buildHeaderFromPayload(
 		}
 
 		wRoot := types.DeriveSha(ws, trie.NewStackTrie(nil))
-		withdrawalsHash = &wRoot
+		header.WithdrawalsHash = &wRoot
 	}
 
-	// Compute requestsHash from execution requests (EIP-7685, Electra/Prague+).
-	var requestsHash *common.Hash
+	// add cancun specific fields
+	if p.Version >= enginev.DataVersionCancun {
+		header.BlobGasUsed = &p.BlobGasUsed
+		header.ExcessBlobGas = &p.ExcessBlobGas
+		header.ParentBeaconRoot = &parentBeaconBlockRoot
+	}
 
-	if executionRequests != nil {
+	// add prague specific fields
+	if p.Version >= enginev.DataVersionPrague {
 		reqBytes := make([][]byte, len(executionRequests))
 		for i, req := range executionRequests {
 			reqBytes[i] = req
 		}
 
 		h := types.CalcRequestsHash(reqBytes)
-		requestsHash = &h
+		header.RequestsHash = &h
 	}
 
-	// Amsterdam (EIP-7732 / EIP-7928): slotNumber and the block-access-list
-	// hash join the header.
-	var (
-		slotNumber          *uint64
-		blockAccessListHash *common.Hash
-	)
-
+	// add amsterdam specific fields
 	if p.Version >= enginev.DataVersionAmsterdam {
 		sn := p.SlotNumber
-		slotNumber = &sn
+		header.SlotNumber = &sn
 
 		if len(p.BlockAccessList) > 0 {
 			h := crypto.Keccak256Hash(p.BlockAccessList)
-			blockAccessListHash = &h
+			header.BlockAccessListHash = &h
 		}
-	}
-
-	var bloom types.Bloom
-	copy(bloom[:], p.LogsBloom[:])
-
-	blobGasUsed := p.BlobGasUsed
-	excessBlobGas := p.ExcessBlobGas
-
-	header := &types.Header{
-		ParentHash:          common.Hash(p.ParentHash),
-		UncleHash:           types.EmptyUncleHash,
-		Coinbase:            common.Address(p.FeeRecipient),
-		Root:                common.Hash(p.StateRoot),
-		TxHash:              txRoot,
-		ReceiptHash:         common.Hash(p.ReceiptsRoot),
-		Bloom:               bloom,
-		Difficulty:          big.NewInt(0),
-		Number:              new(big.Int).SetUint64(p.BlockNumber),
-		GasLimit:            p.GasLimit,
-		GasUsed:             p.GasUsed,
-		Time:                p.Timestamp,
-		Extra:               p.ExtraData,
-		MixDigest:           common.Hash(p.PrevRandao),
-		Nonce:               types.BlockNonce{},
-		BaseFee:             baseFee,
-		WithdrawalsHash:     withdrawalsHash,
-		ParentBeaconRoot:    &parentBeaconBlockRoot,
-		RequestsHash:        requestsHash,
-		BlockAccessListHash: blockAccessListHash,
-		SlotNumber:          slotNumber,
-	}
-
-	// BlobGasUsed/ExcessBlobGas are present for Cancun+ only.
-	if p.Version >= enginev.DataVersionCancun {
-		header.BlobGasUsed = &blobGasUsed
-		header.ExcessBlobGas = &excessBlobGas
 	}
 
 	return header, nil

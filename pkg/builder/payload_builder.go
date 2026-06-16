@@ -117,8 +117,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
-	parentBeaconRoot := common.Hash(attrs.ParentBeaconBlockRoot)
-
 	// Resolve the fee recipient (and target gas limit) for the build.
 	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit), falling
 	//             back to SuggestedFeeRecipient from payload_attributes.
@@ -263,7 +261,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		enginePayload,
 		resp.ExecutionRequests,
 		[]byte("buildoor/"),
-		parentBeaconRoot,
+		common.Hash(attrs.ParentBeaconBlockRoot),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
@@ -292,7 +290,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		BlockHash:         phase0.Hash32(newHash),
 		FeeRecipient:      proposerFeeRecipient,
 		BlockValue:        blockValue,
-		BuildSource:       BuildSourceBlock,
 		ReadyAt:           time.Now(),
 	}
 
@@ -322,12 +319,4 @@ func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 
 		b.log.WithField("slot", slot).Debug("Build aborted")
 	}
-}
-
-// SetFeeRecipient updates the fee recipient address.
-func (b *PayloadBuilder) SetFeeRecipient(feeRecipient common.Address) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.feeRecipient = feeRecipient
 }

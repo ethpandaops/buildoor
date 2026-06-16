@@ -329,7 +329,6 @@ type PayloadBySlotResponse struct {
 	FeeRecipient    string          `json:"fee_recipient"`
 	GasLimit        uint64          `json:"gas_limit"`
 	Timestamp       uint64          `json:"timestamp"`
-	BuildSource     string          `json:"build_source"`
 	ReadyAt         time.Time       `json:"ready_at"`
 }
 
@@ -383,7 +382,6 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 		FeeRecipient:    event.FeeRecipient.Hex(),
 		GasLimit:        event.ExecutionPayload.GasLimit,
 		Timestamp:       event.Attributes.Timestamp,
-		BuildSource:     event.BuildSource.String(),
 		ReadyAt:         event.ReadyAt,
 	}
 

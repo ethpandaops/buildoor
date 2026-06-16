@@ -25,9 +25,9 @@ type EpochStats struct {
 	ActiveIndices     []phase0.ValidatorIndex
 	EffectiveBalances []uint32 // Effective balance in full ETH units
 
-	// Builder data (for lifecycle management, Gloas only)
-	Builders       []*BuilderInfo
-	BuildersLoaded bool
+	// Builder data (for lifecycle management, Gloas only).
+	// Populated (possibly empty) for any Gloas+ state; nil for pre-Gloas epochs.
+	Builders []*BuilderInfo
 
 	// Pre-computed duties
 	RandaoMix      phase0.Hash32

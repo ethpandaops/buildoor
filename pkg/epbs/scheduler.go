@@ -159,7 +159,9 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 
 	elapsed := now.Sub(genesisTime)
 	currentSlot := s.chainSvc.TimeToSlot(now)
-	msIntoSlot := elapsed.Milliseconds()
+	// msIntoSlot is the offset within the current slot (not the time since
+	// genesis) — the bid and reveal windows are slot-relative.
+	msIntoSlot := (elapsed % s.chainSvc.GetChainSpec().SecondsPerSlot).Milliseconds()
 
 	// ePBS bids are only valid from the Gloas fork onwards.
 	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {

@@ -189,7 +189,7 @@ func (s *service) SubscribeEpochStats() *utils.Subscription[*EpochStats] {
 // GetBuilderByIndex returns builder info by index from the current epoch stats.
 func (s *service) GetBuilderByIndex(index uint64) *BuilderInfo {
 	stats := s.GetCurrentEpochStats()
-	if stats == nil || !stats.BuildersLoaded {
+	if stats == nil {
 		return nil
 	}
 
@@ -203,7 +203,7 @@ func (s *service) GetBuilderByIndex(index uint64) *BuilderInfo {
 // GetBuilderByPubkey returns builder info by public key from the current epoch stats.
 func (s *service) GetBuilderByPubkey(pubkey phase0.BLSPubKey) *BuilderInfo {
 	stats := s.GetCurrentEpochStats()
-	if stats == nil || !stats.BuildersLoaded {
+	if stats == nil {
 		return nil
 	}
 

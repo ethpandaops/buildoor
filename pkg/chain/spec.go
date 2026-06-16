@@ -146,7 +146,7 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 	// Parse fork schedule
 	forkSchedule := []ForkSchedule{}
 	for key, val := range specData {
-		if strings.HasSuffix(key, "_FORK_VERSION") {
+		if strings.HasSuffix(key, "_FORK_VERSION") && key != "GENESIS_FORK_VERSION" {
 			forkKey := key[:len(key)-len("_FORK_VERSION")]
 			fork, err := version.DataVersionFromString(strings.ToLower(forkKey))
 			if err != nil {
