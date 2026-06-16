@@ -12,11 +12,11 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
-	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
@@ -38,8 +38,8 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(config *types.FrontendConfig, settingsSvc *settings.Service, stateDB *db.Database, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
-	authHandler, err := auth.NewAuthHandler(context.Background(), config.AuthProviderURL)
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
+	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
 	}
@@ -110,7 +110,7 @@ func StartHttpServer(config *types.FrontendConfig, settingsSvc *settings.Service
 	// Optional raw HTML snippet injected into <head> of the served index.html
 	// (e.g. the panda menu loader / analytics). The CLI flag wins; fall back
 	// to the legacy BUILDOOR_INJECT_HEAD_HTML env var when the flag is empty.
-	headInjectHTML := config.InjectHeadHTML
+	headInjectHTML := frontendConfig.InjectHeadHTML
 	if headInjectHTML == "" {
 		headInjectHTML = os.Getenv("BUILDOOR_INJECT_HEAD_HTML")
 	}
@@ -119,8 +119,8 @@ func StartHttpServer(config *types.FrontendConfig, settingsSvc *settings.Service
 		logrus.WithField("module", "web-spa"),
 		staticEmbedFS,
 		handlers.RuntimeConfig{
-			AuthProviderURL: config.AuthProviderURL,
-			OverviewURL:     config.OverviewURL,
+			AuthProviderURL: frontendConfig.AuthProviderURL,
+			OverviewURL:     frontendConfig.OverviewURL,
 		},
 		headInjectHTML,
 	)
@@ -134,14 +134,14 @@ func StartHttpServer(config *types.FrontendConfig, settingsSvc *settings.Service
 	//n.Use(gzip.Gzip(gzip.DefaultCompression))
 	n.UseHandler(router)
 
-	if config.Host == "" {
-		config.Host = "0.0.0.0"
+	if frontendConfig.Host == "" {
+		frontendConfig.Host = "0.0.0.0"
 	}
-	if config.Port == 0 {
-		config.Port = 8080
+	if frontendConfig.Port == 0 {
+		frontendConfig.Port = 8080
 	}
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", config.Host, config.Port),
+		Addr:         fmt.Sprintf("%s:%d", frontendConfig.Host, frontendConfig.Port),
 		WriteTimeout: 0,
 		ReadTimeout:  0,
 		IdleTimeout:  120 * time.Second,

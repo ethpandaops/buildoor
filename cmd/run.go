@@ -25,7 +25,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
-	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -197,11 +196,11 @@ and begins building blocks according to configuration.`,
 
 		// Only operator-supplied keys (flag/env/config) form the CLI layer.
 		supplied := make(map[string]bool)
-		for _, f := range settings.Fields() {
+		for _, f := range config.Fields() {
 			supplied[f.Key] = v.IsSet(f.FlagKey)
 		}
 
-		settingsSvc, err := settings.New(cfg, defaults, supplied, stateDB, logger)
+		settingsSvc, err := config.NewService(cfg, defaults, supplied, stateDB, logger)
 		if err != nil {
 			return fmt.Errorf("failed to init settings service: %w", err)
 		}

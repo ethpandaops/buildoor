@@ -5,11 +5,11 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
-	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -17,8 +17,8 @@ import (
 // APIHandler handles API requests for the buildoor web UI.
 type APIHandler struct {
 	authHandler    *auth.AuthHandler
-	settingsSvc    *settings.Service // central settings authority (single writer)
-	stateDB        *db.Database      // optional state-db (may be disabled)
+	settingsSvc    *config.Service // central settings authority (single writer)
+	stateDB        *db.Database    // optional state-db (may be disabled)
 	builderSvc     *builder.Service
 	epbsSvc        *epbs.Service                // May be nil
 	lifecycleMgr   *lifecycle.Manager           // May be nil
@@ -33,7 +33,7 @@ type APIHandler struct {
 // NewAPIHandler creates a new API handler.
 func NewAPIHandler(
 	authHandler *auth.AuthHandler,
-	settingsSvc *settings.Service,
+	settingsSvc *config.Service,
 	stateDB *db.Database,
 	builderSvc *builder.Service,
 	epbsSvc *epbs.Service,
