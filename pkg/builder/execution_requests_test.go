@@ -188,9 +188,9 @@ func TestParseExecutionRequests_AllThreeTypes(t *testing.T) {
 func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 	// Entry with only type prefix and no data should be skipped
 	raw := []prague.ExecutionRequest{
-		prague.ExecutionRequest{depositRequestType},
-		prague.ExecutionRequest{withdrawalRequestType},
-		prague.ExecutionRequest{consolidationRequestType},
+		{depositRequestType},
+		{withdrawalRequestType},
+		{consolidationRequestType},
 	}
 
 	result, err := ParseExecutionRequests(raw)
@@ -201,14 +201,14 @@ func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 }
 
 func TestParseExecutionRequests_EmptyEntry(t *testing.T) {
-	raw := []prague.ExecutionRequest{prague.ExecutionRequest{}}
+	raw := []prague.ExecutionRequest{{}}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty entry")
 }
 
 func TestParseExecutionRequests_UnknownType(t *testing.T) {
-	raw := []prague.ExecutionRequest{prague.ExecutionRequest{0xFF, 0x01}}
+	raw := []prague.ExecutionRequest{{0xFF, 0x01}}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown type 0xff")
