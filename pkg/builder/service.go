@@ -127,7 +127,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.validatorStore,
 		s.validatorIndexCache,
 		s.propPrefCache,
-		s.chainSvc.IsGloas,
+		s.chainSvc,
 	)
 
 	// Start event stream
