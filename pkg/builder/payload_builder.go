@@ -246,7 +246,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	modifiedPayloadJSON, _, err := ModifyPayloadExtraData(
 		payloadResult.ExecutionPayloadJSON,
-		[]byte("buildoor/"),
+		[]byte(b.cfg.ExtraDataPrefix),
 		parentBeaconRoot,
 		payloadResult.ExecutionRequests,
 	)

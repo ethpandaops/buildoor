@@ -30,6 +30,7 @@ func DefaultConfig() *Config {
 			BidSubsidy:   100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
 		},
 		ValidateWithdrawals: false,
+		ExtraDataPrefix:     "buildoor/",
 	}
 }
 

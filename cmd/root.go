@@ -94,6 +94,9 @@ func init() {
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
 
+	// Extra data prefix prepended to the execution payload's extraData field
+	rootCmd.PersistentFlags().String("extra-data-prefix", defaults.ExtraDataPrefix, "Prefix prepended to the execution payload's extraData field")
+
 	// Validator ranges
 	rootCmd.PersistentFlags().String("validator-ranges-file", "", "Path to validator ranges YAML file (format: '0-127: client-name')")
 	rootCmd.PersistentFlags().String("validator-ranges-url", "", "URL to fetch validator ranges JSON (format: {\"ranges\": {\"0-127\": \"client-name\"}})")
@@ -191,6 +194,7 @@ func initConfig() error {
 		},
 		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
 		PayloadBuildTime:    v.GetUint64("payload-build-time"),
+		ExtraDataPrefix:     v.GetString("extra-data-prefix"),
 		ValidatorRanges: builder.ValidatorRangesConfig{
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
