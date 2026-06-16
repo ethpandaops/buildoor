@@ -5,10 +5,11 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
-	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+
+	"github.com/ethpandaops/buildoor/pkg/builder"
 )
 
 // BuiltPayload represents an execution payload that we've built and can reveal.
@@ -20,7 +21,7 @@ type BuiltPayload struct {
 	ParentBlockHash   phase0.Hash32
 	ParentBlockRoot   phase0.Root
 	ExecutionPayload  *eth2all.ExecutionPayload
-	BlobsBundle       *engineall.BlobsBundle
+	BlobsBundle       *builder.BlobsBundle
 	ExecutionRequests *electra.ExecutionRequests
 	BidValue          *big.Int
 	FeeRecipient      common.Address

@@ -228,11 +228,17 @@ func (s *service) GetBuilders() []*BuilderInfo {
 
 // GetValidatorPubkeyByIndex returns the public key for a validator by index from the current epoch stats.
 func (s *service) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+
 	if index >= phase0.ValidatorIndex(len(s.validatorIndexCache)) {
 		return nil
 	}
 
-	return &s.validatorIndexCache[index]
+	// Return a copy: the backing slice is swapped out on each epoch refresh.
+	pubkey := s.validatorIndexCache[index]
+
+	return &pubkey
 }
 
 // GetChainSpec returns the chain specification.

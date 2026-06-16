@@ -81,7 +81,9 @@ func (s *service) fetchEpochStats(
 		validatorPubkeys[i] = v.PublicKey
 	}
 
+	s.cacheMu.Lock()
 	s.validatorIndexCache = validatorPubkeys
+	s.cacheMu.Unlock()
 
 	return s.computeEpochStats(resp.Data, epoch)
 }

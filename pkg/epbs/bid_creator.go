@@ -2,9 +2,9 @@ package epbs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
@@ -14,7 +14,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
-	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
@@ -70,7 +69,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	// Build the execution payload bid
-	bid := &gloas.ExecutionPayloadBid{
+	bid := &eth2all.ExecutionPayloadBid{
+		Version:               payload.ExecutionPayload.Version,
 		ParentBlockHash:       payload.Attributes.ParentBlockHash,
 		ParentBlockRoot:       payload.Attributes.ParentBlockRoot,
 		BlockHash:             payload.BlockHash,
@@ -83,19 +83,16 @@ func (c *BidCreator) CreateAndSubmitBid(
 		ExecutionPayment:      0,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
+		InclusionListBits:     []byte{0xff, 0xff}, // TODO: Set a proper value here
+	}
+
+	if payload.BlobsBundle != nil {
+		bid.BlobKZGCommitments = payload.BlobsBundle.Commitments
 	}
 
 	c.log.Info("Created execution payload bid")
 
-	if commitments := fulu.CommitmentsToDeneb(payload.BlobsBundle); commitments != nil {
-		bid.BlobKZGCommitments = commitments
-	}
-
-	c.log.Info("Populated bid with blobs")
-
-	c.log.Info("Signing bid before submitting")
 	// Sign the bid using proper domain.
-	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
 	forkVersion, err := c.chainSvc.GetForkVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get Gloas fork version: %w", err)
@@ -110,18 +107,11 @@ func (c *BidCreator) CreateAndSubmitBid(
 		return fmt.Errorf("failed to sign bid: %w", err)
 	}
 
-	c.log.Info("Signed bid successfully!")
-
 	// Create signed bid
-	signedBid := &gloas.SignedExecutionPayloadBid{
+	signedBid := &eth2all.SignedExecutionPayloadBid{
+		Version:   payload.ExecutionPayload.Version,
 		Message:   bid,
 		Signature: signature,
-	}
-
-	// Marshal to JSON for submission
-	signedBidJSON, err := json.Marshal(signedBid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal signed bid: %w", err)
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
@@ -135,10 +125,10 @@ func (c *BidCreator) CreateAndSubmitBid(
 		"parent_block_root": fmt.Sprintf("%x", payload.Attributes.ParentBlockRoot[:8]),
 	})
 
-	logger.Info("Submitting bid")
+	logger.Info("Created and signed bid successfully!")
 
 	// Submit bid
-	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {
+	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBid); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
 	}
 

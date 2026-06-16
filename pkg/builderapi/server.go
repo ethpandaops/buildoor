@@ -758,8 +758,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
 	}
-	if commitments := fulu.CommitmentsToDeneb(event.BlobsBundle); commitments != nil {
-		bid.BlobKZGCommitments = commitments
+	if event.BlobsBundle != nil {
+		bid.BlobKZGCommitments = event.BlobsBundle.Commitments
 	}
 
 	bidRoot, err := bid.HashTreeRoot()
@@ -945,8 +945,8 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 
 	var blobs, kzgProofs [][]byte
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
-		blobs = fulu.BlobsAsBytes(event.BlobsBundle)
-		kzgProofs = fulu.ProofsAsBytes(event.BlobsBundle)
+		blobs = event.BlobsBundle.BlobsAsBytes()
+		kzgProofs = event.BlobsBundle.ProofsAsBytes()
 	}
 
 	if err := s.clClient.SubmitExecutionPayloadEnvelope(r.Context(), envelopeJSON, blobs, kzgProofs); err != nil {

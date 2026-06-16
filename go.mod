@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/ethereum/go-ethereum v1.17.3
-	github.com/ethpandaops/go-eth-engine-client v0.0.0-20260615013137-8a6a7f8bc971
+	github.com/ethpandaops/go-eth-engine-client v0.0.0-20260616025304-fcd77b340b2a
 	github.com/ethpandaops/go-eth2-client v0.1.3
 	github.com/ethpandaops/service-authenticatoor v0.0.1
 	github.com/glebarez/go-sqlite v1.22.0
@@ -123,7 +123,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.49.1 // indirect
 )
-
-replace github.com/ethpandaops/go-eth-engine-client => /home/pk910/github/ethpandaops/go-eth-engine-client
 
 tool github.com/pk910/dynamic-ssz/dynssz-gen

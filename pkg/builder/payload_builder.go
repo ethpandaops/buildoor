@@ -182,6 +182,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		TargetGasLimit:        targetGasLimit,
 	}
 
+	if len(attrs.InclusionListTransactions) > 0 {
+		payloadAttrs.InclusionListTransactions = make([]paris.Transaction, len(attrs.InclusionListTransactions))
+		for i, tx := range attrs.InclusionListTransactions {
+			payloadAttrs.InclusionListTransactions[i] = paris.Transaction(tx)
+		}
+	}
+
 	fcuReq := &engineall.ForkchoiceUpdatedRequest{
 		Version: engineVersion,
 		ForkchoiceState: &paris.ForkchoiceState{
@@ -285,7 +292,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	event := &PayloadReadyEvent{
 		Attributes:        attrs,
 		ExecutionPayload:  beaconPayload,
-		BlobsBundle:       resp.BlobsBundle,
+		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),
 		ExecutionRequests: execRequests,
 		BlockHash:         phase0.Hash32(newHash),
 		FeeRecipient:      proposerFeeRecipient,

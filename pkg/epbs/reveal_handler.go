@@ -96,8 +96,8 @@ func (h *RevealHandler) SubmitReveal(
 	var cellProofs [][]byte
 
 	if payload.BlobsBundle != nil && len(payload.BlobsBundle.Blobs) > 0 {
-		blobs = fulu.BlobsAsBytes(payload.BlobsBundle)
-		cellProofs = fulu.ProofsAsBytes(payload.BlobsBundle)
+		blobs = payload.BlobsBundle.BlobsAsBytes()
+		cellProofs = payload.BlobsBundle.ProofsAsBytes()
 
 		h.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),

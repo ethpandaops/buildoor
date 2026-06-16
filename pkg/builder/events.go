@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -22,8 +21,8 @@ type PayloadReadyEvent struct {
 	Attributes *beacon.PayloadAttributesEvent
 	// ExecutionPayload is the fork-agnostic beacon execution payload.
 	ExecutionPayload *eth2all.ExecutionPayload
-	// BlobsBundle is the engine API blobs bundle (Deneb+), nil if none.
-	BlobsBundle *engineall.BlobsBundle
+	// BlobsBundle holds the blobs/commitments/proofs (Deneb+), nil if none.
+	BlobsBundle *BlobsBundle
 	// ExecutionRequests are the parsed execution requests (Electra+).
 	ExecutionRequests *electra.ExecutionRequests
 

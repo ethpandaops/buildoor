@@ -43,8 +43,8 @@ func UnblindSignedBlindedBeaconBlock(
 	}
 
 	// Copy BlobKZGCommitments from event if we have blobs (must match blinded commitments).
-	if commitments := CommitmentsToDeneb(event.BlobsBundle); len(commitments) > 0 {
-		fullBody.BlobKZGCommitments = commitments
+	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
+		fullBody.BlobKZGCommitments = event.BlobsBundle.Commitments
 	}
 
 	fullBlock := &electra.BeaconBlock{
@@ -60,9 +60,13 @@ func UnblindSignedBlindedBeaconBlock(
 		Signature: blinded.Signature,
 	}
 
-	return &apiv1fulu.SignedBlockContents{
+	contents := &apiv1fulu.SignedBlockContents{
 		SignedBlock: signedBlock,
-		KZGProofs:   ProofsToDeneb(event.BlobsBundle),
-		Blobs:       BlobsToDeneb(event.BlobsBundle),
-	}, nil
+	}
+	if event.BlobsBundle != nil {
+		contents.KZGProofs = event.BlobsBundle.Proofs
+		contents.Blobs = event.BlobsBundle.Blobs
+	}
+
+	return contents, nil
 }

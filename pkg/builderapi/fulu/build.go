@@ -36,8 +36,6 @@ func BuildSignedBuilderBid(
 		return nil, err
 	}
 
-	commitments := CommitmentsToDeneb(event.BlobsBundle)
-
 	execRequests := event.ExecutionRequests
 	if execRequests == nil {
 		execRequests = &electra.ExecutionRequests{}
@@ -53,11 +51,13 @@ func BuildSignedBuilderBid(
 	}
 
 	bid := &BuilderBid{
-		Header:             header,
-		BlobKZGCommitments: commitments,
-		ExecutionRequests:  execRequests,
-		Value:              value,
-		Pubkey:             proposerPubkey,
+		Header:            header,
+		ExecutionRequests: execRequests,
+		Value:             value,
+		Pubkey:            proposerPubkey,
+	}
+	if event.BlobsBundle != nil {
+		bid.BlobKZGCommitments = event.BlobsBundle.Commitments
 	}
 
 	bidRoot, err := bid.HashTreeRoot()

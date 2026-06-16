@@ -150,7 +150,10 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 			forkKey := key[:len(key)-len("_FORK_VERSION")]
 			fork, err := version.DataVersionFromString(strings.ToLower(forkKey))
 			if err != nil {
-				return fmt.Errorf("failed to parse fork version: %w", err)
+				// Ignore forks this build's DataVersion enum doesn't know (e.g. a
+				// newer fork the beacon node advertises) rather than failing the
+				// whole spec parse.
+				continue
 			}
 
 			forkVersionBytes, err := hex.DecodeString(strings.TrimPrefix(val, "0x"))
