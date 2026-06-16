@@ -30,7 +30,7 @@ type PayloadBuilder struct {
 	validatorStore      *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
 	validatorIndexCache *chain.ValidatorIndexCache // optional: index→pubkey so we don't query beacon state every build
 	propPrefCache       *proposerpreferences.Cache // optional: proposer preferences cache (Gloas+)
-	chainSvc            chain.Service              // used to detect the current fork (see isGloas)
+	chainSvc            chain.Service              // used to detect the current fork (IsGloas)
 	cfg                 *Config                    // shared config; mutable settings are read live, never cached
 	log                 logrus.FieldLogger
 
@@ -73,11 +73,6 @@ func NewPayloadBuilder(
 		cfg:                 cfg,
 		log:                 log.WithField("component", "payload-builder"),
 	}
-}
-
-// isGloas reports whether the chain is currently on the Gloas fork.
-func (b *PayloadBuilder) isGloas() bool {
-	return b.chainSvc.IsGloas()
 }
 
 // BuildPayloadFromAttributes builds a payload using data from a payload_attributes event.
@@ -135,7 +130,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	proposerFeeRecipient := b.feeRecipient
 	var targetGasLimit uint64
 
-	if b.isGloas() {
+	if b.chainSvc.IsGloas() {
 		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
