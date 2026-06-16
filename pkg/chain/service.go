@@ -28,6 +28,7 @@ type Service interface {
 	GetCurrentEpoch() phase0.Epoch
 	GetCurrentSlot() phase0.Slot
 	GetCurrentFork() version.DataVersion
+	ActiveForkAtEpoch(epoch phase0.Epoch) version.DataVersion
 	GetForkVersion() (phase0.Version, error)
 	GetEpochOfSlot(slot phase0.Slot) phase0.Epoch
 
@@ -177,17 +178,7 @@ func (s *service) GetEpochStats(epoch phase0.Epoch) *EpochStats {
 
 // GetCurrentFork returns the current fork version.
 func (s *service) GetCurrentFork() version.DataVersion {
-	currentEpoch := s.GetCurrentEpoch()
-	latestFork := version.DataVersionPhase0
-	for _, forkSchedule := range s.chainSpec.ForkSchedule {
-		if forkSchedule.Epoch <= currentEpoch {
-			latestFork = forkSchedule.Fork
-		} else {
-			break
-		}
-	}
-
-	return latestFork
+	return s.ActiveForkAtEpoch(s.GetCurrentEpoch())
 }
 
 // SubscribeEpochStats returns a subscription for epoch stats updates.

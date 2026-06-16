@@ -2,15 +2,14 @@ package builder
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethpandaops/go-eth2-client/spec/capella"
+	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
+	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -20,13 +19,12 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 // PayloadBuilder handles execution payload building via the Engine API.
 type PayloadBuilder struct {
 	clClient     *beacon.Client
-	engineClient *engine.Client
+	engineClient EngineClient
 	chainSvc     chain.Service
 	feeRecipient common.Address
 
@@ -43,18 +41,17 @@ type PayloadBuilder struct {
 // activeBuild tracks an in-progress payload build.
 type activeBuild struct {
 	slot      phase0.Slot
-	payloadID engine.PayloadID
+	payloadID paris.PayloadID
 	cancelFn  context.CancelFunc
 }
 
 // NewPayloadBuilder creates a new payload builder.
 // cfg is the shared config pointer; mutable settings (e.g. PayloadBuildTime) are read live from it.
 // When validatorStore is set (pre-Gloas), fee recipient is taken from the proposer's validator registration.
-// When propPrefCache is set and isGloas returns true, fee recipient and gas limit come from proposer preferences instead.
-// validatorIndexCache is optional; when set we use it to resolve proposer index→pubkey instead of querying beacon state every build.
+// When propPrefCache is set and the build epoch is Gloas+, fee recipient and gas limit come from proposer preferences instead.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
-	engineClient *engine.Client,
+	engineClient EngineClient,
 	chainSvc chain.Service,
 	feeRecipient common.Address,
 	cfg *config.Config,
@@ -105,33 +102,32 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		b.mu.Unlock()
 	}()
 
-	// Get finality info (still need safe/finalized block hashes)
+	// Resolve the fork active at the build epoch and the engine method version it implies.
+	buildEpoch := b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)
+	beaconFork := b.chainSvc.ActiveForkAtEpoch(buildEpoch)
+
+	engineVersion, err := chain.EngineVersion(beaconFork)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build payload for fork %s: %w", beaconFork, err)
+	}
+
+	// Get finality info (still need safe/finalized block hashes).
 	finalityInfo, err := b.clClient.GetFinalityInfo(buildCtx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get finality info: %w", err)
 	}
 
-	// Convert hashes for engine API
-	// parent_block_hash from payload_attributes is the execution layer parent
-	headBlockHash := common.BytesToHash(attrs.ParentBlockHash[:])
-	safeBlockHash := common.BytesToHash(finalityInfo.SafeExecutionBlockHash[:])
-	finalizedBlockHash := common.BytesToHash(finalityInfo.FinalizedExecutionBlockHash[:])
-	parentBeaconRoot := common.BytesToHash(attrs.ParentBeaconBlockRoot[:])
+	parentBeaconRoot := common.Hash(attrs.ParentBeaconBlockRoot)
 
-	// Convert withdrawals from payload_attributes to engine format
-	engineWithdrawals := convertWithdrawalsToEngineFormat(attrs.Withdrawals)
-
-	// Get fee recipient for build.
-	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit from the proposer's signed preferences).
-	//             Fall back to SuggestedFeeRecipient from payload_attributes (always available from BN).
-	// Pre-Gloas:  use validator registrations (fee_recipient from the proposer's registerValidator message).
-	// Fallback:   use the builder's configured fee recipient.
+	// Resolve the fee recipient (and target gas limit) for the build.
+	// Post-Gloas: use proposer preferences (fee_recipient + gas_limit), falling
+	//             back to SuggestedFeeRecipient from payload_attributes.
+	// Pre-Gloas:  use validator registrations (fee_recipient from registerValidator).
+	// Fallback:   the builder's configured fee recipient.
 	proposerFeeRecipient := b.feeRecipient
 	var targetGasLimit uint64
 
-	buildEpoch := b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)
-	if b.chainSvc.GetChainSpec().IsForkActive(version.DataVersionGloas, buildEpoch) {
-		// Gloas: prefer proposer preferences from cache, fall back to payload_attributes suggested fee recipient.
+	if beaconFork >= version.DataVersionGloas {
 		if b.propPrefCache != nil {
 			if prefs, ok := b.propPrefCache.Get(attrs.ProposalSlot); ok && prefs.Message != nil {
 				proposerFeeRecipient = common.Address(prefs.Message.FeeRecipient)
@@ -147,9 +143,10 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			targetGasLimit = attrs.TargetGasLimit
 		}
 
-		// If we still have the default fee recipient, use SuggestedFeeRecipient from payload_attributes.
-		// This ensures bids match the proposer's expected fee recipient even when preferences
-		// aren't received via SSE (e.g. same-node P2P broadcast doesn't loop back).
+		// If we still have the default fee recipient, use SuggestedFeeRecipient from
+		// payload_attributes. This ensures bids match the proposer's expected fee
+		// recipient even when preferences aren't received via SSE (e.g. same-node
+		// P2P broadcast doesn't loop back).
 		if proposerFeeRecipient == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
 			proposerFeeRecipient = attrs.SuggestedFeeRecipient
 			b.log.WithFields(logrus.Fields{
@@ -160,53 +157,67 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		}
 	} else if b.validatorStore != nil {
 		// Pre-Gloas: look up fee recipient from validator registrations.
-		var pubkey phase0.BLSPubKey
-		var ok bool
 		pubkeyPtr := b.chainSvc.GetValidatorPubkeyByIndex(attrs.ProposerIndex)
 		if pubkeyPtr != nil {
-			pubkey = *pubkeyPtr
-			ok = true
-		}
-		if ok {
-			reg := b.validatorStore.Get(pubkey)
+			reg := b.validatorStore.Get(*pubkeyPtr)
 			if reg != nil && reg.Message != nil {
 				proposerFeeRecipient = common.Address(reg.Message.FeeRecipient)
 				b.log.WithFields(logrus.Fields{
 					"proposer_index": attrs.ProposerIndex,
-					"pubkey":         fmt.Sprintf("%x", pubkey[:8]),
+					"pubkey":         fmt.Sprintf("%x", pubkeyPtr[:8]),
 					"fee_recipient":  proposerFeeRecipient.Hex(),
 				}).Debug("Using fee recipient from validator registration")
 			}
 		}
 	}
 
+	// Build the fork-agnostic payload attributes and forkchoice request. The
+	// engine client dispatches to the correct engine_forkchoiceUpdated version.
+	payloadAttrs := &engineall.PayloadAttributes{
+		Version:               engineVersion,
+		Timestamp:             attrs.Timestamp,
+		PrevRandao:            paris.Hash32(attrs.PrevRandao),
+		SuggestedFeeRecipient: paris.Address(b.feeRecipient),
+		Withdrawals:           convertWithdrawalsToEngineFormat(attrs.Withdrawals),
+		ParentBeaconBlockRoot: paris.Hash32(attrs.ParentBeaconBlockRoot),
+		SlotNumber:            uint64(attrs.ProposalSlot),
+		TargetGasLimit:        targetGasLimit,
+	}
+
+	fcuReq := &engineall.ForkchoiceUpdatedRequest{
+		Version: engineVersion,
+		ForkchoiceState: &paris.ForkchoiceState{
+			HeadBlockHash:      paris.Hash32(attrs.ParentBlockHash),
+			SafeBlockHash:      paris.Hash32(finalityInfo.SafeExecutionBlockHash),
+			FinalizedBlockHash: paris.Hash32(finalityInfo.FinalizedExecutionBlockHash),
+		},
+		PayloadAttributes: payloadAttrs,
+	}
+
 	b.log.WithFields(logrus.Fields{
 		"slot":             attrs.ProposalSlot,
 		"timestamp":        attrs.Timestamp,
-		"withdrawal_count": len(engineWithdrawals),
+		"withdrawal_count": len(payloadAttrs.Withdrawals),
 		"parent_hash":      fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
+		"engine_version":   engineVersion,
 		"target_gas_limit": targetGasLimit,
 	}).Debug("Building payload from attributes")
 
-	// Request payload build from the EL
-	payloadID, err := b.engineClient.RequestPayloadBuild(
-		buildCtx,
-		headBlockHash,
-		safeBlockHash,
-		finalizedBlockHash,
-		&engine.PayloadAttributes{
-			Timestamp:             attrs.Timestamp,
-			PrevRandao:            common.BytesToHash(attrs.PrevRandao[:]),
-			SuggestedFeeRecipient: b.feeRecipient,
-			Withdrawals:           engineWithdrawals,
-			ParentBeaconBlockRoot: &parentBeaconRoot,
-			SlotNumber:            uint64(attrs.ProposalSlot),
-			TargetGasLimit:        targetGasLimit,
-		},
-	)
+	fcuResp, err := b.engineClient.ForkchoiceUpdatedAgnostic(buildCtx, fcuReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to request payload build: %w", err)
+		return nil, fmt.Errorf("forkchoiceUpdated failed: %w", err)
 	}
+
+	status := fcuResp.PayloadStatus.Status
+	if status != paris.PayloadValidationStatusValid && status != paris.PayloadValidationStatusSyncing {
+		return nil, fmt.Errorf("forkchoice status: %s", status)
+	}
+
+	if fcuResp.PayloadID == nil {
+		return nil, fmt.Errorf("no payload ID returned")
+	}
+
+	payloadID := *fcuResp.PayloadID
 
 	b.mu.Lock()
 	if b.activeBuild != nil && b.activeBuild.slot == attrs.ProposalSlot {
@@ -236,50 +247,49 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	case <-buildTimer.C:
 	}
 
-	// Get the built payload with all components (blobs, execution requests) as typed values
-	payloadResult, err := b.engineClient.GetPayloadRaw(buildCtx, payloadID)
+	// Retrieve the built payload as the fork-agnostic union.
+	resp, err := b.engineClient.GetPayloadAgnostic(buildCtx, engineVersion, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	modifiedPayloadJSON, _, err := ModifyPayloadExtraData(
-		payloadResult.ExecutionPayloadJSON,
+	enginePayload := resp.ExecutionPayload
+	if enginePayload == nil {
+		return nil, fmt.Errorf("getPayload returned no execution payload")
+	}
+
+	// Inject our extra-data marker and recompute the block hash on the typed payload.
+	newHash, err := ModifyPayloadExtraData(
+		enginePayload,
+		resp.ExecutionRequests,
 		[]byte("buildoor/"),
 		parentBeaconRoot,
-		payloadResult.ExecutionRequests,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
 	}
 
-	var modifiedPayload engine.ExecutionPayload
-	if err := json.Unmarshal(modifiedPayloadJSON, &modifiedPayload); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal modified payload: %w", err)
+	// Single fork-independent conversions to the beacon types: the execution
+	// payload and (Electra+) the execution requests are converted here, once,
+	// so consumers never touch the raw engine forms.
+	beaconPayload := beaconPayloadFromEngine(enginePayload, beaconFork)
+
+	execRequests, err := ParseExecutionRequests(resp.ExecutionRequests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse execution requests: %w", err)
 	}
 
-	payload := &modifiedPayload
-	payloadResult.ExecutionPayload = payload
-	var blockHash phase0.Hash32
-	copy(blockHash[:], payload.BlockHash[:])
-
-	blockValue := payloadResult.BlockValue
-	if blockValue == nil {
-		blockValue = new(big.Int)
+	blockValue := new(big.Int)
+	if resp.BlockValue != nil {
+		blockValue = resp.BlockValue.ToBig()
 	}
-
-	txCount := len(payload.Transactions)
 
 	event := &PayloadReadyEvent{
-		Slot:              attrs.ProposalSlot,
-		ParentBlockRoot:   attrs.ParentBlockRoot,
-		ParentBlockHash:   phase0.Hash32(headBlockHash),
-		BlockHash:         blockHash,
-		Payload:           payload,
-		BlobsBundle:       payloadResult.BlobsBundle,
-		ExecutionRequests: payloadResult.ExecutionRequests,
-		Timestamp:         attrs.Timestamp,
-		GasLimit:          payload.GasLimit,
-		PrevRandao:        attrs.PrevRandao,
+		Attributes:        attrs,
+		ExecutionPayload:  beaconPayload,
+		BlobsBundle:       resp.BlobsBundle,
+		ExecutionRequests: execRequests,
+		BlockHash:         phase0.Hash32(newHash),
 		FeeRecipient:      proposerFeeRecipient,
 		BlockValue:        blockValue,
 		BuildSource:       BuildSourceBlock,
@@ -288,14 +298,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
-		"block_hash":        fmt.Sprintf("%x", blockHash[:8]),
+		"block_hash":        fmt.Sprintf("%x", newHash[:8]),
 		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
 		"block_value":       blockValue.String(),
-		"has_blobs":         payloadResult.BlobsBundle != nil,
-		"has_exec_requests": len(payloadResult.ExecutionRequests) > 0,
-		"txs_in_payload":    txCount,
+		"has_blobs":         resp.BlobsBundle != nil,
+		"has_exec_requests": len(resp.ExecutionRequests) > 0,
+		"txs_in_payload":    len(beaconPayload.Transactions),
 		"target_gas_limit":  targetGasLimit,
-		"payload_gas_limit": payload.GasLimit,
+		"payload_gas_limit": beaconPayload.GasLimit,
 	}).Info("Payload built from attributes")
 
 	return event, nil
@@ -320,69 +330,4 @@ func (b *PayloadBuilder) SetFeeRecipient(feeRecipient common.Address) {
 	defer b.mu.Unlock()
 
 	b.feeRecipient = feeRecipient
-}
-
-// convertWithdrawalsToEngineFormat converts CL withdrawals to engine API format.
-// Always returns a non-nil slice (empty if input is nil).
-func convertWithdrawalsToEngineFormat(clWithdrawals []*capella.Withdrawal) []*types.Withdrawal {
-	if clWithdrawals == nil {
-		return make([]*types.Withdrawal, 0)
-	}
-
-	result := make([]*types.Withdrawal, len(clWithdrawals))
-
-	for i, w := range clWithdrawals {
-		result[i] = &types.Withdrawal{
-			Index:     uint64(w.Index),
-			Validator: uint64(w.ValidatorIndex),
-			Address:   common.Address(w.Address),
-			Amount:    uint64(w.Amount),
-		}
-	}
-
-	return result
-}
-
-// BuildContext contains contextual information for building a payload.
-type BuildContext struct {
-	Slot             phase0.Slot
-	HeadBlockHash    common.Hash
-	SafeBlockHash    common.Hash
-	FinalBlockHash   common.Hash
-	ParentBeaconRoot common.Hash
-	Timestamp        uint64
-	PrevRandao       common.Hash
-	Withdrawals      []*types.Withdrawal
-}
-
-// BuildPayloadWithContext builds a payload using explicit context values.
-// This provides more control over the build parameters.
-func (b *PayloadBuilder) BuildPayloadWithContext(
-	ctx context.Context,
-	buildCtx *BuildContext,
-) (*engine.ExecutionPayload, error) {
-	payloadID, err := b.engineClient.RequestPayloadBuild(
-		ctx,
-		buildCtx.HeadBlockHash,
-		buildCtx.SafeBlockHash,
-		buildCtx.FinalBlockHash,
-		&engine.PayloadAttributes{
-			Timestamp:             buildCtx.Timestamp,
-			PrevRandao:            buildCtx.PrevRandao,
-			SuggestedFeeRecipient: b.feeRecipient,
-			Withdrawals:           buildCtx.Withdrawals,
-			ParentBeaconBlockRoot: &buildCtx.ParentBeaconRoot,
-			SlotNumber:            uint64(buildCtx.Slot),
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to request payload build: %w", err)
-	}
-
-	result, err := b.engineClient.GetPayloadRaw(ctx, payloadID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payload: %w", err)
-	}
-
-	return result.ExecutionPayload, nil
 }

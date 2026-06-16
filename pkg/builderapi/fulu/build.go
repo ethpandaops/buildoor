@@ -2,9 +2,7 @@
 package fulu
 
 import (
-	"fmt"
-
-	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/holiman/uint256"
 
@@ -29,30 +27,20 @@ func BuildSignedBuilderBid(
 	genesisForkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (*SignedBuilderBid, error) {
-	if event == nil || event.Payload == nil {
+	if event == nil || event.ExecutionPayload == nil {
 		return nil, nil
 	}
 
-	header, err := ExecutionPayloadHeaderFromEngine(event.Payload)
+	header, err := ExecutionPayloadHeaderFromBeacon(event.ExecutionPayload)
 	if err != nil {
 		return nil, err
 	}
 
-	commitments := make([]deneb.KZGCommitment, 0)
-	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
-		for i, c := range event.BlobsBundle.Commitments {
-			if len(c) != 48 {
-				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(c))
-			}
-			var k deneb.KZGCommitment
-			copy(k[:], c)
-			commitments = append(commitments, k)
-		}
-	}
+	commitments := CommitmentsToDeneb(event.BlobsBundle)
 
-	execRequests, err := ParseExecutionRequests(event.ExecutionRequests)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse execution requests: %w", err)
+	execRequests := event.ExecutionRequests
+	if execRequests == nil {
+		execRequests = &electra.ExecutionRequests{}
 	}
 
 	value, overflow := uint256.FromBig(event.BlockValue)

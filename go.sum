@@ -209,8 +209,8 @@ github.com/pion/transport/v2 v2.2.10 h1:ucLBLE8nuxiHfvkFKnkDQRYWYfp8ejf4YBOPfaQp
 github.com/pion/transport/v2 v2.2.10/go.mod h1:sq1kSLWs+cHW9E+2fJP95QudkzbK7wscs8yYgQToO5E=
 github.com/pion/transport/v3 v3.0.7 h1:iRbMH05BzSNwhILHoBoAPxoB9xQgOaJk+591KC9P1o0=
 github.com/pion/transport/v3 v3.0.7/go.mod h1:YleKiTZ4vqNxVwh77Z0zytYi7rXHl7j6uPLGhhz9rwo=
-github.com/pk910/dynamic-ssz v1.3.2-0.20260505131440-111bcb265c8f h1:k1Dn2h+msg+T0c25hoiJ739ckCNt1dqKErLylois7ss=
-github.com/pk910/dynamic-ssz v1.3.2-0.20260505131440-111bcb265c8f/go.mod h1:ARK5qDyrJ/MHpaZHGJYvCKElvaMYTE9pXOQbvPDeE0U=
+github.com/pk910/dynamic-ssz v1.3.2-0.20260523004546-c95cd65e47a2 h1:FLUux/DiTAGEb0Rfij8b4pJj63IHAAzaFCmGflvpH7Y=
+github.com/pk910/dynamic-ssz v1.3.2-0.20260523004546-c95cd65e47a2/go.mod h1:ARK5qDyrJ/MHpaZHGJYvCKElvaMYTE9pXOQbvPDeE0U=
 github.com/pk910/hashtree-bindings v0.1.0 h1:w7NyRWFi2OaYEFvo9ADcE/QU6PMuVLl3hBgx92KiH9c=
 github.com/pk910/hashtree-bindings v0.1.0/go.mod h1:zrWt88783JmhBfcgni6kkIMYRdXTZi/FL//OyI5T/l4=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=

@@ -2,11 +2,8 @@
 package fulu
 
 import (
-	"fmt"
-
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
-	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
@@ -18,11 +15,11 @@ func UnblindSignedBlindedBeaconBlock(
 	blinded *apiv1electra.SignedBlindedBeaconBlock,
 	event *builder.PayloadReadyEvent,
 ) (*apiv1fulu.SignedBlockContents, error) {
-	if blinded == nil || blinded.Message == nil || blinded.Message.Body == nil || event == nil || event.Payload == nil {
+	if blinded == nil || blinded.Message == nil || blinded.Message.Body == nil || event == nil || event.ExecutionPayload == nil {
 		return nil, nil
 	}
 
-	fullPayload, err := ExecutionPayloadFromEngine(event.Payload)
+	fullPayload, err := DenebPayload(event.ExecutionPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -46,14 +43,8 @@ func UnblindSignedBlindedBeaconBlock(
 	}
 
 	// Copy BlobKZGCommitments from event if we have blobs (must match blinded commitments).
-	if event.BlobsBundle != nil && len(event.BlobsBundle.Commitments) > 0 {
-		fullBody.BlobKZGCommitments = make([]deneb.KZGCommitment, len(event.BlobsBundle.Commitments))
-		for i, c := range event.BlobsBundle.Commitments {
-			if len(c) != 48 {
-				return nil, fmt.Errorf("commitment %d: expected 48 bytes, got %d", i, len(c))
-			}
-			copy(fullBody.BlobKZGCommitments[i][:], c)
-		}
+	if commitments := CommitmentsToDeneb(event.BlobsBundle); len(commitments) > 0 {
+		fullBody.BlobKZGCommitments = commitments
 	}
 
 	fullBlock := &electra.BeaconBlock{
@@ -69,26 +60,9 @@ func UnblindSignedBlindedBeaconBlock(
 		Signature: blinded.Signature,
 	}
 
-	// Build KZGProofs and Blobs from event.BlobsBundle (KZG proofs are 48 bytes).
-	var kzgProofs []deneb.KZGProof
-	var blobs []deneb.Blob
-	if event.BlobsBundle != nil {
-		kzgProofs = make([]deneb.KZGProof, len(event.BlobsBundle.Proofs))
-		for i, p := range event.BlobsBundle.Proofs {
-			if len(p) != 48 {
-				return nil, fmt.Errorf("proof %d: expected 48 bytes, got %d", i, len(p))
-			}
-			copy(kzgProofs[i][:], p)
-		}
-		blobs = make([]deneb.Blob, len(event.BlobsBundle.Blobs))
-		for i, b := range event.BlobsBundle.Blobs {
-			copy(blobs[i][:], b)
-		}
-	}
-
 	return &apiv1fulu.SignedBlockContents{
 		SignedBlock: signedBlock,
-		KZGProofs:   kzgProofs,
-		Blobs:       blobs,
+		KZGProofs:   ProofsToDeneb(event.BlobsBundle),
+		Blobs:       BlobsToDeneb(event.BlobsBundle),
 	}, nil
 }

@@ -5,21 +5,23 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
+	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 // BuiltPayload represents an execution payload that we've built and can reveal.
-// Payload, BlobsBundle, and ExecutionRequests are stored typed; marshal to JSON only when submitting to beacon.
+// The payload, blobs bundle, and execution requests are stored typed; marshal to
+// JSON only when submitting to the beacon node.
 type BuiltPayload struct {
 	Slot              phase0.Slot
 	BlockHash         phase0.Hash32
 	ParentBlockHash   phase0.Hash32
 	ParentBlockRoot   phase0.Root
-	ExecutionPayload  *engine.ExecutionPayload // Typed execution payload
-	BlobsBundle       *engine.BlobsBundle      // Typed blobs bundle if present
-	ExecutionRequests engine.ExecutionRequests // Typed execution requests (Electra/Fulu)
+	ExecutionPayload  *eth2all.ExecutionPayload
+	BlobsBundle       *engineall.BlobsBundle
+	ExecutionRequests *electra.ExecutionRequests
 	BidValue          *big.Int
 	FeeRecipient      common.Address
 	Timestamp         uint64

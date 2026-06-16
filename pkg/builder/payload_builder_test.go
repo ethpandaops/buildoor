@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 func TestNewPayloadBuilder(t *testing.T) {
@@ -28,5 +27,5 @@ func TestNewPayloadBuilder(t *testing.T) {
 
 func TestNewPayloadBuilder_AcceptsNilClients(t *testing.T) {
 	// Constructor allows nil clients (used in tests); actual build will fail if they're nil.
-	_ = NewPayloadBuilder(nil, (*engine.Client)(nil), nil, common.Address{}, &config.Config{}, logrus.New(), nil, nil)
+	_ = NewPayloadBuilder(nil, nil, nil, common.Address{}, &config.Config{}, logrus.New(), nil, nil)
 }

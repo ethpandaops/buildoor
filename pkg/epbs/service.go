@@ -340,7 +340,7 @@ func (s *Service) run() {
 // handlePayloadReady processes a payload ready event from the builder.
 func (s *Service) handlePayloadReady(event *builder.PayloadReadyEvent) {
 	s.log.WithFields(logrus.Fields{
-		"slot":        event.Slot,
+		"slot":        event.Attributes.ProposalSlot,
 		"block_hash":  fmt.Sprintf("%x", event.BlockHash[:8]),
 		"block_value": event.BlockValue,
 	}).Debug("Received payload from builder")

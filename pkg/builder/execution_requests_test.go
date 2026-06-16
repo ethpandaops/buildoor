@@ -1,16 +1,14 @@
-package fulu
+package builder
 
 import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 func TestParseExecutionRequests_Empty(t *testing.T) {
@@ -43,7 +41,7 @@ func TestParseExecutionRequests_SingleDeposit(t *testing.T) {
 
 	entry := append([]byte{depositRequestType}, deposit...)
 
-	result, err := ParseExecutionRequests(engine.ExecutionRequests{hexutil.Bytes(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
 	require.NoError(t, err)
 	require.Len(t, result.Deposits, 1)
 
@@ -82,7 +80,7 @@ func TestParseExecutionRequests_MultipleDeposits(t *testing.T) {
 	data := append(d1, d2...)
 	entry := append([]byte{depositRequestType}, data...)
 
-	result, err := ParseExecutionRequests(engine.ExecutionRequests{hexutil.Bytes(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
 	require.NoError(t, err)
 	require.Len(t, result.Deposits, 2)
 	assert.Equal(t, uint64(1), result.Deposits[0].Index)
@@ -102,7 +100,7 @@ func TestParseExecutionRequests_SingleWithdrawal(t *testing.T) {
 
 	entry := append([]byte{withdrawalRequestType}, w...)
 
-	result, err := ParseExecutionRequests(engine.ExecutionRequests{hexutil.Bytes(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
 	require.NoError(t, err)
 	require.Len(t, result.Withdrawals, 1)
 
@@ -137,7 +135,7 @@ func TestParseExecutionRequests_SingleConsolidation(t *testing.T) {
 
 	entry := append([]byte{consolidationRequestType}, c...)
 
-	result, err := ParseExecutionRequests(engine.ExecutionRequests{hexutil.Bytes(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
 	require.NoError(t, err)
 	require.Len(t, result.Consolidations, 1)
 
@@ -172,10 +170,10 @@ func TestParseExecutionRequests_AllThreeTypes(t *testing.T) {
 	consolidation := make([]byte, consolidationRequestSize)
 	consolidation[0] = 0xFF
 
-	raw := engine.ExecutionRequests{
-		hexutil.Bytes(append([]byte{depositRequestType}, deposit...)),
-		hexutil.Bytes(append([]byte{withdrawalRequestType}, withdrawal...)),
-		hexutil.Bytes(append([]byte{consolidationRequestType}, consolidation...)),
+	raw := []prague.ExecutionRequest{
+		prague.ExecutionRequest(append([]byte{depositRequestType}, deposit...)),
+		prague.ExecutionRequest(append([]byte{withdrawalRequestType}, withdrawal...)),
+		prague.ExecutionRequest(append([]byte{consolidationRequestType}, consolidation...)),
 	}
 
 	result, err := ParseExecutionRequests(raw)
@@ -189,10 +187,10 @@ func TestParseExecutionRequests_AllThreeTypes(t *testing.T) {
 
 func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 	// Entry with only type prefix and no data should be skipped
-	raw := engine.ExecutionRequests{
-		hexutil.Bytes{depositRequestType},
-		hexutil.Bytes{withdrawalRequestType},
-		hexutil.Bytes{consolidationRequestType},
+	raw := []prague.ExecutionRequest{
+		prague.ExecutionRequest{depositRequestType},
+		prague.ExecutionRequest{withdrawalRequestType},
+		prague.ExecutionRequest{consolidationRequestType},
 	}
 
 	result, err := ParseExecutionRequests(raw)
@@ -203,14 +201,14 @@ func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 }
 
 func TestParseExecutionRequests_EmptyEntry(t *testing.T) {
-	raw := engine.ExecutionRequests{hexutil.Bytes{}}
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest{}}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty entry")
 }
 
 func TestParseExecutionRequests_UnknownType(t *testing.T) {
-	raw := engine.ExecutionRequests{hexutil.Bytes{0xFF, 0x01}}
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest{0xFF, 0x01}}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown type 0xff")
@@ -220,7 +218,7 @@ func TestParseExecutionRequests_InvalidDepositLength(t *testing.T) {
 	// 100 bytes is not divisible by 192
 	data := make([]byte, 100)
 	entry := append([]byte{depositRequestType}, data...)
-	raw := engine.ExecutionRequests{hexutil.Bytes(entry)}
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")
@@ -229,7 +227,7 @@ func TestParseExecutionRequests_InvalidDepositLength(t *testing.T) {
 func TestParseExecutionRequests_InvalidWithdrawalLength(t *testing.T) {
 	data := make([]byte, 50) // not divisible by 76
 	entry := append([]byte{withdrawalRequestType}, data...)
-	raw := engine.ExecutionRequests{hexutil.Bytes(entry)}
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")
@@ -238,7 +236,7 @@ func TestParseExecutionRequests_InvalidWithdrawalLength(t *testing.T) {
 func TestParseExecutionRequests_InvalidConsolidationLength(t *testing.T) {
 	data := make([]byte, 50) // not divisible by 116
 	entry := append([]byte{consolidationRequestType}, data...)
-	raw := engine.ExecutionRequests{hexutil.Bytes(entry)}
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
 	_, err := ParseExecutionRequests(raw)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")

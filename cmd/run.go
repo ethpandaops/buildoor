@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	enginejsonrpc "github.com/ethpandaops/go-eth-engine-client/jsonrpc"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -23,7 +24,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -71,11 +71,14 @@ and begins building blocks according to configuration.`,
 		// 2. Initialize Engine API client (always required for payload building)
 		logger.Info("Connecting to execution layer engine API...")
 
-		engineClient, err := engine.NewClient(ctx, cfg.ELEngineAPI, cfg.ELJWTSecret, logger)
+		engineClient, err := enginejsonrpc.New(ctx,
+			enginejsonrpc.WithAddress(cfg.ELEngineAPI),
+			enginejsonrpc.WithJWTSecretFile(cfg.ELJWTSecret),
+			enginejsonrpc.WithLogger(logger),
+		)
 		if err != nil {
 			return fmt.Errorf("failed to connect to EL engine API: %w", err)
 		}
-		defer engineClient.Close()
 
 		// 3. Initialize BLS signer (raw hex key or mnemonic-derived)
 		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)

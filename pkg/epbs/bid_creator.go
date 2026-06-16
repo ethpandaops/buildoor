@@ -58,13 +58,9 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	// Compute the execution requests root over the typed Electra requests.
 	// Empty requests root is the HTR of an empty *electra.ExecutionRequests.
-	execRequests := &electra.ExecutionRequests{}
-	if len(payload.ExecutionRequests) > 0 {
-		parsed, err := fulu.ParseExecutionRequests(payload.ExecutionRequests)
-		if err != nil {
-			return fmt.Errorf("failed to parse execution requests: %w", err)
-		}
-		execRequests = parsed
+	execRequests := payload.ExecutionRequests
+	if execRequests == nil {
+		execRequests = &electra.ExecutionRequests{}
 	}
 	// Use dynssz so preset-dependent list limits resolve from the global spec
 	// (matches the node's computation on non-mainnet presets).
@@ -75,14 +71,14 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	// Build the execution payload bid
 	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       payload.ParentBlockHash,
-		ParentBlockRoot:       payload.ParentBlockRoot,
+		ParentBlockHash:       payload.Attributes.ParentBlockHash,
+		ParentBlockRoot:       payload.Attributes.ParentBlockRoot,
 		BlockHash:             payload.BlockHash,
-		PrevRandao:            payload.PrevRandao,
+		PrevRandao:            payload.Attributes.PrevRandao,
 		FeeRecipient:          feeRecipient,
-		GasLimit:              payload.GasLimit,
+		GasLimit:              payload.ExecutionPayload.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
-		Slot:                  payload.Slot,
+		Slot:                  payload.Attributes.ProposalSlot,
 		Value:                 phase0.Gwei(bidValue),
 		ExecutionPayment:      0,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
@@ -91,11 +87,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	c.log.Info("Created execution payload bid")
 
-	if payload.BlobsBundle != nil {
-		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
-		for i, c := range payload.BlobsBundle.Commitments {
-			copy(bid.BlobKZGCommitments[i][:], c)
-		}
+	if commitments := fulu.CommitmentsToDeneb(payload.BlobsBundle); commitments != nil {
+		bid.BlobKZGCommitments = commitments
 	}
 
 	c.log.Info("Populated bid with blobs")
@@ -132,14 +125,14 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
-		"slot":              payload.Slot,
+		"slot":              payload.Attributes.ProposalSlot,
 		"value":             bidValue,
 		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"builder_index":     c.builderIndex,
 		"fee_recipient":     payload.FeeRecipient.Hex(),
-		"gas_limit":         payload.GasLimit,
-		"parent_block_hash": fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
-		"parent_block_root": fmt.Sprintf("%x", payload.ParentBlockRoot[:8]),
+		"gas_limit":         payload.ExecutionPayload.GasLimit,
+		"parent_block_hash": fmt.Sprintf("%x", payload.Attributes.ParentBlockHash[:8]),
+		"parent_block_root": fmt.Sprintf("%x", payload.Attributes.ParentBlockRoot[:8]),
 	})
 
 	logger.Info("Submitting bid")

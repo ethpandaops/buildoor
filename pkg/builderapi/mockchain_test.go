@@ -35,7 +35,10 @@ func (m *mockChainService) TimeToSlot(time.Time) phase0.Slot { return 0 }
 func (m *mockChainService) GetCurrentEpoch() phase0.Epoch    { return 0 }
 func (m *mockChainService) GetCurrentSlot() phase0.Slot      { return 0 }
 
-func (m *mockChainService) GetCurrentFork() version.DataVersion          { return version.DataVersionUnknown }
+func (m *mockChainService) GetCurrentFork() version.DataVersion { return version.DataVersionUnknown }
+func (m *mockChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {
+	return version.DataVersionUnknown
+}
 func (m *mockChainService) GetForkVersion() (phase0.Version, error)      { return m.forkVersion, nil }
 func (m *mockChainService) GetEpochOfSlot(phase0.Slot) phase0.Epoch      { return 0 }
 func (m *mockChainService) GetCurrentEpochStats() *chain.EpochStats      { return nil }

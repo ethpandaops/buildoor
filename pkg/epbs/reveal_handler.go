@@ -46,18 +46,13 @@ func (h *RevealHandler) SubmitReveal(
 	payload *BuiltPayload,
 	blockInfo *beacon.BlockInfo,
 ) error {
-	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload)
+	gloasPayload, err := fulu.GloasPayload(payload.ExecutionPayload)
 	if err != nil {
 		return fmt.Errorf("failed to convert payload to gloas format: %w", err)
 	}
 
-	var execRequests *electra.ExecutionRequests
-	if len(payload.ExecutionRequests) > 0 {
-		execRequests, err = fulu.ParseExecutionRequests(payload.ExecutionRequests)
-		if err != nil {
-			return fmt.Errorf("failed to parse execution requests: %w", err)
-		}
-	} else {
+	execRequests := payload.ExecutionRequests
+	if execRequests == nil {
 		execRequests = &electra.ExecutionRequests{
 			Deposits:       make([]*electra.DepositRequest, 0),
 			Withdrawals:    make([]*electra.WithdrawalRequest, 0),
@@ -101,8 +96,8 @@ func (h *RevealHandler) SubmitReveal(
 	var cellProofs [][]byte
 
 	if payload.BlobsBundle != nil && len(payload.BlobsBundle.Blobs) > 0 {
-		blobs = payload.BlobsBundle.Blobs
-		cellProofs = payload.BlobsBundle.Proofs
+		blobs = fulu.BlobsAsBytes(payload.BlobsBundle)
+		cellProofs = fulu.ProofsAsBytes(payload.BlobsBundle)
 
 		h.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),

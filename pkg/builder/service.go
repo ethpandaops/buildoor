@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth-engine-client/spec/identification"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -15,7 +16,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -36,7 +36,7 @@ type Service struct {
 	cfg                    *config.Config
 	clClient               *beacon.Client
 	chainSvc               chain.Service
-	engineClient           *engine.Client
+	engineClient           EngineClient
 	feeRecipient           common.Address
 	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
 	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
@@ -70,7 +70,16 @@ type Service struct {
 
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
-	elClientVersion   *engine.ClientVersion
+	elClientVersion   *ELClientVersion
+}
+
+// ELClientVersion is the execution client's identification, as returned by
+// engine_getClientVersionV1, in display-friendly string form.
+type ELClientVersion struct {
+	Code    string
+	Name    string
+	Version string
+	Commit  string
 }
 
 // NewService creates a new builder service.
@@ -81,7 +90,7 @@ func NewService(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
-	engineClient *engine.Client,
+	engineClient EngineClient,
 	feeRecipient common.Address,
 	validatorStore *validators.Store,
 	log logrus.FieldLogger,
@@ -157,10 +166,23 @@ func (s *Service) refreshELClientVersionLoop() {
 		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 		defer cancel()
 
-		v, err := s.engineClient.GetClientVersion(ctx)
-		if err != nil {
-			s.log.WithError(err).Debug("Failed to fetch EL client version")
+		versions, err := s.engineClient.ClientVersion(ctx, &identification.ClientVersion{
+			Code:    []byte("BO"),
+			Name:    []byte("buildoor"),
+			Version: []byte("0"),
+		})
+		if err != nil || len(versions) == 0 {
+			if err != nil {
+				s.log.WithError(err).Debug("Failed to fetch EL client version")
+			}
 			return
+		}
+
+		v := &ELClientVersion{
+			Code:    string(versions[0].Code),
+			Name:    string(versions[0].Name),
+			Version: string(versions[0].Version),
+			Commit:  fmt.Sprintf("%x", versions[0].Commit),
 		}
 
 		s.elClientVersionMu.Lock()
@@ -191,7 +213,7 @@ func (s *Service) refreshELClientVersionLoop() {
 
 // GetELClientVersion returns the cached EL client identification.
 // Returns nil if the EL has not yet responded or does not support engine_getClientVersionV1.
-func (s *Service) GetELClientVersion() *engine.ClientVersion {
+func (s *Service) GetELClientVersion() *ELClientVersion {
 	s.elClientVersionMu.RLock()
 	defer s.elClientVersionMu.RUnlock()
 
@@ -358,7 +380,7 @@ func (s *Service) checkPayloadInclusion(event *beacon.HeadEvent) {
 		return
 	}
 
-	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Slot)
+	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Attributes.ProposalSlot)
 }
 
 // handlePayloadAttributesEvent processes a payload_attributes event.
@@ -376,7 +398,7 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	// Check if the parent block hash matches one of our built payloads
 	// (this means our payload was included as the parent of this new block).
 	if payload := s.payloadCache.GetByBlockHash(event.ParentBlockHash); payload != nil {
-		s.markPayloadWon(event.ParentBlockHash, payload.Slot)
+		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
 	// Check if we should build for this slot
@@ -512,7 +534,7 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
 		"block_value":       payloadEvent.BlockValue,
 		"source":            payloadEvent.BuildSource.String(),
-		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
+		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
 	// Mark slot as built

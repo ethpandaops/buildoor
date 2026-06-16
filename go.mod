@@ -14,7 +14,7 @@ require (
 	github.com/herumi/bls-eth-go-binary v1.37.0
 	github.com/holiman/uint256 v1.3.2
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/pk910/dynamic-ssz v1.3.2-0.20260505131440-111bcb265c8f
+	github.com/pk910/dynamic-ssz v1.3.2-0.20260523004546-c95cd65e47a2
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.35.1
@@ -50,6 +50,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emicklei/dot v1.6.4 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
+	github.com/ethpandaops/go-eth-engine-client v0.0.0-20260615013137-8a6a7f8bc971 // indirect
 	github.com/ferranbt/fastssz v0.1.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -127,3 +128,5 @@ require (
 )
 
 replace github.com/attestantio/go-builder-client => github.com/bharath-123/go-builder-client v0.0.0-20260614061206-3d327877ba19
+
+replace github.com/ethpandaops/go-eth-engine-client => /home/pk910/github/ethpandaops/go-eth-engine-client

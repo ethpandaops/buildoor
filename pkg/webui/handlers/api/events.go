@@ -555,13 +555,15 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuil
 }
 
 func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent) {
+	slot := event.Attributes.ProposalSlot
+
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadReadyStreamEvent{
-			Slot:            uint64(event.Slot),
+			Slot:            uint64(slot),
 			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-			ParentBlockHash: fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
 			BlockValue:      event.BlockValue.String(),
 			ReadyAt:         event.ReadyAt.UnixMilli(),
 		},
@@ -569,17 +571,17 @@ func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent
 
 	// Update slot state
 	m.slotStatesMu.Lock()
-	if state, ok := m.slotStates[event.Slot]; ok {
+	if state, ok := m.slotStates[slot]; ok {
 		state.PayloadReady = true
 	} else {
-		m.slotStates[event.Slot] = &SlotStateEvent{
-			Slot:         uint64(event.Slot),
+		m.slotStates[slot] = &SlotStateEvent{
+			Slot:         uint64(slot),
 			PayloadReady: true,
 		}
 	}
 	m.slotStatesMu.Unlock()
 
-	m.broadcastSlotState(event.Slot)
+	m.broadcastSlotState(slot)
 }
 
 func (m *EventStreamManager) handleBidSubmissionEvent(event *epbs.BidSubmissionEvent) {

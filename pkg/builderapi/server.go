@@ -362,7 +362,7 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	marshalledPayload, err := event.Payload.MarshalJSON()
+	marshalledPayload, err := event.ExecutionPayload.MarshalJSON()
 	if err != nil {
 		return
 	}
@@ -373,16 +373,16 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := PayloadBySlotResponse{
-		Slot:            uint64(event.Slot),
+		Slot:            uint64(event.Attributes.ProposalSlot),
 		BlockHash:       "0x" + hex.EncodeToString(event.BlockHash[:]),
-		ParentBlockHash: "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
-		ParentBlockRoot: "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+		ParentBlockHash: "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
+		ParentBlockRoot: "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
 		Payload:         marshalledPayload,
 		BlobsBundle:     marshalledBlobsBundle,
 		BlockValue:      event.BlockValue.String(),
 		FeeRecipient:    event.FeeRecipient.Hex(),
-		GasLimit:        event.GasLimit,
-		Timestamp:       event.Timestamp,
+		GasLimit:        event.ExecutionPayload.GasLimit,
+		Timestamp:       event.Attributes.Timestamp,
 		BuildSource:     event.BuildSource.String(),
 		ReadyAt:         event.ReadyAt,
 	}
@@ -476,11 +476,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if event.ParentBlockHash != parentHash {
+	if event.Attributes.ParentBlockHash != parentHash {
 		log.WithFields(logrus.Fields{
 			"slot":                slotU64,
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
 		}).Info("getHeader: returning 204 — cached payload parent hash does not match request")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -692,19 +692,19 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if event.ParentBlockHash != parentHash {
+	if event.Attributes.ParentBlockHash != parentHash {
 		log.WithFields(logrus.Fields{
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_hash does not match cached payload")
 		writeValidatorError(w, http.StatusBadRequest, "parent_hash does not match cached payload")
 		return
 	}
 
-	if event.ParentBlockRoot != parentRoot {
+	if event.Attributes.ParentBlockRoot != parentRoot {
 		log.WithFields(logrus.Fields{
 			"request_parent_root": "0x" + hex.EncodeToString(parentRoot[:]),
-			"cached_parent_root":  "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+			"cached_parent_root":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_root does not match cached payload")
 		writeValidatorError(w, http.StatusBadRequest, "parent_root does not match cached payload")
 		return
@@ -723,14 +723,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		Withdrawals:    []*electra.WithdrawalRequest{},
 		Consolidations: []*electra.ConsolidationRequest{},
 	}
-	if len(event.ExecutionRequests) > 0 {
-		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
-		if parseErr != nil {
-			log.WithError(parseErr).Warn("getExecutionPayloadBid: failed to parse execution requests")
-			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
-			return
-		}
-		execRequests = parsed
+	if event.ExecutionRequests != nil {
+		execRequests = event.ExecutionRequests
 	}
 	execRequestsRoot, err := execRequests.HashTreeRoot()
 	if err != nil {
@@ -753,12 +747,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	value := valueAfterSubsidy - executionPayment
 
 	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       event.ParentBlockHash,
-		ParentBlockRoot:       event.ParentBlockRoot,
+		ParentBlockHash:       event.Attributes.ParentBlockHash,
+		ParentBlockRoot:       event.Attributes.ParentBlockRoot,
 		BlockHash:             event.BlockHash,
-		PrevRandao:            event.PrevRandao,
+		PrevRandao:            event.Attributes.PrevRandao,
 		FeeRecipient:          prefs.FeeRecipient,
-		GasLimit:              event.GasLimit,
+		GasLimit:              event.ExecutionPayload.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
 		Slot:                  slot,
 		Value:                 value,
@@ -766,11 +760,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
 	}
-	if event.BlobsBundle != nil {
-		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(event.BlobsBundle.Commitments))
-		for i, c := range event.BlobsBundle.Commitments {
-			copy(bid.BlobKZGCommitments[i][:], c)
-		}
+	if commitments := fulu.CommitmentsToDeneb(event.BlobsBundle); commitments != nil {
+		bid.BlobKZGCommitments = commitments
 	}
 
 	bidRoot, err := bid.HashTreeRoot()
@@ -873,7 +864,7 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	gloasPayload, err := fulu.ExecutionPayloadToGloas(event.Payload)
+	gloasPayload, err := fulu.GloasPayload(event.ExecutionPayload)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to convert payload to gloas format")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to convert payload")
@@ -885,14 +876,8 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		Withdrawals:    []*electra.WithdrawalRequest{},
 		Consolidations: []*electra.ConsolidationRequest{},
 	}
-	if len(event.ExecutionRequests) > 0 {
-		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
-		if parseErr != nil {
-			log.WithError(parseErr).Warn("submitSignedBeaconBlock: failed to parse execution requests")
-			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
-			return
-		}
-		execRequests = parsed
+	if event.ExecutionRequests != nil {
+		execRequests = event.ExecutionRequests
 	}
 
 	beaconBlockRoot, err := block.Message.HashTreeRoot()
@@ -962,8 +947,8 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 
 	var blobs, kzgProofs [][]byte
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
-		blobs = event.BlobsBundle.Blobs
-		kzgProofs = event.BlobsBundle.Proofs
+		blobs = fulu.BlobsAsBytes(event.BlobsBundle)
+		kzgProofs = fulu.ProofsAsBytes(event.BlobsBundle)
 	}
 
 	if err := s.clClient.SubmitExecutionPayloadEnvelope(r.Context(), envelopeJSON, blobs, kzgProofs); err != nil {
@@ -1165,7 +1150,7 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
 
 	// Capture bid won data
-	numTxs := len(event.Payload.Transactions)
+	numTxs := len(event.ExecutionPayload.Transactions)
 	numBlobs := 0
 	if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
 		numBlobs = len(event.BlobsBundle.Commitments)

@@ -14,8 +14,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +25,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -220,27 +222,19 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	log := logrus.New()
 	cache := builder.NewPayloadCache(10)
 	parentHash := phase0.Hash32(common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"))
-	payload := &engine.ExecutionPayload{
-		ParentHash:    common.Hash(parentHash),
-		FeeRecipient:  common.Address{},
-		StateRoot:     common.Hash{},
-		ReceiptsRoot:  common.Hash{},
-		BlockNumber:   1,
-		GasLimit:      30_000_000,
-		GasUsed:       0,
-		Timestamp:     1,
-		BlockHash:     common.HexToHash("0xab00000000000000000000000000000000000000000000000000000000000000"),
-		Transactions:  nil,
-		Withdrawals:   nil,
-		BlobGasUsed:   0,
-		ExcessBlobGas: 0,
+	payload := &eth2all.ExecutionPayload{
+		Version:     version.DataVersionDeneb,
+		ParentHash:  parentHash,
+		BlockNumber: 1,
+		GasLimit:    30_000_000,
+		Timestamp:   1,
+		BlockHash:   phase0.Hash32(common.HexToHash("0xab00000000000000000000000000000000000000000000000000000000000000")),
 	}
 	event := &builder.PayloadReadyEvent{
-		Slot:            1,
-		ParentBlockHash: parentHash,
-		BlockHash:       phase0.Hash32(payload.BlockHash),
-		Payload:         payload,
-		BlockValue:      new(big.Int).SetUint64(500_000_000_000_000), // 0.0005 ETH in wei
+		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1, ParentBlockHash: parentHash},
+		ExecutionPayload: payload,
+		BlockHash:        payload.BlockHash,
+		BlockValue:       new(big.Int).SetUint64(500_000_000_000_000), // 0.0005 ETH in wei
 	}
 	cache.Store(event)
 	mock := &mockPayloadCacheProvider{cache: cache}
@@ -348,28 +342,19 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	srv.SetFuluPublisher(publisher)
 
 	// Seed cache with a payload matching builder-specs Fulu example block_hash.
-	payload := &engine.ExecutionPayload{
-		ParentHash:    blockHashFromBuilderSpecsFulu,
-		FeeRecipient:  common.Address{},
-		StateRoot:     common.Hash{},
-		ReceiptsRoot:  common.Hash{},
-		BlockNumber:   1,
-		GasLimit:      1,
-		GasUsed:       1,
-		Timestamp:     1,
-		ExtraData:     nil,
-		BaseFeePerGas: nil,
-		BlockHash:     blockHashFromBuilderSpecsFulu,
-		Transactions:  nil,
-		Withdrawals:   nil,
-		BlobGasUsed:   0,
-		ExcessBlobGas: 0,
+	payload := &eth2all.ExecutionPayload{
+		Version:     version.DataVersionFulu,
+		ParentHash:  phase0.Hash32(blockHashFromBuilderSpecsFulu),
+		BlockNumber: 1,
+		GasLimit:    1,
+		GasUsed:     1,
+		Timestamp:   1,
+		BlockHash:   phase0.Hash32(blockHashFromBuilderSpecsFulu),
 	}
 	event := &builder.PayloadReadyEvent{
-		Slot:        1,
-		BlockHash:   phase0.Hash32(blockHashFromBuilderSpecsFulu),
-		Payload:     payload,
-		BlobsBundle: nil,
+		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+		ExecutionPayload: payload,
+		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
 	}
 	cache.Store(event)
 

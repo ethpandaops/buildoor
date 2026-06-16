@@ -2,50 +2,52 @@
 package fulu
 
 import (
-	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/holiman/uint256"
 	"github.com/pk910/dynamic-ssz/hasher"
 	"github.com/pk910/dynamic-ssz/sszutils"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
-// ExecutionPayloadHeaderFromEngine builds a deneb.ExecutionPayloadHeader from engine.ExecutionPayload.
-// Used to construct a Fulu BuilderBid for getHeader responses.
-func ExecutionPayloadHeaderFromEngine(p *engine.ExecutionPayload) (*deneb.ExecutionPayloadHeader, error) {
+// ExecutionPayloadHeaderFromBeacon builds a deneb.ExecutionPayloadHeader from
+// the fork-agnostic beacon execution payload. Used to construct a Fulu
+// BuilderBid for getHeader responses.
+func ExecutionPayloadHeaderFromBeacon(p *eth2all.ExecutionPayload) (*deneb.ExecutionPayloadHeader, error) {
 	if p == nil {
 		return nil, nil
 	}
 
 	baseFee := new(uint256.Int)
 	if p.BaseFeePerGas != nil {
-		baseFee.SetFromBig(p.BaseFeePerGas)
+		baseFee.Set(p.BaseFeePerGas)
 	}
 
 	header := &deneb.ExecutionPayloadHeader{
-		ParentHash:    phase0.Hash32(p.ParentHash),
-		FeeRecipient:  bellatrix.ExecutionAddress(p.FeeRecipient),
-		StateRoot:     phase0.Root(p.StateRoot),
-		ReceiptsRoot:  phase0.Root(p.ReceiptsRoot),
+		ParentHash:    p.ParentHash,
+		FeeRecipient:  p.FeeRecipient,
+		StateRoot:     p.StateRoot,
+		ReceiptsRoot:  p.ReceiptsRoot,
+		LogsBloom:     p.LogsBloom,
+		PrevRandao:    p.PrevRandao,
 		BlockNumber:   p.BlockNumber,
 		GasLimit:      p.GasLimit,
 		GasUsed:       p.GasUsed,
 		Timestamp:     p.Timestamp,
 		ExtraData:     p.ExtraData,
 		BaseFeePerGas: baseFee,
-		BlockHash:     phase0.Hash32(p.BlockHash),
+		BlockHash:     p.BlockHash,
 		BlobGasUsed:   p.BlobGasUsed,
 		ExcessBlobGas: p.ExcessBlobGas,
 	}
 
-	copy(header.LogsBloom[:], p.LogsBloom[:])
-	copy(header.PrevRandao[:], p.PrevRandao[:])
+	txs := make([][]byte, len(p.Transactions))
+	for i, tx := range p.Transactions {
+		txs[i] = tx
+	}
 
-	txRoot, err := transactionsRoot(p.Transactions)
+	txRoot, err := transactionsRoot(txs)
 	if err != nil {
 		return nil, err
 	}
@@ -65,21 +67,8 @@ func transactionsRoot(txs [][]byte) ([32]byte, error) {
 	return merkleizeByteLists(txs, 1048576, 1073741824)
 }
 
-// withdrawalsRoot computes the SSZ hash tree root of withdrawals (ExecutionPayload uses types.Withdrawal).
-func withdrawalsRoot(withdrawals []*types.Withdrawal) ([32]byte, error) {
-	list := make([]*capella.Withdrawal, len(withdrawals))
-	for i, w := range withdrawals {
-		if w == nil {
-			list[i] = &capella.Withdrawal{}
-			continue
-		}
-		list[i] = &capella.Withdrawal{
-			Index:          capella.WithdrawalIndex(w.Index),
-			ValidatorIndex: phase0.ValidatorIndex(w.Validator),
-			Address:        bellatrix.ExecutionAddress(w.Address),
-			Amount:         phase0.Gwei(w.Amount),
-		}
-	}
+// withdrawalsRoot computes the SSZ hash tree root of the withdrawals list.
+func withdrawalsRoot(list []*capella.Withdrawal) ([32]byte, error) {
 	var root [32]byte
 	err := hasher.WithDefaultHasher(func(hh sszutils.HashWalker) error {
 		idx := hh.Index()
