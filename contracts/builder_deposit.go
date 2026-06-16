@@ -122,10 +122,3 @@ func GweiToWei(gwei uint64) *big.Int {
 
 	return wei.Mul(wei, big.NewInt(1e9))
 }
-
-// WeiToGwei converts Wei to Gwei.
-func WeiToGwei(wei *big.Int) uint64 {
-	gwei := new(big.Int).Div(wei, big.NewInt(1e9))
-
-	return gwei.Uint64()
-}

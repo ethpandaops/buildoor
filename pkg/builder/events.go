@@ -8,7 +8,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
-	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
 // BuildSource indicates how a payload was built.
@@ -67,23 +66,4 @@ type PayloadBuildFailedEvent struct {
 	Slot     phase0.Slot
 	Error    string    // Failure reason
 	FailedAt time.Time // When the build failed
-}
-
-// PayloadReadyDispatcher dispatches payload ready events to subscribers.
-type PayloadReadyDispatcher struct {
-	*utils.Dispatcher[*PayloadReadyEvent]
-}
-
-// NewPayloadReadyDispatcher creates a new payload ready dispatcher.
-func NewPayloadReadyDispatcher() *PayloadReadyDispatcher {
-	return &PayloadReadyDispatcher{
-		Dispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
-	}
-}
-
-// SubscribePayloadReady subscribes to payload ready events.
-func (d *PayloadReadyDispatcher) SubscribePayloadReady(
-	capacity int,
-) *utils.Subscription[*PayloadReadyEvent] {
-	return d.Subscribe(capacity, false)
 }

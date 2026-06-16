@@ -776,25 +776,3 @@ func (c *Client) GetBlockByHash(ctx context.Context, hash common.Hash) (*BlockRe
 	return &block, nil
 }
 
-// ParsePayloadFields extracts key fields from a raw execution payload JSON.
-func ParsePayloadFields(payloadJSON json.RawMessage) (*ExecutionPayloadFields, error) {
-	var fields ExecutionPayloadFields
-	if err := json.Unmarshal(payloadJSON, &fields); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal payload fields: %w", err)
-	}
-
-	return &fields, nil
-}
-
-// ExecutionPayloadFields contains parsed fields from an execution payload.
-type ExecutionPayloadFields struct {
-	ParentHash    string `json:"parentHash"`
-	BlockHash     string `json:"blockHash"`
-	FeeRecipient  string `json:"feeRecipient"`
-	StateRoot     string `json:"stateRoot"`
-	BlockNumber   string `json:"blockNumber"`
-	GasLimit      string `json:"gasLimit"`
-	GasUsed       string `json:"gasUsed"`
-	Timestamp     string `json:"timestamp"`
-	BaseFeePerGas string `json:"baseFeePerGas"`
-}

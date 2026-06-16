@@ -74,10 +74,3 @@ func NewAPIHandler(
 func (h *APIHandler) GetEventStreamManager() *EventStreamManager {
 	return h.eventStreamMgr
 }
-
-// Stop stops the API handler and its components.
-func (h *APIHandler) Stop() {
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.Stop()
-	}
-}

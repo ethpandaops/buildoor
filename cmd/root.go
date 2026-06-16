@@ -204,13 +204,3 @@ func initConfig() error {
 
 	return nil
 }
-
-// GetConfig returns the current configuration.
-func GetConfig() *builder.Config {
-	return cfg
-}
-
-// GetLogger returns the application logger.
-func GetLogger() *logrus.Logger {
-	return logger
-}
