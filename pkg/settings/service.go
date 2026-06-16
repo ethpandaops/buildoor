@@ -242,21 +242,6 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 	return nil
 }
 
-// Sources returns the winning source ("default"/"cli"/"ui") for each setting
-// key, for display and audit purposes.
-func (s *Service) Sources() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	out := make(map[string]string, len(s.fields))
-
-	for _, f := range s.fields {
-		out[f.Key] = s.sourceLocked(f.Key)
-	}
-
-	return out
-}
-
 // recompute rebuilds the effective config in place: each registered field is set
 // to the highest-seq layer present (defaults are the seq-0 floor). Must hold mu.
 func (s *Service) recompute() {
@@ -278,24 +263,6 @@ func (s *Service) recompute() {
 			s.log.WithError(err).WithField("key", f.Key).Error("failed to apply setting")
 		}
 	}
-}
-
-// sourceLocked returns the winning source for a key. Must hold mu.
-func (s *Service) sourceLocked(key string) string {
-	ks := s.keyState[key]
-	src := SourceDefault
-	winSeq := int64(0)
-
-	if ks.hasCLI && ks.cliSeq > winSeq {
-		src = SourceCLI
-		winSeq = ks.cliSeq
-	}
-
-	if ks.hasUI && ks.uiSeq > winSeq {
-		src = SourceUI
-	}
-
-	return src
 }
 
 // nextSeq allocates a monotonic sequence number. Must hold mu.
