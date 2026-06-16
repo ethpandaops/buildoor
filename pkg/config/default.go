@@ -29,7 +29,6 @@ func DefaultConfig() *Config {
 			BidInterval:  500,       // 500ms between bids
 			BidSubsidy:   100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
 		},
-		ValidateWithdrawals: false,
 	}
 }
 

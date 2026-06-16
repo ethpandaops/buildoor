@@ -88,9 +88,6 @@ func init() {
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 
-	// Validate withdrawals flag
-	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
-
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
 
@@ -189,8 +186,7 @@ func initConfig() error {
 			BidInterval:    v.GetInt64("epbs-bid-interval"),
 			BidSubsidy:     v.GetUint64("epbs-bid-subsidy"),
 		},
-		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
-		PayloadBuildTime:    v.GetUint64("payload-build-time"),
+		PayloadBuildTime: v.GetUint64("payload-build-time"),
 		ValidatorRanges: builder.ValidatorRangesConfig{
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
