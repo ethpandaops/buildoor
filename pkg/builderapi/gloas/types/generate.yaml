@@ -1,0 +1,13 @@
+package: .
+legacy: true
+without-dynamic-expressions: true
+
+types:
+  - name: RequestAuthV1
+    output: requestauthv1_ssz.go
+  - name: SignedRequestAuthV1
+    output: signedrequestauthv1_ssz.go
+  - name: BuilderPreferencesV1
+    output: builderpreferencesv1_ssz.go
+  - name: BuilderPreferencesRequestV1
+    output: builderpreferencesrequestv1_ssz.go
