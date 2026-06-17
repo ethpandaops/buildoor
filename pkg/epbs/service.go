@@ -12,10 +12,11 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -89,7 +90,7 @@ type BidIncludedEvent struct {
 // It subscribes to builder payload events and handles the ePBS protocol.
 type Service struct {
 	cfg                   *config.EPBSConfig
-	signer                *Signer
+	signer                *payload_bidder.Signer
 	blsSigner             *signer.BLSSigner
 	scheduler             *Scheduler
 	bidCreator            *BidCreator
@@ -100,11 +101,11 @@ type Service struct {
 	chainSvc              chain.Service
 	builderIndex          uint64
 	builderPubkey         phase0.BLSPubKey
-	payloadSubscription   *utils.Subscription[*builder.PayloadReadyEvent]
+	payloadSubscription   *utils.Subscription[*payload_builder.Payload]
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
 	revealDispatch        *utils.Dispatcher[*RevealEvent]
 	bidIncludedDispatch   *utils.Dispatcher[*BidIncludedEvent]
-	builderSvc            *builder.Service
+	builderSvc            *payload_builder.Service
 
 	// Track our last included bid to check if the follow-up block uses our payload
 	lastIncludedSlot      phase0.Slot
@@ -137,8 +138,8 @@ func NewService(
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "epbs-service")
 
-	// Create ePBS signer wrapper
-	epbsSigner := NewSigner(blsSigner)
+	// Create the shared payload bidder signer
+	epbsSigner := payload_bidder.NewSigner(blsSigner)
 
 	s := &Service{
 		cfg:                   cfg,
@@ -197,7 +198,7 @@ func (s *Service) SubscribeBidIncluded(capacity int) *utils.Subscription[*BidInc
 
 // Start starts the ePBS service.
 // It subscribes to the builder service's payload ready events.
-func (s *Service) Start(ctx context.Context, builderSvc *builder.Service) error {
+func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.builderSvc = builderSvc
 
@@ -337,8 +338,8 @@ func (s *Service) run() {
 	}
 }
 
-// handlePayloadReady processes a payload ready event from the builder.
-func (s *Service) handlePayloadReady(event *builder.PayloadReadyEvent) {
+// handlePayloadReady processes a payload ready event from the payload_builder.
+func (s *Service) handlePayloadReady(event *payload_builder.Payload) {
 	s.log.WithFields(logrus.Fields{
 		"slot":        event.Attributes.ProposalSlot,
 		"block_hash":  fmt.Sprintf("%x", event.BlockHash[:8]),
@@ -481,25 +482,25 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 	s.log.WithFields(logrus.Fields{
 		"slot":       event.Slot,
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
-		"bid_value":  payload.BidValue.String(),
+		"bid_value":  payload.BlockValue.String(),
 	}).Info("Our payload was included in a beacon block!")
 
 	// Mark bid as included in scheduler
-	s.scheduler.MarkBidIncluded(payload.Slot, blockInfo)
+	s.scheduler.MarkBidIncluded(payload.Attributes.ProposalSlot, blockInfo)
 
 	// Record as pending payment (will be moved to balance deduction if revealed,
 	// or stay pending for 2 epochs if not revealed)
-	if s.bidTracker != nil && payload.BidValue != nil && payload.BidValue.Sign() > 0 {
-		bidValueGwei := new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64()
-		s.bidTracker.RecordWonBid(payload.Slot, bidValueGwei)
+	if s.bidTracker != nil && payload.BlockValue != nil && payload.BlockValue.Sign() > 0 {
+		bidValueGwei := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
+		s.bidTracker.RecordWonBid(payload.Attributes.ProposalSlot, bidValueGwei)
 	}
 
 	// Track for follow-up block check
 	s.lastIncludedMu.Lock()
-	s.lastIncludedSlot = payload.Slot
+	s.lastIncludedSlot = payload.Attributes.ProposalSlot
 	s.lastIncludedBlockHash = blockInfo.ExecutionBlockHash
-	if payload.BidValue != nil {
-		s.lastIncludedBidValue = new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64()
+	if payload.BlockValue != nil {
+		s.lastIncludedBidValue = new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	}
 	s.lastIncludedMu.Unlock()
 
@@ -510,9 +511,9 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 
 	// Notify UI
 	s.bidIncludedDispatch.Fire(&BidIncludedEvent{
-		Slot:      payload.Slot,
+		Slot:      payload.Attributes.ProposalSlot,
 		BlockHash: blockInfo.ExecutionBlockHash,
-		BidValue:  new(big.Int).Div(payload.BidValue, big.NewInt(1_000_000_000)).Uint64(),
+		BidValue:  new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64(),
 	})
 
 	// Persist the won block so it survives restarts (no-op when disabled).
@@ -520,7 +521,7 @@ func (s *Service) checkForOurPayload(event *beacon.HeadEvent, blockInfo *beacon.
 }
 
 // persistWonBlock records an included ePBS payload to the state-db.
-func (s *Service) persistWonBlock(payload *BuiltPayload, blockHash phase0.Hash32) {
+func (s *Service) persistWonBlock(payload *payload_builder.Payload, blockHash phase0.Hash32) {
 	if s.stateDB == nil {
 		return
 	}
@@ -538,14 +539,14 @@ func (s *Service) persistWonBlock(payload *BuiltPayload, blockHash phase0.Hash32
 	valueWei := "0"
 	valueETH := "0.000000000000000000"
 
-	if payload.BidValue != nil {
-		valueWei = payload.BidValue.String()
-		valueETH = weiToETHString(payload.BidValue)
+	if payload.BlockValue != nil {
+		valueWei = payload.BlockValue.String()
+		valueETH = weiToETHString(payload.BlockValue)
 	}
 
 	if err := s.stateDB.AddWonBlock(db.WonBlock{
 		Source:          db.WonBlockSourceEPBS,
-		Slot:            uint64(payload.Slot),
+		Slot:            uint64(payload.Attributes.ProposalSlot),
 		BlockHash:       fmt.Sprintf("%#x", blockHash),
 		NumTransactions: numTxs,
 		NumBlobs:        numBlobs,

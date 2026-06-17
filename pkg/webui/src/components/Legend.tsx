@@ -19,8 +19,8 @@ export const Legend: React.FC = () => {
         <span><span className="legend-dot bg-reveal-sent"></span> Reveal</span>
         <span><span className="legend-dot bg-reveal-failed"></span> Reveal Failed</span>
         <span className="legend-section ms-2">Builder API:</span>
-        <span><span className="legend-dot bg-builder-api-submitted"></span> Submitted</span>
-        <span><span className="legend-dot bg-builder-api-failed"></span> Failed</span>
+        <span><span className="legend-dot bg-builder-api-delivered"></span> Call delivered</span>
+        <span><span className="legend-dot bg-builder-api-pending"></span> Call pending</span>
       </div>
     </div>
   );

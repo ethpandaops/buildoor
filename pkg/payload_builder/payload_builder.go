@@ -1,4 +1,4 @@
-package builder
+package payload_builder
 
 import (
 	"context"
@@ -77,7 +77,7 @@ func NewPayloadBuilder(
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
-) (*PayloadReadyEvent, error) {
+) (*Payload, error) {
 	b.mu.Lock()
 
 	// Cancel any existing build for a different slot
@@ -289,7 +289,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		blockValue = resp.BlockValue.ToBig()
 	}
 
-	event := &PayloadReadyEvent{
+	event := &Payload{
 		Attributes:        attrs,
 		ExecutionPayload:  beaconPayload,
 		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),

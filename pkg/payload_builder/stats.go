@@ -1,4 +1,4 @@
-package builder
+package payload_builder
 
 // BuilderStats tracks statistics for builder operations.
 type BuilderStats struct {

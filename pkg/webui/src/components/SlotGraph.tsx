@@ -566,27 +566,22 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
         {/* Builder API events row */}
         {builderApiActive && (
           <div className="event-row builder-api-events" style={{ bottom: `${builderApiRowBottom}px` }}>
-            {/* getHeader received */}
+            {/* One dot per Builder API call, positioned at the request and colored
+                by outcome: green once we delivered a response, amber while a call
+                was received but not (yet) answered. Both forks share this scheme;
+                the popover names the call and carries both timestamps. */}
+
+            {/* getHeader (Fulu) */}
             {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
-              'get-header-received',
+              `builder-api-call ${state.getHeaderDeliveredAt ? 'delivered' : 'pending'}`,
               state.getHeaderReceivedAt - slotStartTime,
               {
-                title: 'getHeader Request',
+                title: 'getHeader (Fulu)',
                 items: [
-                  { label: 'Time', value: `${state.getHeaderReceivedAt - slotStartTime}ms` }
-                ]
-              },
-              'get-header-rcvd'
-            )}
-
-            {/* getHeader delivered */}
-            {state.getHeaderDeliveredAt && genesisTime > 0 && renderEventDot(
-              'get-header-delivered',
-              state.getHeaderDeliveredAt - slotStartTime,
-              {
-                title: 'Header Delivered',
-                items: [
-                  { label: 'Time', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                  { label: 'Received', value: `${state.getHeaderReceivedAt - slotStartTime}ms` },
+                  state.getHeaderDeliveredAt
+                    ? { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` }
+                    : { label: 'Status', value: 'no response' },
                   ...(state.getHeaderBlockValue ? [{
                     label: 'Block Value',
                     value: state.getHeaderBlockValue + ' wei'
@@ -598,17 +593,20 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   }] : [])
                 ]
               },
-              'get-header-dlvd'
+              'builder-api-get-header'
             )}
 
-            {/* submitBlindedBlock received */}
+            {/* submitBlindedBlock (Fulu) */}
             {state.submitBlindedReceivedAt && genesisTime > 0 && renderEventDot(
-              'submit-blinded-received',
+              `builder-api-call ${state.submitBlindedDeliveredAt ? 'delivered' : 'pending'}`,
               state.submitBlindedReceivedAt - slotStartTime,
               {
-                title: 'submitBlindedBlock Request',
+                title: 'submitBlindedBlock (Fulu)',
                 items: [
-                  { label: 'Time', value: `${state.submitBlindedReceivedAt - slotStartTime}ms` },
+                  { label: 'Received', value: `${state.submitBlindedReceivedAt - slotStartTime}ms` },
+                  state.submitBlindedDeliveredAt
+                    ? { label: 'Published', value: `${state.submitBlindedDeliveredAt - slotStartTime}ms` }
+                    : { label: 'Status', value: 'not published' },
                   ...(state.submitBlindedBlockHash ? [{
                     label: 'Block Hash',
                     value: truncateHash(state.submitBlindedBlockHash),
@@ -616,20 +614,53 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   }] : [])
                 ]
               },
-              'submit-blinded-rcvd'
+              'builder-api-submit-blinded'
             )}
 
-            {/* submitBlindedBlock delivered */}
-            {state.submitBlindedDeliveredAt && genesisTime > 0 && renderEventDot(
-              'submit-blinded-delivered',
-              state.submitBlindedDeliveredAt - slotStartTime,
+            {/* getExecutionPayloadBid (Gloas) */}
+            {state.getBidReceivedAt && genesisTime > 0 && renderEventDot(
+              `builder-api-call ${state.getBidDeliveredAt ? 'delivered' : 'pending'}`,
+              state.getBidReceivedAt - slotStartTime,
               {
-                title: 'Block Published',
+                title: 'getExecutionPayloadBid (Gloas)',
                 items: [
-                  { label: 'Time', value: `${state.submitBlindedDeliveredAt - slotStartTime}ms` }
+                  { label: 'Received', value: `${state.getBidReceivedAt - slotStartTime}ms` },
+                  state.getBidDeliveredAt
+                    ? { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` }
+                    : { label: 'Status', value: 'no response' },
+                  ...(state.getBidBlockValue ? [{
+                    label: 'Bid Value',
+                    value: state.getBidBlockValue + ' gwei'
+                  }] : []),
+                  ...(state.getBidBlockHash ? [{
+                    label: 'Block Hash',
+                    value: truncateHash(state.getBidBlockHash),
+                    copyValue: state.getBidBlockHash
+                  }] : [])
                 ]
               },
-              'submit-blinded-dlvd'
+              'builder-api-get-bid'
+            )}
+
+            {/* submitSignedBeaconBlock (Gloas) — proposer returns the signed block, we reveal the envelope */}
+            {state.submitBlockReceivedAt && genesisTime > 0 && renderEventDot(
+              `builder-api-call ${state.submitBlockDeliveredAt ? 'delivered' : 'pending'}`,
+              state.submitBlockReceivedAt - slotStartTime,
+              {
+                title: 'submitSignedBeaconBlock (Gloas)',
+                items: [
+                  { label: 'Received', value: `${state.submitBlockReceivedAt - slotStartTime}ms` },
+                  state.submitBlockDeliveredAt
+                    ? { label: 'Revealed', value: `${state.submitBlockDeliveredAt - slotStartTime}ms` }
+                    : { label: 'Status', value: 'not revealed' },
+                  ...(state.submitBlockBlockHash ? [{
+                    label: 'Block Hash',
+                    value: truncateHash(state.submitBlockBlockHash),
+                    copyValue: state.submitBlockBlockHash
+                  }] : [])
+                ]
+              },
+              'builder-api-submit-block'
             )}
           </div>
         )}

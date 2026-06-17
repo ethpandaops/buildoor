@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -16,6 +15,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
@@ -38,7 +38,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *epbs.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")

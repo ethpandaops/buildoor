@@ -1,62 +1,56 @@
 package epbs
 
 import (
-	"math/big"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/common"
-	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
-// BuiltPayload represents an execution payload that we've built and can reveal.
-// The payload, blobs bundle, and execution requests are stored typed; marshal to
-// JSON only when submitting to the beacon node.
-type BuiltPayload struct {
-	Slot              phase0.Slot
-	BlockHash         phase0.Hash32
-	ParentBlockHash   phase0.Hash32
-	ParentBlockRoot   phase0.Root
-	ExecutionPayload  *eth2all.ExecutionPayload
-	BlobsBundle       *builder.BlobsBundle
-	ExecutionRequests *electra.ExecutionRequests
-	BidValue          *big.Int
-	FeeRecipient      common.Address
-	Timestamp         uint64
-	PrevRandao        phase0.Root
-	GasLimit          uint64
-}
-
-// PayloadStore stores built execution payloads for later reveal.
+// PayloadStore retains built payloads until they are revealed, keyed by proposal
+// slot. It holds the canonical *payload_builder.Payload by reference — the heavy
+// payload is never copied.
 type PayloadStore struct {
-	payloads map[phase0.Slot]*BuiltPayload
+	payloads map[phase0.Slot]*payload_builder.Payload
 	mu       sync.RWMutex
 }
 
 // NewPayloadStore creates a new payload store.
 func NewPayloadStore() *PayloadStore {
 	return &PayloadStore{
-		payloads: make(map[phase0.Slot]*BuiltPayload, 16),
+		payloads: make(map[phase0.Slot]*payload_builder.Payload, 16),
 	}
 }
 
-// Store stores a built payload.
-func (s *PayloadStore) Store(payload *BuiltPayload) {
+// Store retains a built payload, keyed by its proposal slot.
+func (s *PayloadStore) Store(p *payload_builder.Payload) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.payloads[payload.Slot] = payload
+	s.payloads[p.Attributes.ProposalSlot] = p
 }
 
 // Get retrieves a stored payload for a slot.
-func (s *PayloadStore) Get(slot phase0.Slot) *BuiltPayload {
+func (s *PayloadStore) Get(slot phase0.Slot) *payload_builder.Payload {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.payloads[slot]
+}
+
+// GetByBlockHash retrieves a stored payload by its execution block hash.
+func (s *PayloadStore) GetByBlockHash(blockHash phase0.Hash32) *payload_builder.Payload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, p := range s.payloads {
+		if p.BlockHash == blockHash {
+			return p
+		}
+	}
+
+	return nil
 }
 
 // Delete removes a payload for a slot.
@@ -67,7 +61,7 @@ func (s *PayloadStore) Delete(slot phase0.Slot) {
 	delete(s.payloads, slot)
 }
 
-// Cleanup removes payloads older than the given slot.
+// Cleanup removes payloads for slots older than the given slot.
 func (s *PayloadStore) Cleanup(olderThan phase0.Slot) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,18 +71,4 @@ func (s *PayloadStore) Cleanup(olderThan phase0.Slot) {
 			delete(s.payloads, slot)
 		}
 	}
-}
-
-// GetByBlockHash retrieves a stored payload by block hash.
-func (s *PayloadStore) GetByBlockHash(blockHash phase0.Hash32) *BuiltPayload {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, payload := range s.payloads {
-		if payload.BlockHash == blockHash {
-			return payload
-		}
-	}
-
-	return nil
 }
