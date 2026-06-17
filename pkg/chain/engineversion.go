@@ -19,9 +19,7 @@ import (
 //	Electra   <-> Prague
 //	Fulu      <-> Osaka
 //	Gloas     <-> Amsterdam
-//
-// Post-Gloas forks (Heze, ...) keep the Gloas execution payload shape and so
-// map to Amsterdam as well.
+//	Heze      <-> Bogota
 
 // EngineVersion maps a beacon (consensus) fork to the Engine API (execution)
 // data version whose payload structures it carries. It errors for pre-merge
@@ -38,8 +36,10 @@ func EngineVersion(v version.DataVersion) (enginev.DataVersion, error) {
 		return enginev.DataVersionPrague, nil
 	case version.DataVersionFulu:
 		return enginev.DataVersionOsaka, nil
-	case version.DataVersionGloas, version.DataVersionHeze:
+	case version.DataVersionGloas:
 		return enginev.DataVersionAmsterdam, nil
+	case version.DataVersionHeze:
+		return enginev.DataVersionBogota, nil
 	default:
 		return enginev.DataVersionUnknown, fmt.Errorf("no engine version for beacon fork %s", v)
 	}
@@ -61,6 +61,8 @@ func BeaconVersion(v enginev.DataVersion) (version.DataVersion, error) {
 		return version.DataVersionFulu, nil
 	case enginev.DataVersionAmsterdam:
 		return version.DataVersionGloas, nil
+	case enginev.DataVersionBogota:
+		return version.DataVersionHeze, nil
 	default:
 		return version.DataVersionUnknown, fmt.Errorf("no beacon version for engine fork %s", v)
 	}
