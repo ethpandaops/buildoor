@@ -11,9 +11,9 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -49,7 +49,7 @@ type Scheduler struct {
 	revealHandler          *RevealHandler
 	bidTracker             *BidTracker
 	payloadStore           *PayloadStore
-	payloadCache           *builder.PayloadCache
+	payloadCache           *payload_builder.PayloadCache
 	service                *Service // Reference to parent service for firing events
 	blsSigner              *signer.BLSSigner
 	hasProposerPreferences func(phase0.Slot) bool
@@ -68,7 +68,7 @@ func NewScheduler(
 	revealHandler *RevealHandler,
 	bidTracker *BidTracker,
 	payloadStore *PayloadStore,
-	payloadCache *builder.PayloadCache,
+	payloadCache *payload_builder.PayloadCache,
 	service *Service,
 	blsSigner *signer.BLSSigner,
 	hasProposerPreferences func(phase0.Slot) bool,
@@ -116,22 +116,9 @@ func (s *Scheduler) getSlotStateSafe(slot phase0.Slot) *SlotState {
 	return &stateCopy
 }
 
-// OnPayloadReady stores the payload for reveals.
-func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
-	s.payloadStore.Store(&BuiltPayload{
-		Slot:              event.Attributes.ProposalSlot,
-		BlockHash:         event.BlockHash,
-		ParentBlockHash:   event.Attributes.ParentBlockHash,
-		ParentBlockRoot:   event.Attributes.ParentBlockRoot,
-		ExecutionPayload:  event.ExecutionPayload,
-		BlobsBundle:       event.BlobsBundle,
-		ExecutionRequests: event.ExecutionRequests,
-		BidValue:          event.BlockValue,
-		FeeRecipient:      event.FeeRecipient,
-		Timestamp:         event.Attributes.Timestamp,
-		PrevRandao:        event.Attributes.PrevRandao,
-		GasLimit:          event.ExecutionPayload.GasLimit,
-	})
+// OnPayloadReady stores the payload (by reference) for later reveal.
+func (s *Scheduler) OnPayloadReady(payload *payload_builder.Payload) {
+	s.payloadStore.Store(payload)
 }
 
 // OnHeadEvent closes bidding for the slot — once a block is produced, no more bids can make it.

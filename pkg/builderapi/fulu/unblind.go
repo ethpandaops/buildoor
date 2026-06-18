@@ -6,14 +6,14 @@ import (
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
 // UnblindSignedBlindedBeaconBlock builds full Fulu SignedBlockContents from a blinded block and
-// the matching PayloadReadyEvent (full payload + blobs). The proposer signature is preserved.
+// the matching Payload (full payload + blobs). The proposer signature is preserved.
 func UnblindSignedBlindedBeaconBlock(
 	blinded *apiv1electra.SignedBlindedBeaconBlock,
-	event *builder.PayloadReadyEvent,
+	event *payload_builder.Payload,
 ) (*apiv1fulu.SignedBlockContents, error) {
 	if blinded == nil || blinded.Message == nil || blinded.Message.Body == nil || event == nil || event.ExecutionPayload == nil {
 		return nil, nil

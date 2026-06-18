@@ -1,4 +1,4 @@
-package builder
+package payload_builder
 
 import (
 	"sync"

@@ -4,19 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
-	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
-// RevealHandler handles submission of execution payload reveals.
+// RevealHandler reveals built payloads via the shared payload_bidder and gossips
+// the envelope over p2p.
 type RevealHandler struct {
-	signer       *Signer
+	signer       *payload_bidder.Signer
 	clClient     *beacon.Client
 	chainSvc     chain.Service
 	builderIndex uint64
@@ -25,7 +26,7 @@ type RevealHandler struct {
 
 // NewRevealHandler creates a new reveal handler.
 func NewRevealHandler(
-	signer *Signer,
+	signer *payload_bidder.Signer,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	builderIndex uint64,
@@ -40,51 +41,25 @@ func NewRevealHandler(
 	}
 }
 
-// SubmitReveal constructs the envelope locally, signs it, and then publishes it to the beacon node.
+// SubmitReveal builds the signed envelope via payload_bidder and publishes it
+// (with blobs / KZG proofs) to the beacon node over p2p.
 func (h *RevealHandler) SubmitReveal(
 	ctx context.Context,
-	payload *BuiltPayload,
+	payload *payload_builder.Payload,
 	blockInfo *beacon.BlockInfo,
 ) error {
-	gloasPayload, err := fulu.GloasPayload(payload.ExecutionPayload)
-	if err != nil {
-		return fmt.Errorf("failed to convert payload to gloas format: %w", err)
-	}
-
-	execRequests := payload.ExecutionRequests
-	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{
-			Deposits:       make([]*electra.DepositRequest, 0),
-			Withdrawals:    make([]*electra.WithdrawalRequest, 0),
-			Consolidations: make([]*electra.ConsolidationRequest, 0),
-		}
-	}
-
-	envelope := &gloas.ExecutionPayloadEnvelope{
-		Payload:               gloasPayload,
-		ExecutionRequests:     execRequests,
-		BuilderIndex:          gloas.BuilderIndex(h.builderIndex),
-		BeaconBlockRoot:       blockInfo.Root,
-		ParentBeaconBlockRoot: blockInfo.ParentRoot,
-	}
-
 	forkVersion, err := h.chainSvc.GetForkVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get current fork version: %w", err)
 	}
 
-	signature, err := h.signer.SignExecutionPayloadEnvelope(
-		envelope,
-		forkVersion,
-		h.chainSvc.GetGenesis().GenesisValidatorsRoot,
-	)
+	signedEnvelope, blobs, cellProofs, err := payload_bidder.BuildSignedEnvelope(payload, payload_bidder.RevealContext{
+		BuilderIndex:          h.builderIndex,
+		BeaconBlockRoot:       blockInfo.Root,
+		ParentBeaconBlockRoot: blockInfo.ParentRoot,
+	}, h.signer, forkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
-		return fmt.Errorf("failed to sign envelope: %w", err)
-	}
-
-	signedEnvelope := &gloas.SignedExecutionPayloadEnvelope{
-		Message:   envelope,
-		Signature: signature,
+		return fmt.Errorf("failed to build signed envelope: %w", err)
 	}
 
 	signedEnvelopeJSON, err := json.Marshal(signedEnvelope)
@@ -92,13 +67,7 @@ func (h *RevealHandler) SubmitReveal(
 		return fmt.Errorf("failed to marshal signed envelope: %w", err)
 	}
 
-	var blobs [][]byte
-	var cellProofs [][]byte
-
-	if payload.BlobsBundle != nil && len(payload.BlobsBundle.Blobs) > 0 {
-		blobs = payload.BlobsBundle.BlobsAsBytes()
-		cellProofs = payload.BlobsBundle.ProofsAsBytes()
-
+	if len(blobs) > 0 {
 		h.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),
 			"kzg_proof_count": len(cellProofs),
@@ -109,8 +78,14 @@ func (h *RevealHandler) SubmitReveal(
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
 
+	payload.MarkRevealed(payload_builder.RevealRecord{
+		Transport:       payload_builder.BidTransportP2P,
+		BeaconBlockRoot: blockInfo.Root,
+		At:              time.Now(),
+	})
+
 	h.log.WithFields(logrus.Fields{
-		"slot":       payload.Slot,
+		"slot":       payload.Attributes.ProposalSlot,
 		"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
 	}).Info("Payload revealed")
 

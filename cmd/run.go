@@ -14,7 +14,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -22,6 +21,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -241,7 +241,7 @@ and begins building blocks according to configuration.`,
 			validatorStore = validators.NewStore()
 			validatorStore.SetStateDB(stateDB, logger)
 		}
-		builderSvc, err := builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
+		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}

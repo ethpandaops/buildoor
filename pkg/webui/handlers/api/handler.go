@@ -1,7 +1,6 @@
 package api
 
 import (
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -9,6 +8,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
@@ -19,7 +19,7 @@ type APIHandler struct {
 	authHandler    *auth.AuthHandler
 	settingsSvc    *config.Service // central settings authority (single writer)
 	stateDB        *db.Database    // optional state-db (may be disabled)
-	builderSvc     *builder.Service
+	builderSvc     *payload_builder.Service
 	epbsSvc        *epbs.Service                // May be nil
 	lifecycleMgr   *lifecycle.Manager           // May be nil
 	chainSvc       chain.Service                // May be nil
@@ -35,7 +35,7 @@ func NewAPIHandler(
 	authHandler *auth.AuthHandler,
 	settingsSvc *config.Service,
 	stateDB *db.Database,
-	builderSvc *builder.Service,
+	builderSvc *payload_builder.Service,
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,

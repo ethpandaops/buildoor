@@ -22,19 +22,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // mockPayloadCacheProvider provides a payload cache for tests without full builder deps.
 type mockPayloadCacheProvider struct {
-	cache *builder.PayloadCache
+	cache *payload_builder.PayloadCache
 }
 
-func (m *mockPayloadCacheProvider) GetPayloadCache() *builder.PayloadCache {
+func (m *mockPayloadCacheProvider) GetPayloadCache() *payload_builder.PayloadCache {
 	return m.cache
 }
 
@@ -175,7 +175,7 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
+	mock := &mockPayloadCacheProvider{cache: payload_builder.NewPayloadCache(10)}
 	srv := NewServer(cfg, log, &mockChainService{}, mock, blsSigner, nil)
 	srv.SetEnabled(true)
 
@@ -220,7 +220,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{BlockValueSubsidyGwei: 1_000_000}
 	log := logrus.New()
-	cache := builder.NewPayloadCache(10)
+	cache := payload_builder.NewPayloadCache(10)
 	parentHash := phase0.Hash32(common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"))
 	payload := &eth2all.ExecutionPayload{
 		Version:     version.DataVersionDeneb,
@@ -230,7 +230,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		Timestamp:   1,
 		BlockHash:   phase0.Hash32(common.HexToHash("0xab00000000000000000000000000000000000000000000000000000000000000")),
 	}
-	event := &builder.PayloadReadyEvent{
+	event := &payload_builder.Payload{
 		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1, ParentBlockHash: parentHash},
 		ExecutionPayload: payload,
 		BlockHash:        payload.BlockHash,
@@ -308,7 +308,7 @@ func (m *mockFuluPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1fu
 func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	mock := &mockPayloadCacheProvider{cache: builder.NewPayloadCache(10)}
+	mock := &mockPayloadCacheProvider{cache: payload_builder.NewPayloadCache(10)}
 	srv := NewServer(cfg, log, &mockChainService{}, mock, nil, nil)
 
 	// Minimal Fulu (Electra-shaped) blinded block body: message.body.execution_payload_header.block_hash that won't be in cache
@@ -335,7 +335,7 @@ const randaoReveal96Hex = "0x000000000000000000000000000000000000000000000000000
 func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	cache := builder.NewPayloadCache(10)
+	cache := payload_builder.NewPayloadCache(10)
 	mockCache := &mockPayloadCacheProvider{cache: cache}
 	publisher := &mockFuluPublisher{}
 	srv := NewServer(cfg, log, &mockChainService{}, mockCache, nil, nil)
@@ -351,7 +351,7 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 		Timestamp:   1,
 		BlockHash:   phase0.Hash32(blockHashFromBuilderSpecsFulu),
 	}
-	event := &builder.PayloadReadyEvent{
+	event := &payload_builder.Payload{
 		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
 		ExecutionPayload: payload,
 		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
