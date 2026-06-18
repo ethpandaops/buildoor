@@ -1,4 +1,4 @@
-package builder
+package payload_builder
 
 import (
 	"context"
@@ -42,7 +42,7 @@ type Service struct {
 	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
-	payloadReadyDispatcher *utils.Dispatcher[*PayloadReadyEvent]
+	payloadReadyDispatcher *utils.Dispatcher[*Payload]
 	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
 	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
 	slotManager            *SlotManager
@@ -105,7 +105,7 @@ func NewService(
 		feeRecipient:           feeRecipient,
 		validatorStore:         validatorStore,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
-		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
+		payloadReadyDispatcher: &utils.Dispatcher[*Payload]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
 		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
 		stats:                  &BuilderStats{},
@@ -295,7 +295,7 @@ func (s *Service) SetProposerPreferencesCache(cache *proposerpreferences.Cache) 
 
 // SubscribePayloadReady subscribes to payload ready events.
 // Consumers (like the ePBS service) use this to receive built payloads.
-func (s *Service) SubscribePayloadReady(capacity int) *utils.Subscription[*PayloadReadyEvent] {
+func (s *Service) SubscribePayloadReady(capacity int) *utils.Subscription[*Payload] {
 	return s.payloadReadyDispatcher.Subscribe(capacity, false)
 }
 
@@ -522,7 +522,7 @@ func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEven
 }
 
 // emitPayloadReady stores the payload and emits the ready event.
-func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyEvent) {
+func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 	// Store in cache
 	s.payloadCache.Store(payloadEvent)
 

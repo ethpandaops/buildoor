@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -34,7 +34,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	pk := blsSigner.PublicKey()
 
 	blockValue := new(big.Int).SetUint64(1_000_000_000_000_000) // 0.001 ETH in wei
-	event := minimalPayloadReadyEvent(t, blockValue)
+	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
 	var genesisValidatorsRoot phase0.Root // zero root
@@ -55,7 +55,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 
 	blockValue := new(big.Int).SetUint64(500_000_000_000_000) // 0.0005 ETH in wei
 	subsidy := uint64(1_000_000)                              // 0.001 ETH subsidy in gwei
-	event := minimalPayloadReadyEvent(t, blockValue)
+	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
 	var genesisValidatorsRoot phase0.Root // zero root
@@ -71,7 +71,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 		"bid value should be block_value_wei + subsidy_gwei_converted_to_wei")
 }
 
-func minimalPayloadReadyEvent(t *testing.T, blockValue *big.Int) *builder.PayloadReadyEvent {
+func minimalPayload(t *testing.T, blockValue *big.Int) *payload_builder.Payload {
 	t.Helper()
 	// ExecutionPayloadHeaderFromBeacon needs the basic header fields; Transactions
 	// and Withdrawals can be nil (they hash to empty-list roots).
@@ -83,7 +83,7 @@ func minimalPayloadReadyEvent(t *testing.T, blockValue *big.Int) *builder.Payloa
 		Timestamp:   1,
 		BlockHash:   phase0.Hash32{4, 5, 6},
 	}
-	return &builder.PayloadReadyEvent{
+	return &payload_builder.Payload{
 		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
 		ExecutionPayload: payload,
 		BlockHash:        payload.BlockHash,

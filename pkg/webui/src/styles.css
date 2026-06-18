@@ -323,36 +323,15 @@
   50% { opacity: 1; }
 }
 
-/* Builder API event colors */
-.get-header-received {
-  background: #e83e8c;
-  border: 2px solid #c2185b;
+/* Builder API call dots — one per call, colored by outcome (Fulu + Gloas) */
+.builder-api-call.delivered {
+  background: #28a745;
+  border: 2px solid #1c7430;
 }
 
-.get-header-delivered {
-  background: #d63384;
-  border: 2px solid #a72661;
-}
-
-.submit-blinded-received {
-  background: #20c997;
-  border: 2px solid #199d76;
-}
-
-.submit-blinded-delivered {
-  background: #0dcaf0;
-  border: 2px solid #0aa2c0;
-}
-
-/* Builder API event colors */
-.builder-api-submitted {
-  background: #0d6efd;
-  border: 2px solid #0a58ca;
-}
-
-.builder-api-failed {
-  background: #dc3545;
-  border: 2px solid #bd2130;
+.builder-api-call.pending {
+  background: #ffc107;
+  border: 2px solid #cc9a06;
 }
 
 /* Event popover */
@@ -508,8 +487,8 @@
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
 .bg-head-votes { background: #00bcd4; }
-.bg-builder-api-submitted { background: #0d6efd; }
-.bg-builder-api-failed { background: #dc3545; }
+.bg-builder-api-delivered { background: #28a745; }
+.bg-builder-api-pending { background: #ffc107; }
 
 /* Events log */
 .events-log-container {

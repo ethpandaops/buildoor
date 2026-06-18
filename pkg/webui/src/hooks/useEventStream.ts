@@ -392,6 +392,41 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'builder_api_get_bid_received': {
+          const data = event.data as { slot: number; parent_hash: string; pubkey: string; received_at: number };
+          addEvent('builder_api', `getExecutionPayloadBid request received for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { getBidReceivedAt: data.received_at });
+          break;
+        }
+
+        case 'builder_api_get_bid_delivered': {
+          const data = event.data as { slot: number; block_hash: string; block_value: string; delivered_at: number };
+          addEvent('builder_api', `Execution payload bid delivered for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, {
+            getBidDeliveredAt: data.delivered_at,
+            getBidBlockHash: data.block_hash,
+            getBidBlockValue: data.block_value
+          });
+          break;
+        }
+
+        case 'builder_api_submit_block_received': {
+          const data = event.data as { slot: number; block_hash: string; received_at: number };
+          addEvent('builder_api', `submitSignedBeaconBlock request received for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, {
+            submitBlockReceivedAt: data.received_at,
+            submitBlockBlockHash: data.block_hash
+          });
+          break;
+        }
+
+        case 'builder_api_submit_block_delivered': {
+          const data = event.data as { slot: number; block_hash: string; delivered_at: number };
+          addEvent('builder_api', `Envelope published for slot ${data.slot}`, event.timestamp);
+          updateSlotState(data.slot, { submitBlockDeliveredAt: data.delivered_at });
+          break;
+        }
+
         case 'bid_won': {
           // Event handled by BidsWonView component directly
           // No need to store in main state, just log it

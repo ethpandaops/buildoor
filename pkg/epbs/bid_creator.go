@@ -3,24 +3,23 @@ package epbs
 import (
 	"context"
 	"fmt"
+	"time"
 
-	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
-	"github.com/ethpandaops/go-eth2-client/spec/deneb"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
-	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
-// BidCreator handles creation and submission of execution payload bids.
+// BidCreator builds ePBS bids via the shared payload_bidder and gossips them
+// over p2p. It owns the p2p transport and the (caller-computed) bid economics;
+// the bid construction and signing live in payload_bidder.
 type BidCreator struct {
-	signer       *Signer
+	signer       *payload_bidder.Signer
 	clClient     *beacon.Client
 	chainSvc     chain.Service
 	builderIndex uint64
@@ -29,7 +28,7 @@ type BidCreator struct {
 
 // NewBidCreator creates a new bid creator.
 func NewBidCreator(
-	signer *Signer,
+	signer *payload_bidder.Signer,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	builderIndex uint64,
@@ -44,74 +43,31 @@ func NewBidCreator(
 	}
 }
 
-// CreateAndSubmitBid creates and submits a bid for the given payload.
+// CreateAndSubmitBid builds, signs, and gossips a bid for the given payload at
+// the supplied value. The competitive bid value is decided by the scheduler;
+// the ePBS p2p path takes no execution payment.
 func (c *BidCreator) CreateAndSubmitBid(
 	ctx context.Context,
-	payload *builder.PayloadReadyEvent,
+	payload *payload_builder.Payload,
 	bidValue uint64,
 ) error {
-	// Convert fee recipient to execution address
 	var feeRecipient bellatrix.ExecutionAddress
 
 	copy(feeRecipient[:], payload.FeeRecipient[:])
 
-	// Compute the execution requests root over the typed Electra requests.
-	// Empty requests root is the HTR of an empty *electra.ExecutionRequests.
-	execRequests := payload.ExecutionRequests
-	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{}
-	}
-	// Use dynssz so preset-dependent list limits resolve from the global spec
-	// (matches the node's computation on non-mainnet presets).
-	execRequestsRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(execRequests)
-	if err != nil {
-		return fmt.Errorf("failed to compute execution requests root: %w", err)
-	}
-
-	// Build the execution payload bid
-	bid := &eth2all.ExecutionPayloadBid{
-		Version:               payload.ExecutionPayload.Version,
-		ParentBlockHash:       payload.Attributes.ParentBlockHash,
-		ParentBlockRoot:       payload.Attributes.ParentBlockRoot,
-		BlockHash:             payload.BlockHash,
-		PrevRandao:            payload.Attributes.PrevRandao,
-		FeeRecipient:          feeRecipient,
-		GasLimit:              payload.ExecutionPayload.GasLimit,
-		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
-		Slot:                  payload.Attributes.ProposalSlot,
-		Value:                 phase0.Gwei(bidValue),
-		ExecutionPayment:      0,
-		BlobKZGCommitments:    []deneb.KZGCommitment{},
-		ExecutionRequestsRoot: execRequestsRoot,
-		InclusionListBits:     []byte{0xff, 0xff}, // TODO: Set a proper value here
-	}
-
-	if payload.BlobsBundle != nil {
-		bid.BlobKZGCommitments = payload.BlobsBundle.Commitments
-	}
-
-	c.log.Info("Created execution payload bid")
-
-	// Sign the bid using proper domain.
 	forkVersion, err := c.chainSvc.GetForkVersion()
 	if err != nil {
 		return fmt.Errorf("failed to get Gloas fork version: %w", err)
 	}
 
-	signature, err := c.signer.SignExecutionPayloadBid(
-		bid,
-		forkVersion,
-		c.chainSvc.GetGenesis().GenesisValidatorsRoot,
-	)
+	signedBid, err := payload_bidder.BuildSignedBid(payload, payload_bidder.BidParams{
+		BuilderIndex:     c.builderIndex,
+		FeeRecipient:     feeRecipient,
+		Value:            phase0.Gwei(bidValue),
+		ExecutionPayment: 0,
+	}, c.signer, forkVersion, c.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
-		return fmt.Errorf("failed to sign bid: %w", err)
-	}
-
-	// Create signed bid
-	signedBid := &eth2all.SignedExecutionPayloadBid{
-		Version:   payload.ExecutionPayload.Version,
-		Message:   bid,
-		Signature: signature,
+		return fmt.Errorf("failed to build signed bid: %w", err)
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
@@ -125,12 +81,15 @@ func (c *BidCreator) CreateAndSubmitBid(
 		"parent_block_root": fmt.Sprintf("%x", payload.Attributes.ParentBlockRoot[:8]),
 	})
 
-	logger.Info("Created and signed bid successfully!")
-
-	// Submit bid
 	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBid); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
 	}
+
+	payload.AddBid(payload_builder.BidRecord{
+		Transport: payload_builder.BidTransportP2P,
+		Value:     phase0.Gwei(bidValue),
+		At:        time.Now(),
+	})
 
 	logger.Info("Bid submitted")
 

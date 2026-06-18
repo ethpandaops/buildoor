@@ -197,6 +197,14 @@ export interface SlotState {
   submitBlindedReceivedAt?: number;
   submitBlindedDeliveredAt?: number;
   submitBlindedBlockHash?: string;
+  // Gloas (post-Gloas) builder API interactions.
+  getBidReceivedAt?: number;
+  getBidDeliveredAt?: number;
+  getBidBlockHash?: string;
+  getBidBlockValue?: string;
+  submitBlockReceivedAt?: number;
+  submitBlockDeliveredAt?: number;
+  submitBlockBlockHash?: string;
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.

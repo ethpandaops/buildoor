@@ -10,11 +10,11 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -43,6 +43,10 @@ const (
 	EventTypeBuilderAPIGetHeaderDlvd     EventType = "builder_api_get_header_delivered"
 	EventTypeBuilderAPISubmitBlindedRcvd EventType = "builder_api_submit_blinded_received"
 	EventTypeBuilderAPISubmitBlindedDlvd EventType = "builder_api_submit_blinded_delivered"
+	EventTypeBuilderAPIGetBidRcvd        EventType = "builder_api_get_bid_received"
+	EventTypeBuilderAPIGetBidDlvd        EventType = "builder_api_get_bid_delivered"
+	EventTypeBuilderAPISubmitBlockRcvd   EventType = "builder_api_submit_block_received"
+	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeLifecycle                   EventType = "lifecycle"
 	EventTypeBidIncluded                 EventType = "bid_included"
@@ -132,7 +136,7 @@ type RevealStreamEvent struct {
 	Timestamp   int64  `json:"timestamp"`
 }
 
-// BidStreamEvent represents a bid from any builder.
+// BidStreamEvent represents a bid from any payload_builder.
 type BidStreamEvent struct {
 	Slot         uint64 `json:"slot"`
 	BuilderIndex uint64 `json:"builder_index"`
@@ -247,9 +251,39 @@ type BuilderAPISubmitBlindedDeliveredEvent struct {
 	DeliveredAt int64  `json:"delivered_at"`
 }
 
+// BuilderAPIGetBidReceivedEvent is sent when a Gloas getExecutionPayloadBid request is received.
+type BuilderAPIGetBidReceivedEvent struct {
+	Slot       uint64 `json:"slot"`
+	ParentHash string `json:"parent_hash"`
+	Pubkey     string `json:"pubkey"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+// BuilderAPIGetBidDeliveredEvent is sent when a Gloas execution payload bid is delivered.
+type BuilderAPIGetBidDeliveredEvent struct {
+	Slot        uint64 `json:"slot"`
+	BlockHash   string `json:"block_hash"`
+	BlockValue  string `json:"block_value"`
+	DeliveredAt int64  `json:"delivered_at"`
+}
+
+// BuilderAPISubmitBlockReceivedEvent is sent when a Gloas submitSignedBeaconBlock request is received.
+type BuilderAPISubmitBlockReceivedEvent struct {
+	Slot       uint64 `json:"slot"`
+	BlockHash  string `json:"block_hash"`
+	ReceivedAt int64  `json:"received_at"`
+}
+
+// BuilderAPISubmitBlockDeliveredEvent is sent when a Gloas envelope is successfully published.
+type BuilderAPISubmitBlockDeliveredEvent struct {
+	Slot        uint64 `json:"slot"`
+	BlockHash   string `json:"block_hash"`
+	DeliveredAt int64  `json:"delivered_at"`
+}
+
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
-	builderSvc    *builder.Service
+	builderSvc    *payload_builder.Service
 	epbsSvc       *epbs.Service      // Optional ePBS service for bid events
 	lifecycleMgr  *lifecycle.Manager // Optional lifecycle manager for balance info
 	chainSvc      chain.Service      // Optional chain service for head vote tracking
@@ -279,7 +313,7 @@ type EventStreamManager struct {
 
 // NewEventStreamManager creates a new event stream manager.
 func NewEventStreamManager(
-	builderSvc *builder.Service,
+	builderSvc *payload_builder.Service,
 	epbsSvc *epbs.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
@@ -513,7 +547,7 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	m.cleanupOldSlots(slot)
 }
 
-func (m *EventStreamManager) handlePayloadBuildStarted(event *builder.PayloadBuildStartedEvent) {
+func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypePayloadBuildStarted,
 		Timestamp: time.Now().UnixMilli(),
@@ -544,7 +578,7 @@ func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadA
 	})
 }
 
-func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuildFailedEvent) {
+func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.PayloadBuildFailedEvent) {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypePayloadBuildFailed,
 		Timestamp: time.Now().UnixMilli(),
@@ -556,7 +590,7 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuil
 	})
 }
 
-func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent) {
+func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) {
 	slot := event.Attributes.ProposalSlot
 
 	m.Broadcast(&StreamEvent{
@@ -1284,6 +1318,64 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedDelivered(slot uint
 		Type:      EventTypeBuilderAPISubmitBlindedDlvd,
 		Timestamp: now,
 		Data: BuilderAPISubmitBlindedDeliveredEvent{
+			Slot:        slot,
+			BlockHash:   blockHash,
+			DeliveredAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPIGetBidReceived broadcasts when a Gloas getExecutionPayloadBid request is received.
+func (m *EventStreamManager) BroadcastBuilderAPIGetBidReceived(slot uint64, parentHash, pubkey string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPIGetBidRcvd,
+		Timestamp: now,
+		Data: BuilderAPIGetBidReceivedEvent{
+			Slot:       slot,
+			ParentHash: parentHash,
+			Pubkey:     pubkey,
+			ReceivedAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPIGetBidDelivered broadcasts when a Gloas execution payload bid is delivered.
+func (m *EventStreamManager) BroadcastBuilderAPIGetBidDelivered(slot uint64, blockHash, blockValue string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPIGetBidDlvd,
+		Timestamp: now,
+		Data: BuilderAPIGetBidDeliveredEvent{
+			Slot:        slot,
+			BlockHash:   blockHash,
+			BlockValue:  blockValue,
+			DeliveredAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPISubmitBlockReceived broadcasts when a Gloas submitSignedBeaconBlock request is received.
+func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockReceived(slot uint64, blockHash string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPISubmitBlockRcvd,
+		Timestamp: now,
+		Data: BuilderAPISubmitBlockReceivedEvent{
+			Slot:       slot,
+			BlockHash:  blockHash,
+			ReceivedAt: now,
+		},
+	})
+}
+
+// BroadcastBuilderAPISubmitBlockDelivered broadcasts when a Gloas envelope is successfully published.
+func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockDelivered(slot uint64, blockHash string) {
+	now := time.Now().UnixMilli()
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderAPISubmitBlockDlvd,
+		Timestamp: now,
+		Data: BuilderAPISubmitBlockDeliveredEvent{
 			Slot:        slot,
 			BlockHash:   blockHash,
 			DeliveredAt: now,

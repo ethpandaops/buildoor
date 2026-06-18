@@ -1,4 +1,4 @@
-package builder
+package payload_builder
 
 import (
 	"sync"
@@ -14,7 +14,7 @@ const (
 // PayloadCache stores built payloads for a limited number of slots.
 // It uses a simple LRU-like approach, keeping only the most recent slots.
 type PayloadCache struct {
-	payloads map[phase0.Slot]*PayloadReadyEvent
+	payloads map[phase0.Slot]*Payload
 	maxSlots int
 	mu       sync.RWMutex
 }
@@ -26,14 +26,14 @@ func NewPayloadCache(maxSlots int) *PayloadCache {
 	}
 
 	return &PayloadCache{
-		payloads: make(map[phase0.Slot]*PayloadReadyEvent, maxSlots),
+		payloads: make(map[phase0.Slot]*Payload, maxSlots),
 		maxSlots: maxSlots,
 	}
 }
 
 // Store stores a payload in the cache.
 // It automatically evicts old payloads to maintain the size limit.
-func (c *PayloadCache) Store(event *PayloadReadyEvent) {
+func (c *PayloadCache) Store(event *Payload) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -42,7 +42,7 @@ func (c *PayloadCache) Store(event *PayloadReadyEvent) {
 }
 
 // Get retrieves a payload for the given slot.
-func (c *PayloadCache) Get(slot phase0.Slot) *PayloadReadyEvent {
+func (c *PayloadCache) Get(slot phase0.Slot) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -50,7 +50,7 @@ func (c *PayloadCache) Get(slot phase0.Slot) *PayloadReadyEvent {
 }
 
 // GetByBlockHash retrieves a payload by its block hash.
-func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *PayloadReadyEvent {
+func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -72,11 +72,11 @@ func (c *PayloadCache) Delete(slot phase0.Slot) {
 }
 
 // GetAll returns all cached payloads.
-func (c *PayloadCache) GetAll() []*PayloadReadyEvent {
+func (c *PayloadCache) GetAll() []*Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	result := make([]*PayloadReadyEvent, 0, len(c.payloads))
+	result := make([]*Payload, 0, len(c.payloads))
 	for _, payload := range c.payloads {
 		result = append(result, payload)
 	}

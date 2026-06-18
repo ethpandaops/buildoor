@@ -1,4 +1,4 @@
-// Package fulu provides Fulu (builder-specs) bid building from PayloadReadyEvent.
+// Package fulu provides Fulu (builder-specs) bid building from Payload.
 package fulu
 
 import (
@@ -6,7 +6,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/holiman/uint256"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -15,12 +15,12 @@ type BidSigner interface {
 	SignWithDomain(root phase0.Root, domain phase0.Domain) (phase0.BLSSignature, error)
 }
 
-// BuildSignedBuilderBid builds a Fulu SignedBuilderBid from a PayloadReadyEvent and the proposer's pubkey,
+// BuildSignedBuilderBid builds a Fulu SignedBuilderBid from a Payload and the proposer's pubkey,
 // and signs it with the builder's BLS key using DOMAIN_APPLICATION_BUILDER with the provided genesis fork version
 // and genesis validators root (matches mev-boost-relay behavior).
 // subsidyGwei is added to the bid value so the proposer sees a higher bid (e.g. for testing).
 func BuildSignedBuilderBid(
-	event *builder.PayloadReadyEvent,
+	event *payload_builder.Payload,
 	proposerPubkey phase0.BLSPubKey,
 	blsSigner BidSigner,
 	subsidyGwei uint64,

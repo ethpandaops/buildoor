@@ -25,34 +25,30 @@ import (
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/spec"
-	"github.com/ethpandaops/go-eth2-client/spec/deneb"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
 	gloasauth "github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
-// domainBeaconBuilder is DOMAIN_BEACON_BUILDER from the Gloas consensus spec,
-// used to sign ExecutionPayloadBid and ExecutionPayloadEnvelope messages.
-var domainBeaconBuilder = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
-
-// PayloadCacheProvider provides access to the payload cache (e.g. *builder.Service).
+// PayloadCacheProvider provides access to the payload cache (e.g. *payload_builder.Service).
 // Used so tests can inject a mock without full builder deps.
 type PayloadCacheProvider interface {
-	GetPayloadCache() *builder.PayloadCache
+	GetPayloadCache() *payload_builder.PayloadCache
 }
 
 // FuluBlockPublisher submits unblinded Fulu block contents to the beacon node.
@@ -67,6 +63,11 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string)
 	BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string)
 	BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string)
+	// Gloas (post-Gloas) builder API interactions.
+	BroadcastBuilderAPIGetBidReceived(slot uint64, parentHash, pubkey string)
+	BroadcastBuilderAPIGetBidDelivered(slot uint64, blockHash, blockValue string)
+	BroadcastBuilderAPISubmitBlockReceived(slot uint64, blockHash string)
+	BroadcastBuilderAPISubmitBlockDelivered(slot uint64, blockHash string)
 	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei string)
 }
 
@@ -85,6 +86,7 @@ type Server struct {
 	builderSvc        PayloadCacheProvider       // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
 	validatorsStore   *validators.Store          // in-memory validator registrations
 	blsSigner         *signer.BLSSigner          // optional: for signing Fulu builder bids (getHeader)
+	bidderSigner      *payload_bidder.Signer     // shared Gloas bid/envelope signer (wraps blsSigner)
 	fuluPublisher     FuluBlockPublisher         // optional: for publishing unblinded blocks (submitBlindedBlockV2)
 	clClient          *beacon.Client             // optional: beacon client used to publish Gloas execution payload envelopes
 	eventBroadcaster  EventBroadcaster           // optional: for broadcasting API events to WebUI
@@ -116,6 +118,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		builderSvc:        builderSvc,
 		validatorsStore:   store,
 		blsSigner:         blsSigner,
+		bidderSigner:      payload_bidder.NewSigner(blsSigner),
 		bidsWonStore:      NewBidsWonStore(1000),
 		builderPrefsStore: NewBuilderPreferencesStore(),
 	}
@@ -524,8 +527,8 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 // GetExecutionPayloadBidResponse is the JSON envelope returned by
 // POST /eth/v1/builder/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}.
 type GetExecutionPayloadBidResponse struct {
-	Version string                           `json:"version"`
-	Data    *gloas.SignedExecutionPayloadBid `json:"data"`
+	Version string                             `json:"version"`
+	Data    *eth2all.SignedExecutionPayloadBid `json:"data"`
 }
 
 // handleGetExecutionPayloadBid handles
@@ -592,6 +595,10 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 	slot := phase0.Slot(slotU64)
+
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPIGetBidReceived(slotU64, parentHashStr, proposerPubkeyStr)
+	}
 
 	// Resolve the Gloas fork version once for bid signing (DomainBeaconBuilder is
 	// chain-fork bound). Request auth is NOT signed with this: per the Gloas
@@ -716,80 +723,51 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	}
 	prefs := signedPrefs.Message
 
-	execRequests := &electra.ExecutionRequests{
-		Deposits:       []*electra.DepositRequest{},
-		Withdrawals:    []*electra.WithdrawalRequest{},
-		Consolidations: []*electra.ConsolidationRequest{},
-	}
-	if event.ExecutionRequests != nil {
-		execRequests = event.ExecutionRequests
-	}
-	execRequestsRoot, err := execRequests.HashTreeRoot()
-	if err != nil {
-		log.WithError(err).Warn("getExecutionPayloadBid: failed to compute execution requests root")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to compute execution requests root")
-		return
-	}
-
-	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
-
 	// Split the post-subsidy block value between the execution-layer payment and the
 	// trustless on-chain payment (Value). max_execution_payment caps how much the
 	// proposer accepts directly from the builder as an execution payment; it defaults
 	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
 	// execution payment allowed in that case). Anything above the cap is paid
 	// trustlessly on-chain via Value.
+	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
 	valueAfterSubsidy := phase0.Gwei(blockValueGwei + s.cfg.GloasBuilderApiSubsidy)
 	maxExecutionPayment := s.builderPrefsStore.GetOrDefault(proposerPubkey)
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment
 
-	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       event.Attributes.ParentBlockHash,
-		ParentBlockRoot:       event.Attributes.ParentBlockRoot,
-		BlockHash:             event.BlockHash,
-		PrevRandao:            event.Attributes.PrevRandao,
-		FeeRecipient:          prefs.FeeRecipient,
-		GasLimit:              event.ExecutionPayload.GasLimit,
-		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
-		Slot:                  slot,
-		Value:                 value,
-		ExecutionPayment:      executionPayment,
-		BlobKZGCommitments:    []deneb.KZGCommitment{},
-		ExecutionRequestsRoot: execRequestsRoot,
-	}
-	if event.BlobsBundle != nil {
-		bid.BlobKZGCommitments = event.BlobsBundle.Commitments
-	}
-
-	bidRoot, err := bid.HashTreeRoot()
+	signedBid, err := payload_bidder.BuildSignedBid(event, payload_bidder.BidParams{
+		BuilderIndex:     s.builderIndex.Load(),
+		FeeRecipient:     prefs.FeeRecipient,
+		Value:            value,
+		ExecutionPayment: executionPayment,
+	}, s.bidderSigner, gloasForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
-		log.WithError(err).Warn("getExecutionPayloadBid: failed to compute bid hash tree root")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to compute bid root")
-		return
-	}
-	var root phase0.Root
-	copy(root[:], bidRoot[:])
-
-	domain := signer.ComputeDomain(domainBeaconBuilder, gloasForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
-	sig, err := s.blsSigner.SignWithDomain(root, domain)
-	if err != nil {
-		log.WithError(err).Warn("getExecutionPayloadBid: failed to sign bid")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to sign bid")
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to build signed bid")
 		return
 	}
 
-	signedBid := &gloas.SignedExecutionPayloadBid{
-		Message:   bid,
-		Signature: sig,
-	}
+	event.AddBid(payload_builder.BidRecord{
+		Transport:        payload_builder.BidTransportBuilderAPI,
+		Value:            value,
+		ExecutionPayment: executionPayment,
+		At:               time.Now(),
+	})
 
 	log.WithFields(logrus.Fields{
 		"block_hash":    "0x" + hex.EncodeToString(event.BlockHash[:]),
-		"builder_index": bid.BuilderIndex,
+		"builder_index": signedBid.Message.BuilderIndex,
 		"fee_recipient": prefs.FeeRecipient.String(),
-		"gas_limit":     bid.GasLimit,
+		"gas_limit":     signedBid.Message.GasLimit,
 	}).Info("getExecutionPayloadBid: delivered Gloas SignedExecutionPayloadBid")
+
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPIGetBidDelivered(
+			uint64(slot),
+			"0x"+hex.EncodeToString(event.BlockHash[:]),
+			fmt.Sprintf("%d", uint64(signedBid.Message.Value)),
+		)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", "gloas")
@@ -855,27 +833,15 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 	})
 	log.Debug("submitSignedBeaconBlock request received")
 
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPISubmitBlockReceived(uint64(bid.Slot), blockHashHex)
+	}
+
 	event := s.builderSvc.GetPayloadCache().GetByBlockHash(bid.BlockHash)
 	if event == nil {
 		log.Info("submitSignedBeaconBlock: 400 — no cached payload for bid block hash")
 		writeValidatorError(w, http.StatusBadRequest, "no cached payload for bid block hash")
 		return
-	}
-
-	gloasPayload, err := fulu.GloasPayload(event.ExecutionPayload)
-	if err != nil {
-		log.WithError(err).Warn("submitSignedBeaconBlock: failed to convert payload to gloas format")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to convert payload")
-		return
-	}
-
-	execRequests := &electra.ExecutionRequests{
-		Deposits:       []*electra.DepositRequest{},
-		Withdrawals:    []*electra.WithdrawalRequest{},
-		Consolidations: []*electra.ConsolidationRequest{},
-	}
-	if event.ExecutionRequests != nil {
-		execRequests = event.ExecutionRequests
 	}
 
 	beaconBlockRoot, err := block.Message.HashTreeRoot()
@@ -887,40 +853,22 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 	var blockRoot phase0.Root
 	copy(blockRoot[:], beaconBlockRoot[:])
 
-	envelope := &gloas.ExecutionPayloadEnvelope{
-		Payload:               gloasPayload,
-		ExecutionRequests:     execRequests,
-		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
-		BeaconBlockRoot:       blockRoot,
-		ParentBeaconBlockRoot: block.Message.ParentRoot,
-	}
-
-	envelopeRoot, err := envelope.HashTreeRoot()
-	if err != nil {
-		log.WithError(err).Warn("submitSignedBeaconBlock: failed to compute envelope hash tree root")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to compute envelope root")
-		return
-	}
-	var root phase0.Root
-	copy(root[:], envelopeRoot[:])
-
 	envForkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionGloas)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to get Gloas fork version")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to get Gloas fork version")
 		return
 	}
-	domain := signer.ComputeDomain(domainBeaconBuilder, envForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
-	sig, err := s.blsSigner.SignWithDomain(root, domain)
-	if err != nil {
-		log.WithError(err).Warn("submitSignedBeaconBlock: failed to sign envelope")
-		writeValidatorError(w, http.StatusInternalServerError, "failed to sign envelope")
-		return
-	}
 
-	signedEnvelope := &gloas.SignedExecutionPayloadEnvelope{
-		Message:   envelope,
-		Signature: sig,
+	signedEnvelope, blobs, kzgProofs, err := payload_bidder.BuildSignedEnvelope(event, payload_bidder.RevealContext{
+		BuilderIndex:          s.builderIndex.Load(),
+		BeaconBlockRoot:       blockRoot,
+		ParentBeaconBlockRoot: block.Message.ParentRoot,
+	}, s.bidderSigner, envForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to build signed envelope")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to build signed envelope")
+		return
 	}
 
 	envelopeJSON, err := json.Marshal(signedEnvelope)
@@ -943,16 +891,20 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 	}
 	log.Info("submitSignedBeaconBlock: broadcasted beacon block")
 
-	var blobs, kzgProofs [][]byte
-	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
-		blobs = event.BlobsBundle.BlobsAsBytes()
-		kzgProofs = event.BlobsBundle.ProofsAsBytes()
-	}
-
 	if err := s.clClient.SubmitExecutionPayloadEnvelope(r.Context(), envelopeJSON, blobs, kzgProofs); err != nil {
 		log.WithError(err).Error("submitSignedBeaconBlock: failed to publish execution payload envelope")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to publish envelope: "+err.Error())
 		return
+	}
+
+	event.MarkRevealed(payload_builder.RevealRecord{
+		Transport:       payload_builder.BidTransportBuilderAPI,
+		BeaconBlockRoot: blockRoot,
+		At:              time.Now(),
+	})
+
+	if s.eventBroadcaster != nil {
+		s.eventBroadcaster.BroadcastBuilderAPISubmitBlockDelivered(uint64(bid.Slot), blockHashHex)
 	}
 
 	log.WithFields(logrus.Fields{
