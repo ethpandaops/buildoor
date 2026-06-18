@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -45,7 +46,12 @@ var exitCmd = &cobra.Command{
 		pubkey := blsSigner.PublicKey()
 
 		// Get chain spec and genesis
-		chainSpec, err := clClient.GetChainSpec(ctx)
+		specData, rawData, err := clClient.GetRawSpecData(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
+
+		chainSpec, err := chain.ParseChainSpec(specData, rawData)
 		if err != nil {
 			return fmt.Errorf("failed to get chain spec: %w", err)
 		}
@@ -73,19 +79,13 @@ var exitCmd = &cobra.Command{
 			builderIndex = builderInfo.Index
 		}
 
-		// Get current epoch
-		currentEpoch, err := chainSvc.GetCurrentEpoch(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to get current epoch: %w", err)
-		}
-
 		// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
-		if chainSpec.CapellaForkVersion == nil {
+		forkVersion, err := chainSpec.GetForkVersion(version.DataVersionCapella)
+		if err != nil {
 			return fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
 		}
 
-		forkVersion := *chainSpec.CapellaForkVersion
-
+		currentEpoch := chainSvc.GetCurrentEpoch()
 		logger.WithFields(map[string]any{
 			"builder_index": builderIndex,
 			"pubkey":        fmt.Sprintf("%x", pubkey[:8]),

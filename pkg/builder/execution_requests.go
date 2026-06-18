@@ -1,14 +1,13 @@
-package fulu
+package builder
 
 import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 )
 
 const (
@@ -26,7 +25,7 @@ const (
 //
 // Each element in raw is: [type_prefix_byte || request_1 || request_2 || ...]
 // where all requests of the same type are concatenated after a single prefix byte.
-func ParseExecutionRequests(raw engine.ExecutionRequests) (*electra.ExecutionRequests, error) {
+func ParseExecutionRequests(raw []prague.ExecutionRequest) (*electra.ExecutionRequests, error) {
 	result := &electra.ExecutionRequests{
 		Deposits:       make([]*electra.DepositRequest, 0),
 		Withdrawals:    make([]*electra.WithdrawalRequest, 0),

@@ -9,25 +9,26 @@ import (
 	"net/http"
 	"strconv"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
-// ExecutionPayloadBidResponse represents the response from getting a bid template.
-type ExecutionPayloadBidResponse struct {
-	Data json.RawMessage `json:"data"`
-}
-
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
-func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid json.RawMessage) error {
+func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.SignedExecutionPayloadBid) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bids", c.baseURL)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bid))
+	bidJSON, err := json.Marshal(bid)
+	if err != nil {
+		return fmt.Errorf("failed to marshal bid: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bidJSON))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", "gloas")
+	req.Header.Set("Eth-Consensus-Version", bid.Version.String())
 
 	httpClient := &http.Client{}
 

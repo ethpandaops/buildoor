@@ -4,13 +4,14 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -72,34 +73,20 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 
 func minimalPayloadReadyEvent(t *testing.T, blockValue *big.Int) *builder.PayloadReadyEvent {
 	t.Helper()
-	// ExecutionPayloadHeaderFromEngine needs ParentHash, FeeRecipient, StateRoot, ReceiptsRoot,
-	// LogsBloom (256 bytes), PrevRandao (32 bytes), Transactions (can be nil for root), Withdrawals (can be nil).
-	payload := &engine.ExecutionPayload{
-		ParentHash:    common.Hash{1, 2, 3},
-		FeeRecipient:  common.Address{},
-		StateRoot:     common.Hash{},
-		ReceiptsRoot:  common.Hash{},
-		BlockNumber:   1,
-		GasLimit:      30_000_000,
-		GasUsed:       0,
-		Timestamp:     1,
-		BlockHash:     common.Hash{4, 5, 6},
-		Transactions:  nil,
-		Withdrawals:   nil,
-		BlobGasUsed:   0,
-		ExcessBlobGas: 0,
-	}
-	// LogsBloom and PrevRandao must have correct length for SSZ/header.
-	for i := range payload.LogsBloom {
-		payload.LogsBloom[i] = 0
-	}
-	for i := range payload.PrevRandao {
-		payload.PrevRandao[i] = 0
+	// ExecutionPayloadHeaderFromBeacon needs the basic header fields; Transactions
+	// and Withdrawals can be nil (they hash to empty-list roots).
+	payload := &eth2all.ExecutionPayload{
+		Version:     version.DataVersionDeneb,
+		ParentHash:  phase0.Hash32{1, 2, 3},
+		BlockNumber: 1,
+		GasLimit:    30_000_000,
+		Timestamp:   1,
+		BlockHash:   phase0.Hash32{4, 5, 6},
 	}
 	return &builder.PayloadReadyEvent{
-		Slot:       1,
-		BlockHash:  phase0.Hash32(payload.BlockHash),
-		Payload:    payload,
-		BlockValue: blockValue,
+		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+		ExecutionPayload: payload,
+		BlockHash:        payload.BlockHash,
+		BlockValue:       blockValue,
 	}
 }

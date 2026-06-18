@@ -29,6 +29,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
@@ -78,26 +79,23 @@ type RequestStats struct {
 
 // Server implements the combined Builder API + Buildoor API HTTP server.
 type Server struct {
-	cfg                   *config.BuilderAPIConfig
-	log                   *logrus.Logger
-	builderSvc            PayloadCacheProvider       // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
-	validatorsStore       *validators.Store          // in-memory validator registrations
-	blsSigner             *signer.BLSSigner          // optional: for signing Fulu builder bids (getHeader)
-	fuluPublisher         FuluBlockPublisher         // optional: for publishing unblinded blocks (submitBlindedBlockV2)
-	clClient              *beacon.Client             // optional: beacon client used to publish Gloas execution payload envelopes
-	eventBroadcaster      EventBroadcaster           // optional: for broadcasting API events to WebUI
-	bidsWonStore          *BidsWonStore              // in-memory store of successfully delivered blocks
-	builderPrefsStore     *BuilderPreferencesStore   // latest per-validator builder preferences (max_execution_payment)
-	propPrefsCache        *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
-	chainSvc              chain.Service              // optional: used to verify builder is active before serving Gloas bids
-	builderIndex          atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
-	enabled               atomic.Bool                // runtime toggle for enabling/disabling the builder API
-	headersRequested      atomic.Uint64              // count of getHeader requests received
-	blocksPublished       atomic.Uint64              // count of successfully published blocks
-	genesisForkVersion    phase0.Version             // genesis fork version for builder domain (mev-boost-relay style)
-	forkVersion           phase0.Version             // current fork version for chain-specific verification
-	genesisValidatorsRoot phase0.Root                // genesis validators root for chain-specific verification
-	stateDB               *db.Database               // optional: persistent won-block store (may be nil/disabled)
+	cfg               *config.BuilderAPIConfig
+	log               *logrus.Logger
+	chainSvc          chain.Service
+	builderSvc        PayloadCacheProvider       // optional: for buildoor debug APIs and Fulu getHeader/submitBlindedBlockV2
+	validatorsStore   *validators.Store          // in-memory validator registrations
+	blsSigner         *signer.BLSSigner          // optional: for signing Fulu builder bids (getHeader)
+	fuluPublisher     FuluBlockPublisher         // optional: for publishing unblinded blocks (submitBlindedBlockV2)
+	clClient          *beacon.Client             // optional: beacon client used to publish Gloas execution payload envelopes
+	eventBroadcaster  EventBroadcaster           // optional: for broadcasting API events to WebUI
+	bidsWonStore      *BidsWonStore              // in-memory store of successfully delivered blocks
+	builderPrefsStore *BuilderPreferencesStore   // latest per-validator builder preferences (max_execution_payment)
+	propPrefsCache    *proposerpreferences.Cache // optional: per-slot proposer preferences for Gloas bid construction
+	builderIndex      atomic.Uint64              // builder index used in Gloas bids; set after lifecycle registration
+	enabled           atomic.Bool                // runtime toggle for enabling/disabling the builder API
+	headersRequested  atomic.Uint64              // count of getHeader requests received
+	blocksPublished   atomic.Uint64              // count of successfully published blocks
+	stateDB           *db.Database               // optional: persistent won-block store (may be nil/disabled)
 }
 
 // NewServer creates a new server. builderSvc may be nil; if set, buildoor-specific
@@ -106,22 +104,20 @@ type Server struct {
 // validatorStore is optional; when provided it is shared with the builder service for fee recipient lookup.
 // genesisForkVersion is used for DomainBuilder (genesis fork + zero root) like mev-boost-relay; forkVersion and
 // genesisValidatorsRoot are used for chain-specific verification. Pass chain values from the beacon node.
-func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store, genesisForkVersion, forkVersion phase0.Version, genesisValidatorsRoot phase0.Root) *Server {
+func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service, builderSvc PayloadCacheProvider, blsSigner *signer.BLSSigner, validatorStore *validators.Store) *Server {
 	store := validatorStore
 	if store == nil {
 		store = validators.NewStore()
 	}
 	return &Server{
-		cfg:                   cfg,
-		log:                   log,
-		builderSvc:            builderSvc,
-		validatorsStore:       store,
-		blsSigner:             blsSigner,
-		bidsWonStore:          NewBidsWonStore(1000),
-		builderPrefsStore:     NewBuilderPreferencesStore(),
-		genesisForkVersion:    genesisForkVersion,
-		forkVersion:           forkVersion,
-		genesisValidatorsRoot: genesisValidatorsRoot,
+		cfg:               cfg,
+		log:               log,
+		chainSvc:          chainSvc,
+		builderSvc:        builderSvc,
+		validatorsStore:   store,
+		blsSigner:         blsSigner,
+		bidsWonStore:      NewBidsWonStore(1000),
+		builderPrefsStore: NewBuilderPreferencesStore(),
 	}
 }
 
@@ -281,6 +277,13 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 
 	log.WithField("count", len(regs)).Debug("Decoded validator registrations")
 
+	forkVersion, err := s.chainSvc.GetForkVersion()
+	if err != nil {
+		log.WithError(err).Warn("Rejected: failed to get fork version")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to get fork version")
+		return
+	}
+
 	for i, reg := range regs {
 		if reg == nil || reg.Message == nil {
 			log.WithFields(logrus.Fields{"index": i, "total": len(regs)}).Warn("Rejected: registration message missing")
@@ -288,7 +291,7 @@ func (s *Server) handleRegisterValidators(w http.ResponseWriter, r *http.Request
 			return
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		if !validators.VerifyRegistrationWithDomain(reg, s.genesisForkVersion, s.forkVersion, s.genesisValidatorsRoot) {
+		if !validators.VerifyRegistrationWithDomain(reg, s.chainSvc.GetGenesis().GenesisForkVersion, forkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot) {
 			// Log first failing registration as JSON for debugging (copy and share).
 			rejJSON, _ := json.Marshal(reg)
 			log.WithFields(logrus.Fields{
@@ -326,7 +329,6 @@ type PayloadBySlotResponse struct {
 	FeeRecipient    string          `json:"fee_recipient"`
 	GasLimit        uint64          `json:"gas_limit"`
 	Timestamp       uint64          `json:"timestamp"`
-	BuildSource     string          `json:"build_source"`
 	ReadyAt         time.Time       `json:"ready_at"`
 }
 
@@ -359,7 +361,7 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	marshalledPayload, err := event.Payload.MarshalJSON()
+	marshalledPayload, err := event.ExecutionPayload.MarshalJSON()
 	if err != nil {
 		return
 	}
@@ -370,17 +372,16 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 	}
 
 	resp := PayloadBySlotResponse{
-		Slot:            uint64(event.Slot),
+		Slot:            uint64(event.Attributes.ProposalSlot),
 		BlockHash:       "0x" + hex.EncodeToString(event.BlockHash[:]),
-		ParentBlockHash: "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
-		ParentBlockRoot: "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+		ParentBlockHash: "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
+		ParentBlockRoot: "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
 		Payload:         marshalledPayload,
 		BlobsBundle:     marshalledBlobsBundle,
 		BlockValue:      event.BlockValue.String(),
 		FeeRecipient:    event.FeeRecipient.Hex(),
-		GasLimit:        event.GasLimit,
-		Timestamp:       event.Timestamp,
-		BuildSource:     event.BuildSource.String(),
+		GasLimit:        event.ExecutionPayload.GasLimit,
+		Timestamp:       event.Attributes.Timestamp,
 		ReadyAt:         event.ReadyAt,
 	}
 
@@ -473,11 +474,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if event.ParentBlockHash != parentHash {
+	if event.Attributes.ParentBlockHash != parentHash {
 		log.WithFields(logrus.Fields{
 			"slot":                slotU64,
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
 		}).Info("getHeader: returning 204 — cached payload parent hash does not match request")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -488,7 +489,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
 	}
 	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))
-	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.genesisForkVersion, s.genesisValidatorsRoot)
+	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.chainSvc.GetGenesis().GenesisForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")
@@ -549,7 +550,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if s.chainSvc != nil && !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
+	if !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
 		log.Warn("getExecutionPayloadBid: returning 204 — builder not active on chain")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -598,11 +599,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	// using the genesis fork version and a zero genesis_validators_root — an
 	// application-space domain that mirrors DomainApplicationBuilder. So auth is
 	// verified below with s.genesisForkVersion, not gloasForkVersion.
-	gloasForkVersion := s.forkVersion
-	if s.chainSvc != nil {
-		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
-			gloasForkVersion = *cs.GloasForkVersion
-		}
+
+	gloasForkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionGloas)
+	if err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to get Gloas fork version")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to get Gloas fork version")
+		return
 	}
 
 	// Parse and validate SignedRequestAuth from the request body.
@@ -651,7 +653,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 			return
 		}
 
-		if authErr := gloasauth.VerifyRequestAuth(signedAuth, proposerPubkey, s.genesisForkVersion); authErr != nil {
+		if authErr := gloasauth.VerifyRequestAuth(signedAuth, proposerPubkey, s.chainSvc.GetGenesis().GenesisForkVersion); authErr != nil {
 			log.WithError(authErr).Warn("getExecutionPayloadBid: SignedRequestAuth signature verification failed")
 			writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
 			return
@@ -688,19 +690,19 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if event.ParentBlockHash != parentHash {
+	if event.Attributes.ParentBlockHash != parentHash {
 		log.WithFields(logrus.Fields{
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.ParentBlockHash[:]),
+			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_hash does not match cached payload")
 		writeValidatorError(w, http.StatusBadRequest, "parent_hash does not match cached payload")
 		return
 	}
 
-	if event.ParentBlockRoot != parentRoot {
+	if event.Attributes.ParentBlockRoot != parentRoot {
 		log.WithFields(logrus.Fields{
 			"request_parent_root": "0x" + hex.EncodeToString(parentRoot[:]),
-			"cached_parent_root":  "0x" + hex.EncodeToString(event.ParentBlockRoot[:]),
+			"cached_parent_root":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_root does not match cached payload")
 		writeValidatorError(w, http.StatusBadRequest, "parent_root does not match cached payload")
 		return
@@ -719,14 +721,8 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		Withdrawals:    []*electra.WithdrawalRequest{},
 		Consolidations: []*electra.ConsolidationRequest{},
 	}
-	if len(event.ExecutionRequests) > 0 {
-		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
-		if parseErr != nil {
-			log.WithError(parseErr).Warn("getExecutionPayloadBid: failed to parse execution requests")
-			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
-			return
-		}
-		execRequests = parsed
+	if event.ExecutionRequests != nil {
+		execRequests = event.ExecutionRequests
 	}
 	execRequestsRoot, err := execRequests.HashTreeRoot()
 	if err != nil {
@@ -749,12 +745,12 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	value := valueAfterSubsidy - executionPayment
 
 	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       event.ParentBlockHash,
-		ParentBlockRoot:       event.ParentBlockRoot,
+		ParentBlockHash:       event.Attributes.ParentBlockHash,
+		ParentBlockRoot:       event.Attributes.ParentBlockRoot,
 		BlockHash:             event.BlockHash,
-		PrevRandao:            event.PrevRandao,
+		PrevRandao:            event.Attributes.PrevRandao,
 		FeeRecipient:          prefs.FeeRecipient,
-		GasLimit:              event.GasLimit,
+		GasLimit:              event.ExecutionPayload.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(s.builderIndex.Load()),
 		Slot:                  slot,
 		Value:                 value,
@@ -763,10 +759,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 		ExecutionRequestsRoot: execRequestsRoot,
 	}
 	if event.BlobsBundle != nil {
-		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(event.BlobsBundle.Commitments))
-		for i, c := range event.BlobsBundle.Commitments {
-			copy(bid.BlobKZGCommitments[i][:], c)
-		}
+		bid.BlobKZGCommitments = event.BlobsBundle.Commitments
 	}
 
 	bidRoot, err := bid.HashTreeRoot()
@@ -778,7 +771,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	var root phase0.Root
 	copy(root[:], bidRoot[:])
 
-	domain := signer.ComputeDomain(domainBeaconBuilder, gloasForkVersion, s.genesisValidatorsRoot)
+	domain := signer.ComputeDomain(domainBeaconBuilder, gloasForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	sig, err := s.blsSigner.SignWithDomain(root, domain)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to sign bid")
@@ -869,7 +862,7 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	gloasPayload, err := fulu.ExecutionPayloadToGloas(event.Payload)
+	gloasPayload, err := fulu.GloasPayload(event.ExecutionPayload)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to convert payload to gloas format")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to convert payload")
@@ -881,14 +874,8 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		Withdrawals:    []*electra.WithdrawalRequest{},
 		Consolidations: []*electra.ConsolidationRequest{},
 	}
-	if len(event.ExecutionRequests) > 0 {
-		parsed, parseErr := fulu.ParseExecutionRequests(event.ExecutionRequests)
-		if parseErr != nil {
-			log.WithError(parseErr).Warn("submitSignedBeaconBlock: failed to parse execution requests")
-			writeValidatorError(w, http.StatusInternalServerError, "failed to parse execution requests")
-			return
-		}
-		execRequests = parsed
+	if event.ExecutionRequests != nil {
+		execRequests = event.ExecutionRequests
 	}
 
 	beaconBlockRoot, err := block.Message.HashTreeRoot()
@@ -917,13 +904,13 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 	var root phase0.Root
 	copy(root[:], envelopeRoot[:])
 
-	envForkVersion := s.forkVersion
-	if s.chainSvc != nil {
-		if cs := s.chainSvc.GetChainSpec(); cs != nil && cs.GloasForkVersion != nil {
-			envForkVersion = *cs.GloasForkVersion
-		}
+	envForkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionGloas)
+	if err != nil {
+		log.WithError(err).Warn("submitSignedBeaconBlock: failed to get Gloas fork version")
+		writeValidatorError(w, http.StatusInternalServerError, "failed to get Gloas fork version")
+		return
 	}
-	domain := signer.ComputeDomain(domainBeaconBuilder, envForkVersion, s.genesisValidatorsRoot)
+	domain := signer.ComputeDomain(domainBeaconBuilder, envForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	sig, err := s.blsSigner.SignWithDomain(root, domain)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to sign envelope")
@@ -958,8 +945,8 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 
 	var blobs, kzgProofs [][]byte
 	if event.BlobsBundle != nil && len(event.BlobsBundle.Blobs) > 0 {
-		blobs = event.BlobsBundle.Blobs
-		kzgProofs = event.BlobsBundle.Proofs
+		blobs = event.BlobsBundle.BlobsAsBytes()
+		kzgProofs = event.BlobsBundle.ProofsAsBytes()
 	}
 
 	if err := s.clClient.SubmitExecutionPayloadEnvelope(r.Context(), envelopeJSON, blobs, kzgProofs); err != nil {
@@ -1052,7 +1039,7 @@ func (s *Server) handleSubmitBuilderPreferences(w http.ResponseWriter, r *http.R
 	// Verify the BLS signature against the validator_pubkey path param (401 on failure).
 	// RequestAuth is signed with DOMAIN_REQUEST_AUTH at the genesis fork version — an
 	// application-space domain, not chain-fork bound.
-	if authErr := gloasauth.VerifyRequestAuth(req.Auth, validatorPubkey, s.genesisForkVersion); authErr != nil {
+	if authErr := gloasauth.VerifyRequestAuth(req.Auth, validatorPubkey, s.chainSvc.GetGenesis().GenesisForkVersion); authErr != nil {
 		log.WithError(authErr).Warn("submitBuilderPreferences: signature verification failed")
 		writeValidatorError(w, http.StatusUnauthorized, "invalid SignedRequestAuthV1: signature verification failed")
 		return
@@ -1161,7 +1148,7 @@ func (s *Server) handleSubmitBlindedBlockV2(w http.ResponseWriter, r *http.Reque
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
 
 	// Capture bid won data
-	numTxs := len(event.Payload.Transactions)
+	numTxs := len(event.ExecutionPayload.Transactions)
 	numBlobs := 0
 	if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
 		numBlobs = len(event.BlobsBundle.Commitments)

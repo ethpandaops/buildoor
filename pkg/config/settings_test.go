@@ -1,4 +1,4 @@
-package settings
+package config
 
 import (
 	"encoding/json"
@@ -9,7 +9,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 )
 
@@ -22,8 +21,8 @@ func testLogger() logrus.FieldLogger {
 	return l
 }
 
-func defaultsConfig() *config.Config {
-	c := config.DefaultConfig()
+func defaultsConfig() *Config {
+	c := DefaultConfig()
 	c.ApplySlotDefaults(12000)
 
 	return c
@@ -32,7 +31,7 @@ func defaultsConfig() *config.Config {
 // boot simulates a process start: it builds a fresh effective config from the
 // (possibly bumped) defaults, optionally overlays an operator-supplied subsidy,
 // and constructs a settings.Service against the shared db.
-func boot(t *testing.T, store *db.Database, defaults *config.Config, suppliedVal *uint64) *Service {
+func boot(t *testing.T, store *db.Database, defaults *Config, suppliedVal *uint64) *Service {
 	t.Helper()
 
 	eff := *defaults // value copy — the shared effective config for this "boot"
@@ -43,7 +42,7 @@ func boot(t *testing.T, store *db.Database, defaults *config.Config, suppliedVal
 		supplied[subsidyKey] = true
 	}
 
-	svc, err := New(&eff, defaults, supplied, store, testLogger())
+	svc, err := NewService(&eff, defaults, supplied, store, testLogger())
 	require.NoError(t, err)
 
 	return svc
@@ -135,7 +134,7 @@ func TestUnsuppliedUsesDefault(t *testing.T) {
 	eff := *defaults
 	eff.EPBS.BidSubsidy = 999 // present in effective but NOT operator-supplied
 
-	svc, err := New(&eff, defaults, map[string]bool{}, store, testLogger())
+	svc, err := NewService(&eff, defaults, map[string]bool{}, store, testLogger())
 	require.NoError(t, err)
 	require.Equal(t, defaults.EPBS.BidSubsidy, svc.Load().EPBS.BidSubsidy)
 }

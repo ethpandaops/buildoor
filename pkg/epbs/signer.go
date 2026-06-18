@@ -3,6 +3,7 @@ package epbs
 import (
 	"fmt"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	dynssz "github.com/pk910/dynamic-ssz"
@@ -32,7 +33,7 @@ func NewSigner(blsSigner *signer.BLSSigner) *Signer {
 // forkVersion must be the current fork version (e.g. Gloas fork version) to match
 // Prysm's verification which uses st.Fork().CurrentVersion.
 func (s *Signer) SignExecutionPayloadBid(
-	bid *gloas.ExecutionPayloadBid,
+	bid *eth2all.ExecutionPayloadBid,
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {

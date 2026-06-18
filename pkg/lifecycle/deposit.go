@@ -9,8 +9,8 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/contracts"
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
@@ -21,7 +21,7 @@ var DefaultDepositContractAddress = common.HexToAddress("0x00000000219ab540356cb
 
 // DepositService handles builder deposits and top-ups.
 type DepositService struct {
-	cfg      *builder.Config
+	cfg      *config.Config
 	chainSvc chain.Service
 	signer   *signer.BLSSigner
 	wallet   *wallet.Wallet
@@ -31,7 +31,7 @@ type DepositService struct {
 
 // NewDepositService creates a new deposit service.
 func NewDepositService(
-	cfg *builder.Config,
+	cfg *config.Config,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
@@ -68,18 +68,18 @@ func NewDepositService(
 }
 
 // IsBuilderRegistered checks if the builder is registered on the beacon chain.
-func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *builder.BuilderState, error) {
+func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *BuilderState, error) {
 	pubkey := s.signer.PublicKey()
 
 	info := s.chainSvc.GetBuilderByPubkey(pubkey)
 	if info == nil {
-		return false, &builder.BuilderState{
+		return false, &BuilderState{
 			Pubkey:       pubkey[:],
 			IsRegistered: false,
 		}, nil
 	}
 
-	return true, &builder.BuilderState{
+	return true, &BuilderState{
 		Pubkey:            pubkey[:],
 		Index:             info.Index,
 		IsRegistered:      true,

@@ -7,14 +7,14 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // BalanceService handles balance monitoring and automatic top-ups.
 type BalanceService struct {
-	cfg        *builder.Config
+	cfg        *config.Config
 	clClient   *beacon.Client
 	depositSvc *DepositService
 	bidTracker *epbs.BidTracker
@@ -24,7 +24,7 @@ type BalanceService struct {
 
 // NewBalanceService creates a new balance service.
 func NewBalanceService(
-	cfg *builder.Config,
+	cfg *config.Config,
 	clClient *beacon.Client,
 	depositSvc *DepositService,
 	bidTracker *epbs.BidTracker,

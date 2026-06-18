@@ -1,4 +1,4 @@
-package settings
+package config
 
 // Canonical settings keys. These are the persisted/override keys and are shared
 // between the field registry (fields.go) and the API handlers that apply UI

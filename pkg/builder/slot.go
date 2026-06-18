@@ -3,19 +3,20 @@ package builder
 import (
 	"sync"
 
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 // SlotManager handles slot scheduling decisions.
 type SlotManager struct {
-	cfg         *Config
+	cfg         *config.Config
 	currentSlot phase0.Slot
 	slotsBuilt  uint64
 	mu          sync.Mutex
 }
 
 // NewSlotManager creates a new slot manager.
-func NewSlotManager(cfg *Config) *SlotManager {
+func NewSlotManager(cfg *config.Config) *SlotManager {
 	return &SlotManager{
 		cfg: cfg,
 	}
@@ -35,10 +36,10 @@ func (m *SlotManager) ShouldBuildForSlot(slot phase0.Slot) bool {
 	}
 
 	switch m.cfg.Schedule.Mode {
-	case ScheduleModeAll:
+	case config.ScheduleModeAll:
 		return true
 
-	case ScheduleModeEveryN:
+	case config.ScheduleModeEveryN:
 		if m.cfg.Schedule.EveryNth == 0 {
 			return true
 		}
@@ -53,7 +54,7 @@ func (m *SlotManager) ShouldBuildForSlot(slot phase0.Slot) bool {
 
 		return slotsSinceStart%m.cfg.Schedule.EveryNth == 0
 
-	case ScheduleModeNextN:
+	case config.ScheduleModeNextN:
 		if m.cfg.Schedule.NextN == 0 {
 			return false
 		}
@@ -75,14 +76,14 @@ func (m *SlotManager) OnSlotBuilt(slot phase0.Slot) {
 }
 
 // UpdateConfig updates the slot manager configuration.
-func (m *SlotManager) UpdateConfig(cfg *Config) {
+func (m *SlotManager) UpdateConfig(cfg *config.Config) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	m.cfg = cfg
 
 	// Reset slots built if mode changed to next_n
-	if cfg.Schedule.Mode == ScheduleModeNextN {
+	if cfg.Schedule.Mode == config.ScheduleModeNextN {
 		m.slotsBuilt = 0
 	}
 }
@@ -93,7 +94,7 @@ func (m *SlotManager) GetSlotsRemaining() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.cfg.Schedule.Mode != ScheduleModeNextN {
+	if m.cfg.Schedule.Mode != config.ScheduleModeNextN {
 		return -1
 	}
 

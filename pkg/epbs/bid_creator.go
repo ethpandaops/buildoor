@@ -2,9 +2,9 @@ package epbs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
@@ -14,7 +14,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
-	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -22,8 +22,7 @@ import (
 type BidCreator struct {
 	signer       *Signer
 	clClient     *beacon.Client
-	genesis      *beacon.Genesis
-	chainSpec    *beacon.ChainSpec
+	chainSvc     chain.Service
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -32,16 +31,14 @@ type BidCreator struct {
 func NewBidCreator(
 	signer *Signer,
 	clClient *beacon.Client,
-	genesis *beacon.Genesis,
-	chainSpec *beacon.ChainSpec,
+	chainSvc chain.Service,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *BidCreator {
 	return &BidCreator{
 		signer:       signer,
 		clClient:     clClient,
-		genesis:      genesis,
-		chainSpec:    chainSpec,
+		chainSvc:     chainSvc,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "bid-creator"),
 	}
@@ -60,13 +57,9 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	// Compute the execution requests root over the typed Electra requests.
 	// Empty requests root is the HTR of an empty *electra.ExecutionRequests.
-	execRequests := &electra.ExecutionRequests{}
-	if len(payload.ExecutionRequests) > 0 {
-		parsed, err := fulu.ParseExecutionRequests(payload.ExecutionRequests)
-		if err != nil {
-			return fmt.Errorf("failed to parse execution requests: %w", err)
-		}
-		execRequests = parsed
+	execRequests := payload.ExecutionRequests
+	if execRequests == nil {
+		execRequests = &electra.ExecutionRequests{}
 	}
 	// Use dynssz so preset-dependent list limits resolve from the global spec
 	// (matches the node's computation on non-mainnet presets).
@@ -76,78 +69,66 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	// Build the execution payload bid
-	bid := &gloas.ExecutionPayloadBid{
-		ParentBlockHash:       payload.ParentBlockHash,
-		ParentBlockRoot:       payload.ParentBlockRoot,
+	bid := &eth2all.ExecutionPayloadBid{
+		Version:               payload.ExecutionPayload.Version,
+		ParentBlockHash:       payload.Attributes.ParentBlockHash,
+		ParentBlockRoot:       payload.Attributes.ParentBlockRoot,
 		BlockHash:             payload.BlockHash,
-		PrevRandao:            payload.PrevRandao,
+		PrevRandao:            payload.Attributes.PrevRandao,
 		FeeRecipient:          feeRecipient,
-		GasLimit:              payload.GasLimit,
+		GasLimit:              payload.ExecutionPayload.GasLimit,
 		BuilderIndex:          gloas.BuilderIndex(c.builderIndex),
-		Slot:                  payload.Slot,
+		Slot:                  payload.Attributes.ProposalSlot,
 		Value:                 phase0.Gwei(bidValue),
 		ExecutionPayment:      0,
 		BlobKZGCommitments:    []deneb.KZGCommitment{},
 		ExecutionRequestsRoot: execRequestsRoot,
+		InclusionListBits:     []byte{0xff, 0xff}, // TODO: Set a proper value here
+	}
+
+	if payload.BlobsBundle != nil {
+		bid.BlobKZGCommitments = payload.BlobsBundle.Commitments
 	}
 
 	c.log.Info("Created execution payload bid")
 
-	if payload.BlobsBundle != nil {
-		bid.BlobKZGCommitments = make([]deneb.KZGCommitment, len(payload.BlobsBundle.Commitments))
-		for i, c := range payload.BlobsBundle.Commitments {
-			copy(bid.BlobKZGCommitments[i][:], c)
-		}
-	}
-
-	c.log.Info("Populated bid with blobs")
-
-	c.log.Info("Signing bid before submitting")
 	// Sign the bid using proper domain.
-	// Prysm verifies using st.Fork().CurrentVersion — we must use the Gloas fork version.
-	var forkVersion phase0.Version
-	if c.chainSpec.GloasForkVersion != nil {
-		forkVersion = *c.chainSpec.GloasForkVersion
+	forkVersion, err := c.chainSvc.GetForkVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get Gloas fork version: %w", err)
 	}
 
 	signature, err := c.signer.SignExecutionPayloadBid(
 		bid,
 		forkVersion,
-		c.genesis.GenesisValidatorsRoot,
+		c.chainSvc.GetGenesis().GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to sign bid: %w", err)
 	}
 
-	c.log.Info("Signed bid successfully!")
-
 	// Create signed bid
-	signedBid := &gloas.SignedExecutionPayloadBid{
+	signedBid := &eth2all.SignedExecutionPayloadBid{
+		Version:   payload.ExecutionPayload.Version,
 		Message:   bid,
 		Signature: signature,
 	}
 
-	// Marshal to JSON for submission
-	signedBidJSON, err := json.Marshal(signedBid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal signed bid: %w", err)
-	}
-
 	logger := c.log.WithFields(logrus.Fields{
-		"slot":              payload.Slot,
+		"slot":              payload.Attributes.ProposalSlot,
 		"value":             bidValue,
 		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"builder_index":     c.builderIndex,
 		"fee_recipient":     payload.FeeRecipient.Hex(),
-		"gas_limit":         payload.GasLimit,
-		"parent_block_hash": fmt.Sprintf("%x", payload.ParentBlockHash[:8]),
-		"parent_block_root": fmt.Sprintf("%x", payload.ParentBlockRoot[:8]),
+		"gas_limit":         payload.ExecutionPayload.GasLimit,
+		"parent_block_hash": fmt.Sprintf("%x", payload.Attributes.ParentBlockHash[:8]),
+		"parent_block_root": fmt.Sprintf("%x", payload.Attributes.ParentBlockRoot[:8]),
 	})
 
-	logger.Info("Submitting bid")
+	logger.Info("Created and signed bid successfully!")
 
 	// Submit bid
-	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBidJSON); err != nil {
+	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBid); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
 	}
 

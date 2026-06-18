@@ -29,7 +29,7 @@ func TestGetBuilderPreferences_NotEnabled(t *testing.T) {
 
 func TestGetBuilderPreferences_ReturnsEntries(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
-	srv := builderapi.NewServer(cfg, logrus.New(), nil, nil, nil, phase0.Version{}, phase0.Version{}, phase0.Root{})
+	srv := builderapi.NewServer(cfg, logrus.New(), nil, nil, nil, nil)
 
 	var pk phase0.BLSPubKey
 	pk[0] = 0xab

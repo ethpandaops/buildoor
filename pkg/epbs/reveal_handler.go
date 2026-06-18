@@ -7,10 +7,10 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -18,8 +18,7 @@ import (
 type RevealHandler struct {
 	signer       *Signer
 	clClient     *beacon.Client
-	genesis      *beacon.Genesis
-	chainSpec    *beacon.ChainSpec
+	chainSvc     chain.Service
 	builderIndex uint64
 	log          logrus.FieldLogger
 }
@@ -28,16 +27,14 @@ type RevealHandler struct {
 func NewRevealHandler(
 	signer *Signer,
 	clClient *beacon.Client,
-	genesis *beacon.Genesis,
-	chainSpec *beacon.ChainSpec,
+	chainSvc chain.Service,
 	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *RevealHandler {
 	return &RevealHandler{
 		signer:       signer,
 		clClient:     clClient,
-		genesis:      genesis,
-		chainSpec:    chainSpec,
+		chainSvc:     chainSvc,
 		builderIndex: builderIndex,
 		log:          log.WithField("component", "reveal-handler"),
 	}
@@ -49,18 +46,13 @@ func (h *RevealHandler) SubmitReveal(
 	payload *BuiltPayload,
 	blockInfo *beacon.BlockInfo,
 ) error {
-	gloasPayload, err := fulu.ExecutionPayloadToGloas(payload.ExecutionPayload)
+	gloasPayload, err := fulu.GloasPayload(payload.ExecutionPayload)
 	if err != nil {
 		return fmt.Errorf("failed to convert payload to gloas format: %w", err)
 	}
 
-	var execRequests *electra.ExecutionRequests
-	if len(payload.ExecutionRequests) > 0 {
-		execRequests, err = fulu.ParseExecutionRequests(payload.ExecutionRequests)
-		if err != nil {
-			return fmt.Errorf("failed to parse execution requests: %w", err)
-		}
-	} else {
+	execRequests := payload.ExecutionRequests
+	if execRequests == nil {
 		execRequests = &electra.ExecutionRequests{
 			Deposits:       make([]*electra.DepositRequest, 0),
 			Withdrawals:    make([]*electra.WithdrawalRequest, 0),
@@ -76,15 +68,15 @@ func (h *RevealHandler) SubmitReveal(
 		ParentBeaconBlockRoot: blockInfo.ParentRoot,
 	}
 
-	var forkVersion phase0.Version
-	if h.chainSpec.GloasForkVersion != nil {
-		forkVersion = *h.chainSpec.GloasForkVersion
+	forkVersion, err := h.chainSvc.GetForkVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get current fork version: %w", err)
 	}
 
 	signature, err := h.signer.SignExecutionPayloadEnvelope(
 		envelope,
 		forkVersion,
-		h.genesis.GenesisValidatorsRoot,
+		h.chainSvc.GetGenesis().GenesisValidatorsRoot,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to sign envelope: %w", err)
@@ -104,8 +96,8 @@ func (h *RevealHandler) SubmitReveal(
 	var cellProofs [][]byte
 
 	if payload.BlobsBundle != nil && len(payload.BlobsBundle.Blobs) > 0 {
-		blobs = payload.BlobsBundle.Blobs
-		cellProofs = payload.BlobsBundle.Proofs
+		blobs = payload.BlobsBundle.BlobsAsBytes()
+		cellProofs = payload.BlobsBundle.ProofsAsBytes()
 
 		h.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),

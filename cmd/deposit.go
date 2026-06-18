@@ -8,7 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -66,7 +66,15 @@ var depositCmd = &cobra.Command{
 		}
 
 		// Get chain spec and genesis
-		chainSpec, err := clClient.GetChainSpec(ctx)
+		specData, rawData, err := clClient.GetRawSpecData(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
+
+		chainSpec, err := chain.ParseChainSpec(specData, rawData)
+		if err != nil {
+			return fmt.Errorf("failed to get chain spec: %w", err)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to get chain spec: %w", err)
 		}

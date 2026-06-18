@@ -1,100 +1,58 @@
 package builder
 
 import (
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/big"
-	"strconv"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
 
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
+	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
+	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 )
 
 const maxExtraDataSize = 32
 
-// fullPayloadJSON is the full execution payload as returned by the engine API.
-// All fields are in engine API format (camelCase, hex-encoded numerics).
-type fullPayloadJSON struct {
-	ParentHash      string          `json:"parentHash"`
-	FeeRecipient    string          `json:"feeRecipient"`
-	StateRoot       string          `json:"stateRoot"`
-	ReceiptsRoot    string          `json:"receiptsRoot"`
-	LogsBloom       string          `json:"logsBloom"`
-	PrevRandao      string          `json:"prevRandao"`
-	BlockNumber     string          `json:"blockNumber"`
-	GasLimit        string          `json:"gasLimit"`
-	GasUsed         string          `json:"gasUsed"`
-	Timestamp       string          `json:"timestamp"`
-	ExtraData       string          `json:"extraData"`
-	BaseFeePerGas   string          `json:"baseFeePerGas"`
-	BlockHash       string          `json:"blockHash"`
-	Transactions    []string        `json:"transactions"`
-	Withdrawals     json.RawMessage `json:"withdrawals"`
-	BlobGasUsed     string          `json:"blobGasUsed"`
-	ExcessBlobGas   string          `json:"excessBlobGas"`
-	BlockAccessList json.RawMessage `json:"blockAccessList"` // Amsterdam (V6+)
-	SlotNumber      string          `json:"slotNumber"`      // Amsterdam (V6+)
-}
-
-// engineWithdrawalJSON is the JSON format for withdrawals in the engine API.
-type engineWithdrawalJSON struct {
-	Index          string `json:"index"`
-	ValidatorIndex string `json:"validatorIndex"`
-	Address        string `json:"address"`
-	Amount         string `json:"amount"`
-}
-
-// ModifyPayloadExtraData modifies the extraData field of an execution payload
-// and recomputes the block hash. It prepends the given prefix to the existing
-// extra data, truncating the original if necessary to stay within the 32-byte limit.
+// ModifyPayloadExtraData rewrites the extraData field of a built execution
+// payload in place, prepending the given prefix (truncating the original to
+// stay within the 32-byte limit), recomputes the block hash, updates the
+// payload's BlockHash field, and returns the new hash.
 //
 // The parentBeaconBlockRoot is required because it is part of the block header
-// (and therefore affects the block hash) but is NOT included in the execution
-// payload JSON from the engine API.
+// (and therefore affects the block hash) but is not carried in the execution
+// payload itself.
 //
-// executionRequests contains the raw EIP-7685 execution requests from the
-// engine API response (Electra+). These are needed to compute the requestsHash
+// executionRequests carries the EIP-7685 execution requests from the engine
+// API response (Electra/Prague+); they are needed to compute the requestsHash
 // header field. Pass nil for pre-Electra payloads.
 //
-// The function first verifies that it can correctly reconstruct the original
-// block hash from the payload fields. If verification fails (e.g., due to an
-// unhandled fork adding new header fields), it returns an error rather than
-// producing an incorrect hash.
+// The function first verifies it can reconstruct the original block hash from
+// the payload fields. If verification fails (e.g. an unhandled fork added new
+// header fields) it returns an error rather than producing an incorrect hash.
 func ModifyPayloadExtraData(
-	payloadJSON json.RawMessage,
+	p *engineall.ExecutionPayload,
+	executionRequests []prague.ExecutionRequest,
 	extraDataPrefix []byte,
 	parentBeaconBlockRoot common.Hash,
-	executionRequests engine.ExecutionRequests,
-) (json.RawMessage, common.Hash, error) {
-	// Parse the full execution payload
-	var payload fullPayloadJSON
-	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
-		return nil, common.Hash{}, fmt.Errorf("failed to unmarshal payload: %w", err)
-	}
-
-	// Build a types.Header from the payload fields
-	header, err := buildHeaderFromPayload(&payload, parentBeaconBlockRoot, executionRequests)
+) (common.Hash, error) {
+	header, err := buildHeaderFromPayload(p, parentBeaconBlockRoot, executionRequests)
 	if err != nil {
-		return nil, common.Hash{}, fmt.Errorf("failed to build header from payload: %w", err)
+		return common.Hash{}, fmt.Errorf("failed to build header from payload: %w", err)
 	}
 
-	// Verify our reconstruction matches the original block hash.
-	// This catches cases where the fork has added new header fields
-	// that we don't handle yet.
-	originalHash := common.HexToHash(payload.BlockHash)
+	// Verify our reconstruction matches the original block hash. This catches
+	// cases where the fork added new header fields we don't handle yet.
+	originalHash := common.Hash(p.BlockHash)
 	computedHash := header.Hash()
 
 	if computedHash != originalHash {
-		// Fallback: try toggling requestsHash.
-		// The engine API may not always clearly signal whether executionRequests
-		// are present (e.g., field absent vs null vs empty array). Try the
-		// opposite setting to handle edge cases.
+		// Fallback: try toggling requestsHash. The engine API may not always
+		// clearly signal whether executionRequests are present (field absent
+		// vs null vs empty array). Try the opposite setting.
 		if header.RequestsHash == nil {
 			emptyReqHash := types.CalcRequestsHash(nil)
 			header.RequestsHash = &emptyReqHash
@@ -104,7 +62,7 @@ func ModifyPayloadExtraData(
 
 		computedHash = header.Hash()
 		if computedHash != originalHash {
-			return nil, common.Hash{}, fmt.Errorf(
+			return common.Hash{}, fmt.Errorf(
 				"hash verification failed: computed %s but payload has %s "+
 					"(this may indicate an unhandled fork with new header fields)",
 				computedHash.Hex(), originalHash.Hex(),
@@ -112,7 +70,7 @@ func ModifyPayloadExtraData(
 		}
 	}
 
-	// Build new extra data: prefix + original (truncated to fit)
+	// Build new extra data: prefix + original (truncated to fit).
 	newExtraData := make([]byte, 0, maxExtraDataSize)
 	newExtraData = append(newExtraData, extraDataPrefix...)
 
@@ -128,104 +86,33 @@ func ModifyPayloadExtraData(
 		newExtraData = newExtraData[:maxExtraDataSize]
 	}
 
-	// Update the header and compute new hash
 	header.Extra = newExtraData
 	newHash := header.Hash()
 
-	// Update the JSON payload preserving all existing fields
-	var rawMap map[string]json.RawMessage
-	if err := json.Unmarshal(payloadJSON, &rawMap); err != nil {
-		return nil, common.Hash{}, fmt.Errorf("failed to unmarshal payload to map: %w", err)
-	}
+	p.ExtraData = newExtraData
+	p.BlockHash = paris.Hash32(newHash)
 
-	newExtraDataHex := "0x" + hex.EncodeToString(newExtraData)
-
-	rawMap["extraData"], _ = json.Marshal(newExtraDataHex)
-	rawMap["blockHash"], _ = json.Marshal(newHash.Hex())
-
-	modifiedJSON, err := json.Marshal(rawMap)
-	if err != nil {
-		return nil, common.Hash{}, fmt.Errorf("failed to marshal modified payload: %w", err)
-	}
-
-	return modifiedJSON, newHash, nil
+	return newHash, nil
 }
 
 // buildHeaderFromPayload reconstructs a go-ethereum types.Header from the
-// execution payload JSON fields. This includes deriving transactionsRoot and
-// withdrawalsRoot from the raw arrays, computing requestsHash from execution
-// requests (Electra+), and setting post-merge constants (empty uncle hash,
-// zero difficulty, zero nonce).
+// engine execution payload fields: deriving transactionsRoot and
+// withdrawalsRoot from the typed arrays, computing requestsHash from execution
+// requests (Electra+), the block-access-list hash and slot number (Amsterdam+),
+// and setting post-merge constants (empty uncle hash, zero difficulty/nonce).
 func buildHeaderFromPayload(
-	payload *fullPayloadJSON,
+	p *engineall.ExecutionPayload,
 	parentBeaconBlockRoot common.Hash,
-	executionRequests engine.ExecutionRequests,
+	executionRequests []prague.ExecutionRequest,
 ) (*types.Header, error) {
-	blockNumber, err := parseHexUint64(payload.BlockNumber)
-	if err != nil {
-		return nil, fmt.Errorf("invalid blockNumber: %w", err)
+	baseFee := new(big.Int)
+	if p.BaseFeePerGas != nil {
+		baseFee = p.BaseFeePerGas.ToBig()
 	}
 
-	gasLimit, err := parseHexUint64(payload.GasLimit)
-	if err != nil {
-		return nil, fmt.Errorf("invalid gasLimit: %w", err)
-	}
-
-	gasUsed, err := parseHexUint64(payload.GasUsed)
-	if err != nil {
-		return nil, fmt.Errorf("invalid gasUsed: %w", err)
-	}
-
-	timestamp, err := parseHexUint64(payload.Timestamp)
-	if err != nil {
-		return nil, fmt.Errorf("invalid timestamp: %w", err)
-	}
-
-	baseFeePerGas := new(big.Int)
-
-	cleaned := strings.TrimPrefix(payload.BaseFeePerGas, "0x")
-	if _, ok := baseFeePerGas.SetString(cleaned, 16); !ok {
-		return nil, fmt.Errorf("invalid baseFeePerGas: %s", payload.BaseFeePerGas)
-	}
-
-	extraData := common.FromHex(payload.ExtraData)
-
-	// Parse logs bloom (256 bytes)
-	bloomBytes := common.FromHex(payload.LogsBloom)
-
-	var bloom types.Bloom
-
-	copy(bloom[:], bloomBytes)
-
-	// Parse optional blob gas fields
-	var blobGasUsed *uint64
-
-	if payload.BlobGasUsed != "" {
-		v, err := parseHexUint64(payload.BlobGasUsed)
-		if err != nil {
-			return nil, fmt.Errorf("invalid blobGasUsed: %w", err)
-		}
-
-		blobGasUsed = &v
-	}
-
-	var excessBlobGas *uint64
-
-	if payload.ExcessBlobGas != "" {
-		v, err := parseHexUint64(payload.ExcessBlobGas)
-		if err != nil {
-			return nil, fmt.Errorf("invalid excessBlobGas: %w", err)
-		}
-
-		excessBlobGas = &v
-	}
-
-	// Decode transactions and compute Merkle root
-	txs := make(types.Transactions, 0, len(payload.Transactions))
-
-	for i, txHex := range payload.Transactions {
-		txBytes := common.FromHex(txHex)
-
+	// Decode transactions and compute Merkle root.
+	txs := make(types.Transactions, 0, len(p.Transactions))
+	for i, txBytes := range p.Transactions {
 		tx := new(types.Transaction)
 		if err := tx.UnmarshalBinary(txBytes); err != nil {
 			return nil, fmt.Errorf("failed to decode transaction %d: %w", i, err)
@@ -234,116 +121,72 @@ func buildHeaderFromPayload(
 		txs = append(txs, tx)
 	}
 
-	txRoot := types.DeriveSha(txs, trie.NewStackTrie(nil))
+	var bloom types.Bloom
+	copy(bloom[:], p.LogsBloom[:])
 
-	// Parse withdrawals and compute Merkle root
-	var withdrawalsHash *common.Hash
+	header := &types.Header{
+		ParentHash:  common.Hash(p.ParentHash),
+		UncleHash:   types.EmptyUncleHash,
+		Coinbase:    common.Address(p.FeeRecipient),
+		Root:        common.Hash(p.StateRoot),
+		TxHash:      types.DeriveSha(txs, trie.NewStackTrie(nil)),
+		ReceiptHash: common.Hash(p.ReceiptsRoot),
+		Bloom:       bloom,
+		Difficulty:  big.NewInt(0),
+		Number:      new(big.Int).SetUint64(p.BlockNumber),
+		GasLimit:    p.GasLimit,
+		GasUsed:     p.GasUsed,
+		Time:        p.Timestamp,
+		Extra:       p.ExtraData,
+		MixDigest:   common.Hash(p.PrevRandao),
+		Nonce:       types.BlockNonce{},
+		BaseFee:     baseFee,
+	}
 
-	if len(payload.Withdrawals) > 0 {
-		var engineWithdrawals []engineWithdrawalJSON
-		if err := json.Unmarshal(payload.Withdrawals, &engineWithdrawals); err != nil {
-			return nil, fmt.Errorf("failed to parse withdrawals: %w", err)
-		}
-
-		ws := make(types.Withdrawals, 0, len(engineWithdrawals))
-
-		for i, w := range engineWithdrawals {
-			idx, err := parseHexUint64(w.Index)
-			if err != nil {
-				return nil, fmt.Errorf("invalid withdrawal %d index: %w", i, err)
+	// add shanghai specific fields
+	if p.Version >= enginev.DataVersionShanghai {
+		ws := make(types.Withdrawals, len(p.Withdrawals))
+		for i, w := range p.Withdrawals {
+			ws[i] = &types.Withdrawal{
+				Index:     w.Index,
+				Validator: w.ValidatorIndex,
+				Address:   common.Address(w.Address),
+				Amount:    w.Amount,
 			}
-
-			valIdx, err := parseHexUint64(w.ValidatorIndex)
-			if err != nil {
-				return nil, fmt.Errorf("invalid withdrawal %d validatorIndex: %w", i, err)
-			}
-
-			amount, err := parseHexUint64(w.Amount)
-			if err != nil {
-				return nil, fmt.Errorf("invalid withdrawal %d amount: %w", i, err)
-			}
-
-			ws = append(ws, &types.Withdrawal{
-				Index:     idx,
-				Validator: valIdx,
-				Address:   common.HexToAddress(w.Address),
-				Amount:    amount,
-			})
 		}
 
 		wRoot := types.DeriveSha(ws, trie.NewStackTrie(nil))
-		withdrawalsHash = &wRoot
+		header.WithdrawalsHash = &wRoot
 	}
 
-	// Compute requestsHash from execution requests (EIP-7685, Electra+).
-	// executionRequests is non-nil (possibly empty) when the engine API response
-	// included the field, indicating Electra+ where requestsHash is always
-	// required in the block header.
-	var requestsHash *common.Hash
+	// add cancun specific fields
+	if p.Version >= enginev.DataVersionCancun {
+		header.BlobGasUsed = &p.BlobGasUsed
+		header.ExcessBlobGas = &p.ExcessBlobGas
+		header.ParentBeaconRoot = &parentBeaconBlockRoot
+	}
 
-	if executionRequests != nil {
+	// add prague specific fields
+	if p.Version >= enginev.DataVersionPrague {
 		reqBytes := make([][]byte, len(executionRequests))
 		for i, req := range executionRequests {
 			reqBytes[i] = req
 		}
+
 		h := types.CalcRequestsHash(reqBytes)
-		requestsHash = &h
+		header.RequestsHash = &h
 	}
 
-	// Amsterdam (EIP-7732 / EIP-7928): slotNumber and blockAccessList hash join the
-	// header. We treat the presence of slotNumber as the Amsterdam signal — geth
-	// emits it iff the payload is Amsterdam.
-	var (
-		slotNumber          *uint64
-		blockAccessListHash *common.Hash
-	)
+	// add amsterdam specific fields
+	if p.Version >= enginev.DataVersionAmsterdam {
+		sn := p.SlotNumber
+		header.SlotNumber = &sn
 
-	if payload.SlotNumber != "" {
-		sn, err := parseHexUint64(payload.SlotNumber)
-		if err != nil {
-			return nil, fmt.Errorf("invalid slotNumber: %w", err)
+		if len(p.BlockAccessList) > 0 {
+			h := crypto.Keccak256Hash(p.BlockAccessList)
+			header.BlockAccessListHash = &h
 		}
-		slotNumber = &sn
-
-		balBytes := engine.DecodeBlockAccessList(payload.BlockAccessList)
-		if len(balBytes) > 0 {
-			h := crypto.Keccak256Hash(balBytes)
-			blockAccessListHash = &h
-		}
-	}
-
-	// Construct the full block header with post-merge constants
-	header := &types.Header{
-		ParentHash:          common.HexToHash(payload.ParentHash),
-		UncleHash:           types.EmptyUncleHash,
-		Coinbase:            common.HexToAddress(payload.FeeRecipient),
-		Root:                common.HexToHash(payload.StateRoot),
-		TxHash:              txRoot,
-		ReceiptHash:         common.HexToHash(payload.ReceiptsRoot),
-		Bloom:               bloom,
-		Difficulty:          big.NewInt(0),
-		Number:              new(big.Int).SetUint64(blockNumber),
-		GasLimit:            gasLimit,
-		GasUsed:             gasUsed,
-		Time:                timestamp,
-		Extra:               extraData,
-		MixDigest:           common.HexToHash(payload.PrevRandao),
-		Nonce:               types.BlockNonce{},
-		BaseFee:             baseFeePerGas,
-		WithdrawalsHash:     withdrawalsHash,
-		BlobGasUsed:         blobGasUsed,
-		ExcessBlobGas:       excessBlobGas,
-		ParentBeaconRoot:    &parentBeaconBlockRoot,
-		RequestsHash:        requestsHash,
-		BlockAccessListHash: blockAccessListHash,
-		SlotNumber:          slotNumber,
 	}
 
 	return header, nil
-}
-
-// parseHexUint64 parses a hex string (with or without 0x prefix) as uint64.
-func parseHexUint64(s string) (uint64, error) {
-	cleaned := strings.TrimPrefix(s, "0x")
-	return strconv.ParseUint(cleaned, 16, 64)
 }

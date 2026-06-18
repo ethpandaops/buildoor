@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/settings"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -248,19 +247,19 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 	updates := map[string]json.RawMessage{}
 	if req.Mode != "" {
-		updates[settings.KeyScheduleMode] = mustJSON(req.Mode)
+		updates[config.KeyScheduleMode] = mustJSON(req.Mode)
 	}
 
 	if req.EveryNth > 0 {
-		updates[settings.KeyScheduleEveryNth] = mustJSON(req.EveryNth)
+		updates[config.KeyScheduleEveryNth] = mustJSON(req.EveryNth)
 	}
 
 	if req.NextN > 0 {
-		updates[settings.KeyScheduleNextN] = mustJSON(req.NextN)
+		updates[config.KeyScheduleNextN] = mustJSON(req.NextN)
 	}
 
 	if req.StartSlot != nil {
-		updates[settings.KeyScheduleStartSlot] = mustJSON(*req.StartSlot)
+		updates[config.KeyScheduleStartSlot] = mustJSON(*req.StartSlot)
 	}
 
 	if !h.applySettings(w, r, token, "config.schedule", req, updates) {
@@ -300,39 +299,39 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 
 	updates := map[string]json.RawMessage{}
 	if req.BuildStartTime != nil {
-		updates[settings.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
+		updates[config.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
 	}
 
 	if req.BidStartTime != nil {
-		updates[settings.KeyEPBSBidStartTime] = mustJSON(*req.BidStartTime)
+		updates[config.KeyEPBSBidStartTime] = mustJSON(*req.BidStartTime)
 	}
 
 	if req.BidEndTime != nil {
-		updates[settings.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
+		updates[config.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
 	}
 
 	if req.RevealTime != nil {
-		updates[settings.KeyEPBSRevealTime] = mustJSON(*req.RevealTime)
+		updates[config.KeyEPBSRevealTime] = mustJSON(*req.RevealTime)
 	}
 
 	if req.BidMinAmount != nil {
-		updates[settings.KeyEPBSBidMinAmount] = mustJSON(*req.BidMinAmount)
+		updates[config.KeyEPBSBidMinAmount] = mustJSON(*req.BidMinAmount)
 	}
 
 	if req.BidIncrease != nil {
-		updates[settings.KeyEPBSBidIncrease] = mustJSON(*req.BidIncrease)
+		updates[config.KeyEPBSBidIncrease] = mustJSON(*req.BidIncrease)
 	}
 
 	if req.BidInterval != nil {
-		updates[settings.KeyEPBSBidInterval] = mustJSON(*req.BidInterval)
+		updates[config.KeyEPBSBidInterval] = mustJSON(*req.BidInterval)
 	}
 
 	if req.PayloadBuildDelay != nil {
-		updates[settings.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
+		updates[config.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
 	}
 
 	if req.BidSubsidy != nil {
-		updates[settings.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
+		updates[config.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
 	}
 
 	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
@@ -608,11 +607,11 @@ func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request)
 
 	updates := map[string]json.RawMessage{}
 	if req.BuildStartTime != nil {
-		updates[settings.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
+		updates[config.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
 	}
 
 	if req.PayloadBuildDelay != nil {
-		updates[settings.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
+		updates[config.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
 	}
 
 	if !h.applySettings(w, r, token, "config.builder", req, updates) {
@@ -638,7 +637,7 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 
 	updates := map[string]json.RawMessage{}
 	if req.BlockValueSubsidyGwei != nil {
-		updates[settings.KeyBuilderAPISubsidy] = mustJSON(*req.BlockValueSubsidyGwei)
+		updates[config.KeyBuilderAPISubsidy] = mustJSON(*req.BlockValueSubsidyGwei)
 	}
 
 	if !h.applySettings(w, r, token, "config.builder-api", req, updates) {
@@ -664,11 +663,11 @@ func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Reques
 
 	updates := map[string]json.RawMessage{}
 	if req.TopupThreshold != nil {
-		updates[settings.KeyTopupThreshold] = mustJSON(*req.TopupThreshold)
+		updates[config.KeyTopupThreshold] = mustJSON(*req.TopupThreshold)
 	}
 
 	if req.TopupAmount != nil {
-		updates[settings.KeyTopupAmount] = mustJSON(*req.TopupAmount)
+		updates[config.KeyTopupAmount] = mustJSON(*req.TopupAmount)
 	}
 
 	if !h.applySettings(w, r, token, "config.lifecycle", req, updates) {
@@ -704,15 +703,15 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 	// Only toggle modules that are actually available.
 	updates := map[string]json.RawMessage{}
 	if req.EPBSEnabled != nil && h.epbsSvc != nil {
-		updates[settings.KeyEPBSEnabled] = mustJSON(*req.EPBSEnabled)
+		updates[config.KeyEPBSEnabled] = mustJSON(*req.EPBSEnabled)
 	}
 
 	if req.BuilderAPIEnabled != nil && h.builderAPISvc != nil {
-		updates[settings.KeyBuilderAPIEnabled] = mustJSON(*req.BuilderAPIEnabled)
+		updates[config.KeyBuilderAPIEnabled] = mustJSON(*req.BuilderAPIEnabled)
 	}
 
 	if req.LifecycleEnabled != nil && h.lifecycleMgr != nil {
-		updates[settings.KeyLifecycleEnabled] = mustJSON(*req.LifecycleEnabled)
+		updates[config.KeyLifecycleEnabled] = mustJSON(*req.LifecycleEnabled)
 	}
 
 	if len(updates) > 0 {
@@ -913,7 +912,7 @@ func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Reques
 }
 
 // configToMap returns the config as a map with sensitive fields redacted.
-func configToMap(cfg *builder.Config) map[string]any {
+func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil
 	}

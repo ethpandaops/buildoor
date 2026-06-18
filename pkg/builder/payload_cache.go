@@ -37,8 +37,8 @@ func (c *PayloadCache) Store(event *PayloadReadyEvent) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.payloads[event.Slot] = event
-	c.evictOld(event.Slot)
+	c.payloads[event.Attributes.ProposalSlot] = event
+	c.evictOld(event.Attributes.ProposalSlot)
 }
 
 // Get retrieves a payload for the given slot.

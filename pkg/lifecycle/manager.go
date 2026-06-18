@@ -11,12 +11,13 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 )
 
 // LifecycleEvent represents a lifecycle action for UI logging.
@@ -28,12 +29,12 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg          *builder.Config
+	cfg          *config.Config
 	clClient     *beacon.Client
 	chainSvc     chain.Service
 	signer       *signer.BLSSigner
 	wallet       *wallet.Wallet
-	builderState *builder.BuilderState
+	builderState *BuilderState
 	stateMu      sync.RWMutex
 	depositSvc   *DepositService
 	balanceSvc   *BalanceService
@@ -52,7 +53,7 @@ type Manager struct {
 
 // NewManager creates a new lifecycle manager.
 func NewManager(
-	cfg *builder.Config,
+	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
@@ -67,7 +68,7 @@ func NewManager(
 		chainSvc:     chainSvc,
 		signer:       blsSigner,
 		wallet:       w,
-		builderState: &builder.BuilderState{},
+		builderState: &BuilderState{},
 		log:          managerLog,
 		stopCh:       make(chan struct{}),
 	}
@@ -142,7 +143,7 @@ func (m *Manager) Stop() {
 }
 
 // GetBuilderState returns the current builder state.
-func (m *Manager) GetBuilderState() *builder.BuilderState {
+func (m *Manager) GetBuilderState() *BuilderState {
 	m.stateMu.RLock()
 	defer m.stateMu.RUnlock()
 
@@ -259,7 +260,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 			info := m.chainSvc.GetBuilderByPubkey(pubkey)
 			if info != nil {
 				m.stateMu.Lock()
-				m.builderState = &builder.BuilderState{
+				m.builderState = &BuilderState{
 					Pubkey:            pubkey[:],
 					Index:             info.Index,
 					IsRegistered:      true,
@@ -309,17 +310,13 @@ func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 		return
 	}
 
-	// Step 1: Wait for Gloas fork activation if not yet active
-	if !m.chainSvc.IsGloas() {
-		m.log.Info("Waiting for Gloas fork activation before builder registration")
-		m.fireEvent("waiting_gloas", "Waiting for Gloas fork activation before builder registration", "info")
-
-		if !m.waitForGloas(ctx) {
-			return // stopped or context cancelled
-		}
-
-		m.log.Info("Gloas fork activated, proceeding with registration")
-		m.fireEvent("state_change", "Gloas fork activated, proceeding with builder registration", "success")
+	// Step 1: Wait until the chain has loaded a Gloas (or later) beacon state.
+	// The on-chain builder set is available from the first Gloas EpochStats; the
+	// fork being active by epoch is not sufficient — the state must be fetched
+	// and cached before we can tell whether this builder is already registered
+	// (otherwise we'd read an empty set and deposit again unnecessarily).
+	if !m.waitForGloasState(ctx) {
+		return // stopped or context cancelled
 	}
 
 	// Step 2: Ensure builder is registered (with retries)
@@ -359,10 +356,22 @@ func (m *Manager) waitForEnabled(ctx context.Context) bool {
 	}
 }
 
-// waitForGloas waits for the Gloas fork to activate by subscribing to epoch stats.
-func (m *Manager) waitForGloas(ctx context.Context) bool {
+// waitForGloasState blocks until the chain service has loaded a Gloas (or later)
+// beacon state — the first EpochStats from which the on-chain builder set is
+// available. It logs/fires a waiting event only when it actually has to wait.
+// Returns false if the context is cancelled or the manager is stopped.
+func (m *Manager) waitForGloasState(ctx context.Context) bool {
+	// Subscribe before reading the current stats so the transition can't slip
+	// through between the check below and the subscription.
 	epochSub := m.chainSvc.SubscribeEpochStats()
 	defer epochSub.Unsubscribe()
+
+	if stats := m.chainSvc.GetCurrentEpochStats(); stats != nil && stats.Version >= version.DataVersionGloas {
+		return true
+	}
+
+	m.log.Info("Waiting for first Gloas beacon state before builder registration")
+	m.fireEvent("waiting_gloas", "Waiting for Gloas state before builder registration", "info")
 
 	for {
 		select {
@@ -375,7 +384,10 @@ func (m *Manager) waitForGloas(ctx context.Context) bool {
 				return false
 			}
 
-			if stats.IsGloas {
+			if stats.Version >= version.DataVersionGloas {
+				m.log.Info("Gloas state loaded, proceeding with builder registration")
+				m.fireEvent("state_change", "Gloas state loaded, proceeding with builder registration", "success")
+
 				return true
 			}
 		}
@@ -468,7 +480,7 @@ func (m *Manager) refreshBuilderState() {
 
 	m.stateMu.Lock()
 	oldBalance := m.builderState.Balance
-	m.builderState = &builder.BuilderState{
+	m.builderState = &BuilderState{
 		Pubkey:            pubkey[:],
 		Index:             info.Index,
 		IsRegistered:      true,

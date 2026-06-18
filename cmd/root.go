@@ -9,13 +9,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
-	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
 var (
 	cfgFile string
-	cfg     *builder.Config
+	cfg     *config.Config
 	logger  *logrus.Logger
 	v       *viper.Viper
 )
@@ -88,9 +87,6 @@ func init() {
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 
-	// Validate withdrawals flag
-	rootCmd.PersistentFlags().Bool("validate-withdrawals", defaults.ValidateWithdrawals, "Validate expected vs actual withdrawals")
-
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
 
@@ -148,7 +144,7 @@ func loadConfigFile() {
 }
 
 func initConfig() error {
-	cfg = &builder.Config{
+	cfg = &config.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
 		BuilderMnemonic:   v.GetString("builder-mnemonic"),
 		BuilderKeyIndex:   v.GetUint64("builder-key-index"),
@@ -164,7 +160,7 @@ func initConfig() error {
 		LifecycleEnabled:  v.GetBool("lifecycle"),
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
-		BuilderAPI: builder.BuilderAPIConfig{
+		BuilderAPI: config.BuilderAPIConfig{
 			BuilderURL:             v.GetString("builder-api-url"),
 			RequireRequestAuth:     v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei:  v.GetUint64("builder-api-subsidy"),
@@ -173,13 +169,13 @@ func initConfig() error {
 		DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),
 		TopupAmount:    v.GetUint64("topup-amount"),
-		Schedule: builder.ScheduleConfig{
-			Mode:      builder.ScheduleMode(v.GetString("schedule-mode")),
+		Schedule: config.ScheduleConfig{
+			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
 			NextN:     v.GetUint64("schedule-next-n"),
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
-		EPBS: builder.EPBSConfig{
+		EPBS: config.EPBSConfig{
 			BuildStartTime: v.GetInt64("build-start-time"),
 			BidStartTime:   v.GetInt64("epbs-bid-start"),
 			BidEndTime:     v.GetInt64("epbs-bid-end"),
@@ -189,9 +185,8 @@ func initConfig() error {
 			BidInterval:    v.GetInt64("epbs-bid-interval"),
 			BidSubsidy:     v.GetUint64("epbs-bid-subsidy"),
 		},
-		ValidateWithdrawals: v.GetBool("validate-withdrawals"),
-		PayloadBuildTime:    v.GetUint64("payload-build-time"),
-		ValidatorRanges: builder.ValidatorRangesConfig{
+		PayloadBuildTime: v.GetUint64("payload-build-time"),
+		ValidatorRanges: config.ValidatorRangesConfig{
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
 		},
@@ -203,14 +198,4 @@ func initConfig() error {
 	}
 
 	return nil
-}
-
-// GetConfig returns the current configuration.
-func GetConfig() *builder.Config {
-	return cfg
-}
-
-// GetLogger returns the application logger.
-func GetLogger() *logrus.Logger {
-	return logger
 }

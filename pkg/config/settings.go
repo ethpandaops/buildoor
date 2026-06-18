@@ -1,15 +1,4 @@
-// Package settings is the central authority for buildoor's mutable runtime
-// configuration. It owns the effective Config that every module reads and is
-// the single writer for settings changes, layering three sources:
-//
-//	hardcoded defaults  <  CLI-supplied (flag/env/config)  <  UI override
-//
-// CLI and UI are resolved by recency (a monotonic seq), not a fixed priority: a
-// CLI value that changed since the last run wins over an older UI override,
-// while an unchanged CLI flag lets a newer UI override win. UI overrides persist
-// across restarts via the optional state-db; CLI changes are detected by diffing
-// the operator-supplied value against the last-seen one stored in the db.
-package settings
+package config
 
 import (
 	"database/sql"
@@ -20,7 +9,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 )
 
@@ -41,16 +29,22 @@ type keyState struct {
 	uiSeq    int64
 }
 
-// Service is the central settings authority. The effective Config it manages is
-// the same pointer handed to every module, so writes (applied in place under
-// the service lock) are observed live by all readers.
+// Service is the central authority for buildoor's mutable runtime configuration.
+// It owns the effective Config every module reads and is the single writer,
+// layering three sources: hardcoded defaults < CLI-supplied < UI override. CLI
+// and UI are resolved by recency (a monotonic seq), not a fixed priority: a CLI
+// value that changed since the last run wins over an older UI override, while an
+// unchanged CLI flag lets a newer UI override win. UI overrides persist across
+// restarts via the optional state-db. The effective Config is the same pointer
+// handed to every module, so writes (applied in place under the service lock)
+// are observed live by all readers.
 type Service struct {
 	log       logrus.FieldLogger
 	store     *db.Database
 	fields    []Field
 	byKey     map[string]Field
-	defaults  *config.Config // pristine, slot-adjusted defaults — the floor
-	effective *config.Config // shared config; mutated in place
+	defaults  *Config // pristine, slot-adjusted defaults — the floor
+	effective *Config // shared config; mutated in place
 
 	mu          sync.Mutex
 	seq         int64
@@ -67,7 +61,7 @@ type Service struct {
 //   - supplied maps each field key to whether the operator explicitly provided
 //     it (viper.IsSet); only supplied keys form the CLI layer.
 //   - store is the optional state-db (may be disabled).
-func New(effective, defaults *config.Config, supplied map[string]bool, store *db.Database, log logrus.FieldLogger) (*Service, error) {
+func NewService(effective, defaults *Config, supplied map[string]bool, store *db.Database, log logrus.FieldLogger) (*Service, error) {
 	s := &Service{
 		log:       log.WithField("module", "settings"),
 		store:     store,
@@ -171,9 +165,9 @@ func New(effective, defaults *config.Config, supplied map[string]bool, store *db
 	return s, nil
 }
 
-// Load returns the effective config. The returned pointer is the shared config
+// Load returns the effective  The returned pointer is the shared config
 // modules read; callers must treat it as read-only.
-func (s *Service) Load() *config.Config {
+func (s *Service) Load() *Config {
 	return s.effective
 }
 
@@ -242,21 +236,6 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 	return nil
 }
 
-// Sources returns the winning source ("default"/"cli"/"ui") for each setting
-// key, for display and audit purposes.
-func (s *Service) Sources() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	out := make(map[string]string, len(s.fields))
-
-	for _, f := range s.fields {
-		out[f.Key] = s.sourceLocked(f.Key)
-	}
-
-	return out
-}
-
 // recompute rebuilds the effective config in place: each registered field is set
 // to the highest-seq layer present (defaults are the seq-0 floor). Must hold mu.
 func (s *Service) recompute() {
@@ -278,24 +257,6 @@ func (s *Service) recompute() {
 			s.log.WithError(err).WithField("key", f.Key).Error("failed to apply setting")
 		}
 	}
-}
-
-// sourceLocked returns the winning source for a key. Must hold mu.
-func (s *Service) sourceLocked(key string) string {
-	ks := s.keyState[key]
-	src := SourceDefault
-	winSeq := int64(0)
-
-	if ks.hasCLI && ks.cliSeq > winSeq {
-		src = SourceCLI
-		winSeq = ks.cliSeq
-	}
-
-	if ks.hasUI && ks.uiSeq > winSeq {
-		src = SourceUI
-	}
-
-	return src
 }
 
 // nextSeq allocates a monotonic sequence number. Must hold mu.
@@ -338,9 +299,9 @@ func (s *Service) persist(f Field, ks *keyState, actor string) {
 // validateValue performs light per-field validation of incoming UI values.
 func validateValue(key string, v any) error {
 	if key == KeyScheduleMode {
-		mode, _ := v.(config.ScheduleMode)
+		mode, _ := v.(ScheduleMode)
 		switch mode {
-		case config.ScheduleModeAll, config.ScheduleModeEveryN, config.ScheduleModeNextN:
+		case ScheduleModeAll, ScheduleModeEveryN, ScheduleModeNextN:
 		default:
 			return fmt.Errorf("invalid schedule mode %q", mode)
 		}

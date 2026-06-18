@@ -4,10 +4,9 @@ package epbs
 import (
 	"sync"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // PendingPayment records an unrevealed won bid that may be deducted later.
@@ -34,17 +33,17 @@ type BidTracker struct {
 	pendingPayments map[phase0.Slot]*PendingPayment
 	pendingMu       sync.Mutex
 
-	chainSpec *beacon.ChainSpec
-	log       logrus.FieldLogger
+	chainSvc chain.Service
+	log      logrus.FieldLogger
 }
 
 // NewBidTracker creates a new bid tracker.
-func NewBidTracker(ourBuilderIdx uint64, chainSpec *beacon.ChainSpec, log logrus.FieldLogger) *BidTracker {
+func NewBidTracker(ourBuilderIdx uint64, chainSvc chain.Service, log logrus.FieldLogger) *BidTracker {
 	return &BidTracker{
 		slotBids:        make(map[phase0.Slot]*SlotBids, 64),
 		ourBuilderIdx:   ourBuilderIdx,
 		pendingPayments: make(map[phase0.Slot]*PendingPayment, 16),
-		chainSpec:       chainSpec,
+		chainSvc:        chainSvc,
 		log:             log.WithField("component", "bid-tracker"),
 	}
 }
@@ -119,7 +118,7 @@ func (t *BidTracker) RecordWonBid(slot phase0.Slot, value uint64) {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
 
-	epoch := phase0.Epoch(uint64(slot) / t.chainSpec.SlotsPerEpoch)
+	epoch := t.chainSvc.GetEpochOfSlot(slot)
 
 	t.pendingPayments[slot] = &PendingPayment{
 		Slot:  slot,

@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -41,16 +43,14 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg                    *builder.EPBSConfig
-	chainSpec              *beacon.ChainSpec
-	genesis                *beacon.Genesis
+	cfg                    *config.EPBSConfig
+	chainSvc               chain.Service
 	bidCreator             *BidCreator
 	revealHandler          *RevealHandler
 	bidTracker             *BidTracker
 	payloadStore           *PayloadStore
 	payloadCache           *builder.PayloadCache
 	service                *Service // Reference to parent service for firing events
-	chainSvc               chain.Service
 	blsSigner              *signer.BLSSigner
 	hasProposerPreferences func(phase0.Slot) bool
 	log                    logrus.FieldLogger
@@ -62,31 +62,27 @@ type Scheduler struct {
 
 // NewScheduler creates a new scheduler.
 func NewScheduler(
-	cfg *builder.EPBSConfig,
-	chainSpec *beacon.ChainSpec,
-	genesis *beacon.Genesis,
+	cfg *config.EPBSConfig,
+	chainSvc chain.Service,
 	bidCreator *BidCreator,
 	revealHandler *RevealHandler,
 	bidTracker *BidTracker,
 	payloadStore *PayloadStore,
 	payloadCache *builder.PayloadCache,
 	service *Service,
-	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	hasProposerPreferences func(phase0.Slot) bool,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
 		cfg:                    cfg,
-		chainSpec:              chainSpec,
-		genesis:                genesis,
+		chainSvc:               chainSvc,
 		bidCreator:             bidCreator,
 		revealHandler:          revealHandler,
 		bidTracker:             bidTracker,
 		payloadStore:           payloadStore,
 		payloadCache:           payloadCache,
 		service:                service,
-		chainSvc:               chainSvc,
 		blsSigner:              blsSigner,
 		hasProposerPreferences: hasProposerPreferences,
 		slotStates:             make(map[phase0.Slot]*SlotState),
@@ -123,18 +119,18 @@ func (s *Scheduler) getSlotStateSafe(slot phase0.Slot) *SlotState {
 // OnPayloadReady stores the payload for reveals.
 func (s *Scheduler) OnPayloadReady(event *builder.PayloadReadyEvent) {
 	s.payloadStore.Store(&BuiltPayload{
-		Slot:              event.Slot,
+		Slot:              event.Attributes.ProposalSlot,
 		BlockHash:         event.BlockHash,
-		ParentBlockHash:   event.ParentBlockHash,
-		ParentBlockRoot:   event.ParentBlockRoot,
-		ExecutionPayload:  event.Payload,
+		ParentBlockHash:   event.Attributes.ParentBlockHash,
+		ParentBlockRoot:   event.Attributes.ParentBlockRoot,
+		ExecutionPayload:  event.ExecutionPayload,
 		BlobsBundle:       event.BlobsBundle,
 		ExecutionRequests: event.ExecutionRequests,
 		BidValue:          event.BlockValue,
 		FeeRecipient:      event.FeeRecipient,
-		Timestamp:         event.Timestamp,
-		PrevRandao:        event.PrevRandao,
-		GasLimit:          event.GasLimit,
+		Timestamp:         event.Attributes.Timestamp,
+		PrevRandao:        event.Attributes.PrevRandao,
+		GasLimit:          event.ExecutionPayload.GasLimit,
 	})
 }
 
@@ -156,20 +152,20 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	now := time.Now()
 
 	// Calculate current slot and position within slot
-	if now.Before(s.genesis.GenesisTime) {
+	genesisTime := s.chainSvc.GetGenesis().GenesisTime
+	if now.Before(genesisTime) {
 		return
 	}
 
-	elapsed := now.Sub(s.genesis.GenesisTime)
-	currentSlot := phase0.Slot(elapsed / s.chainSpec.SecondsPerSlot)
-	msIntoSlot := (elapsed % s.chainSpec.SecondsPerSlot).Milliseconds()
+	elapsed := now.Sub(genesisTime)
+	currentSlot := s.chainSvc.TimeToSlot(now)
+	// msIntoSlot is the offset within the current slot (not the time since
+	// genesis) — the bid and reveal windows are slot-relative.
+	msIntoSlot := (elapsed % s.chainSvc.GetChainSpec().SecondsPerSlot).Milliseconds()
 
 	// ePBS bids are only valid from the Gloas fork onwards.
-	if s.chainSpec.GloasForkEpoch != nil {
-		currentEpoch := uint64(currentSlot) / s.chainSpec.SlotsPerEpoch
-		if currentEpoch < *s.chainSpec.GloasForkEpoch {
-			return
-		}
+	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {
+		return
 	}
 
 	// Don't bid if the builder is not active on-chain.
@@ -181,7 +177,7 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 
 	// Check slots that might need bidding (current slot + next slot for negative bid start times)
 	s.checkSlotForBidding(ctx, currentSlot, now, msIntoSlot)
-	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSpec.SecondsPerSlot.Milliseconds()))
+	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSvc.GetChainSpec().SecondsPerSlot.Milliseconds()))
 
 	// Check for reveals
 	s.checkSlotForReveal(ctx, currentSlot, now, msIntoSlot)
@@ -453,7 +449,7 @@ func (s *Scheduler) Cleanup(olderThan phase0.Slot) {
 }
 
 // UpdateConfig updates the scheduler configuration.
-func (s *Scheduler) UpdateConfig(cfg *builder.EPBSConfig) {
+func (s *Scheduler) UpdateConfig(cfg *config.EPBSConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

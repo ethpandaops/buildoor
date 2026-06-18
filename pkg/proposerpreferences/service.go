@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -56,11 +55,6 @@ func (s *Service) Stop() {
 
 	s.wg.Wait()
 	s.log.Info("Proposer preferences service stopped")
-}
-
-// GetPreferences returns the cached proposer preferences for a given slot.
-func (s *Service) GetPreferences(slot phase0.Slot) (*gloas.SignedProposerPreferences, bool) {
-	return s.cache.Get(slot)
 }
 
 // GetCache returns the underlying cache for direct access.

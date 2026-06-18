@@ -14,7 +14,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/epbs"
-	"github.com/ethpandaops/buildoor/pkg/epbs/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -72,16 +72,17 @@ type PayloadBuildStartedStreamEvent struct {
 // received from the beacon node. It arrives before the slot it targets
 // (ProposalSlot), so the WebUI renders it on the parent slot's graph.
 type PayloadAttributesStreamEvent struct {
-	ProposalSlot      uint64 `json:"proposal_slot"`
-	ProposerIndex     uint64 `json:"proposer_index"`
-	ParentBlockHash   string `json:"parent_block_hash"`
-	ParentBlockRoot   string `json:"parent_block_root"`
-	ParentBlockNumber uint64 `json:"parent_block_number"`
-	Timestamp         uint64 `json:"timestamp"`
-	FeeRecipient      string `json:"fee_recipient"`
-	TargetGasLimit    uint64 `json:"target_gas_limit"`
-	WithdrawalsCount  int    `json:"withdrawals_count"`
-	ReceivedAt        int64  `json:"received_at"`
+	ProposalSlot       uint64 `json:"proposal_slot"`
+	ProposerIndex      uint64 `json:"proposer_index"`
+	ParentBlockHash    string `json:"parent_block_hash"`
+	ParentBlockRoot    string `json:"parent_block_root"`
+	ParentBlockNumber  uint64 `json:"parent_block_number"`
+	Timestamp          uint64 `json:"timestamp"`
+	FeeRecipient       string `json:"fee_recipient"`
+	TargetGasLimit     uint64 `json:"target_gas_limit"`
+	WithdrawalsCount   int    `json:"withdrawals_count"`
+	ReceivedAt         int64  `json:"received_at"`
+	InclusionListCount int    `json:"inclusion_list_count"`
 }
 
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
@@ -528,16 +529,17 @@ func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadA
 		Type:      EventTypePayloadAttributes,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadAttributesStreamEvent{
-			ProposalSlot:      uint64(event.ProposalSlot),
-			ProposerIndex:     uint64(event.ProposerIndex),
-			ParentBlockHash:   fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
-			ParentBlockRoot:   fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
-			ParentBlockNumber: event.ParentBlockNumber,
-			Timestamp:         event.Timestamp,
-			FeeRecipient:      event.SuggestedFeeRecipient.Hex(),
-			TargetGasLimit:    event.TargetGasLimit,
-			WithdrawalsCount:  len(event.Withdrawals),
-			ReceivedAt:        time.Now().UnixMilli(),
+			ProposalSlot:       uint64(event.ProposalSlot),
+			ProposerIndex:      uint64(event.ProposerIndex),
+			ParentBlockHash:    fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockRoot:    fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
+			ParentBlockNumber:  event.ParentBlockNumber,
+			Timestamp:          event.Timestamp,
+			FeeRecipient:       event.SuggestedFeeRecipient.Hex(),
+			TargetGasLimit:     event.TargetGasLimit,
+			InclusionListCount: len(event.InclusionListTransactions),
+			WithdrawalsCount:   len(event.Withdrawals),
+			ReceivedAt:         time.Now().UnixMilli(),
 		},
 	})
 }
@@ -555,13 +557,15 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *builder.PayloadBuil
 }
 
 func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent) {
+	slot := event.Attributes.ProposalSlot
+
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadReadyStreamEvent{
-			Slot:            uint64(event.Slot),
+			Slot:            uint64(slot),
 			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-			ParentBlockHash: fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
 			BlockValue:      event.BlockValue.String(),
 			ReadyAt:         event.ReadyAt.UnixMilli(),
 		},
@@ -569,17 +573,17 @@ func (m *EventStreamManager) handlePayloadReady(event *builder.PayloadReadyEvent
 
 	// Update slot state
 	m.slotStatesMu.Lock()
-	if state, ok := m.slotStates[event.Slot]; ok {
+	if state, ok := m.slotStates[slot]; ok {
 		state.PayloadReady = true
 	} else {
-		m.slotStates[event.Slot] = &SlotStateEvent{
-			Slot:         uint64(event.Slot),
+		m.slotStates[slot] = &SlotStateEvent{
+			Slot:         uint64(slot),
 			PayloadReady: true,
 		}
 	}
 	m.slotStatesMu.Unlock()
 
-	m.broadcastSlotState(event.Slot)
+	m.broadcastSlotState(slot)
 }
 
 func (m *EventStreamManager) handleBidSubmissionEvent(event *epbs.BidSubmissionEvent) {

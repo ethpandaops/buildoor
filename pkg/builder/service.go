@@ -7,14 +7,15 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth-engine-client/spec/identification"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/rpc/engine"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -32,13 +33,12 @@ const buildCallTimeout = 10 * time.Second
 // Building is triggered by payload_attributes events from the beacon node,
 // which contain all the information needed to build a payload.
 type Service struct {
-	cfg                    *Config
+	cfg                    *config.Config
 	clClient               *beacon.Client
 	chainSvc               chain.Service
-	engineClient           *engine.Client
+	engineClient           EngineClient
 	feeRecipient           common.Address
 	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
-	validatorIndexCache    *chain.ValidatorIndexCache // optional: index→pubkey cache so we don't query beacon every build
 	propPrefCache          *proposerpreferences.Cache // optional: proposer preferences (Gloas+)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
@@ -70,7 +70,16 @@ type Service struct {
 
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
-	elClientVersion   *engine.ClientVersion
+	elClientVersion   *ELClientVersion
+}
+
+// ELClientVersion is the execution client's identification, as returned by
+// engine_getClientVersionV1, in display-friendly string form.
+type ELClientVersion struct {
+	Code    string
+	Name    string
+	Version string
+	Commit  string
 }
 
 // NewService creates a new builder service.
@@ -78,13 +87,12 @@ type Service struct {
 // If no registration exists for a proposer, the build is skipped for that slot.
 // validatorIndexCache is optional; when set, proposer index→pubkey is read from cache instead of querying beacon state every build.
 func NewService(
-	cfg *Config,
+	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
-	engineClient *engine.Client,
+	engineClient EngineClient,
 	feeRecipient common.Address,
 	validatorStore *validators.Store,
-	validatorIndexCache *chain.ValidatorIndexCache,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "builder-service")
@@ -96,7 +104,6 @@ func NewService(
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		validatorStore:         validatorStore,
-		validatorIndexCache:    validatorIndexCache,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*PayloadReadyEvent]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
@@ -121,13 +128,12 @@ func (s *Service) Start(ctx context.Context) error {
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
+		s.chainSvc,
 		s.feeRecipient,
 		s.cfg,
 		s.log,
 		s.validatorStore,
-		s.validatorIndexCache,
 		s.propPrefCache,
-		s.chainSvc.IsGloas,
 	)
 
 	// Start event stream
@@ -160,10 +166,23 @@ func (s *Service) refreshELClientVersionLoop() {
 		ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
 		defer cancel()
 
-		v, err := s.engineClient.GetClientVersion(ctx)
-		if err != nil {
-			s.log.WithError(err).Debug("Failed to fetch EL client version")
+		versions, err := s.engineClient.ClientVersion(ctx, &identification.ClientVersion{
+			Code:    []byte("BO"),
+			Name:    []byte("buildoor"),
+			Version: []byte("0"),
+		})
+		if err != nil || len(versions) == 0 {
+			if err != nil {
+				s.log.WithError(err).Debug("Failed to fetch EL client version")
+			}
 			return
+		}
+
+		v := &ELClientVersion{
+			Code:    string(versions[0].Code),
+			Name:    string(versions[0].Name),
+			Version: string(versions[0].Version),
+			Commit:  fmt.Sprintf("%x", versions[0].Commit),
 		}
 
 		s.elClientVersionMu.Lock()
@@ -194,7 +213,7 @@ func (s *Service) refreshELClientVersionLoop() {
 
 // GetELClientVersion returns the cached EL client identification.
 // Returns nil if the EL has not yet responded or does not support engine_getClientVersionV1.
-func (s *Service) GetELClientVersion() *engine.ClientVersion {
+func (s *Service) GetELClientVersion() *ELClientVersion {
 	s.elClientVersionMu.RLock()
 	defer s.elClientVersionMu.RUnlock()
 
@@ -229,12 +248,12 @@ func (s *Service) GetStats() BuilderStats {
 }
 
 // GetConfig returns the current configuration.
-func (s *Service) GetConfig() *Config {
+func (s *Service) GetConfig() *config.Config {
 	return s.cfg
 }
 
 // UpdateConfig updates the service configuration at runtime.
-func (s *Service) UpdateConfig(cfg *Config) error {
+func (s *Service) UpdateConfig(cfg *config.Config) error {
 	s.cfg = cfg
 	s.slotManager.UpdateConfig(cfg)
 
@@ -249,7 +268,7 @@ func (s *Service) GetCurrentSlot() phase0.Slot {
 }
 
 // GetChainSpec returns the chain specification.
-func (s *Service) GetChainSpec() *beacon.ChainSpec {
+func (s *Service) GetChainSpec() *chain.ChainSpec {
 	return s.chainSvc.GetChainSpec()
 }
 
@@ -261,11 +280,6 @@ func (s *Service) GetGenesis() *beacon.Genesis {
 // GetCLClient returns the consensus layer client.
 func (s *Service) GetCLClient() *beacon.Client {
 	return s.clClient
-}
-
-// IsGloas returns whether we're on the Gloas fork.
-func (s *Service) IsGloas() bool {
-	return s.chainSvc.IsGloas()
 }
 
 // GetProposerPreferencesCache returns the proposer preferences cache.
@@ -340,7 +354,7 @@ func (s *Service) run() {
 func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 	s.log.WithFields(logrus.Fields{
 		"head_slot": event.Slot,
-		"is_gloas":  s.chainSvc.IsGloas(),
+		"fork":      s.chainSvc.GetCurrentFork().String(),
 	}).Debug("Head event received")
 
 	go s.checkPayloadInclusion(event)
@@ -366,7 +380,7 @@ func (s *Service) checkPayloadInclusion(event *beacon.HeadEvent) {
 		return
 	}
 
-	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Slot)
+	s.markPayloadWon(blockInfo.ExecutionBlockHash, payload.Attributes.ProposalSlot)
 }
 
 // handlePayloadAttributesEvent processes a payload_attributes event.
@@ -384,7 +398,7 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	// Check if the parent block hash matches one of our built payloads
 	// (this means our payload was included as the parent of this new block).
 	if payload := s.payloadCache.GetByBlockHash(event.ParentBlockHash); payload != nil {
-		s.markPayloadWon(event.ParentBlockHash, payload.Slot)
+		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
 	// Check if we should build for this slot
@@ -519,8 +533,7 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *PayloadReadyE
 		"slot":              slot,
 		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
 		"block_value":       payloadEvent.BlockValue,
-		"source":            payloadEvent.BuildSource.String(),
-		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.ParentBlockHash[:8]),
+		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
 	// Mark slot as built
@@ -586,51 +599,5 @@ func (s *Service) markPayloadWon(blockHash phase0.Hash32, slot phase0.Slot) {
 
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.BlocksIncluded++
-	})
-}
-
-// incrementStat safely increments statistics.
-func (s *Service) incrementStat(fn func(*BuilderStats)) {
-	s.statsMu.Lock()
-	defer s.statsMu.Unlock()
-
-	fn(s.stats)
-}
-
-// IncrementBidsSubmitted increments the bids submitted counter.
-// Called by the ePBS service when a bid is submitted.
-func (s *Service) IncrementBidsSubmitted() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.BidsSubmitted++
-	})
-}
-
-// IncrementBlocksIncluded increments the blocks included and bids won counters.
-// Called by the ePBS service when our payload is included in a beacon block.
-func (s *Service) IncrementBlocksIncluded() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.BlocksIncluded++
-		stats.BidsWon++
-	})
-}
-
-// IncrementRevealsSuccess increments the successful reveals counter.
-func (s *Service) IncrementRevealsSuccess() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsSuccess++
-	})
-}
-
-// IncrementRevealsFailed increments the failed reveals counter.
-func (s *Service) IncrementRevealsFailed() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsFailed++
-	})
-}
-
-// IncrementRevealsSkipped increments the skipped reveals counter.
-func (s *Service) IncrementRevealsSkipped() {
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.RevealsSkipped++
 	})
 }
