@@ -279,7 +279,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// so consumers never touch the raw engine forms.
 	beaconPayload := beaconPayloadFromEngine(enginePayload, beaconFork)
 
-	execRequests, err := ParseExecutionRequests(resp.ExecutionRequests)
+	execRequests, err := ParseExecutionRequests(resp.ExecutionRequests, beaconFork)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse execution requests: %w", err)
 	}

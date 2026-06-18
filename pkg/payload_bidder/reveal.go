@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
@@ -33,11 +32,7 @@ func BuildSignedEnvelope(
 ) (signed *eth2all.SignedExecutionPayloadEnvelope, blobs, proofs [][]byte, err error) {
 	execRequests := p.ExecutionRequests
 	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{
-			Deposits:       []*electra.DepositRequest{},
-			Withdrawals:    []*electra.WithdrawalRequest{},
-			Consolidations: []*electra.ConsolidationRequest{},
-		}
+		execRequests = &eth2all.ExecutionRequests{Version: p.ExecutionPayload.Version}
 	}
 
 	envelope := &eth2all.ExecutionPayloadEnvelope{

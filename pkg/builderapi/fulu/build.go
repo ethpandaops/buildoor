@@ -36,8 +36,16 @@ func BuildSignedBuilderBid(
 		return nil, err
 	}
 
-	execRequests := event.ExecutionRequests
-	if execRequests == nil {
+	// Fulu Builder API wire format uses electra.ExecutionRequests; builder
+	// deposit/exit requests (Gloas+) do not exist in this spec version.
+	var execRequests *electra.ExecutionRequests
+	if event.ExecutionRequests != nil {
+		execRequests = &electra.ExecutionRequests{
+			Deposits:       event.ExecutionRequests.Deposits,
+			Withdrawals:    event.ExecutionRequests.Withdrawals,
+			Consolidations: event.ExecutionRequests.Consolidations,
+		}
+	} else {
 		execRequests = &electra.ExecutionRequests{}
 	}
 
