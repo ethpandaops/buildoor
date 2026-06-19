@@ -299,6 +299,7 @@ numbered step comments there match this list 1:1):
 3. **Time-Based Scheduling**: ePBS uses precise timing relative to slot boundaries, not just event triggers
 4. **Fork Awareness**: All payload building logic checks current fork and adjusts behavior
 5. **Subscription Model**: Builder doesn't know about ePBS; ePBS subscribes to Builder's events
+6. **No function pointers as struct fields / constructor params**: Don't store callbacks like `func(slot) bool` on a struct or thread them through constructors — they are hard to read and obscure what a type actually depends on. Pass the concrete dependency (the struct that owns the behavior, e.g. `*proposerpreferences.Cache`) and call its method directly. Dispatcher subscriptions (pattern 1/2) are the sanctioned way to decouple; ad-hoc callbacks are not.
 
 ## Code Structure
 

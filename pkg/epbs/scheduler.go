@@ -14,6 +14,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -43,17 +44,17 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg                    *config.EPBSConfig
-	chainSvc               chain.Service
-	bidCreator             *BidCreator
-	revealHandler          *RevealHandler
-	bidTracker             *BidTracker
-	payloadStore           *PayloadStore
-	payloadCache           *payload_builder.PayloadCache
-	service                *Service // Reference to parent service for firing events
-	blsSigner              *signer.BLSSigner
-	hasProposerPreferences func(phase0.Slot) bool
-	log                    logrus.FieldLogger
+	cfg           *config.EPBSConfig
+	chainSvc      chain.Service
+	bidCreator    *BidCreator
+	revealHandler *RevealHandler
+	bidTracker    *BidTracker
+	payloadStore  *PayloadStore
+	payloadCache  *payload_builder.PayloadCache
+	service       *Service // Reference to parent service for firing events
+	blsSigner     *signer.BLSSigner
+	propPrefCache *proposerpreferences.Cache
+	log           logrus.FieldLogger
 
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
@@ -71,22 +72,22 @@ func NewScheduler(
 	payloadCache *payload_builder.PayloadCache,
 	service *Service,
 	blsSigner *signer.BLSSigner,
-	hasProposerPreferences func(phase0.Slot) bool,
+	propPrefCache *proposerpreferences.Cache,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:                    cfg,
-		chainSvc:               chainSvc,
-		bidCreator:             bidCreator,
-		revealHandler:          revealHandler,
-		bidTracker:             bidTracker,
-		payloadStore:           payloadStore,
-		payloadCache:           payloadCache,
-		service:                service,
-		blsSigner:              blsSigner,
-		hasProposerPreferences: hasProposerPreferences,
-		slotStates:             make(map[phase0.Slot]*SlotState),
-		log:                    log.WithField("component", "scheduler"),
+		cfg:           cfg,
+		chainSvc:      chainSvc,
+		bidCreator:    bidCreator,
+		revealHandler: revealHandler,
+		bidTracker:    bidTracker,
+		payloadStore:  payloadStore,
+		payloadCache:  payloadCache,
+		service:       service,
+		blsSigner:     blsSigner,
+		propPrefCache: propPrefCache,
+		slotStates:    make(map[phase0.Slot]*SlotState),
+		log:           log.WithField("component", "scheduler"),
 	}
 }
 
@@ -184,6 +185,11 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
+	if s.propPrefCache == nil || !s.propPrefCache.Has(slot) {
+		s.log.WithField("slot", slot).Debug("No proposer preferences for slot yet — skipping bid")
+		return
+	}
+
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
@@ -231,21 +237,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	s.mu.Unlock()
 
-	// Warn if no proposer preferences — the BN will reject the bid
-	hasPrefs := s.hasProposerPreferences != nil && s.hasProposerPreferences(slot)
-
 	s.log.WithFields(logrus.Fields{
-		"slot":                     slot,
-		"bid_value":                bidValue,
-		"bid_count":                state.BidCount,
-		"block_hash":               fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"ms_into_slot":             msRelativeToSlot,
-		"has_proposer_preferences": hasPrefs,
+		"slot":         slot,
+		"bid_value":    bidValue,
+		"bid_count":    state.BidCount,
+		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
-
-	if !hasPrefs {
-		s.log.WithField("slot", slot).Warn("No proposer preferences for slot — bid will likely be rejected by beacon node")
-	}
 
 	// Submit bid
 	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
@@ -284,17 +282,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Fire bid success event
 	if s.service != nil {
-		event := &BidSubmissionEvent{
+		s.service.FireBidSubmission(&BidSubmissionEvent{
 			Slot:      slot,
 			BlockHash: payload.BlockHash,
 			Value:     bidValue,
 			BidCount:  bidCount,
 			Success:   true,
-		}
-		if !hasPrefs {
-			event.Warning = "no proposer preferences — bid likely rejected"
-		}
-		s.service.FireBidSubmission(event)
+		})
 	}
 
 	// Increment stats (count each bid submission)
