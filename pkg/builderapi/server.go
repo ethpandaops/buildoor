@@ -30,6 +30,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
+	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/fulu"
@@ -844,7 +845,7 @@ func (s *Server) handleSubmitSignedBeaconBlock(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	beaconBlockRoot, err := block.Message.HashTreeRoot()
+	beaconBlockRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(block.Message)
 	if err != nil {
 		log.WithError(err).Warn("submitSignedBeaconBlock: failed to compute beacon block hash tree root")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to compute beacon block root")
