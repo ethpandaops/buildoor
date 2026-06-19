@@ -14,9 +14,10 @@ func DefaultConfig() *Config {
 			BlockValueSubsidyGwei:  100000, // 100k Gwei
 			GloasBuilderApiSubsidy: 0,
 		},
-		DepositAmount:  50000000000, // 50 ETH in Gwei
-		TopupThreshold: 10000000000, // 10 ETH in Gwei
-		TopupAmount:    50000000000, // 50 ETH in Gwei
+		DepositAmount:     50000000000, // 50 ETH in Gwei
+		TopupThreshold:    10000000000, // 10 ETH in Gwei
+		TopupAmount:       50000000000, // 50 ETH in Gwei
+		DepositMaxFeeGwei: 1000000,     // 0.001 ETH in Gwei; delay deposits/topups above this queue fee
 		Schedule: ScheduleConfig{
 			Mode:     ScheduleModeAll,
 			EveryNth: 1,
