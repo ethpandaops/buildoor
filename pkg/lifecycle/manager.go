@@ -81,8 +81,8 @@ func NewManager(
 
 	m.depositSvc = depositSvc
 
-	// Exit service
-	m.exitSvc = NewExitService(clClient, chainSvc, blsSigner, managerLog)
+	// Exit service (builder exit system contract, sent from the funding wallet)
+	m.exitSvc = NewExitService(chainSvc, blsSigner, w, managerLog)
 
 	return m, nil
 }
@@ -189,7 +189,12 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 	}
 
 	if err := m.depositSvc.CreateDeposit(ctx, m.cfg.DepositAmount); err != nil {
-		m.fireEvent("deposit", fmt.Sprintf("Deposit failed: %v", err), "error")
+		if isDepositDeferred(err) {
+			// Fee too high or contract not active yet — delay, don't treat as failure.
+			m.fireEvent("deposit", fmt.Sprintf("Deposit deferred: %v", err), "info")
+		} else {
+			m.fireEvent("deposit", fmt.Sprintf("Deposit failed: %v", err), "error")
+		}
 
 		return fmt.Errorf("failed to create deposit: %w", err)
 	}
@@ -209,7 +214,7 @@ func (m *Manager) CheckAndTopup(ctx context.Context) error {
 	return m.balanceSvc.CheckAndTopup(ctx)
 }
 
-// InitiateExit initiates a voluntary exit.
+// InitiateExit submits a builder exit request via the builder exit system contract.
 func (m *Manager) InitiateExit(ctx context.Context) error {
 	m.stateMu.RLock()
 	builderIndex := m.builderState.Index
@@ -219,15 +224,15 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 		return fmt.Errorf("builder not registered")
 	}
 
-	m.fireEvent("exit", fmt.Sprintf("Submitting voluntary exit for builder index %d", builderIndex), "info")
+	m.fireEvent("exit", fmt.Sprintf("Submitting builder exit for builder index %d", builderIndex), "info")
 
-	if err := m.exitSvc.CreateVoluntaryExit(ctx, builderIndex); err != nil {
+	if err := m.exitSvc.CreateExit(ctx); err != nil {
 		m.fireEvent("exit", fmt.Sprintf("Exit failed: %v", err), "error")
 
 		return err
 	}
 
-	m.fireEvent("exit", fmt.Sprintf("Voluntary exit submitted for builder index %d", builderIndex), "success")
+	m.fireEvent("exit", fmt.Sprintf("Builder exit submitted for builder index %d", builderIndex), "success")
 
 	return nil
 }
@@ -410,8 +415,13 @@ func (m *Manager) ensureRegisteredWithRetry(ctx context.Context) {
 			return
 		}
 
-		m.log.WithError(err).Warn("Builder registration attempt failed, retrying in 30s")
-		m.fireEvent("deposit", fmt.Sprintf("Registration attempt failed: %v, retrying in 30s", err), "warning")
+		if isDepositDeferred(err) {
+			// Queue fee too high or contract not active yet — keep retrying quietly.
+			m.log.WithError(err).Info("Builder registration deferred, retrying in 30s")
+		} else {
+			m.log.WithError(err).Warn("Builder registration attempt failed, retrying in 30s")
+			m.fireEvent("deposit", fmt.Sprintf("Registration attempt failed: %v, retrying in 30s", err), "warning")
+		}
 
 		select {
 		case <-ctx.Done():
@@ -454,8 +464,15 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 				m.fireEvent("balance_topup", fmt.Sprintf("Balance below threshold, topping up %d gwei", amount), "info")
 
 				if err := m.balanceSvc.CheckAndTopup(ctx); err != nil {
-					m.log.WithError(err).Warn("Balance topup failed")
-					m.fireEvent("balance_topup", fmt.Sprintf("Balance topup failed: %v", err), "error")
+					if isDepositDeferred(err) {
+						// Queue fee too high or contract not active — delay this top-up
+						// to the next monitor tick instead of failing.
+						m.log.WithError(err).Info("Balance top-up deferred")
+						m.fireEvent("balance_topup", fmt.Sprintf("Top-up deferred: %v", err), "info")
+					} else {
+						m.log.WithError(err).Warn("Balance topup failed")
+						m.fireEvent("balance_topup", fmt.Sprintf("Balance topup failed: %v", err), "error")
+					}
 				} else {
 					// Immediately reflect the topup in the live balance (no finalization delay)
 					if tracker := m.GetBidTracker(); tracker != nil {

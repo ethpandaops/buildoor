@@ -3,97 +3,91 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"time"
 
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/contracts"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
+	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
-// ExitService handles voluntary exits for builders.
+// exitGasLimit is the gas limit for builder exit transactions.
+const exitGasLimit = 200000
+
+// ExitService handles builder exits via the EIP-8282 builder exit system contract.
+//
+// Unlike a validator voluntary exit (a BLS-signed beacon message), a builder exit is
+// an execution-layer transaction to the builder exit predeploy carrying only the
+// builder pubkey as calldata. The source is the transaction sender (msg.sender), which
+// must match the builder's registered execution address — i.e. the funding wallet that
+// supplied the withdrawal credentials at deposit time. A per-request queue fee is paid
+// as msg.value.
 type ExitService struct {
-	clClient *beacon.Client
 	chainSvc chain.Service
 	signer   *signer.BLSSigner
+	wallet   *wallet.Wallet
 	log      logrus.FieldLogger
 }
 
 // NewExitService creates a new exit service.
 func NewExitService(
-	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
+	w *wallet.Wallet,
 	log logrus.FieldLogger,
 ) *ExitService {
 	return &ExitService{
-		clClient: clClient,
 		chainSvc: chainSvc,
 		signer:   blsSigner,
+		wallet:   w,
 		log:      log.WithField("component", "exit-service"),
 	}
 }
 
-// CreateVoluntaryExit creates and submits a voluntary exit for the builder.
-func (s *ExitService) CreateVoluntaryExit(ctx context.Context, builderIndex uint64) error {
-	s.log.WithField("builder_index", builderIndex).Info("Creating voluntary exit")
+// CreateExit submits a builder exit request transaction for this builder.
+//
+// Exits always proceed regardless of the configured deposit fee limit (unlike
+// deposits/top-ups, which are delayed when the fee is too high), so the operator can
+// always withdraw. The queue fee is read from the contract and paid as msg.value.
+func (s *ExitService) CreateExit(ctx context.Context) error {
+	pubkey := s.signer.PublicKey()
 
-	// Build exit message
-	currentEpoch := s.chainSvc.GetCurrentEpoch()
-	exitMsg := s.buildExitMessage(builderIndex, currentEpoch)
+	s.log.WithField("pubkey", fmt.Sprintf("0x%x", pubkey[:])).Info("Creating builder exit")
 
-	// Sign exit message
-	signedExit, err := s.signExitMessage(exitMsg)
+	calldata, err := contracts.BuildBuilderExitCalldata(pubkey[:])
 	if err != nil {
-		return fmt.Errorf("failed to sign exit: %w", err)
+		return fmt.Errorf("failed to build exit calldata: %w", err)
 	}
 
-	// Submit exit
-	if err := s.clClient.SubmitVoluntaryExit(ctx, signedExit); err != nil {
-		return fmt.Errorf("failed to submit exit: %w", err)
+	fee, active, err := contracts.ReadQueueFee(ctx, s.wallet.GetRPCClient(), contracts.BuilderExitContractAddress)
+	if err != nil {
+		return fmt.Errorf("failed to read exit queue fee: %w", err)
+	}
+
+	if !active {
+		return ErrContractNotActive
+	}
+
+	s.log.WithField("queue_fee_wei", fee.String()).Info("Builder exit prepared")
+
+	receipt, err := s.wallet.SendAndConfirm(
+		ctx,
+		contracts.BuilderExitContractAddress,
+		fee,
+		calldata,
+		exitGasLimit,
+		5*time.Minute,
+	)
+	if err != nil {
+		return fmt.Errorf("exit transaction failed: %w", err)
 	}
 
 	s.log.WithFields(logrus.Fields{
-		"builder_index": builderIndex,
-		"epoch":         currentEpoch,
-	}).Info("Voluntary exit submitted")
+		"tx_hash":      receipt.TxHash.Hex(),
+		"block_number": receipt.BlockNumber.Uint64(),
+	}).Info("Exit transaction confirmed")
 
 	return nil
-}
-
-// buildExitMessage creates a voluntary exit message.
-func (s *ExitService) buildExitMessage(builderIndex uint64, epoch phase0.Epoch) *phase0.VoluntaryExit {
-	return &phase0.VoluntaryExit{
-		Epoch:          epoch,
-		ValidatorIndex: phase0.ValidatorIndex(builderIndex),
-	}
-}
-
-// signExitMessage signs a voluntary exit message.
-func (s *ExitService) signExitMessage(exit *phase0.VoluntaryExit) (*phase0.SignedVoluntaryExit, error) {
-	// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
-	capellaForkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionCapella)
-	if err != nil {
-		return nil, fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
-	}
-
-	genesis := s.chainSvc.GetGenesis()
-
-	// Sign the exit
-	signature, err := s.signer.SignVoluntaryExit(
-		exit.Epoch,
-		exit.ValidatorIndex,
-		capellaForkVersion,
-		genesis.GenesisValidatorsRoot,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign exit: %w", err)
-	}
-
-	return &phase0.SignedVoluntaryExit{
-		Message:   exit,
-		Signature: signature,
-	}, nil
 }

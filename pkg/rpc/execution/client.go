@@ -155,6 +155,22 @@ func (c *Client) IsTxKnown(ctx context.Context, txHash common.Hash) (bool, error
 	return true, nil
 }
 
+// GetStorageAt returns the raw 32-byte value stored at slot for the given account
+// at the latest block. Used to read the EIP-7002/7251/8282 system-contract queue
+// excess (slot 0) for queue-fee calculation.
+func (c *Client) GetStorageAt(
+	ctx context.Context,
+	account common.Address,
+	slot common.Hash,
+) ([]byte, error) {
+	data, err := c.ethClient.StorageAt(ctx, account, slot, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get storage at %s slot %s: %w", account.Hex(), slot.Hex(), err)
+	}
+
+	return data, nil
+}
+
 // GetBalance returns the balance for an address.
 func (c *Client) GetBalance(ctx context.Context, address common.Address) (*big.Int, error) {
 	balance, err := c.ethClient.BalanceAt(ctx, address, nil)

@@ -66,6 +66,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
+	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
 
@@ -166,9 +167,10 @@ func initConfig() error {
 			BlockValueSubsidyGwei:  v.GetUint64("builder-api-subsidy"),
 			GloasBuilderApiSubsidy: v.GetUint64("gloas-builder-api-subsidy"),
 		},
-		DepositAmount:  v.GetUint64("deposit-amount"),
-		TopupThreshold: v.GetUint64("topup-threshold"),
-		TopupAmount:    v.GetUint64("topup-amount"),
+		DepositAmount:     v.GetUint64("deposit-amount"),
+		TopupThreshold:    v.GetUint64("topup-threshold"),
+		TopupAmount:       v.GetUint64("topup-amount"),
+		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
