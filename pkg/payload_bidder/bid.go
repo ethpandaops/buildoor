@@ -6,7 +6,6 @@ import (
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	dynssz "github.com/pk910/dynamic-ssz"
@@ -38,7 +37,7 @@ func BuildSignedBid(
 ) (*eth2all.SignedExecutionPayloadBid, error) {
 	execRequests := p.ExecutionRequests
 	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{}
+		execRequests = &eth2all.ExecutionRequests{Version: p.ExecutionPayload.Version}
 	}
 
 	// dynssz so preset-dependent list limits resolve from the global spec.

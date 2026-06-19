@@ -7,26 +7,36 @@ import (
 	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
+	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
+
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 )
 
 const (
-	depositRequestType       = 0x00
-	withdrawalRequestType    = 0x01
-	consolidationRequestType = 0x02
+	depositRequestType        = 0x00
+	withdrawalRequestType     = 0x01
+	consolidationRequestType  = 0x02
+	builderDepositRequestType = 0x03 // EIP-8282, Gloas+
+	builderExitRequestType    = 0x04 // EIP-8282, Gloas+
 
-	depositRequestSize       = 192 // 48 + 32 + 8 + 96 + 8
-	withdrawalRequestSize    = 76  // 20 + 48 + 8
-	consolidationRequestSize = 116 // 20 + 48 + 48
+	depositRequestSize        = 192 // 48 + 32 + 8 + 96 + 8
+	withdrawalRequestSize     = 76  // 20 + 48 + 8
+	consolidationRequestSize  = 116 // 20 + 48 + 48
+	builderDepositRequestSize = 184 // 48 + 32 + 8 + 96
+	builderExitRequestSize    = 68  // 20 + 48
 )
 
 // ParseExecutionRequests decodes raw EIP-7685 execution request bytes from the
-// Engine API into typed electra.ExecutionRequests.
+// Engine API into a versioned eth2all.ExecutionRequests.
 //
 // Each element in raw is: [type_prefix_byte || request_1 || request_2 || ...]
 // where all requests of the same type are concatenated after a single prefix byte.
-func ParseExecutionRequests(raw []prague.ExecutionRequest) (*electra.ExecutionRequests, error) {
-	result := &electra.ExecutionRequests{
+// Builder deposit (0x03) and builder exit (0x04) requests are only valid from Gloas onwards.
+func ParseExecutionRequests(raw []prague.ExecutionRequest, dataVersion version.DataVersion) (*eth2all.ExecutionRequests, error) {
+	result := &eth2all.ExecutionRequests{
+		Version:        dataVersion,
 		Deposits:       make([]*electra.DepositRequest, 0),
 		Withdrawals:    make([]*electra.WithdrawalRequest, 0),
 		Consolidations: make([]*electra.ConsolidationRequest, 0),
@@ -67,6 +77,26 @@ func ParseExecutionRequests(raw []prague.ExecutionRequest) (*electra.ExecutionRe
 				return nil, fmt.Errorf("execution request %d: %w", i, err)
 			}
 			result.Consolidations = consolidations
+
+		case builderDepositRequestType:
+			if dataVersion < version.DataVersionGloas {
+				return nil, fmt.Errorf("execution request %d: builder deposit request not valid before Gloas", i)
+			}
+			builderDeposits, err := parseBuilderDepositRequests(data)
+			if err != nil {
+				return nil, fmt.Errorf("execution request %d: %w", i, err)
+			}
+			result.BuilderDeposits = builderDeposits
+
+		case builderExitRequestType:
+			if dataVersion < version.DataVersionGloas {
+				return nil, fmt.Errorf("execution request %d: builder exit request not valid before Gloas", i)
+			}
+			builderExits, err := parseBuilderExitRequests(data)
+			if err != nil {
+				return nil, fmt.Errorf("execution request %d: %w", i, err)
+			}
+			result.BuilderExits = builderExits
 
 		default:
 			return nil, fmt.Errorf("execution request %d: unknown type 0x%02x", i, reqType)
@@ -169,4 +199,63 @@ func parseConsolidationRequests(data []byte) ([]*electra.ConsolidationRequest, e
 	}
 
 	return consolidations, nil
+}
+
+func parseBuilderDepositRequests(data []byte) ([]*gloas.BuilderDepositRequest, error) {
+	if len(data)%builderDepositRequestSize != 0 {
+		return nil, fmt.Errorf("builder deposit requests: length %d not divisible by %d", len(data), builderDepositRequestSize)
+	}
+
+	count := len(data) / builderDepositRequestSize
+	deposits := make([]*gloas.BuilderDepositRequest, count)
+
+	for i := range count {
+		d := data[i*builderDepositRequestSize : (i+1)*builderDepositRequestSize]
+
+		var pubkey phase0.BLSPubKey
+		copy(pubkey[:], d[0:48])
+
+		withdrawalCreds := make([]byte, 32)
+		copy(withdrawalCreds, d[48:80])
+
+		amount := phase0.Gwei(binary.LittleEndian.Uint64(d[80:88]))
+
+		var sig phase0.BLSSignature
+		copy(sig[:], d[88:184])
+
+		deposits[i] = &gloas.BuilderDepositRequest{
+			Pubkey:                pubkey,
+			WithdrawalCredentials: withdrawalCreds,
+			Amount:                amount,
+			Signature:             sig,
+		}
+	}
+
+	return deposits, nil
+}
+
+func parseBuilderExitRequests(data []byte) ([]*gloas.BuilderExitRequest, error) {
+	if len(data)%builderExitRequestSize != 0 {
+		return nil, fmt.Errorf("builder exit requests: length %d not divisible by %d", len(data), builderExitRequestSize)
+	}
+
+	count := len(data) / builderExitRequestSize
+	exits := make([]*gloas.BuilderExitRequest, count)
+
+	for i := range count {
+		d := data[i*builderExitRequestSize : (i+1)*builderExitRequestSize]
+
+		var addr bellatrix.ExecutionAddress
+		copy(addr[:], d[0:20])
+
+		var pubkey phase0.BLSPubKey
+		copy(pubkey[:], d[20:68])
+
+		exits[i] = &gloas.BuilderExitRequest{
+			SourceAddress: addr,
+			Pubkey:        pubkey,
+		}
+	}
+
+	return exits, nil
 }

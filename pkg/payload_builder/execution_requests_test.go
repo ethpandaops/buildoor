@@ -7,12 +7,13 @@ import (
 	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestParseExecutionRequests_Empty(t *testing.T) {
-	result, err := ParseExecutionRequests(nil)
+	result, err := ParseExecutionRequests(nil, version.DataVersionFulu)
 	require.NoError(t, err)
 	assert.Empty(t, result.Deposits)
 	assert.Empty(t, result.Withdrawals)
@@ -41,7 +42,7 @@ func TestParseExecutionRequests_SingleDeposit(t *testing.T) {
 
 	entry := append([]byte{depositRequestType}, deposit...)
 
-	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)}, version.DataVersionFulu)
 	require.NoError(t, err)
 	require.Len(t, result.Deposits, 1)
 
@@ -80,7 +81,7 @@ func TestParseExecutionRequests_MultipleDeposits(t *testing.T) {
 	data := append(d1, d2...)
 	entry := append([]byte{depositRequestType}, data...)
 
-	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)}, version.DataVersionFulu)
 	require.NoError(t, err)
 	require.Len(t, result.Deposits, 2)
 	assert.Equal(t, uint64(1), result.Deposits[0].Index)
@@ -100,7 +101,7 @@ func TestParseExecutionRequests_SingleWithdrawal(t *testing.T) {
 
 	entry := append([]byte{withdrawalRequestType}, w...)
 
-	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)}, version.DataVersionFulu)
 	require.NoError(t, err)
 	require.Len(t, result.Withdrawals, 1)
 
@@ -135,7 +136,7 @@ func TestParseExecutionRequests_SingleConsolidation(t *testing.T) {
 
 	entry := append([]byte{consolidationRequestType}, c...)
 
-	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)})
+	result, err := ParseExecutionRequests([]prague.ExecutionRequest{prague.ExecutionRequest(entry)}, version.DataVersionFulu)
 	require.NoError(t, err)
 	require.Len(t, result.Consolidations, 1)
 
@@ -176,13 +177,92 @@ func TestParseExecutionRequests_AllThreeTypes(t *testing.T) {
 		prague.ExecutionRequest(append([]byte{consolidationRequestType}, consolidation...)),
 	}
 
-	result, err := ParseExecutionRequests(raw)
+	result, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	require.NoError(t, err)
 	require.Len(t, result.Deposits, 1)
 	require.Len(t, result.Withdrawals, 1)
 	require.Len(t, result.Consolidations, 1)
 	assert.Equal(t, uint64(99), result.Deposits[0].Index)
 	assert.Equal(t, phase0.Gwei(500), result.Withdrawals[0].Amount)
+}
+
+func TestParseExecutionRequests_AllFiveTypes(t *testing.T) {
+	deposit := make([]byte, depositRequestSize)
+	binary.LittleEndian.PutUint64(deposit[184:192], 99)
+
+	withdrawal := make([]byte, withdrawalRequestSize)
+	binary.LittleEndian.PutUint64(withdrawal[68:76], 500)
+
+	consolidation := make([]byte, consolidationRequestSize)
+
+	builderDeposit := make([]byte, builderDepositRequestSize)
+	binary.LittleEndian.PutUint64(builderDeposit[80:88], 64_000_000_000)
+
+	builderExit := make([]byte, builderExitRequestSize)
+	for i := 0; i < 20; i++ {
+		builderExit[i] = 0xCC
+	}
+
+	raw := []prague.ExecutionRequest{
+		prague.ExecutionRequest(append([]byte{depositRequestType}, deposit...)),
+		prague.ExecutionRequest(append([]byte{withdrawalRequestType}, withdrawal...)),
+		prague.ExecutionRequest(append([]byte{consolidationRequestType}, consolidation...)),
+		prague.ExecutionRequest(append([]byte{builderDepositRequestType}, builderDeposit...)),
+		prague.ExecutionRequest(append([]byte{builderExitRequestType}, builderExit...)),
+	}
+
+	result, err := ParseExecutionRequests(raw, version.DataVersionGloas)
+	require.NoError(t, err)
+	require.Len(t, result.Deposits, 1)
+	require.Len(t, result.Withdrawals, 1)
+	require.Len(t, result.Consolidations, 1)
+	require.Len(t, result.BuilderDeposits, 1)
+	require.Len(t, result.BuilderExits, 1)
+	assert.Equal(t, uint64(99), result.Deposits[0].Index)
+	assert.Equal(t, phase0.Gwei(500), result.Withdrawals[0].Amount)
+	assert.Equal(t, phase0.Gwei(64_000_000_000), result.BuilderDeposits[0].Amount)
+
+	var expectedAddr bellatrix.ExecutionAddress
+	for i := range expectedAddr {
+		expectedAddr[i] = 0xCC
+	}
+	assert.Equal(t, expectedAddr, result.BuilderExits[0].SourceAddress)
+}
+
+func TestParseExecutionRequests_BuilderDepositBeforeGloas(t *testing.T) {
+	bd := make([]byte, builderDepositRequestSize)
+	entry := append([]byte{builderDepositRequestType}, bd...)
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "builder deposit request not valid before Gloas")
+}
+
+func TestParseExecutionRequests_BuilderExitBeforeGloas(t *testing.T) {
+	be := make([]byte, builderExitRequestSize)
+	entry := append([]byte{builderExitRequestType}, be...)
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "builder exit request not valid before Gloas")
+}
+
+func TestParseExecutionRequests_InvalidBuilderDepositLength(t *testing.T) {
+	data := make([]byte, 100) // not divisible by 184
+	entry := append([]byte{builderDepositRequestType}, data...)
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
+	_, err := ParseExecutionRequests(raw, version.DataVersionGloas)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not divisible by")
+}
+
+func TestParseExecutionRequests_InvalidBuilderExitLength(t *testing.T) {
+	data := make([]byte, 50) // not divisible by 68
+	entry := append([]byte{builderExitRequestType}, data...)
+	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
+	_, err := ParseExecutionRequests(raw, version.DataVersionGloas)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "not divisible by")
 }
 
 func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
@@ -193,7 +273,7 @@ func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 		{consolidationRequestType},
 	}
 
-	result, err := ParseExecutionRequests(raw)
+	result, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	require.NoError(t, err)
 	assert.Empty(t, result.Deposits)
 	assert.Empty(t, result.Withdrawals)
@@ -202,14 +282,14 @@ func TestParseExecutionRequests_TypePrefixOnly(t *testing.T) {
 
 func TestParseExecutionRequests_EmptyEntry(t *testing.T) {
 	raw := []prague.ExecutionRequest{{}}
-	_, err := ParseExecutionRequests(raw)
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty entry")
 }
 
 func TestParseExecutionRequests_UnknownType(t *testing.T) {
 	raw := []prague.ExecutionRequest{{0xFF, 0x01}}
-	_, err := ParseExecutionRequests(raw)
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown type 0xff")
 }
@@ -219,7 +299,7 @@ func TestParseExecutionRequests_InvalidDepositLength(t *testing.T) {
 	data := make([]byte, 100)
 	entry := append([]byte{depositRequestType}, data...)
 	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
-	_, err := ParseExecutionRequests(raw)
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")
 }
@@ -228,7 +308,7 @@ func TestParseExecutionRequests_InvalidWithdrawalLength(t *testing.T) {
 	data := make([]byte, 50) // not divisible by 76
 	entry := append([]byte{withdrawalRequestType}, data...)
 	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
-	_, err := ParseExecutionRequests(raw)
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")
 }
@@ -237,7 +317,7 @@ func TestParseExecutionRequests_InvalidConsolidationLength(t *testing.T) {
 	data := make([]byte, 50) // not divisible by 116
 	entry := append([]byte{consolidationRequestType}, data...)
 	raw := []prague.ExecutionRequest{prague.ExecutionRequest(entry)}
-	_, err := ParseExecutionRequests(raw)
+	_, err := ParseExecutionRequests(raw, version.DataVersionFulu)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not divisible by")
 }

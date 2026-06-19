@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -28,8 +27,8 @@ type Payload struct {
 	ExecutionPayload *eth2all.ExecutionPayload
 	// BlobsBundle holds the blobs/commitments/proofs (Deneb+), nil if none.
 	BlobsBundle *BlobsBundle
-	// ExecutionRequests are the parsed execution requests (Electra+).
-	ExecutionRequests *electra.ExecutionRequests
+	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
+	ExecutionRequests *eth2all.ExecutionRequests
 
 	// Metadata not carried by the objects above.
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
