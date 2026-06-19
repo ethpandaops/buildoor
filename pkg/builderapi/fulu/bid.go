@@ -4,9 +4,10 @@ package fulu
 import (
 	"encoding/json"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/holiman/uint256"
 	"github.com/pk910/dynamic-ssz/hasher"
 	"github.com/pk910/dynamic-ssz/sszutils"
@@ -16,7 +17,7 @@ import (
 type BuilderBid struct {
 	Header             *deneb.ExecutionPayloadHeader `json:"header"`
 	BlobKZGCommitments []deneb.KZGCommitment         `json:"blob_kzg_commitments"`
-	ExecutionRequests  *electra.ExecutionRequests    `json:"execution_requests"`
+	ExecutionRequests  *eth2all.ExecutionRequests    `json:"execution_requests"`
 	Value              *uint256.Int                  `json:"value"` // wei as uint256 in spec
 	Pubkey             phase0.BLSPubKey              `json:"pubkey"`
 }
@@ -80,7 +81,7 @@ func (b *BuilderBid) HashTreeRootWith(hh sszutils.HashWalker) error {
 			return err
 		}
 	} else {
-		empty := &electra.ExecutionRequests{}
+		empty := &eth2all.ExecutionRequests{Version: version.DataVersionFulu}
 		if err := empty.HashTreeRootWith(hh); err != nil {
 			return err
 		}
@@ -116,7 +117,7 @@ type GetHeaderResponse struct {
 type builderBidJSON struct {
 	Header             *deneb.ExecutionPayloadHeader `json:"header"`
 	BlobKZGCommitments []deneb.KZGCommitment         `json:"blob_kzg_commitments"`
-	ExecutionRequests  *electra.ExecutionRequests    `json:"execution_requests"`
+	ExecutionRequests  *eth2all.ExecutionRequests    `json:"execution_requests"`
 	Value              string                        `json:"value"`
 	Pubkey             phase0.BLSPubKey              `json:"pubkey"`
 }
