@@ -185,9 +185,6 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
-	// Don't bid without proposer preferences for this slot: the beacon node's
-	// gossip validator silently rejects such bids. Preferences arrive via gossip
-	// and may show up later in the slot, so just skip and retry on the next tick.
 	if s.propPrefCache == nil || !s.propPrefCache.Has(slot) {
 		s.log.WithField("slot", slot).Debug("No proposer preferences for slot yet — skipping bid")
 		return
