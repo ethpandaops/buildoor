@@ -33,7 +33,7 @@ func isDepositDeferred(err error) bool {
 }
 
 // depositGasLimit is the gas limit for builder deposit transactions.
-const depositGasLimit = 400000
+const depositGasLimit = 800000
 
 // DepositService handles builder deposits and top-ups via the EIP-8282 builder
 // deposit system contract.
