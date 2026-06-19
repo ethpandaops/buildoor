@@ -44,17 +44,17 @@ type SlotState struct {
 // Scheduler handles time-based bid and reveal scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg                    *config.EPBSConfig
-	chainSvc               chain.Service
-	bidCreator             *BidCreator
-	revealHandler          *RevealHandler
-	bidTracker             *BidTracker
-	payloadStore           *PayloadStore
-	payloadCache           *payload_builder.PayloadCache
-	service                *Service // Reference to parent service for firing events
-	blsSigner              *signer.BLSSigner
-	propPrefCache          *proposerpreferences.Cache
-	log                    logrus.FieldLogger
+	cfg           *config.EPBSConfig
+	chainSvc      chain.Service
+	bidCreator    *BidCreator
+	revealHandler *RevealHandler
+	bidTracker    *BidTracker
+	payloadStore  *PayloadStore
+	payloadCache  *payload_builder.PayloadCache
+	service       *Service // Reference to parent service for firing events
+	blsSigner     *signer.BLSSigner
+	propPrefCache *proposerpreferences.Cache
+	log           logrus.FieldLogger
 
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
