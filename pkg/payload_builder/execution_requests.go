@@ -35,11 +35,16 @@ const (
 // where all requests of the same type are concatenated after a single prefix byte.
 // Builder deposit (0x03) and builder exit (0x04) requests are only valid from Gloas onwards.
 func ParseExecutionRequests(raw []prague.ExecutionRequest, dataVersion version.DataVersion) (*eth2all.ExecutionRequests, error) {
+	// All lists are initialized to empty (non-nil) slices so JSON marshalling
+	// emits `[]` rather than `null`. Strict SSZ-JSON consumers (e.g. Lodestar's
+	// @chainsafe/ssz) reject `null` list fields with "JSON is not an array".
 	result := &eth2all.ExecutionRequests{
-		Version:        dataVersion,
-		Deposits:       make([]*electra.DepositRequest, 0),
-		Withdrawals:    make([]*electra.WithdrawalRequest, 0),
-		Consolidations: make([]*electra.ConsolidationRequest, 0),
+		Version:         dataVersion,
+		Deposits:        make([]*electra.DepositRequest, 0),
+		Withdrawals:     make([]*electra.WithdrawalRequest, 0),
+		Consolidations:  make([]*electra.ConsolidationRequest, 0),
+		BuilderDeposits: make([]*gloas.BuilderDepositRequest, 0),
+		BuilderExits:    make([]*gloas.BuilderExitRequest, 0),
 	}
 
 	for i, entry := range raw {
