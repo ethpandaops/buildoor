@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/ethereum/go-ethereum v1.17.3
 	github.com/ethpandaops/go-eth-engine-client v0.0.0-20260616025304-fcd77b340b2a
-	github.com/ethpandaops/go-eth2-client v0.1.4-0.20260618143220-d4d071326327
+	github.com/ethpandaops/go-eth2-client v0.1.4-0.20260618225213-e8d135e8cdc1
 	github.com/ethpandaops/service-authenticatoor v0.0.1
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2
