@@ -237,16 +237,8 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		s.builderIndex,
 		s.log,
 	)
-	// hasProposerPreferences checks whether we have cached preferences for a slot.
-	// Without them the BN's gossip validator will silently reject the bid.
-	hasProposerPreferences := func(slot phase0.Slot) bool {
-		cache := builderSvc.GetProposerPreferencesCache()
-		if cache == nil {
-			return false
-		}
-		return cache.Has(slot)
-	}
-
+	// The scheduler skips bidding for slots without cached proposer preferences:
+	// the BN's gossip validator silently rejects such bids.
 	s.scheduler = NewScheduler(
 		s.cfg,
 		s.chainSvc,
@@ -257,7 +249,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		builderSvc.GetPayloadCache(),
 		s,
 		s.blsSigner,
-		hasProposerPreferences,
+		builderSvc.GetProposerPreferencesCache(),
 		s.log,
 	)
 
