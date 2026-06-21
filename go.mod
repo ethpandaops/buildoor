@@ -4,8 +4,8 @@ go 1.25.7
 
 require (
 	github.com/ethereum/go-ethereum v1.17.3
-	github.com/ethpandaops/go-eth-engine-client v0.0.0-20260616025304-fcd77b340b2a
-	github.com/ethpandaops/go-eth2-client v0.1.4-0.20260618225213-e8d135e8cdc1
+	github.com/ethpandaops/go-eth-engine-client v0.0.1
+	github.com/ethpandaops/go-eth2-client v0.1.4
 	github.com/ethpandaops/service-authenticatoor v0.0.1
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2
@@ -14,7 +14,7 @@ require (
 	github.com/herumi/bls-eth-go-binary v1.37.0
 	github.com/holiman/uint256 v1.3.2
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/pk910/dynamic-ssz v1.3.2-0.20260523004546-c95cd65e47a2
+	github.com/pk910/dynamic-ssz v1.3.2
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/prometheus/client_golang v1.23.2
@@ -82,7 +82,7 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/transport/v2 v2.2.10 // indirect
 	github.com/pion/transport/v3 v3.0.7 // indirect
-	github.com/pk910/hashtree-bindings v0.1.0 // indirect
+	github.com/pk910/hashtree-bindings v0.2.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
