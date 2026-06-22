@@ -40,16 +40,17 @@ type Config struct {
 	DepositAmount     uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
 	TopupThreshold    uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
 	TopupAmount       uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
-	// DepositMaxFeeGwei caps the EIP-8282 builder deposit contract's per-request queue
-	// fee (in Gwei) buildoor is willing to pay. Deposits and top-ups are delayed and
-	// retried while the current fee exceeds this limit. 0 disables the limit (always pay).
-	DepositMaxFeeGwei uint64                `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig        `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig            `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
-	Debug             bool                  `yaml:"debug" json:"debug"`
-	Pprof             bool                  `yaml:"pprof" json:"pprof"`
-	PayloadBuildTime  uint64                `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
-	ValidatorRanges   ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+    DepositMaxFeeGwei uint64                `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+    Schedule          ScheduleConfig   `yaml:"schedule" json:"schedule"`
+	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	Debug             bool             `yaml:"debug" json:"debug"`
+	Pprof             bool             `yaml:"pprof" json:"pprof"`
+	PayloadBuildTime  uint64           `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	// ExtraData is the prefix injected into the built payload's extra-data field
+	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
+	// to mark blocks built by this builder. Default "buildoor/".
+	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
+	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
 	// StateDBPath, when set, enables the optional SQLite state-db at this path.
 	// It persists UI setting overrides, won blocks, validator registrations,
 	// proposer preferences and an audit log across restarts. Startup-only and
