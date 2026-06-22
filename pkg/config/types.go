@@ -34,6 +34,12 @@ type Config struct {
 	InjectHeadHTML    string           `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
 	OverviewURL       string           `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
 	LifecycleEnabled  bool             `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
+	// OnboardEarly enables onboarding the builder before the Gloas fork via the regular
+	// validator deposit contract (the deposit sits in the pending queue and converts to a
+	// builder at the fork boundary), so there is no coverage gap between the Fulu Builder-API
+	// range and Gloas. When false (default), the lifecycle manager waits for the Gloas spec
+	// and registers via the builder deposit contract after the fork.
+	OnboardEarly      bool             `yaml:"onboard_early" json:"onboard_early"`
 	EPBSEnabled       bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
 	BuilderAPIEnabled bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
 	BuilderAPI        BuilderAPIConfig `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration

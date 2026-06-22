@@ -103,5 +103,6 @@ func Fields() []Field {
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),
 		newField(KeyLifecycleEnabled, "lifecycle", func(c *Config) *bool { return &c.LifecycleEnabled }),
+		newField(KeyOnboardEarly, "onboard-early", func(c *Config) *bool { return &c.OnboardEarly }),
 	}
 }

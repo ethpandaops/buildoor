@@ -57,6 +57,7 @@ func init() {
 	rootCmd.PersistentFlags().String("inject-head-html", "", "Raw HTML snippet injected into <head> of the served SPA (e.g. global panda menu loader). Falls back to the BUILDOOR_INJECT_HEAD_HTML env var when empty.")
 	rootCmd.PersistentFlags().String("overview-url", "", "Optional URL of the multi-instance overview UI. When set, the dashboard renders an Overview entry as the first top-nav item so navigation stays consistent across instances.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
+	rootCmd.PersistentFlags().Bool("onboard-early", defaults.OnboardEarly, "Onboard the builder before the Gloas fork via the regular deposit contract; otherwise wait for the Gloas spec and deposit via the builder contract after the fork")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
@@ -158,6 +159,7 @@ func initConfig() error {
 		InjectHeadHTML:    v.GetString("inject-head-html"),
 		OverviewURL:       v.GetString("overview-url"),
 		LifecycleEnabled:  v.GetBool("lifecycle"),
+		OnboardEarly:      v.GetBool("onboard-early"),
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
 		BuilderAPI: config.BuilderAPIConfig{

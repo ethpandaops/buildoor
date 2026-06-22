@@ -8,6 +8,7 @@ func DefaultConfig() *Config {
 		APIPort:           0,
 		AuthProviderURL:   "",
 		LifecycleEnabled:  false,
+		OnboardEarly:      false, // Wait for the Gloas spec by default; opt in to pre-fork onboarding
 		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{

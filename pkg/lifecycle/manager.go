@@ -388,7 +388,8 @@ func (m *Manager) waitForEnabled(ctx context.Context) bool {
 
 // maybeEarlyOnboard onboards the builder before the Gloas fork via the regular validator
 // deposit contract, so there is no coverage gap between the Fulu Builder-API range and
-// Gloas. It returns immediately (no-op) when early onboarding does not apply: the early
+// Gloas. It returns immediately (no-op) when early onboarding does not apply: the
+// --onboard-early flag is off (the default — wait for the Gloas spec instead), the early
 // deposit service is unavailable, Gloas is not scheduled, no deposit contract is known,
 // Gloas is already active, or the builder is already registered.
 //
@@ -396,6 +397,10 @@ func (m *Manager) waitForEnabled(ctx context.Context) bool {
 // deposit (and waits for registration), the builder gets registered, the fork is reached,
 // or the manager stops.
 func (m *Manager) maybeEarlyOnboard(ctx context.Context) {
+	if !m.cfg.OnboardEarly {
+		return
+	}
+
 	if m.earlyDepositSvc == nil {
 		return
 	}

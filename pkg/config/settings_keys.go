@@ -28,4 +28,5 @@ const (
 	KeyEPBSEnabled       = "epbs_enabled"
 	KeyBuilderAPIEnabled = "builder_api_enabled"
 	KeyLifecycleEnabled  = "lifecycle_enabled"
+	KeyOnboardEarly      = "onboard_early"
 )
