@@ -731,7 +731,7 @@ func (s *Server) handleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Req
 	// execution payment allowed in that case). Anything above the cap is paid
 	// trustlessly on-chain via Value.
 	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + s.cfg.GloasBuilderApiSubsidy)
+	valueAfterSubsidy := phase0.Gwei(blockValueGwei + s.cfg.BlockValueSubsidyGwei)
 	maxExecutionPayment := s.builderPrefsStore.GetOrDefault(proposerPubkey)
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment
