@@ -17,8 +17,14 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 )
+
+// earlyOnboardFinalizationMargin is the preferred minimum number of epochs before the
+// Gloas fork to submit an early-onboarding deposit, leaving time for it to finalize so
+// the fork transition converts it into a builder.
+const earlyOnboardFinalizationMargin = 4
 
 // LifecycleEvent represents a lifecycle action for UI logging.
 type LifecycleEvent struct {
@@ -29,20 +35,21 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg          *config.Config
-	clClient     *beacon.Client
-	chainSvc     chain.Service
-	signer       *signer.BLSSigner
-	wallet       *wallet.Wallet
-	builderState *BuilderState
-	stateMu      sync.RWMutex
-	depositSvc   *DepositService
-	balanceSvc   *BalanceService
-	bidTracker   *epbs.BidTracker
-	exitSvc      *ExitService
-	log          logrus.FieldLogger
-	stopCh       chan struct{}
-	wg           sync.WaitGroup
+	cfg             *config.Config
+	clClient        *beacon.Client
+	chainSvc        chain.Service
+	signer          *signer.BLSSigner
+	wallet          *wallet.Wallet
+	builderState    *BuilderState
+	stateMu         sync.RWMutex
+	depositSvc      *DepositService
+	earlyDepositSvc *EarlyDepositService
+	balanceSvc      *BalanceService
+	bidTracker      *epbs.BidTracker
+	exitSvc         *ExitService
+	log             logrus.FieldLogger
+	stopCh          chan struct{}
+	wg              sync.WaitGroup
 
 	registrationCallback   func(index uint64)
 	depositPendingCallback func()
@@ -80,6 +87,15 @@ func NewManager(
 	}
 
 	m.depositSvc = depositSvc
+
+	// Early deposit service (regular validator deposit contract, used to onboard the
+	// builder before the Gloas fork so there is no Builder-API-to-Gloas coverage gap).
+	earlyDepositSvc, err := NewEarlyDepositService(cfg, chainSvc, blsSigner, w, managerLog)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create early deposit service: %w", err)
+	}
+
+	m.earlyDepositSvc = earlyDepositSvc
 
 	// Exit service (builder exit system contract, sent from the funding wallet)
 	m.exitSvc = NewExitService(chainSvc, blsSigner, w, managerLog)
@@ -315,6 +331,10 @@ func (m *Manager) runRegistrationAndMonitor(ctx context.Context) {
 		return
 	}
 
+	// Step 0: Try to onboard the builder before the Gloas fork via the regular deposit
+	// contract (no-op when not applicable), so coverage is continuous across the fork.
+	m.maybeEarlyOnboard(ctx)
+
 	// Step 1: Wait until the chain has loaded a Gloas (or later) beacon state.
 	// The on-chain builder set is available from the first Gloas EpochStats; the
 	// fork being active by epoch is not sufficient — the state must be fetched
@@ -358,6 +378,149 @@ func (m *Manager) waitForEnabled(ctx context.Context) bool {
 				return true
 			}
 		}
+	}
+}
+
+// maybeEarlyOnboard onboards the builder before the Gloas fork via the regular validator
+// deposit contract, so there is no coverage gap between the Fulu Builder-API range and
+// Gloas. It returns immediately (no-op) when early onboarding does not apply: the early
+// deposit service is unavailable, Gloas is not scheduled, no deposit contract is known,
+// Gloas is already active, or the builder is already registered.
+//
+// When applicable it re-evaluates the deposit timing once per epoch until it submits the
+// deposit (and waits for registration), the builder gets registered, the fork is reached,
+// or the manager stops.
+func (m *Manager) maybeEarlyOnboard(ctx context.Context) {
+	if m.earlyDepositSvc == nil {
+		return
+	}
+
+	spec := m.chainSvc.GetChainSpec()
+	if !spec.IsForkScheduled(version.DataVersionGloas) || spec.DepositContractAddress == nil {
+		return
+	}
+
+	if spec.IsForkActive(version.DataVersionGloas, m.chainSvc.GetCurrentEpoch()) {
+		return
+	}
+
+	if m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey()) != nil {
+		return
+	}
+
+	forkEpoch := spec.GetForkEpoch(version.DataVersionGloas)
+
+	m.log.WithField("gloas_fork_epoch", forkEpoch).Info("Gloas scheduled, evaluating early builder onboarding")
+	m.fireEvent("early_onboard", fmt.Sprintf("Gloas fork at epoch %d, preparing early builder onboarding", forkEpoch), "info")
+
+	// Subscribe before the first evaluation so an epoch transition can't slip through
+	// between a "wait" decision and the subscription.
+	epochSub := m.chainSvc.SubscribeEpochStats()
+	defer epochSub.Unsubscribe()
+
+	for {
+		if m.tryEarlyOnboardOnce(ctx, forkEpoch) {
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-m.stopCh:
+			return
+		case _, ok := <-epochSub.Channel():
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+// tryEarlyOnboardOnce performs one early-onboarding evaluation. It returns true when the
+// early-onboarding phase is complete and the loop should stop: the builder is registered,
+// the deposit was submitted (and we waited for registration), or the fork was reached
+// without onboarding (handed off to the normal post-fork flow).
+func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoch) bool {
+	if !m.enabled.Load() {
+		return false // paused; keep waiting until re-enabled
+	}
+
+	if info := m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey()); info != nil {
+		m.onRegistered(info.Index)
+
+		return true
+	}
+
+	currentEpoch := m.chainSvc.GetCurrentEpoch()
+	if currentEpoch >= forkEpoch {
+		// Fork reached without onboarding — let the normal post-fork flow take over.
+		return true
+	}
+
+	// Restart safety: if our deposit is already in the pending queue, don't submit again;
+	// just wait for the fork transition to convert it into a builder.
+	if m.earlyDepositSvc.HasPendingDeposit() {
+		m.log.Info("Early builder deposit already pending, waiting for registration")
+		m.fireEvent("early_onboard", "Early deposit already pending, waiting for registration", "info")
+		m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
+
+		return true
+	}
+
+	epochsUntilFork := uint64(forkEpoch - currentEpoch)
+	amount := m.cfg.DepositAmount
+
+	// Two deposit windows (per design): at least earlyOnboardFinalizationMargin epochs
+	// before the fork if the pending-deposit queue is long enough to shield our deposit
+	// from being processed before the fork; otherwise in the epoch directly before the
+	// fork (a fresh back-of-queue deposit is guaranteed to survive a single transition).
+	shouldDeposit := epochsUntilFork == 1 ||
+		(epochsUntilFork >= earlyOnboardFinalizationMargin &&
+			depositSurvivesUntilFork(m.chainSvc.GetCurrentEpochStats(), m.chainSvc.GetChainSpec(), amount, forkEpoch))
+
+	if !shouldDeposit {
+		m.log.WithFields(logrus.Fields{
+			"current_epoch":     currentEpoch,
+			"fork_epoch":        forkEpoch,
+			"epochs_until_fork": epochsUntilFork,
+		}).Debug("Waiting for early onboarding deposit window")
+
+		return false
+	}
+
+	m.fireEvent("early_onboard", fmt.Sprintf("Submitting early onboarding deposit (%d gwei, %d epochs before fork)", amount, epochsUntilFork), "info")
+
+	if m.depositPendingCallback != nil {
+		m.depositPendingCallback()
+	}
+
+	if err := m.earlyDepositSvc.CreateEarlyDeposit(ctx, amount); err != nil {
+		m.log.WithError(err).Warn("Early onboarding deposit failed, retrying next epoch")
+		m.fireEvent("early_onboard", fmt.Sprintf("Early deposit failed: %v, retrying", err), "warning")
+
+		return false // retry on the next epoch
+	}
+
+	m.fireEvent("early_onboard", "Early deposit confirmed, waiting for fork transition and registration", "success")
+	m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
+
+	return true
+}
+
+// waitForEarlyRegistration waits for the builder to be registered after an early deposit.
+// The registration only happens once the Gloas fork converts the pending deposit into a
+// builder, which can be several epochs out, so the timeout spans until a few epochs past
+// the fork. On timeout it logs and returns; the normal post-fork flow then retries via the
+// builder deposit contract as a fallback.
+func (m *Manager) waitForEarlyRegistration(ctx context.Context, forkEpoch, currentEpoch phase0.Epoch) {
+	spec := m.chainSvc.GetChainSpec()
+
+	epochsToWait := uint64(forkEpoch-currentEpoch) + earlyOnboardFinalizationMargin
+	timeout := max(time.Duration(epochsToWait*spec.SlotsPerEpoch)*spec.SecondsPerSlot, 5*time.Minute)
+
+	if err := m.WaitForRegistration(ctx, timeout); err != nil {
+		m.log.WithError(err).Warn("Builder not registered after early deposit; normal post-fork flow will retry")
+		m.fireEvent("early_onboard", "Builder not yet registered after early deposit; post-fork flow will retry", "warning")
 	}
 }
 

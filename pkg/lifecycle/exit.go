@@ -7,7 +7,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/contracts"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -56,12 +55,12 @@ func (s *ExitService) CreateExit(ctx context.Context) error {
 
 	s.log.WithField("pubkey", fmt.Sprintf("0x%x", pubkey[:])).Info("Creating builder exit")
 
-	calldata, err := contracts.BuildBuilderExitCalldata(pubkey[:])
+	calldata, err := BuildBuilderExitCalldata(pubkey[:])
 	if err != nil {
 		return fmt.Errorf("failed to build exit calldata: %w", err)
 	}
 
-	fee, active, err := contracts.ReadQueueFee(ctx, s.wallet.GetRPCClient(), contracts.BuilderExitContractAddress)
+	fee, active, err := ReadQueueFee(ctx, s.wallet.GetRPCClient(), BuilderExitContractAddress)
 	if err != nil {
 		return fmt.Errorf("failed to read exit queue fee: %w", err)
 	}
@@ -74,7 +73,7 @@ func (s *ExitService) CreateExit(ctx context.Context) error {
 
 	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
-		contracts.BuilderExitContractAddress,
+		BuilderExitContractAddress,
 		fee,
 		calldata,
 		exitGasLimit,

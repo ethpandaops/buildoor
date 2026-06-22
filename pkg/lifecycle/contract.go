@@ -1,5 +1,7 @@
-// Package contracts provides calldata builders and fee helpers for the EIP-8282
-// builder deposit and exit system contracts (Gloas).
+package lifecycle
+
+// This file provides calldata builders and fee helpers for the EIP-8282 builder
+// deposit and exit system contracts (Gloas).
 //
 // Unlike the legacy validator deposit contract (an ABI-encoded function call),
 // the builder deposit/exit predeploys follow the EIP-7002/7251 pattern: the
@@ -7,7 +9,6 @@
 // signature for deposits, msg.sender for exits), and a per-request queue fee must
 // be paid as msg.value. The fee is derived from the contract's excess counter
 // (storage slot 0) via the same fake-exponential formula as EIP-7002.
-package contracts
 
 import (
 	"context"
@@ -39,6 +40,14 @@ const (
 	// observed excess, so the request still clears if other requests land in the
 	// same block(s) before ours is included. Mirrors dora's "add extra fee".
 	queueFeeHeadroom = 3
+
+	// builderWithdrawalPrefix is the withdrawal-credential prefix for builder
+	// deposits submitted via the EIP-8282 builder deposit contract.
+	builderWithdrawalPrefix = 0x00
+	// validatorWithdrawalPrefix is the withdrawal-credential prefix used for the
+	// pre-Gloas early-onboarding deposit, which goes through the regular validator
+	// deposit contract (execution-address / 0x03-style credentials).
+	validatorWithdrawalPrefix = 0x03
 )
 
 // excessInhibitor is the EXCESS_INHIBITOR (2^256-1) stored in slot 0 of the
@@ -145,16 +154,29 @@ func fakeExponential(factor, numerator, denominator *big.Int) *big.Int {
 	return output.Div(output, denominator)
 }
 
-// BuildWithdrawalCredentials builds builder withdrawal credentials.
-// Format: 0x03 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
-func BuildWithdrawalCredentials(walletAddress common.Address) [32]byte {
+// buildWithdrawalCredentials builds 32-byte withdrawal credentials in the
+// execution-address layout: prefix(1) + 11 zero bytes + wallet_address(20).
+func buildWithdrawalCredentials(prefix byte, walletAddress common.Address) [32]byte {
 	var creds [32]byte
 
-	creds[0] = 0x03 // Builder withdrawal prefix
+	creds[0] = prefix
 
 	copy(creds[12:], walletAddress.Bytes())
 
 	return creds
+}
+
+// BuilderWithdrawalCredentials builds the withdrawal credentials for an EIP-8282
+// builder deposit. Format: 0x00 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+func BuilderWithdrawalCredentials(walletAddress common.Address) [32]byte {
+	return buildWithdrawalCredentials(builderWithdrawalPrefix, walletAddress)
+}
+
+// ValidatorWithdrawalCredentials builds the withdrawal credentials for the pre-Gloas
+// early-onboarding deposit, which is submitted through the regular validator deposit
+// contract. Format: 0x03 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+func ValidatorWithdrawalCredentials(walletAddress common.Address) [32]byte {
+	return buildWithdrawalCredentials(validatorWithdrawalPrefix, walletAddress)
 }
 
 // GweiToWei converts Gwei to Wei.

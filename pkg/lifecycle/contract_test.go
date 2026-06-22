@@ -1,4 +1,4 @@
-package contracts
+package lifecycle
 
 import (
 	"context"
@@ -86,15 +86,29 @@ func TestBuildBuilderExitCalldata(t *testing.T) {
 	assert.Error(t, err, "short pubkey rejected")
 }
 
-func TestBuildWithdrawalCredentials(t *testing.T) {
+func TestWithdrawalCredentials(t *testing.T) {
 	addr := common.HexToAddress("0x1122334455667788990011223344556677889900")
-	creds := BuildWithdrawalCredentials(addr)
 
-	assert.Equal(t, byte(0x03), creds[0], "0x03 builder prefix")
-	for i := 1; i < 12; i++ {
-		assert.Equal(t, byte(0x00), creds[i], "zero padding at byte %d", i)
+	tests := []struct {
+		name       string
+		creds      [32]byte
+		wantPrefix byte
+	}{
+		{"builder uses 0x00 prefix", BuilderWithdrawalCredentials(addr), 0x00},
+		{"validator uses 0x03 prefix", ValidatorWithdrawalCredentials(addr), 0x03},
 	}
-	assert.Equal(t, addr.Bytes(), creds[12:], "address in last 20 bytes")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantPrefix, tt.creds[0], "withdrawal prefix")
+
+			for i := 1; i < 12; i++ {
+				assert.Equal(t, byte(0x00), tt.creds[i], "zero padding at byte %d", i)
+			}
+
+			assert.Equal(t, addr.Bytes(), tt.creds[12:], "address in last 20 bytes")
+		})
+	}
 }
 
 // fakeStorageReader returns a fixed 32-byte slot value.
