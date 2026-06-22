@@ -19,6 +19,7 @@ const (
 	KeyEPBSBidSubsidy     = "epbs.bid_subsidy"
 
 	KeyPayloadBuildTime  = "payload_build_time"
+	KeyExtraData         = "extra_data"
 	KeyBuilderAPISubsidy = "builder_api.block_value_subsidy_gwei"
 
 	KeyDepositAmount  = "deposit_amount"

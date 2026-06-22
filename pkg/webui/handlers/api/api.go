@@ -69,8 +69,9 @@ type UpdateEPBSRequest struct {
 
 // UpdateBuilderConfigRequest is the request for updating shared builder config.
 type UpdateBuilderConfigRequest struct {
-	BuildStartTime    *int64 `json:"build_start_time,omitempty"`
-	PayloadBuildDelay *int64 `json:"payload_build_delay,omitempty"`
+	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
+	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
+	ExtraData         *string `json:"extra_data,omitempty"`
 }
 
 // UpdateBuilderAPIConfigRequest is the request for updating Builder API config.
@@ -612,6 +613,10 @@ func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request)
 
 	if req.PayloadBuildDelay != nil {
 		updates[config.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
+	}
+
+	if req.ExtraData != nil {
+		updates[config.KeyExtraData] = mustJSON(*req.ExtraData)
 	}
 
 	if !h.applySettings(w, r, token, "config.builder", req, updates) {
