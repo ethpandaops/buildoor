@@ -20,11 +20,17 @@ var (
 	// DomainVoluntaryExit is the standard domain for voluntary exits.
 	DomainVoluntaryExit = phase0.DomainType{0x04, 0x00, 0x00, 0x00}
 
-	// DomainDeposit is the standard domain for deposit signatures. EIP-8282 builder
-	// deposits reuse this same domain (DOMAIN_DEPOSIT) rather than a dedicated one, so
-	// the proof-of-possession is the same chain- and fork-agnostic check validator
-	// deposits use.
+	// DomainDeposit is the standard domain for validator deposit signatures, and for
+	// the genesis builder-onboarding path (a pre-fork deposit to the validator deposit
+	// contract with a 0x03 credential, per the Gloas spec).
 	DomainDeposit = phase0.DomainType{0x03, 0x00, 0x00, 0x00}
+
+	// DomainBuilderDeposit is DOMAIN_BUILDER_DEPOSIT (Gloas, 0x0E000000): the dedicated
+	// domain for post-fork builder deposits submitted to the EIP-8282 builder deposit
+	// contract. The consensus-specs sign the DepositMessage proof-of-possession under
+	// this domain (is_valid_builder_deposit_signature) so validator and builder deposit
+	// signatures cannot be replayed against the other contract.
+	DomainBuilderDeposit = phase0.DomainType{0x0E, 0x00, 0x00, 0x00}
 
 	// DomainApplicationBuilder is the domain for builder API validator registration signatures.
 	// See https://github.com/ethereum/builder-specs
@@ -186,8 +192,9 @@ func ComputeDepositSigningRoot(
 }
 
 // ComputeBuilderDepositSigningRoot computes the signing root for an EIP-8282 builder
-// deposit message. Per spec it reuses DOMAIN_DEPOSIT (0x03000000) — the same domain
-// validator deposits use — signing over GENESIS_FORK_VERSION with a zero
+// deposit message. Per the Gloas consensus-specs (is_valid_builder_deposit_signature)
+// it signs the DepositMessage under DOMAIN_BUILDER_DEPOSIT (0x0E000000) — a dedicated
+// domain, distinct from validator deposits — with GENESIS_FORK_VERSION and a zero
 // genesis_validators_root, so the proof-of-possession is chain- and fork-agnostic.
 func ComputeBuilderDepositSigningRoot(
 	pubkey phase0.BLSPubKey,
@@ -212,7 +219,7 @@ func ComputeBuilderDepositSigningRoot(
 	// Builder deposits, like regular deposits, sign over a zero genesis_validators_root.
 	var emptyRoot phase0.Root
 
-	domain := ComputeDomain(DomainDeposit, genesisForkVersion, emptyRoot)
+	domain := ComputeDomain(DomainBuilderDeposit, genesisForkVersion, emptyRoot)
 
 	return ComputeSigningRoot(root, domain), nil
 }
