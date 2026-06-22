@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -70,6 +71,10 @@ func (f *fakeBackend) GetBalance(context.Context, common.Address) (*big.Int, err
 
 func (f *fakeBackend) SuggestGasTipCap(context.Context) (*big.Int, error) {
 	return big.NewInt(1_000_000_000), nil
+}
+
+func (f *fakeBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, error) {
+	return 21_000, nil
 }
 
 func (f *fakeBackend) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {

@@ -31,9 +31,6 @@ func isDepositDeferred(err error) bool {
 	return errors.Is(err, ErrDepositFeeTooHigh) || errors.Is(err, ErrContractNotActive)
 }
 
-// depositGasLimit is the gas limit for builder deposit transactions.
-const depositGasLimit = 800000
-
 // DepositService handles builder deposits and top-ups via the EIP-8282 builder
 // deposit system contract.
 type DepositService struct {
@@ -184,16 +181,20 @@ func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error
 }
 
 // sendDepositTransaction sends the deposit transaction to the builder deposit contract.
-//
-// SendAndConfirm sources a fresh nonce and resolves nonce conflicts/displacement, so
-// several instances can share this funding key safely.
+// Gas is estimated per-transaction so it tracks the active fork's gas schedule rather
+// than a hardcoded limit that goes stale and reverts out-of-gas.
 func (s *DepositService) sendDepositTransaction(ctx context.Context, calldata []byte, value *big.Int) error {
+	gasLimit, err := s.wallet.EstimateGas(ctx, BuilderDepositContractAddress, value, calldata)
+	if err != nil {
+		return fmt.Errorf("failed to estimate deposit gas: %w", err)
+	}
+
 	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
 		BuilderDepositContractAddress,
 		value,
 		calldata,
-		depositGasLimit,
+		gasLimit,
 		5*time.Minute,
 	)
 	if err != nil {

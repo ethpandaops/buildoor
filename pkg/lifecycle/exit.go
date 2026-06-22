@@ -12,9 +12,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
-// exitGasLimit is the gas limit for builder exit transactions.
-const exitGasLimit = 200000
-
 // ExitService handles builder exits via the EIP-8282 builder exit system contract.
 //
 // Unlike a validator voluntary exit (a BLS-signed beacon message), a builder exit is
@@ -71,12 +68,18 @@ func (s *ExitService) CreateExit(ctx context.Context) error {
 
 	s.log.WithField("queue_fee_wei", fee.String()).Info("Builder exit prepared")
 
+	// Estimate gas per-transaction (see sendDepositTransaction).
+	gasLimit, err := s.wallet.EstimateGas(ctx, BuilderExitContractAddress, fee, calldata)
+	if err != nil {
+		return fmt.Errorf("failed to estimate exit gas: %w", err)
+	}
+
 	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
 		BuilderExitContractAddress,
 		fee,
 		calldata,
-		exitGasLimit,
+		gasLimit,
 		5*time.Minute,
 	)
 	if err != nil {

@@ -137,7 +137,12 @@ func (s *EarlyDepositService) CreateEarlyDeposit(ctx context.Context, amountGwei
 		"value_wei":        value.String(),
 	}).Info("Early builder deposit prepared (regular deposit contract)")
 
-	receipt, err := s.wallet.SendAndConfirm(ctx, *depositContract, value, calldata, depositGasLimit, 5*time.Minute)
+	gasLimit, err := s.wallet.EstimateGas(ctx, *depositContract, value, calldata)
+	if err != nil {
+		return fmt.Errorf("failed to estimate early deposit gas: %w", err)
+	}
+
+	receipt, err := s.wallet.SendAndConfirm(ctx, *depositContract, value, calldata, gasLimit, 5*time.Minute)
 	if err != nil {
 		return fmt.Errorf("early deposit transaction failed: %w", err)
 	}

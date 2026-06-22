@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -29,6 +30,13 @@ const (
 	txConflictBackoff = 500 * time.Millisecond
 )
 
+// gasEstimateBuffer scales up an eth_estimateGas result (3/2 = +50%) for headroom.
+// Unused gas is refunded under EIP-1559, so over-estimating is effectively free.
+const (
+	gasEstimateBufferNum = 3
+	gasEstimateBufferDen = 2
+)
+
 // walletBackend is the subset of execution-RPC operations the wallet depends on.
 // It is satisfied by *execution.Client and lets transaction-submission logic be
 // exercised against a fake in tests.
@@ -38,6 +46,7 @@ type walletBackend interface {
 	GetConfirmedNonce(ctx context.Context, address common.Address) (uint64, error)
 	GetBalance(ctx context.Context, address common.Address) (*big.Int, error)
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
+	EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	GetTransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
@@ -134,6 +143,22 @@ func (w *Wallet) GetNonce(ctx context.Context) (uint64, error) {
 	}
 
 	return nonce, nil
+}
+
+// EstimateGas estimates the gas for a call from this wallet, scaled by gasEstimateBuffer.
+// value is included because the builder system contracts gate execution on msg.value.
+func (w *Wallet) EstimateGas(ctx context.Context, to common.Address, value *big.Int, data []byte) (uint64, error) {
+	gas, err := w.rpcClient.EstimateGas(ctx, ethereum.CallMsg{
+		From:  w.address,
+		To:    &to,
+		Value: value,
+		Data:  data,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to estimate gas: %w", err)
+	}
+
+	return gas * gasEstimateBufferNum / gasEstimateBufferDen, nil
 }
 
 // Sync synchronizes the wallet state with the chain.
