@@ -26,6 +26,11 @@ import (
 // the fork transition converts it into a builder.
 const earlyOnboardFinalizationMargin = 4
 
+// minEarlyOnboardSlots is the hard floor of slots remaining before the Gloas fork for an
+// early-onboarding deposit to be worthwhile. Closer than this we skip early onboarding
+// and let the normal post-fork builder deposit register the builder instead.
+const minEarlyOnboardSlots uint64 = 10
+
 // LifecycleEvent represents a lifecycle action for UI logging.
 type LifecycleEvent struct {
 	Action  string // "deposit", "topup", "exit", "state_change", "waiting_gloas", "balance_topup"
@@ -467,28 +472,49 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		return true
 	}
 
+	spec := m.chainSvc.GetChainSpec()
 	epochsUntilFork := uint64(forkEpoch - currentEpoch)
+	forkSlot := uint64(forkEpoch) * spec.SlotsPerEpoch
+	slotsUntilFork := forkSlot - uint64(m.chainSvc.GetCurrentSlot())
+
+	// Only onboard early if there is enough runway before the fork. Closer than the
+	// minimum, the early deposit may not land in (and finalize within) the pending
+	// queue in time, so abandon early onboarding and let the normal post-fork flow
+	// register the builder via the builder deposit contract instead.
+	if slotsUntilFork < minEarlyOnboardSlots {
+		m.log.WithFields(logrus.Fields{
+			"fork_epoch":       forkEpoch,
+			"slots_until_fork": slotsUntilFork,
+		}).Info("Fewer than minimum slots until Gloas, skipping early onboarding (will deposit via builder contract after the fork)")
+		m.fireEvent("early_onboard", fmt.Sprintf("Only %d slots until Gloas, skipping early onboarding; will deposit after the fork", slotsUntilFork), "info")
+
+		return true
+	}
+
 	amount := m.cfg.DepositAmount
 
 	// Two deposit windows (per design): at least earlyOnboardFinalizationMargin epochs
 	// before the fork if the pending-deposit queue is long enough to shield our deposit
-	// from being processed before the fork; otherwise in the epoch directly before the
-	// fork (a fresh back-of-queue deposit is guaranteed to survive a single transition).
-	shouldDeposit := epochsUntilFork == 1 ||
+	// from being processed before the fork; otherwise at the latest epoch boundary that
+	// still leaves at least minEarlyOnboardSlots before the fork (a fresh back-of-queue
+	// deposit is guaranteed to survive the remaining transitions).
+	lastSafeEpoch := (epochsUntilFork-1)*spec.SlotsPerEpoch < minEarlyOnboardSlots
+	shouldDeposit := lastSafeEpoch ||
 		(epochsUntilFork >= earlyOnboardFinalizationMargin &&
-			depositSurvivesUntilFork(m.chainSvc.GetCurrentEpochStats(), m.chainSvc.GetChainSpec(), amount, forkEpoch))
+			depositSurvivesUntilFork(m.chainSvc.GetCurrentEpochStats(), spec, amount, forkEpoch))
 
 	if !shouldDeposit {
 		m.log.WithFields(logrus.Fields{
 			"current_epoch":     currentEpoch,
 			"fork_epoch":        forkEpoch,
 			"epochs_until_fork": epochsUntilFork,
+			"slots_until_fork":  slotsUntilFork,
 		}).Debug("Waiting for early onboarding deposit window")
 
 		return false
 	}
 
-	m.fireEvent("early_onboard", fmt.Sprintf("Submitting early onboarding deposit (%d gwei, %d epochs before fork)", amount, epochsUntilFork), "info")
+	m.fireEvent("early_onboard", fmt.Sprintf("Submitting early onboarding deposit (%d gwei, %d slots before fork)", amount, slotsUntilFork), "info")
 
 	if m.depositPendingCallback != nil {
 		m.depositPendingCallback()
