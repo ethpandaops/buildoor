@@ -9,7 +9,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/contracts"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -60,7 +59,7 @@ func NewDepositService(
 		return nil, fmt.Errorf("failed to sync wallet: %w", err)
 	}
 
-	depositLog.WithField("deposit_contract", contracts.BuilderDepositContractAddress.Hex()).
+	depositLog.WithField("deposit_contract", BuilderDepositContractAddress.Hex()).
 		Info("Using builder deposit contract")
 
 	return &DepositService{
@@ -104,7 +103,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 	s.log.WithField("amount_gwei", amountGwei).Info("Creating builder deposit")
 
 	pubkey := s.signer.PublicKey()
-	withdrawalCredentials := contracts.BuildWithdrawalCredentials(s.wallet.Address())
+	withdrawalCredentials := BuilderWithdrawalCredentials(s.wallet.Address())
 
 	// Step 1: Compute the builder-deposit signing root (DOMAIN_BUILDER_DEPOSIT,
 	// GENESIS_FORK_VERSION) and sign it as a proof-of-possession.
@@ -124,7 +123,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 	}
 
 	// Step 2: Build the raw 184-byte request calldata.
-	calldata, err := contracts.BuildBuilderDepositCalldata(pubkey[:], withdrawalCredentials[:], amountGwei, signature[:])
+	calldata, err := BuildBuilderDepositCalldata(pubkey[:], withdrawalCredentials[:], amountGwei, signature[:])
 	if err != nil {
 		return fmt.Errorf("failed to build deposit calldata: %w", err)
 	}
@@ -136,7 +135,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 	}
 
 	// Step 4: msg.value = stake (wei) + queue fee (wei).
-	value := new(big.Int).Add(contracts.GweiToWei(amountGwei), fee)
+	value := new(big.Int).Add(GweiToWei(amountGwei), fee)
 
 	s.log.WithFields(logrus.Fields{
 		"pubkey":           fmt.Sprintf("0x%x", pubkey[:]),
@@ -160,7 +159,7 @@ func (s *DepositService) CreateTopup(ctx context.Context, amountGwei uint64) err
 // enforces DepositMaxFeeGwei. It returns ErrContractNotActive before the fork and
 // ErrDepositFeeTooHigh when the fee exceeds the configured limit.
 func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error) {
-	fee, active, err := contracts.ReadQueueFee(ctx, s.wallet.GetRPCClient(), contracts.BuilderDepositContractAddress)
+	fee, active, err := ReadQueueFee(ctx, s.wallet.GetRPCClient(), BuilderDepositContractAddress)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read deposit queue fee: %w", err)
 	}
@@ -170,7 +169,7 @@ func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error
 	}
 
 	if maxFeeGwei := s.cfg.DepositMaxFeeGwei; maxFeeGwei > 0 {
-		maxFeeWei := contracts.GweiToWei(maxFeeGwei)
+		maxFeeWei := GweiToWei(maxFeeGwei)
 		if fee.Cmp(maxFeeWei) > 0 {
 			s.log.WithFields(logrus.Fields{
 				"queue_fee_wei": fee.String(),
@@ -191,7 +190,7 @@ func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error
 func (s *DepositService) sendDepositTransaction(ctx context.Context, calldata []byte, value *big.Int) error {
 	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
-		contracts.BuilderDepositContractAddress,
+		BuilderDepositContractAddress,
 		value,
 		calldata,
 		depositGasLimit,

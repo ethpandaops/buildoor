@@ -30,6 +30,16 @@ type ChainSpec struct {
 	EpochsPerHistoricalVector  uint64
 	MinSeedLookahead           uint64
 
+	// Pending-deposit processing parameters (Electra). Used to estimate how many
+	// pending deposits drain per epoch when timing the pre-Gloas early onboarding
+	// deposit (see pkg/lifecycle pending-deposit simulation).
+	MinPerEpochChurnLimit               uint64
+	ChurnLimitQuotient                  uint64
+	MaxPerEpochActivationExitChurnLimit uint64
+	MaxPendingDepositsPerEpoch          uint64
+	MinActivationBalance                uint64
+	EffectiveBalanceIncrement           uint64
+
 	// Domain types
 	DomainBeaconProposer      phase0.DomainType
 	DomainBeaconAttester      phase0.DomainType
@@ -124,6 +134,31 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 
 	if v, err := parseSpecUint64(specData, "MIN_SEED_LOOKAHEAD"); err == nil {
 		s.MinSeedLookahead = v
+	}
+
+	// Pending-deposit processing parameters (optional; only needed for early onboarding).
+	if v, err := parseSpecUint64(specData, "MIN_PER_EPOCH_CHURN_LIMIT"); err == nil {
+		s.MinPerEpochChurnLimit = v
+	}
+
+	if v, err := parseSpecUint64(specData, "CHURN_LIMIT_QUOTIENT"); err == nil {
+		s.ChurnLimitQuotient = v
+	}
+
+	if v, err := parseSpecUint64(specData, "MAX_PER_EPOCH_ACTIVATION_EXIT_CHURN_LIMIT"); err == nil {
+		s.MaxPerEpochActivationExitChurnLimit = v
+	}
+
+	if v, err := parseSpecUint64(specData, "MAX_PENDING_DEPOSITS_PER_EPOCH"); err == nil {
+		s.MaxPendingDepositsPerEpoch = v
+	}
+
+	if v, err := parseSpecUint64(specData, "MIN_ACTIVATION_BALANCE"); err == nil {
+		s.MinActivationBalance = v
+	}
+
+	if v, err := parseSpecUint64(specData, "EFFECTIVE_BALANCE_INCREMENT"); err == nil {
+		s.EffectiveBalanceIncrement = v
 	}
 
 	// Parse domain types
