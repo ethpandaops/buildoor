@@ -90,12 +90,10 @@ type BuilderAPIConfig struct {
 	// is always fully validated.
 	RequireRequestAuth bool `yaml:"require_request_auth" json:"require_request_auth"`
 
-	// BlockValueSubsidyGwei is added to the bid value (getHeader) so the proposer sees a higher bid.
+	// BlockValueSubsidyGwei is added to the bid value so the proposer sees a higher bid:
+	// to the getHeader bid value in the Fulu Builder API, and to the block value that
+	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
-
-	// GloasBuilderApiSubsidy is added to the block value (converted to gwei) to form
-	// bid.ExecutionPayment in Gloas getExecutionPayloadBid calls.
-	GloasBuilderApiSubsidy uint64 `yaml:"gloas_builder_api_subsidy" json:"gloas_builder_api_subsidy"`
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
