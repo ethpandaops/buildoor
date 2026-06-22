@@ -20,13 +20,11 @@ var (
 	// DomainVoluntaryExit is the standard domain for voluntary exits.
 	DomainVoluntaryExit = phase0.DomainType{0x04, 0x00, 0x00, 0x00}
 
-	// DomainDeposit is the standard domain for deposit signatures.
+	// DomainDeposit is the standard domain for deposit signatures. EIP-8282 builder
+	// deposits reuse this same domain (DOMAIN_DEPOSIT) rather than a dedicated one, so
+	// the proof-of-possession is the same chain- and fork-agnostic check validator
+	// deposits use.
 	DomainDeposit = phase0.DomainType{0x03, 0x00, 0x00, 0x00}
-
-	// DomainBuilderDeposit is DOMAIN_BUILDER_DEPOSIT (Gloas/EIP-8282): a dedicated
-	// domain type that keeps builder-deposit signatures from being replayed against
-	// the regular validator deposit contract and vice versa.
-	DomainBuilderDeposit = phase0.DomainType{0x0E, 0x00, 0x00, 0x00}
 
 	// DomainApplicationBuilder is the domain for builder API validator registration signatures.
 	// See https://github.com/ethereum/builder-specs
@@ -188,9 +186,9 @@ func ComputeDepositSigningRoot(
 }
 
 // ComputeBuilderDepositSigningRoot computes the signing root for an EIP-8282 builder
-// deposit message. It is identical to a regular deposit proof-of-possession except it
-// uses DOMAIN_BUILDER_DEPOSIT (0x0E000000). Per spec it signs over GENESIS_FORK_VERSION
-// with a zero genesis_validators_root, so the signature is fork-agnostic.
+// deposit message. Per spec it reuses DOMAIN_DEPOSIT (0x03000000) — the same domain
+// validator deposits use — signing over GENESIS_FORK_VERSION with a zero
+// genesis_validators_root, so the proof-of-possession is chain- and fork-agnostic.
 func ComputeBuilderDepositSigningRoot(
 	pubkey phase0.BLSPubKey,
 	withdrawalCredentials [32]byte,
@@ -214,7 +212,7 @@ func ComputeBuilderDepositSigningRoot(
 	// Builder deposits, like regular deposits, sign over a zero genesis_validators_root.
 	var emptyRoot phase0.Root
 
-	domain := ComputeDomain(DomainBuilderDeposit, genesisForkVersion, emptyRoot)
+	domain := ComputeDomain(DomainDeposit, genesisForkVersion, emptyRoot)
 
 	return ComputeSigningRoot(root, domain), nil
 }
