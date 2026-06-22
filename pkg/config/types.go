@@ -48,7 +48,7 @@ type Config struct {
 	PayloadBuildTime  uint64           `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
-	// to mark blocks built by this builder. Default "buildoor/".
+	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
 	// StateDBPath, when set, enables the optional SQLite state-db at this path.
