@@ -13,7 +13,7 @@ import (
 )
 
 // exitGasLimit is the gas limit for builder exit transactions.
-const exitGasLimit = 200000
+const exitGasLimit = 400000
 
 // ExitService handles builder exits via the EIP-8282 builder exit system contract.
 //
