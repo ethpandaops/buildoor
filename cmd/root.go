@@ -166,17 +166,11 @@ func initConfig() error {
 			RequireRequestAuth:    v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 		},
-<<<<<<< HEAD
-		DepositAmount:     v.GetUint64("deposit-amount"),
-		TopupThreshold:    v.GetUint64("topup-threshold"),
-		TopupAmount:       v.GetUint64("topup-amount"),
-		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
-=======
-		DepositAmount:  v.GetUint64("deposit-amount"),
+        DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
+        DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),
 		TopupAmount:    v.GetUint64("topup-amount"),
 		ExtraData:      v.GetString("extra-data"),
->>>>>>> 89cdd1c (pass extra data prefix as a flag)
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
