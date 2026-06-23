@@ -9,6 +9,7 @@ interface BuilderConfigPanelProps {
 interface BuilderFormState {
   build_start_time: number;
   payload_build_delay: number;
+  extra_data: string;
 }
 
 export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }) => {
@@ -20,6 +21,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
   const [form, setForm] = useState<BuilderFormState>({
     build_start_time: 0,
     payload_build_delay: 0,
+    extra_data: '',
   });
 
   const [scheduleForm, setScheduleForm] = useState<ScheduleConfig>({
@@ -42,6 +44,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
       setForm({
         build_start_time: config.epbs.build_start_time || 0,
         payload_build_delay: payloadBuildDelay,
+        extra_data: config.extra_data ?? '',
       });
     }
   }, [config, editing, payloadBuildDelay]);
@@ -144,6 +147,12 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                   <div className="config-item-value">{payloadBuildDelay} ms</div>
                 </div>
               </div>
+              <div className="col-12">
+                <div className="config-item">
+                  <div className="config-item-label">Extra Data</div>
+                  <div className="config-item-value">{config?.extra_data || '—'}</div>
+                </div>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleSave} className="mb-3">
@@ -166,6 +175,18 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                   onChange={(e) => setForm({ ...form, payload_build_delay: parseInt(e.target.value) || 0 })}
                   required
                 />
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Extra Data</label>
+                <input
+                  type="text"
+                  className="form-control form-control-sm"
+                  value={form.extra_data}
+                  maxLength={32}
+                  placeholder="buildoor/"
+                  onChange={(e) => setForm({ ...form, extra_data: e.target.value })}
+                />
+                <div className="form-text">Prefix injected into the block's extra-data field (max 32 bytes, padded with the EL's original extra data).</div>
               </div>
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>

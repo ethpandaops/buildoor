@@ -267,7 +267,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	newHash, err := ModifyPayloadExtraData(
 		enginePayload,
 		resp.ExecutionRequests,
-		[]byte("buildoor/"),
+		[]byte(b.cfg.ExtraData),
 		common.Hash(attrs.ParentBeaconBlockRoot),
 	)
 	if err != nil {

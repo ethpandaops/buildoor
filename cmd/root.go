@@ -65,6 +65,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
+	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
 
@@ -167,6 +168,7 @@ func initConfig() error {
 		DepositAmount:  v.GetUint64("deposit-amount"),
 		TopupThreshold: v.GetUint64("topup-threshold"),
 		TopupAmount:    v.GetUint64("topup-amount"),
+		ExtraData:      v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),

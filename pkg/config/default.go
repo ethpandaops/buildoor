@@ -16,6 +16,7 @@ func DefaultConfig() *Config {
 		DepositAmount:  50000000000, // 50 ETH in Gwei
 		TopupThreshold: 10000000000, // 10 ETH in Gwei
 		TopupAmount:    50000000000, // 50 ETH in Gwei
+		ExtraData:      "buildoor/",
 		Schedule: ScheduleConfig{
 			Mode:     ScheduleModeAll,
 			EveryNth: 1,
