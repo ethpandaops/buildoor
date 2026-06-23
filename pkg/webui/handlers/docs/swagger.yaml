@@ -34,6 +34,20 @@ definitions:
       validator_count:
         type: integer
     type: object
+  api.BuilderPreferencesEntry:
+    properties:
+      max_execution_payment:
+        type: integer
+      validator_pubkey:
+        type: string
+    type: object
+  api.BuilderPreferencesResponse:
+    properties:
+      preferences:
+        items:
+          $ref: '#/definitions/api.BuilderPreferencesEntry'
+        type: array
+    type: object
   api.GetValidatorsResponse:
     properties:
       validators:
@@ -398,6 +412,27 @@ paths:
               type: string
             type: object
       summary: Get Builder API status
+      tags:
+      - Buildoor
+  /api/buildoor/builder-preferences:
+    get:
+      description: Returns all builder preferences currently in the cache, submitted
+        by proposers via the submitBuilderPreferences API.
+      operationId: getBuilderPreferences
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.BuilderPreferencesResponse'
+        "404":
+          description: Builder API not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get cached builder preferences
       tags:
       - Buildoor
   /api/buildoor/overview:

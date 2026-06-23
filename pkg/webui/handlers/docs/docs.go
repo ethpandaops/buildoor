@@ -153,6 +153,36 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/builder-preferences": {
+            "get": {
+                "description": "Returns all builder preferences currently in the cache, submitted by proposers via the submitBuilderPreferences API.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get cached builder preferences",
+                "operationId": "getBuilderPreferences",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderPreferencesResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Builder API not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/overview": {
             "get": {
                 "description": "Returns a single-payload summary used by the multi-instance overview UI:\nrunning state, builder pubkey, current slot, EL client info, available/enabled\nservices, balances, and recent build stats.",
@@ -800,6 +830,28 @@ const docTemplate = `{
                 },
                 "validator_count": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.BuilderPreferencesEntry": {
+            "type": "object",
+            "properties": {
+                "max_execution_payment": {
+                    "type": "integer"
+                },
+                "validator_pubkey": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.BuilderPreferencesResponse": {
+            "type": "object",
+            "properties": {
+                "preferences": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.BuilderPreferencesEntry"
+                    }
                 }
             }
         },
