@@ -26,6 +26,8 @@ export interface Config {
   deposit_amount: number;
   topup_threshold: number;
   topup_amount: number;
+  payload_build_time?: number;
+  extra_data?: string;
 }
 
 export interface ScheduleConfig {
