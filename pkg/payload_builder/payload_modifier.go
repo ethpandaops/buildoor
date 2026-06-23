@@ -70,9 +70,16 @@ func ModifyPayloadExtraData(
 		}
 	}
 
-	// Build new extra data: prefix + original (truncated to fit).
+	// Build new extra data: prefix + "/" separator + original (truncated to
+	// fit). The separator keeps the prefix readable when concatenated with the
+	// EL's original extra data (e.g. "buildoor-0/ethrex 17.0.0" rather than
+	// "buildoor-0ethrex 17.0.0").
 	newExtraData := make([]byte, 0, maxExtraDataSize)
 	newExtraData = append(newExtraData, extraDataPrefix...)
+
+	if len(extraDataPrefix) > 0 && len(newExtraData) < maxExtraDataSize {
+		newExtraData = append(newExtraData, '/')
+	}
 
 	if remaining := maxExtraDataSize - len(newExtraData); remaining > 0 && len(header.Extra) > 0 {
 		if len(header.Extra) > remaining {
