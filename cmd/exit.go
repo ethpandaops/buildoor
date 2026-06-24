@@ -4,20 +4,20 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ethpandaops/go-eth2-client/spec/gloas"
-	"github.com/ethpandaops/go-eth2-client/spec/phase0"
-	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
+	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
 var exitCmd = &cobra.Command{
 	Use:   "exit",
 	Short: "Exit builder from the network",
-	Long:  `Sends a voluntary exit for the builder to remove it from the builder set.`,
+	Long:  `Submits a builder exit request to the EIP-8282 builder exit system contract to remove this builder from the builder set.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 
@@ -30,12 +30,27 @@ var exitCmd = &cobra.Command{
 			return fmt.Errorf("--cl-client is required")
 		}
 
+		if cfg.ELRPC == "" {
+			return fmt.Errorf("--el-rpc is required for builder exit")
+		}
+
+		if cfg.WalletPrivkey == "" {
+			return fmt.Errorf("--wallet-privkey is required for builder exit")
+		}
+
 		// Initialize CL client
 		clClient, err := beacon.NewClient(ctx, cfg.CLClient, logger)
 		if err != nil {
 			return fmt.Errorf("failed to connect to CL: %w", err)
 		}
 		defer clClient.Close()
+
+		// Initialize EL RPC client
+		rpcClient, err := execution.NewClient(ctx, cfg.ELRPC, logger)
+		if err != nil {
+			return fmt.Errorf("failed to connect to EL RPC: %w", err)
+		}
+		defer rpcClient.Close()
 
 		// Initialize BLS signer (raw hex key or mnemonic-derived)
 		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)
@@ -45,6 +60,13 @@ var exitCmd = &cobra.Command{
 
 		pubkey := blsSigner.PublicKey()
 
+		// Initialize wallet (its address is the exit source; must match the builder's
+		// registered execution address)
+		w, err := wallet.NewWallet(cfg.WalletPrivkey, rpcClient, logger)
+		if err != nil {
+			return fmt.Errorf("invalid wallet key: %w", err)
+		}
+
 		// Get chain spec and genesis
 		specData, rawData, err := clClient.GetRawSpecData(ctx)
 		if err != nil {
@@ -53,7 +75,7 @@ var exitCmd = &cobra.Command{
 
 		chainSpec, err := chain.ParseChainSpec(specData, rawData)
 		if err != nil {
-			return fmt.Errorf("failed to get chain spec: %w", err)
+			return fmt.Errorf("failed to parse chain spec: %w", err)
 		}
 
 		genesis, err := clClient.GetGenesis(ctx)
@@ -68,57 +90,23 @@ var exitCmd = &cobra.Command{
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
-		// Get builder index
-		builderIndex, _ := cmd.Flags().GetUint64("builder-index")
-		if builderIndex == 0 {
-			builderInfo := chainSvc.GetBuilderByPubkey(pubkey)
-			if builderInfo == nil {
-				return fmt.Errorf("builder not registered")
-			}
-
-			builderIndex = builderInfo.Index
+		// Confirm the builder is registered before exiting
+		builderInfo := chainSvc.GetBuilderByPubkey(pubkey)
+		if builderInfo == nil {
+			return fmt.Errorf("builder not registered")
 		}
 
-		// Per EIP-7044, voluntary exit signatures must always use the Capella fork version
-		forkVersion, err := chainSpec.GetForkVersion(version.DataVersionCapella)
-		if err != nil {
-			return fmt.Errorf("CAPELLA_FORK_VERSION not found in chain spec")
-		}
-
-		currentEpoch := chainSvc.GetCurrentEpoch()
 		logger.WithFields(map[string]any{
-			"builder_index": builderIndex,
+			"builder_index": builderInfo.Index,
 			"pubkey":        fmt.Sprintf("%x", pubkey[:8]),
-			"epoch":         currentEpoch,
-		}).Info("Creating voluntary exit")
+		}).Info("Submitting builder exit")
 
-		builderIndexToUse := gloas.BuilderIndex(builderIndex | chain.BuilderIndexFlag)
-
-		// Sign voluntary exit
-		signature, err := blsSigner.SignVoluntaryExit(
-			currentEpoch,
-			phase0.ValidatorIndex(builderIndexToUse),
-			forkVersion,
-			genesis.GenesisValidatorsRoot,
-		)
-		if err != nil {
-			return fmt.Errorf("failed to sign exit: %w", err)
+		exitSvc := lifecycle.NewExitService(chainSvc, blsSigner, w, logger)
+		if err := exitSvc.CreateExit(ctx); err != nil {
+			return fmt.Errorf("failed to submit builder exit: %w", err)
 		}
 
-		// Submit exit via CL API
-		exit := &phase0.SignedVoluntaryExit{
-			Message: &phase0.VoluntaryExit{
-				Epoch:          currentEpoch,
-				ValidatorIndex: phase0.ValidatorIndex(builderIndexToUse),
-			},
-			Signature: signature,
-		}
-
-		if err := clClient.SubmitVoluntaryExit(ctx, exit); err != nil {
-			return fmt.Errorf("failed to submit exit: %w", err)
-		}
-
-		logger.WithField("builder_index", builderIndex).Info("Voluntary exit submitted")
+		logger.WithField("builder_index", builderInfo.Index).Info("Builder exit submitted")
 
 		return nil
 	},
@@ -126,6 +114,4 @@ var exitCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(exitCmd)
-
-	exitCmd.Flags().Uint64("builder-index", 0, "Builder index (if known, skips lookup)")
 }

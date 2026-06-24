@@ -40,6 +40,7 @@ type Config struct {
 	DepositAmount     uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
 	TopupThreshold    uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
 	TopupAmount       uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
+	DepositMaxFeeGwei uint64           `yaml:"deposit_max_fee" json:"deposit_max_fee"`
 	Schedule          ScheduleConfig   `yaml:"schedule" json:"schedule"`
 	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
 	Debug             bool             `yaml:"debug" json:"debug"`

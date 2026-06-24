@@ -2,8 +2,9 @@
 package fulu
 
 import (
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/holiman/uint256"
 
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -36,9 +37,13 @@ func BuildSignedBuilderBid(
 		return nil, err
 	}
 
-	execRequests := event.ExecutionRequests
-	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{}
+	// Fulu Builder API wire format uses the Electra layout; builder
+	// deposit/exit requests (Gloas+) do not exist in this spec version.
+	execRequests := &eth2all.ExecutionRequests{Version: version.DataVersionFulu}
+	if event.ExecutionRequests != nil {
+		execRequests.Deposits = event.ExecutionRequests.Deposits
+		execRequests.Withdrawals = event.ExecutionRequests.Withdrawals
+		execRequests.Consolidations = event.ExecutionRequests.Consolidations
 	}
 
 	value, overflow := uint256.FromBig(event.BlockValue)

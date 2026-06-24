@@ -7,6 +7,7 @@ import (
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
 	"github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -29,12 +30,32 @@ type EpochStats struct {
 	// Populated (possibly empty) for any Gloas+ state; nil for pre-Gloas epochs.
 	Builders []*BuilderInfo
 
+	// Total active effective balance (gwei). Used to estimate the activation-exit
+	// churn limit for pending-deposit processing (early-onboarding timing).
+	TotalActiveBalance uint64
+
+	// Pending-deposit queue data (Electra+). Used to time the pre-Gloas early
+	// onboarding deposit so it is still queued at the fork boundary.
+	PendingDeposits           []PendingDepositInfo
+	DepositBalanceToConsume   uint64 // gwei
+	Eth1DepositIndex          uint64
+	DepositRequestsStartIndex uint64
+
 	// Pre-computed duties
 	RandaoMix      phase0.Hash32
 	NextRandaoMix  phase0.Hash32
 	ProposerDuties []phase0.ValidatorIndex // [slot_index] -> validator index
 	AttesterDuties [][][]ActiveIndiceIndex // [slot_index][committee_index][member] -> active indice index
 	PtcDuties      [][]ActiveIndiceIndex   // [slot_index][ptc_member] -> active indice index (Gloas only)
+}
+
+// PendingDepositInfo is a single entry of the beacon state's pending_deposits queue,
+// reduced to the fields needed to model Electra deposit-queue draining and to
+// identify our own (early-onboarding) deposit after a restart.
+type PendingDepositInfo struct {
+	Pubkey phase0.BLSPubKey
+	Amount uint64 // gwei
+	Slot   phase0.Slot
 }
 
 // BuilderInfo represents information about a builder from the beacon state.
@@ -106,14 +127,18 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 	stats.ActiveIndices = make([]phase0.ValidatorIndex, 0, len(validators))
 	stats.EffectiveBalances = make([]uint32, 0, len(validators))
 
+	var totalActiveBalance phase0.Gwei
+
 	for i, v := range validators {
 		if isActiveValidator(v, epoch) {
 			stats.ActiveIndices = append(stats.ActiveIndices, phase0.ValidatorIndex(i))
 			stats.EffectiveBalances = append(stats.EffectiveBalances, uint32(v.EffectiveBalance/EtherGweiFactor))
+			totalActiveBalance += v.EffectiveBalance
 		}
 	}
 
 	stats.ActiveValidators = uint64(len(stats.ActiveIndices))
+	stats.TotalActiveBalance = uint64(totalActiveBalance)
 
 	// Create DutyState for duty calculations
 	randaoMixes := state.RANDAOMixes
@@ -178,7 +203,39 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 		applyPendingPayments(stats.Builders, state.BuilderPendingPayments)
 	}
 
+	// Pending-deposit queue is available from Electra onwards. It is used to time
+	// the pre-Gloas early-onboarding deposit, so we only need it before Gloas.
+	if state.Version >= version.DataVersionElectra {
+		stats.DepositBalanceToConsume = uint64(state.DepositBalanceToConsume)
+		stats.Eth1DepositIndex = state.ETH1DepositIndex
+		stats.DepositRequestsStartIndex = state.DepositRequestsStartIndex
+		stats.PendingDeposits = extractPendingDeposits(state.PendingDeposits)
+	}
+
 	return stats, nil
+}
+
+// extractPendingDeposits reduces the beacon state's pending_deposits queue to the
+// amount/slot pairs needed to model Electra deposit-queue draining.
+func extractPendingDeposits(deposits []*electra.PendingDeposit) []PendingDepositInfo {
+	if len(deposits) == 0 {
+		return nil
+	}
+
+	result := make([]PendingDepositInfo, 0, len(deposits))
+	for _, deposit := range deposits {
+		if deposit == nil {
+			continue
+		}
+
+		result = append(result, PendingDepositInfo{
+			Pubkey: deposit.Pubkey,
+			Amount: uint64(deposit.Amount),
+			Slot:   deposit.Slot,
+		})
+	}
+
+	return result
 }
 
 // isActiveValidator checks if a validator is active at the given epoch.

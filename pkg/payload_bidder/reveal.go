@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
@@ -31,19 +30,10 @@ func BuildSignedEnvelope(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (signed *eth2all.SignedExecutionPayloadEnvelope, blobs, proofs [][]byte, err error) {
-	execRequests := p.ExecutionRequests
-	if execRequests == nil {
-		execRequests = &electra.ExecutionRequests{
-			Deposits:       []*electra.DepositRequest{},
-			Withdrawals:    []*electra.WithdrawalRequest{},
-			Consolidations: []*electra.ConsolidationRequest{},
-		}
-	}
-
 	envelope := &eth2all.ExecutionPayloadEnvelope{
 		Version:               p.ExecutionPayload.Version,
 		Payload:               p.ExecutionPayload,
-		ExecutionRequests:     execRequests,
+		ExecutionRequests:     p.ExecutionRequests,
 		BuilderIndex:          gloas.BuilderIndex(rc.BuilderIndex),
 		BeaconBlockRoot:       rc.BeaconBlockRoot,
 		ParentBeaconBlockRoot: rc.ParentBeaconBlockRoot,
