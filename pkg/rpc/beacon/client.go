@@ -299,8 +299,11 @@ type BlockInfo struct {
 	Slot               phase0.Slot
 	Root               phase0.Root
 	ExecutionBlockHash phase0.Hash32
-	ParentRoot         phase0.Root
-	StateRoot          phase0.Root
+	// Execution block hash safe to use as an FCU safe/finalized hash; always
+	// present on the EL. See agnosticFinalitySafeExecutionBlockHash.
+	FinalitySafeExecutionBlockHash phase0.Hash32
+	ParentRoot                     phase0.Root
+	StateRoot                      phase0.Root
 }
 
 // FinalityInfo contains finality checkpoint execution block hashes.
@@ -345,12 +348,18 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get execution block hash: %w", err)
 	}
 
+	finalitySafeHash, err := agnosticFinalitySafeExecutionBlockHash(msg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get finality-safe execution block hash: %w", err)
+	}
+
 	return &BlockInfo{
-		Slot:               msg.Slot,
-		Root:               root,
-		ExecutionBlockHash: execBlockHash,
-		ParentRoot:         msg.ParentRoot,
-		StateRoot:          msg.StateRoot,
+		Slot:                           msg.Slot,
+		Root:                           root,
+		ExecutionBlockHash:             execBlockHash,
+		FinalitySafeExecutionBlockHash: finalitySafeHash,
+		ParentRoot:                     msg.ParentRoot,
+		StateRoot:                      msg.StateRoot,
 	}, nil
 }
 
@@ -367,6 +376,30 @@ func agnosticExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32, error) {
 		}
 
 		return body.SignedExecutionPayloadBid.Message.BlockHash, nil
+	}
+
+	if body.ExecutionPayload == nil {
+		return phase0.Hash32{}, fmt.Errorf("no execution payload in block")
+	}
+
+	return body.ExecutionPayload.BlockHash, nil
+}
+
+// agnosticFinalitySafeExecutionBlockHash returns an execution block hash safe to
+// use as a forkchoiceUpdated safe/finalized hash: one the EL is guaranteed to
+// have. A Gloas block's committed bid block_hash may belong to a withheld payload
+// the EL never imported, so use the bid's parent_block_hash instead — the block
+// the builder built upon, an already-revealed ancestor. Pre-Gloas the payload is
+// embedded, so the block hash is always present.
+func agnosticFinalitySafeExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32, error) {
+	body := msg.Body
+
+	if msg.Version >= version.DataVersionGloas {
+		if body.SignedExecutionPayloadBid == nil || body.SignedExecutionPayloadBid.Message == nil {
+			return phase0.Hash32{}, fmt.Errorf("no execution payload bid in block")
+		}
+
+		return body.SignedExecutionPayloadBid.Message.ParentBlockHash, nil
 	}
 
 	if body.ExecutionPayload == nil {
@@ -410,7 +443,7 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 			c.log.WithError(err).Warn("Failed to get safe block info, using head")
 			safeBlockHash = headInfo.ExecutionBlockHash
 		} else {
-			safeBlockHash = safeInfo.ExecutionBlockHash
+			safeBlockHash = safeInfo.FinalitySafeExecutionBlockHash
 		}
 	} else {
 		safeBlockHash = headInfo.ExecutionBlockHash
@@ -425,7 +458,7 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 			c.log.WithError(err).Warn("Failed to get finalized block info, using safe")
 			finalizedBlockHash = safeBlockHash
 		} else {
-			finalizedBlockHash = finalizedInfo.ExecutionBlockHash
+			finalizedBlockHash = finalizedInfo.FinalitySafeExecutionBlockHash
 		}
 	} else {
 		finalizedBlockHash = safeBlockHash
