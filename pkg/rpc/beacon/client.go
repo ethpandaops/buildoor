@@ -299,9 +299,8 @@ type BlockInfo struct {
 	Slot               phase0.Slot
 	Root               phase0.Root
 	ExecutionBlockHash phase0.Hash32
-	// FinalitySafeExecutionBlockHash is an execution block hash guaranteed to be
-	// present on the EL, for use as a forkchoiceUpdated safe/finalized hash. See
-	// agnosticFinalitySafeExecutionBlockHash.
+	// Execution block hash safe to use as an FCU safe/finalized hash; always
+	// present on the EL. See agnosticFinalitySafeExecutionBlockHash.
 	FinalitySafeExecutionBlockHash phase0.Hash32
 	ParentRoot                     phase0.Root
 	StateRoot                      phase0.Root
@@ -386,20 +385,12 @@ func agnosticExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32, error) {
 	return body.ExecutionPayload.BlockHash, nil
 }
 
-// agnosticFinalitySafeExecutionBlockHash returns an execution block hash that is
-// guaranteed to be present on the execution layer, suitable for use as a
-// forkchoiceUpdated safe/finalized hash.
-//
-// Pre-Gloas the payload is embedded in the beacon block, so the committed block
-// hash is always present once the block is imported. From Gloas on, a block only
-// commits to a builder *bid* whose payload may have been withheld (never revealed,
-// so never imported by the EL) — sending that committed block hash as safe/
-// finalized makes the EL reject the forkchoiceUpdated ("A fork choice element was
-// not found" / "safe block not available in database"). The bid's
-// parent_block_hash, however, is the execution block the builder built upon: by
-// definition an already-revealed, canonical payload that the EL has. It is an
-// ancestor of the block (hence still finalized/justified) and is always present,
-// which is exactly what safe/finalized require.
+// agnosticFinalitySafeExecutionBlockHash returns an execution block hash safe to
+// use as a forkchoiceUpdated safe/finalized hash: one the EL is guaranteed to
+// have. A Gloas block's committed bid block_hash may belong to a withheld payload
+// the EL never imported, so use the bid's parent_block_hash instead — the block
+// the builder built upon, an already-revealed ancestor. Pre-Gloas the payload is
+// embedded, so the block hash is always present.
 func agnosticFinalitySafeExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32, error) {
 	body := msg.Body
 
