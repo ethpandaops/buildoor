@@ -26,12 +26,13 @@ func BuildSignedBuilderBid(
 	blsSigner BidSigner,
 	subsidyGwei uint64,
 	genesisForkVersion phase0.Version,
+	maxWithdrawalsPerPayload uint64,
 ) (*SignedBuilderBid, error) {
 	if event == nil || event.ExecutionPayload == nil {
 		return nil, nil
 	}
 
-	header, err := ExecutionPayloadHeaderFromBeacon(event.ExecutionPayload)
+	header, err := ExecutionPayloadHeaderFromBeacon(event.ExecutionPayload, maxWithdrawalsPerPayload)
 	if err != nil {
 		return nil, err
 	}

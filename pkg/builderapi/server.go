@@ -493,7 +493,11 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
 	}
 	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))
-	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.chainSvc.GetGenesis().GenesisForkVersion)
+	maxWithdrawalsPerPayload := uint64(0)
+	if chainSpec := s.chainSvc.GetChainSpec(); chainSpec != nil {
+		maxWithdrawalsPerPayload = chainSpec.MaxWithdrawalsPerPayload
+	}
+	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.chainSvc.GetGenesis().GenesisForkVersion, maxWithdrawalsPerPayload)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")

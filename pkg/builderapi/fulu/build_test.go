@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,7 @@ func TestBuildSignedBuilderBid_NilEvent(t *testing.T) {
 	pk := blsSigner.PublicKey()
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0, genesisForkVersion)
+	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	assert.Nil(t, bid)
 }
@@ -35,7 +36,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0, genesisForkVersion)
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -54,7 +55,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy, genesisForkVersion)
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -71,7 +72,7 @@ func TestBuildSignedBuilderBid_SignsWithZeroGenesisValidatorsRoot(t *testing.T) 
 	pk := blsSigner.PublicKey()
 
 	genesisForkVersion := phase0.Version{1, 2, 3, 4}
-	bid, err := BuildSignedBuilderBid(minimalPayload(t, big.NewInt(1)), pk, blsSigner, 0, genesisForkVersion)
+	bid, err := BuildSignedBuilderBid(minimalPayload(t, big.NewInt(1)), pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 
@@ -89,6 +90,27 @@ func TestBuildSignedBuilderBid_SignsWithZeroGenesisValidatorsRoot(t *testing.T) 
 	wrongDomain := signer.ComputeDomain(signer.DomainApplicationBuilder, genesisForkVersion, nonZeroRoot)
 	wrongSigningRoot := signer.ComputeSigningRoot(root, wrongDomain)
 	require.False(t, signer.VerifyBLSSignature(pk, wrongSigningRoot[:], bid.Signature))
+}
+
+func TestExecutionPayloadHeaderFromBeacon_UsesMaxWithdrawalsPerPayload(t *testing.T) {
+	payload := minimalPayload(t, big.NewInt(1)).ExecutionPayload
+	payload.Withdrawals = []*capella.Withdrawal{{
+		Index:          1,
+		ValidatorIndex: 2,
+		Amount:         3,
+	}}
+
+	header, err := ExecutionPayloadHeaderFromBeacon(payload, 4)
+	require.NoError(t, err)
+	require.NotNil(t, header)
+
+	minimalRoot, err := withdrawalsRoot(payload.Withdrawals, 4)
+	require.NoError(t, err)
+	mainnetRoot, err := withdrawalsRoot(payload.Withdrawals, 16)
+	require.NoError(t, err)
+
+	assert.Equal(t, phase0.Root(minimalRoot), header.WithdrawalsRoot)
+	assert.NotEqual(t, mainnetRoot, minimalRoot)
 }
 
 func minimalPayload(t *testing.T, blockValue *big.Int) *payload_builder.Payload {
