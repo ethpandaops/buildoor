@@ -493,7 +493,7 @@ func (s *Server) handleGetHeader(w http.ResponseWriter, r *http.Request) {
 		subsidyGwei = s.cfg.BlockValueSubsidyGwei
 	}
 	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))
-	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.chainSvc.GetGenesis().GenesisForkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	signedBid, err := fulu.BuildSignedBuilderBid(event, s.blsSigner.PublicKey(), s.blsSigner, subsidyGwei, s.chainSvc.GetGenesis().GenesisForkVersion)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeValidatorError(w, http.StatusInternalServerError, "failed to build bid")

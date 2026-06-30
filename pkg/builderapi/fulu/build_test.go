@@ -21,9 +21,7 @@ func TestBuildSignedBuilderBid_NilEvent(t *testing.T) {
 	pk := blsSigner.PublicKey()
 
 	var genesisForkVersion phase0.Version // zero version
-	var genesisValidatorsRoot phase0.Root // zero root
-
-	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0, genesisForkVersion, genesisValidatorsRoot)
+	bid, err := BuildSignedBuilderBid(nil, pk, blsSigner, 0, genesisForkVersion)
 	require.NoError(t, err)
 	assert.Nil(t, bid)
 }
@@ -37,9 +35,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	var genesisValidatorsRoot phase0.Root // zero root
-
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0, genesisForkVersion, genesisValidatorsRoot)
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, 0, genesisForkVersion)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -58,9 +54,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	var genesisValidatorsRoot phase0.Root // zero root
-
-	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy, genesisForkVersion, genesisValidatorsRoot)
+	bid, err := BuildSignedBuilderBid(event, pk, blsSigner, subsidy, genesisForkVersion)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -69,6 +63,32 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	expected := new(big.Int).Add(blockValue, new(big.Int).SetUint64(subsidy*1_000_000_000))
 	assert.Equal(t, expected.Uint64(), bid.Message.Value.Uint64(),
 		"bid value should be block_value_wei + subsidy_gwei_converted_to_wei")
+}
+
+func TestBuildSignedBuilderBid_SignsWithZeroGenesisValidatorsRoot(t *testing.T) {
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+	pk := blsSigner.PublicKey()
+
+	genesisForkVersion := phase0.Version{1, 2, 3, 4}
+	bid, err := BuildSignedBuilderBid(minimalPayload(t, big.NewInt(1)), pk, blsSigner, 0, genesisForkVersion)
+	require.NoError(t, err)
+	require.NotNil(t, bid)
+
+	bidRoot, err := bid.Message.HashTreeRoot()
+	require.NoError(t, err)
+	var root phase0.Root
+	copy(root[:], bidRoot[:])
+
+	var zeroRoot phase0.Root
+	domain := signer.ComputeDomain(signer.DomainApplicationBuilder, genesisForkVersion, zeroRoot)
+	signingRoot := signer.ComputeSigningRoot(root, domain)
+	require.True(t, signer.VerifyBLSSignature(pk, signingRoot[:], bid.Signature))
+
+	nonZeroRoot := phase0.Root{1}
+	wrongDomain := signer.ComputeDomain(signer.DomainApplicationBuilder, genesisForkVersion, nonZeroRoot)
+	wrongSigningRoot := signer.ComputeSigningRoot(root, wrongDomain)
+	require.False(t, signer.VerifyBLSSignature(pk, wrongSigningRoot[:], bid.Signature))
 }
 
 func minimalPayload(t *testing.T, blockValue *big.Int) *payload_builder.Payload {
