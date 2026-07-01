@@ -94,7 +94,8 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "gloas")
-	// We always publish full contents, so this is statically "false" (strict CLs reject a missing header).
+	// Buildoor only ever sends an unblinded body (never a payload_root form), so this is
+	// always "false". Strict CLs (Prysm) reject the request when the header is missing.
 	req.Header.Set("Eth-Execution-Payload-Blinded", "false")
 
 	httpClient := &http.Client{}
