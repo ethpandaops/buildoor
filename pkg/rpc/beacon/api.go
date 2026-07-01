@@ -94,6 +94,10 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "gloas")
+	// We always publish full contents (never a blinded/payload_root body), so this is
+	// statically "false". The header discriminates the request body per beacon-APIs #580;
+	// lenient CLs infer it from the JSON, but strict ones (e.g. Prysm) reject a missing header.
+	req.Header.Set("Eth-Execution-Payload-Blinded", "false")
 
 	httpClient := &http.Client{}
 
