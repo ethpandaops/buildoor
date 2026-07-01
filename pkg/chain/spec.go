@@ -39,6 +39,7 @@ type ChainSpec struct {
 	MaxPendingDepositsPerEpoch          uint64
 	MinActivationBalance                uint64
 	EffectiveBalanceIncrement           uint64
+	MaxWithdrawalsPerPayload            uint64
 
 	// Domain types
 	DomainBeaconProposer      phase0.DomainType
@@ -159,6 +160,12 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 
 	if v, err := parseSpecUint64(specData, "EFFECTIVE_BALANCE_INCREMENT"); err == nil {
 		s.EffectiveBalanceIncrement = v
+	}
+
+	if v, err := parseSpecUint64(specData, "MAX_WITHDRAWALS_PER_PAYLOAD"); err == nil {
+		s.MaxWithdrawalsPerPayload = v
+	} else {
+		s.MaxWithdrawalsPerPayload = 16
 	}
 
 	// Parse domain types
