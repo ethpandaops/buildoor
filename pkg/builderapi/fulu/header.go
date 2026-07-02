@@ -11,10 +11,12 @@ import (
 	"github.com/pk910/dynamic-ssz/sszutils"
 )
 
+const defaultMaxWithdrawalsPerPayload = 16
+
 // ExecutionPayloadHeaderFromBeacon builds a deneb.ExecutionPayloadHeader from
 // the fork-agnostic beacon execution payload. Used to construct a Fulu
 // BuilderBid for getHeader responses.
-func ExecutionPayloadHeaderFromBeacon(p *eth2all.ExecutionPayload) (*deneb.ExecutionPayloadHeader, error) {
+func ExecutionPayloadHeaderFromBeacon(p *eth2all.ExecutionPayload, maxWithdrawalsPerPayload uint64) (*deneb.ExecutionPayloadHeader, error) {
 	if p == nil {
 		return nil, nil
 	}
@@ -53,7 +55,7 @@ func ExecutionPayloadHeaderFromBeacon(p *eth2all.ExecutionPayload) (*deneb.Execu
 	}
 	header.TransactionsRoot = phase0.Root(txRoot)
 
-	withdrawalsRoot, err := withdrawalsRoot(p.Withdrawals)
+	withdrawalsRoot, err := withdrawalsRoot(p.Withdrawals, maxWithdrawalsPerPayload)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +70,10 @@ func transactionsRoot(txs [][]byte) ([32]byte, error) {
 }
 
 // withdrawalsRoot computes the SSZ hash tree root of the withdrawals list.
-func withdrawalsRoot(list []*capella.Withdrawal) ([32]byte, error) {
+func withdrawalsRoot(list []*capella.Withdrawal, maxWithdrawalsPerPayload uint64) ([32]byte, error) {
+	if maxWithdrawalsPerPayload == 0 {
+		maxWithdrawalsPerPayload = defaultMaxWithdrawalsPerPayload
+	}
 	var root [32]byte
 	err := hasher.WithDefaultHasher(func(hh sszutils.HashWalker) error {
 		idx := hh.Index()
@@ -78,7 +83,7 @@ func withdrawalsRoot(list []*capella.Withdrawal) ([32]byte, error) {
 			}
 		}
 		vlen := uint64(len(list))
-		hh.MerkleizeWithMixin(idx, vlen, sszutils.CalculateLimit(16, vlen, 32))
+		hh.MerkleizeWithMixin(idx, vlen, sszutils.CalculateLimit(maxWithdrawalsPerPayload, vlen, 32))
 		var err error
 		root, err = hh.HashRoot()
 		return err
