@@ -6,7 +6,7 @@ require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/ethereum/go-ethereum v1.17.4
 	github.com/ethpandaops/go-eth-engine-client v0.0.1
-	github.com/ethpandaops/go-eth2-client v0.1.5
+	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260702233011-12cc4b9b3bd0
 	github.com/ethpandaops/service-authenticatoor v0.0.2
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2
@@ -122,5 +122,3 @@ require (
 )
 
 tool github.com/pk910/dynamic-ssz/dynssz-gen
-
-replace github.com/ethpandaops/go-eth2-client => ../go-eth2-client
