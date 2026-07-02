@@ -6,7 +6,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
+	epbstypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -34,7 +34,7 @@ var (
 //
 // Returns nil on success, or one of the package's sentinel errors on failure.
 func VerifyRequestAuth(
-	signed *gloastypes.SignedRequestAuthV1,
+	signed *epbstypes.SignedRequestAuthV1,
 	validatorPubkey phase0.BLSPubKey,
 	genesisForkVersion phase0.Version,
 ) error {

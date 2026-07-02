@@ -1,6 +1,7 @@
 package legacy
 
 import (
+	_ "embed"
 	"encoding/json"
 	"testing"
 	"time"
@@ -13,11 +14,18 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
+// builderSpecsExampleJSON is the official example from
+// https://github.com/ethereum/builder-specs/blob/main/examples/bellatrix/signed_validator_registrations.json
+// (request body is the array, not the {"value": [...]} wrapper).
+//
+//go:embed testdata/signed_validator_registrations.json
+var builderSpecsExampleJSON []byte
+
 // TestVerifyRegistration_BuilderSpecsExample verifies that the official builder-specs
 // example (which uses a placeholder signature) fails BLS verification.
 func TestVerifyRegistration_BuilderSpecsExample(t *testing.T) {
 	var regs []*apiv1.SignedValidatorRegistration
-	require.NoError(t, json.Unmarshal(BuilderSpecsExampleJSON, &regs))
+	require.NoError(t, json.Unmarshal(builderSpecsExampleJSON, &regs))
 	require.Len(t, regs, 1, "builder-specs example has one registration")
 
 	reg := regs[0]

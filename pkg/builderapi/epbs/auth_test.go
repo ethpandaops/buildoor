@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
+	epbstypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -28,10 +28,10 @@ func signRequestAuth(
 	builderURL []byte,
 	slot phase0.Slot,
 	genesisForkVersion phase0.Version,
-) *gloastypes.SignedRequestAuthV1 {
+) *epbstypes.SignedRequestAuthV1 {
 	t.Helper()
 
-	msg := &gloastypes.RequestAuthV1{
+	msg := &epbstypes.RequestAuthV1{
 		Data: builderURL,
 		Slot: slot,
 	}
@@ -44,7 +44,7 @@ func signRequestAuth(
 	sig, err := s.SignWithDomain(root, domain)
 	require.NoError(t, err)
 
-	return &gloastypes.SignedRequestAuthV1{
+	return &epbstypes.SignedRequestAuthV1{
 		Message:   msg,
 		Signature: sig,
 	}
@@ -61,7 +61,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 
 	genesisForkVersion := phase0.Version{}
 
-	msg := &gloastypes.RequestAuthV1{
+	msg := &epbstypes.RequestAuthV1{
 		Data: []byte(testBuilderURL),
 		Slot: 1234,
 	}
@@ -72,7 +72,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 	require.NotEmpty(t, encoded)
 
 	// Unmarshal from SSZ into a fresh value.
-	decoded := &gloastypes.RequestAuthV1{}
+	decoded := &epbstypes.RequestAuthV1{}
 	require.NoError(t, decoded.UnmarshalSSZ(encoded))
 
 	// The decoded value must match the original.
@@ -91,7 +91,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 	sig, err := validator.SignWithDomain(decodedRoot, domain)
 	require.NoError(t, err)
 
-	signed := &gloastypes.SignedRequestAuthV1{
+	signed := &epbstypes.SignedRequestAuthV1{
 		Message:   decoded,
 		Signature: sig,
 	}
@@ -175,7 +175,7 @@ func TestVerifyRequestAuth_NilMessage(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
 
-	signed := &gloastypes.SignedRequestAuthV1{
+	signed := &epbstypes.SignedRequestAuthV1{
 		Message:   nil,
 		Signature: phase0.BLSSignature{},
 	}
@@ -188,8 +188,8 @@ func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
 
-	signed := &gloastypes.SignedRequestAuthV1{
-		Message: &gloastypes.RequestAuthV1{
+	signed := &epbstypes.SignedRequestAuthV1{
+		Message: &epbstypes.RequestAuthV1{
 			Data: []byte(testBuilderURL),
 			Slot: 1,
 		},

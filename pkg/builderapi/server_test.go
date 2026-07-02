@@ -3,6 +3,7 @@ package builderapi
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
@@ -29,13 +30,19 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
+// builderSpecsExampleJSON is the official builder-specs example request body
+// (embedded from the legacy dialect's testdata).
+//
+//go:embed legacy/testdata/signed_validator_registrations.json
+var builderSpecsExampleJSON []byte
+
 func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(legacy.BuilderSpecsExampleJSON))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(builderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
