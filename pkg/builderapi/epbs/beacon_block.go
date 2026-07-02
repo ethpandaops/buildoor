@@ -134,7 +134,9 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	var blockRoot phase0.Root
 	copy(blockRoot[:], beaconBlockRoot[:])
 
-	proposal, err := blockProposal(&block)
+	// Post-Gloas blocks are submitted bare (no block-contents wrapper — blobs
+	// travel with the envelope reveal later).
+	proposal, err := apiv1all.ProposalFromSignedBlock(&block)
 	if err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: failed to build proposal from beacon block")
 		writeError(w, http.StatusInternalServerError, "failed to build proposal: "+err.Error())
@@ -176,13 +178,4 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		"submitBeaconBlock: accepted beacon block, reveal scheduled")
 
 	w.WriteHeader(http.StatusAccepted)
-}
-
-// blockProposal wraps a fork-agnostic post-Gloas signed beacon block into the
-// versioned proposal consumed by the beacon node client. Post-Gloas blocks are
-// submitted bare (no block-contents wrapper — blobs travel with the envelope
-// reveal), so this maps via apiv1all.ProposalFromSignedBlock rather than
-// SignedBlockContents.
-func blockProposal(block *eth2all.SignedBeaconBlock) (*api.VersionedSignedProposal, error) {
-	return apiv1all.ProposalFromSignedBlock(block)
 }
