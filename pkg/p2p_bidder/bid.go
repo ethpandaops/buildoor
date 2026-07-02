@@ -1,4 +1,4 @@
-package epbs
+package p2p_bidder
 
 import (
 	"time"

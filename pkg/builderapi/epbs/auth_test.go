@@ -1,4 +1,4 @@
-package gloas_test
+package epbs_test
 
 import (
 	"strings"
@@ -7,8 +7,8 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -39,7 +39,7 @@ func signRequestAuth(
 	root, err := msg.HashTreeRoot()
 	require.NoError(t, err)
 
-	domain := signer.ComputeDomain(gloas.DomainRequestAuth, genesisForkVersion, phase0.Root{})
+	domain := signer.ComputeDomain(epbs.DomainRequestAuth, genesisForkVersion, phase0.Root{})
 
 	sig, err := s.SignWithDomain(root, domain)
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func signRequestAuth(
 
 func TestDomainRequestAuthValue(t *testing.T) {
 	// Spec: DOMAIN_REQUEST_AUTH = DomainType('0x0B000001')
-	require.Equal(t, phase0.DomainType{0x0B, 0x00, 0x00, 0x01}, gloas.DomainRequestAuth)
+	require.Equal(t, phase0.DomainType{0x0B, 0x00, 0x00, 0x01}, epbs.DomainRequestAuth)
 }
 
 func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
@@ -87,7 +87,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 	require.Equal(t, origRoot, decodedRoot)
 
 	// Sign the decoded message and verify the signature is valid.
-	domain := signer.ComputeDomain(gloas.DomainRequestAuth, genesisForkVersion, phase0.Root{})
+	domain := signer.ComputeDomain(epbs.DomainRequestAuth, genesisForkVersion, phase0.Root{})
 	sig, err := validator.SignWithDomain(decodedRoot, domain)
 	require.NoError(t, err)
 
@@ -95,7 +95,7 @@ func TestRequestAuth_SSZRoundTripAndSign(t *testing.T) {
 		Message:   decoded,
 		Signature: sig,
 	}
-	require.NoError(t, gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
+	require.NoError(t, epbs.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
 }
 
 func TestVerifyRequestAuth_RoundTrip(t *testing.T) {
@@ -106,7 +106,7 @@ func TestVerifyRequestAuth_RoundTrip(t *testing.T) {
 
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 1234, genesisForkVersion)
 
-	require.NoError(t, gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
+	require.NoError(t, epbs.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion))
 }
 
 func TestVerifyRequestAuth_WrongValidatorPubkey(t *testing.T) {
@@ -120,8 +120,8 @@ func TestVerifyRequestAuth_WrongValidatorPubkey(t *testing.T) {
 
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 42, genesisForkVersion)
 
-	err = gloas.VerifyRequestAuth(signed, other.PublicKey(), genesisForkVersion)
-	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+	err = epbs.VerifyRequestAuth(signed, other.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, epbs.ErrInvalidRequestAuthSignature)
 }
 
 func TestVerifyRequestAuth_TamperedSlot(t *testing.T) {
@@ -133,8 +133,8 @@ func TestVerifyRequestAuth_TamperedSlot(t *testing.T) {
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 100, genesisForkVersion)
 	signed.Message.Slot = 101 // tamper
 
-	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
-	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+	err = epbs.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, epbs.ErrInvalidRequestAuthSignature)
 }
 
 func TestVerifyRequestAuth_TamperedBuilderURL(t *testing.T) {
@@ -146,8 +146,8 @@ func TestVerifyRequestAuth_TamperedBuilderURL(t *testing.T) {
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 7, genesisForkVersion)
 	signed.Message.Data = []byte(otherBuilderURL) // tamper
 
-	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
-	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+	err = epbs.VerifyRequestAuth(signed, validator.PublicKey(), genesisForkVersion)
+	require.ErrorIs(t, err, epbs.ErrInvalidRequestAuthSignature)
 }
 
 func TestVerifyRequestAuth_WrongGenesisForkVersion(t *testing.T) {
@@ -159,16 +159,16 @@ func TestVerifyRequestAuth_WrongGenesisForkVersion(t *testing.T) {
 
 	signed := signRequestAuth(t, validator, []byte(testBuilderURL), 7, signingFork)
 
-	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), verifyFork)
-	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+	err = epbs.VerifyRequestAuth(signed, validator.PublicKey(), verifyFork)
+	require.ErrorIs(t, err, epbs.ErrInvalidRequestAuthSignature)
 }
 
 func TestVerifyRequestAuth_NilSigned(t *testing.T) {
 	validator, err := signer.NewBLSSigner(validatorPrivkeyHex)
 	require.NoError(t, err)
 
-	err = gloas.VerifyRequestAuth(nil, validator.PublicKey(), phase0.Version{})
-	require.ErrorIs(t, err, gloas.ErrNilSignedRequestAuth)
+	err = epbs.VerifyRequestAuth(nil, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, epbs.ErrNilSignedRequestAuth)
 }
 
 func TestVerifyRequestAuth_NilMessage(t *testing.T) {
@@ -180,8 +180,8 @@ func TestVerifyRequestAuth_NilMessage(t *testing.T) {
 		Signature: phase0.BLSSignature{},
 	}
 
-	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
-	require.ErrorIs(t, err, gloas.ErrNilRequestAuthMessage)
+	err = epbs.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, epbs.ErrNilRequestAuthMessage)
 }
 
 func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
@@ -197,8 +197,8 @@ func TestVerifyRequestAuth_GarbageSignature(t *testing.T) {
 		Signature: phase0.BLSSignature{},
 	}
 
-	err = gloas.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
-	require.ErrorIs(t, err, gloas.ErrInvalidRequestAuthSignature)
+	err = epbs.VerifyRequestAuth(signed, validator.PublicKey(), phase0.Version{})
+	require.ErrorIs(t, err, epbs.ErrInvalidRequestAuthSignature)
 
 	// Sanity check: the error message hasn't drifted (loosely).
 	require.True(t, strings.Contains(err.Error(), "signature"))

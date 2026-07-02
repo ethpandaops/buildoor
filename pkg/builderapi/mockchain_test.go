@@ -14,12 +14,15 @@ import (
 )
 
 // mockChainService is a minimal chain.Service for tests. It returns the
-// configured genesis and fork version; all other accessors return zero values.
-// The default zero-valued genesis/fork version matches the zero-version domains
-// the test signatures are built against.
+// configured genesis, fork version, and current fork; all other accessors
+// return zero values. The default zero-valued genesis/fork version matches
+// the zero-version domains the test signatures are built against; the default
+// currentFork (DataVersionUnknown) is pre-Gloas, so legacy-dialect tests pass
+// the fork guards while post-Gloas paths require setting currentFork.
 type mockChainService struct {
 	genesis     beacon.Genesis
 	forkVersion phase0.Version
+	currentFork version.DataVersion
 }
 
 var _ chain.Service = (*mockChainService)(nil)
@@ -35,9 +38,9 @@ func (m *mockChainService) TimeToSlot(time.Time) phase0.Slot { return 0 }
 func (m *mockChainService) GetCurrentEpoch() phase0.Epoch    { return 0 }
 func (m *mockChainService) GetCurrentSlot() phase0.Slot      { return 0 }
 
-func (m *mockChainService) GetCurrentFork() version.DataVersion { return version.DataVersionUnknown }
+func (m *mockChainService) GetCurrentFork() version.DataVersion { return m.currentFork }
 func (m *mockChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {
-	return version.DataVersionUnknown
+	return m.currentFork
 }
 func (m *mockChainService) GetForkVersion() (phase0.Version, error)      { return m.forkVersion, nil }
 func (m *mockChainService) GetEpochOfSlot(phase0.Slot) phase0.Epoch      { return 0 }

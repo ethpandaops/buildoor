@@ -1,4 +1,4 @@
-package fulu
+package legacy
 
 import (
 	"fmt"

@@ -12,8 +12,9 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
@@ -284,15 +285,20 @@ type BuilderAPISubmitBlockDeliveredEvent struct {
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
 	builderSvc    *payload_builder.Service
-	epbsSvc       *epbs.Service      // Optional ePBS service for bid events
-	lifecycleMgr  *lifecycle.Manager // Optional lifecycle manager for balance info
-	chainSvc      chain.Service      // Optional chain service for head vote tracking
-	builderAPISvc *builderapi.Server // Optional Builder API server
-	clients       map[chan *StreamEvent]struct{}
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	epbsSvc       *p2p_bidder.Service // Optional ePBS service for bid events
+	lifecycleMgr  *lifecycle.Manager  // Optional lifecycle manager for balance info
+	chainSvc      chain.Service       // Optional chain service for head vote tracking
+	builderAPISvc *builderapi.Server  // Optional Builder API server
+
+	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
+	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
+	payments         *payload_bidder.PaymentTracker   // Optional shared payment tracker (Gloas+)
+
+	clients map[chan *StreamEvent]struct{}
+	mu      sync.RWMutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 
 	// Track slot states for UI
 	slotStates   map[phase0.Slot]*SlotStateEvent
@@ -314,23 +320,29 @@ type EventStreamManager struct {
 // NewEventStreamManager creates a new event stream manager.
 func NewEventStreamManager(
 	builderSvc *payload_builder.Service,
-	epbsSvc *epbs.Service,
+	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
 	builderAPISvc *builderapi.Server,
+	revealSvc *payload_bidder.RevealService,
+	inclusionTracker *payload_bidder.InclusionTracker,
+	payments *payload_bidder.PaymentTracker,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &EventStreamManager{
-		builderSvc:    builderSvc,
-		epbsSvc:       epbsSvc,
-		lifecycleMgr:  lifecycleMgr,
-		chainSvc:      chainSvc,
-		builderAPISvc: builderAPISvc,
-		clients:       make(map[chan *StreamEvent]struct{}, 8),
-		ctx:           ctx,
-		cancel:        cancel,
-		slotStates:    make(map[phase0.Slot]*SlotStateEvent, 16),
+		builderSvc:       builderSvc,
+		epbsSvc:          epbsSvc,
+		lifecycleMgr:     lifecycleMgr,
+		chainSvc:         chainSvc,
+		builderAPISvc:    builderAPISvc,
+		revealSvc:        revealSvc,
+		inclusionTracker: inclusionTracker,
+		payments:         payments,
+		clients:          make(map[chan *StreamEvent]struct{}, 8),
+		ctx:              ctx,
+		cancel:           cancel,
+		slotStates:       make(map[phase0.Slot]*SlotStateEvent, 16),
 	}
 }
 
@@ -352,25 +364,25 @@ func (m *EventStreamManager) Start() {
 	payloadAttrSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAttributes()
 
 	// Subscribe to bid submission events from ePBS service (if available)
-	var bidSubmitChan <-chan *epbs.BidSubmissionEvent
+	var bidSubmitChan <-chan *p2p_bidder.BidSubmissionEvent
 	if m.epbsSvc != nil {
 		bidSubmitSub := m.epbsSvc.SubscribeBidSubmissions(16)
 		bidSubmitChan = bidSubmitSub.Channel()
 		defer bidSubmitSub.Unsubscribe()
 	}
 
-	// Subscribe to reveal events from ePBS service (if available)
-	var revealChan <-chan *epbs.RevealEvent
-	if m.epbsSvc != nil {
-		revealSub := m.epbsSvc.SubscribeReveals(16)
+	// Subscribe to reveal results from the shared reveal service (if available)
+	var revealChan <-chan *payload_bidder.RevealResult
+	if m.revealSvc != nil {
+		revealSub := m.revealSvc.SubscribeResults(16)
 		revealChan = revealSub.Channel()
 		defer revealSub.Unsubscribe()
 	}
 
-	// Subscribe to bid included events from ePBS service (if available)
-	var bidIncludedChan <-chan *epbs.BidIncludedEvent
-	if m.epbsSvc != nil {
-		bidIncludedSub := m.epbsSvc.SubscribeBidIncluded(16)
+	// Subscribe to payload inclusion events from the shared inclusion tracker (if available)
+	var bidIncludedChan <-chan *payload_bidder.PayloadIncludedEvent
+	if m.inclusionTracker != nil {
+		bidIncludedSub := m.inclusionTracker.SubscribeIncluded(16)
 		bidIncludedChan = bidIncludedSub.Channel()
 		defer bidIncludedSub.Unsubscribe()
 	}
@@ -457,9 +469,9 @@ func (m *EventStreamManager) Start() {
 						Type:      EventTypeBidIncluded,
 						Timestamp: time.Now().UnixMilli(),
 						Data: map[string]any{
-							"slot":       uint64(event.Slot),
-							"block_hash": fmt.Sprintf("0x%x", event.BlockHash[:]),
-							"bid_value":  event.BidValue,
+							"slot":       uint64(event.Payload.Attributes.ProposalSlot),
+							"block_hash": fmt.Sprintf("0x%x", event.BlockInfo.ExecutionBlockHash[:]),
+							"bid_value":  event.BidValueGwei,
 						},
 					})
 				}
@@ -620,7 +632,7 @@ func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) 
 	m.broadcastSlotState(slot)
 }
 
-func (m *EventStreamManager) handleBidSubmissionEvent(event *epbs.BidSubmissionEvent) {
+func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmissionEvent) {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeBidSubmitted,
 		Timestamp: time.Now().UnixMilli(),
@@ -866,8 +878,8 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		}
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
-		if tracker := m.epbsSvc.GetBidTracker(); tracker != nil {
-			adjustment := tracker.GetBalanceAdjustment()
+		if m.payments != nil {
+			adjustment := m.payments.GetBalanceAdjustment()
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0
@@ -901,7 +913,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 	regState := "unknown"
 	if m.epbsSvc != nil {
-		regState = epbs.RegistrationStateName(m.epbsSvc.GetRegistrationState())
+		regState = p2p_bidder.RegistrationStateName(m.epbsSvc.GetRegistrationState())
 	}
 
 	return ServiceStatusEvent{
@@ -1229,7 +1241,7 @@ func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, v
 }
 
 // BroadcastReveal broadcasts a reveal event (one per attempt, success or failure).
-func (m *EventStreamManager) BroadcastReveal(event *epbs.RevealEvent) {
+func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult) {
 	slot := uint64(event.Slot)
 
 	m.Broadcast(&StreamEvent{

@@ -9,7 +9,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -132,9 +132,9 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		resp.BuilderPubkey = pubkey.String()
 		resp.IsRegistered = h.epbsSvc.IsRegistered()
 
-		// Get pending payments from bid tracker
-		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
-			resp.PendingPayments = tracker.GetTotalPendingPayments()
+		// Get pending payments from the shared payment tracker
+		if h.payments != nil {
+			resp.PendingPayments = h.payments.GetTotalPendingPayments()
 		}
 
 		// Get live balance from chain service (works without lifecycle enabled)
@@ -369,14 +369,12 @@ func (h *APIHandler) GetLifecycleStatus(w http.ResponseWriter, _ *http.Request) 
 		WithdrawableEpoch: state.WithdrawableEpoch,
 	}
 
-	// Get pending payments from bid tracker
-	if h.epbsSvc != nil {
-		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
-			resp.PendingPayments = tracker.GetTotalPendingPayments()
+	// Get pending payments from the shared payment tracker
+	if h.payments != nil {
+		resp.PendingPayments = h.payments.GetTotalPendingPayments()
 
-			if resp.Balance > resp.PendingPayments {
-				resp.EffectiveBalance = resp.Balance - resp.PendingPayments
-			}
+		if resp.Balance > resp.PendingPayments {
+			resp.EffectiveBalance = resp.Balance - resp.PendingPayments
 		}
 	}
 
@@ -738,7 +736,7 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 	// Return current status
 	regState := "unknown"
 	if h.epbsSvc != nil {
-		regState = epbs.RegistrationStateName(h.epbsSvc.GetRegistrationState())
+		regState = p2p_bidder.RegistrationStateName(h.epbsSvc.GetRegistrationState())
 	}
 
 	status := ServiceStatusEvent{

@@ -1,4 +1,4 @@
-package fulu
+package legacy
 
 import (
 	"math/big"

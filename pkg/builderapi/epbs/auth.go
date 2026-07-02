@@ -1,6 +1,4 @@
-// Package gloas implements the Gloas-fork Builder API handlers and helpers.
-// See https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/specs/gloas/builder.md
-package gloas
+package epbs
 
 import (
 	"errors"
@@ -8,7 +6,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 

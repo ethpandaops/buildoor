@@ -77,13 +77,13 @@ go run main.go run \
 go test ./...
 
 # Run tests for specific package
-go test ./pkg/builder
+go test ./pkg/payload_builder
 
 # Run tests with verbose output
-go test -v ./pkg/builder
+go test -v ./pkg/payload_builder
 
 # Run specific test
-go test -v ./pkg/builder -run TestPayloadBuilder
+go test -v ./pkg/payload_builder -run TestPayloadBuilder
 ```
 
 ### Docker
@@ -129,19 +129,30 @@ npm run clean
 
 ### Core Components
 
-1. **Builder Service** (`pkg/builder/`)
+1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
    - Schedules builds at configurable times relative to slot start
    - Calls Engine API to construct execution payloads (forkchoiceUpdated → getPayload)
    - Emits `PayloadReadyEvent` to subscribers
 
-2. **ePBS Service** (`pkg/epbs/`)
-   - Time-scheduled bidding and payload reveals
-   - Subscribes to Builder's `PayloadReadyEvent`
-   - 10ms tick processor for precise timing control
-   - Tracks bid competition and payload inclusion
-   - Key components: Scheduler, BidCreator, RevealHandler, BidTracker
+2. **Payload Bidder** (`pkg/payload_bidder/`) — shared Gloas+ bid/reveal domain
+   - `Signer`, `BuildSignedBid`, `BuildSignedEnvelope`: bid/envelope construction + signing
+   - `RevealService`: the ONLY envelope publisher. Own main loop (channel + timer, no
+     polling); both flows request reveals via `RequestReveal`; dedupes per slot (exactly
+     one publish per won slot), publishes at `RevealTime`, retries ×3, fires `RevealResult`
+   - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
+     forks), single writer of the `won_blocks` table, requests the p2p-side reveal,
+     fires `PayloadIncludedEvent`, checks follow-up blocks for orphaned payloads
+   - `PaymentTracker`: pending payments + live balance adjustments (fed by
+     InclusionTracker/RevealService; consumed by lifecycle and WebUI)
+
+2b. **P2P Bidder** (`pkg/p2p_bidder/`) — active p2p bidding flow of ePBS only
+   - Time-scheduled bidding (10ms tick for bid windows), bid submission via gossip
+   - Competitor bid tracking, registration state machine
+   - Subscribes to nothing after bidding closes for a slot — reveals/inclusion/payments
+     are handled by the shared `payload_bidder` services
+   - `epbs_enabled` gates ONLY this module (p2p bidding); reveals always run
 
 3. **Chain Service** (`pkg/chain/`)
    - Manages epoch-level beacon state
@@ -156,15 +167,20 @@ npm run clean
    - Deposit and exit operations
    - Optional component (only active with `--lifecycle` flag)
 
-5. **Builder API Server** (`pkg/builderapi/`)
-   - Traditional Builder API (pre-ePBS mode)
-   - Endpoints: registerValidator, getHeader, submitBlindedBlock
-   - Supports Fulu fork's split header/payload model
+5. **Builder API Server** (`pkg/builderapi/`) — thin host + two dialect subpackages
+   - `builderapi/legacy/`: pre-Gloas dialect (Electra/Fulu via agnostic types) —
+     registerValidators, getHeader, submitBlindedBlockV2 (unblind + publish)
+   - `builderapi/epbs/`: post-Gloas dialect (Gloas/Heze+) — getExecutionPayloadBid,
+     submitSignedBeaconBlock (broadcasts the block immediately, then hands the reveal to
+     `payload_bidder.RevealService` — no inline envelope publish), submitBuilderPreferences
+   - Parent `Server`: route table, shared stores, stats aggregation, enable fan-out,
+     debug endpoints; implements `legacy.WinRecorder` (in-memory bids-won + SSE only;
+     durable won_blocks persistence is the InclusionTracker's job)
    - Validator fee recipient management
    - **Bids Won Store**: In-memory tracking of successfully delivered blocks
      - Thread-safe circular buffer (1000 entries max, ~200KB memory)
      - Stores: slot, block hash, transaction count, blob count, value (ETH/wei), timestamp
-     - Populated after successful block publication in `submitBlindedBlockV2`
+     - Populated by `Server.RecordBidWon` (called from `legacy.HandleSubmitBlindedBlock`)
      - Pagination support via `/api/buildoor/bids-won` endpoint
 
 6. **WebUI** (`pkg/webui/`)
@@ -181,25 +197,25 @@ npm run clean
 ### Event Flow
 
 ```
-Beacon Node Event → Builder → ePBS → Beacon Node
-       ↓              ↓         ↓
- payload_attributes  Build   Submit Bids
-                      ↓         ↓
-                 PayloadReady  Reveal
+Beacon Node ─payload_attributes─▶ payload_builder ─PayloadReady─▶ p2p_bidder (bids via gossip)
+Beacon Node ─head events────────▶ payload_bidder.InclusionTracker ─▶ RevealService ─▶ Beacon Node
+Proposer ───Builder API─────────▶ builderapi (legacy: unblind+publish │ epbs: block broadcast
+                                              + RevealService.RequestReveal)
 ```
 
 ### Data Flow (ePBS Mode)
 
 1. Beacon node emits `payload_attributes` event
-2. Builder validates slot against schedule
-3. Builder schedules build at `BuildStartTime` (relative to slot)
-4. PayloadBuilder calls Engine API (forkchoiceUpdated → getPayload)
-5. Builder emits `PayloadReadyEvent` to subscribers
-6. ePBS Service receives event and stores payload
-7. ePBS Scheduler ticks every 10ms:
-   - Submits bids between `BidStartTime` and `BidEndTime`
-   - Reveals payload at `RevealTime`
-8. Head event received → check if our payload was included
+2. Builder validates slot against schedule and builds at `BuildStartTime`
+   (Engine API: forkchoiceUpdated → getPayload), emits `PayloadReadyEvent`
+3. p2p_bidder scheduler ticks every 10ms and submits bids between `BidStartTime`
+   and `BidEndTime` (gated on `epbs_enabled` + builder registration)
+4. Head event → InclusionTracker matches the block against our payload cache; on a win
+   it records the pending payment, persists the won block, and requests the reveal
+5. RevealService publishes the envelope at `RevealTime` (55–75%% window), deduped per
+   slot — a Builder-API-won block's reveal was already requested by the epbs dialect
+   handler at block submission, so the p2p-side request is a no-op
+6. RevealResult → payment moves from pending to balance deduction; WebUI event fires
 
 ### Fork Compatibility
 
@@ -273,7 +289,8 @@ numbered step comments there match this list 1:1):
 7. Start chain service
 8. Initialize lifecycle manager (if prerequisites available)
 9. Initialize builder service
-10. Initialize ePBS service (if Gloas fork is scheduled)
+9b. Start shared payment tracker + reveal service (Gloas scheduled) and inclusion tracker (always) from `pkg/payload_bidder`
+10. Initialize p2p bidder service (if Gloas fork is scheduled)
 11. Initialize Builder API server (if `--api-port` set)
 12. Initialize proposer preferences service (if ePBS available)
 13. Initialize and start validator ranges resolver
@@ -281,8 +298,8 @@ numbered step comments there match this list 1:1):
 15. Start WebUI/API server (if APIPort > 0)
 16. Wire lifecycle manager callbacks to ePBS (if both present)
 17. Start builder service
-18. Start ePBS service (if available)
-19. Start lifecycle manager (after ePBS so the bid tracker is available)
+18. Start p2p bidder service (if available)
+19. Start lifecycle manager (uses the shared payment tracker from step 9b)
 20. Start proposer preferences service (if initialized)
 21. Wait for shutdown signal
 
@@ -309,17 +326,26 @@ buildoor/
 ├── cmd/                    # CLI commands (root, run, deposit, exit)
 ├── pkg/
 │   ├── builder/           # Core payload building logic
-│   ├── builderapi/        # Traditional Builder API server
-│   │   ├── bids_won.go    # BidsWonStore and BidWonEntry types
-│   │   └── ...
+│   ├── builderapi/        # Builder API host (route table, shared stores, stats)
+│   │   ├── bids_won.go    # BidsWonStore and BidWonEntry types (in-memory, UI)
+│   │   ├── legacy/        # pre-Gloas dialect (Electra/Fulu): registerValidators,
+│   │   │                  # getHeader, submitBlindedBlockV2, bid build/unblind helpers
+│   │   ├── epbs/          # post-Gloas dialect (Gloas/Heze+): payload bid, beacon block
+│   │   │                  # (block broadcast + scheduled reveal), builder preferences,
+│   │   │                  # request auth + SSZ types
+│   │   └── validators/    # validator registration store + signature verification
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
 │   ├── db/                # Optional SQLite state-db (settings, won_blocks, audit, ...)
 │   │   ├── database.go    # Database struct, Init, migrations, disabled no-op mode
 │   │   └── schema/        # Embedded goose migrations
 │   ├── settings/          # Central settings service (3-way default<cli<ui resolution)
-│   ├── epbs/              # ePBS bidding and revealing
+│   ├── p2p_bidder/        # active p2p bidding flow of ePBS (bid windows, competitor
+│   │                      # tracking, registration state) — no reveal/payment logic
+│   ├── memstore/          # generic thread-safe keyed store w/ buffered persistence
 │   ├── lifecycle/         # Deposit/exit/balance management
+│   ├── payload_bidder/    # shared Gloas+ domain: Signer, bid/envelope build,
+│   │                      # RevealService, InclusionTracker, PaymentTracker
 │   ├── rpc/
 │   │   ├── beacon/        # Beacon node client
 │   │   ├── engine/        # Engine API client
@@ -441,7 +467,7 @@ The Bids Won feature tracks successfully delivered blocks via the Builder API, p
   - Entry fields: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
 
 - **Integration Point** (`pkg/builderapi/server.go`):
-  - Data captured in `handleSubmitBlindedBlockV2` after successful `SubmitFuluBlock()`
+  - Data captured in `legacy.HandleSubmitBlindedBlock` after successful `SubmitFuluBlock()`, recorded via `Server.RecordBidWon` (in-memory + SSE; durable `won_blocks` rows come from the shared InclusionTracker on actual inclusion)
   - Extracts transaction count from `event.Payload.Transactions`
   - Extracts blob count from `event.BlobsBundle.Commitments`
   - Converts block value from wei to ETH using `weiToETH()` (18 decimal precision)

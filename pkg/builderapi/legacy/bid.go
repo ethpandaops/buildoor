@@ -1,5 +1,4 @@
-// Package fulu provides Fulu (builder-specs) bid types for the Builder API.
-package fulu
+package legacy
 
 import (
 	"encoding/json"

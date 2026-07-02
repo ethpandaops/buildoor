@@ -6,8 +6,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
@@ -20,7 +21,7 @@ type APIHandler struct {
 	settingsSvc    *config.Service // central settings authority (single writer)
 	stateDB        *db.Database    // optional state-db (may be disabled)
 	builderSvc     *payload_builder.Service
-	epbsSvc        *epbs.Service                // May be nil
+	epbsSvc        *p2p_bidder.Service          // May be nil
 	lifecycleMgr   *lifecycle.Manager           // May be nil
 	chainSvc       chain.Service                // May be nil
 	validatorStore *validators.Store            // May be nil (only set when Builder API enabled)
@@ -28,6 +29,10 @@ type APIHandler struct {
 	propPrefSvc    *proposerpreferences.Service // May be nil (only set when P2P peer addrs configured)
 	valRanges      *validatorranges.Resolver    // May be nil
 	eventStreamMgr *EventStreamManager          // May be nil
+
+	revealSvc        *payload_bidder.RevealService    // May be nil (Gloas not scheduled)
+	inclusionTracker *payload_bidder.InclusionTracker // May be nil
+	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
 }
 
 // NewAPIHandler creates a new API handler.
@@ -36,13 +41,16 @@ func NewAPIHandler(
 	settingsSvc *config.Service,
 	stateDB *db.Database,
 	builderSvc *payload_builder.Service,
-	epbsSvc *epbs.Service,
+	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
 	validatorStore *validators.Store,
 	builderAPISvc *builderapi.Server,
 	propPrefSvc *proposerpreferences.Service,
 	valRanges *validatorranges.Resolver,
+	revealSvc *payload_bidder.RevealService,
+	inclusionTracker *payload_bidder.InclusionTracker,
+	payments *payload_bidder.PaymentTracker,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -56,13 +64,17 @@ func NewAPIHandler(
 		builderAPISvc:  builderAPISvc,
 		propPrefSvc:    propPrefSvc,
 		valRanges:      valRanges,
+
+		revealSvc:        revealSvc,
+		inclusionTracker: inclusionTracker,
+		payments:         payments,
 	}
 
 	// Create and start event stream manager
 	if builderSvc != nil {
 		h.eventStreamMgr = NewEventStreamManager(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
-			builderAPISvc,
+			builderAPISvc, revealSvc, inclusionTracker, payments,
 		)
 		h.eventStreamMgr.Start()
 	}

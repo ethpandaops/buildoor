@@ -1,4 +1,4 @@
-package builderapi
+package epbs
 
 import (
 	"encoding/json"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 )
 
 func sampleSignedRequestAuth() *gloastypes.SignedRequestAuthV1 {

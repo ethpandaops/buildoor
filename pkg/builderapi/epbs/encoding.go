@@ -1,4 +1,4 @@
-package builderapi
+package epbs
 
 import (
 	"encoding/json"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 )
 
 // Wire formats accepted on Gloas builder-API request bodies. The builder-spec

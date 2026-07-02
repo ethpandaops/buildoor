@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gloasauth "github.com/ethpandaops/buildoor/pkg/builderapi/gloas"
-	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/gloas/types"
+	epbsapi "github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
+	gloastypes "github.com/ethpandaops/buildoor/pkg/builderapi/epbs/types"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -45,7 +45,7 @@ func signBuilderPrefsRequest(
 	root, err := auth.HashTreeRoot()
 	require.NoError(t, err)
 
-	domain := signer.ComputeDomain(gloasauth.DomainRequestAuth, genesisForkVersion, phase0.Root{})
+	domain := signer.ComputeDomain(epbsapi.DomainRequestAuth, genesisForkVersion, phase0.Root{})
 	sig, err := s.SignWithDomain(phase0.Root(root), domain)
 	require.NoError(t, err)
 
@@ -59,44 +59,6 @@ func signBuilderPrefsRequest(
 	body, err := json.Marshal(req)
 	require.NoError(t, err)
 	return body
-}
-
-func TestBuilderPreferencesStore(t *testing.T) {
-	store := NewBuilderPreferencesStore()
-
-	var pk1, pk2 phase0.BLSPubKey
-	pk1[0] = 1
-	pk2[0] = 2
-
-	// Absent → GetOrDefault is 0, Get reports not found.
-	assert.Equal(t, phase0.Gwei(0), store.GetOrDefault(pk1))
-	_, ok := store.Get(pk1)
-	assert.False(t, ok)
-
-	// Set then read back.
-	store.Set(pk1, 100)
-	got, ok := store.Get(pk1)
-	require.True(t, ok)
-	assert.Equal(t, phase0.Gwei(100), got)
-	assert.Equal(t, phase0.Gwei(100), store.GetOrDefault(pk1))
-
-	// Overwrite keeps only the latest value.
-	store.Set(pk1, 250)
-	got, _ = store.Get(pk1)
-	assert.Equal(t, phase0.Gwei(250), got)
-
-	store.Set(pk2, 7)
-
-	// GetAll returns a snapshot of all entries.
-	all := store.GetAll()
-	require.Len(t, all, 2)
-	assert.Equal(t, phase0.Gwei(250), all[pk1])
-	assert.Equal(t, phase0.Gwei(7), all[pk2])
-
-	// The snapshot is a copy — mutating it must not affect the store.
-	all[pk1] = 999
-	got, _ = store.Get(pk1)
-	assert.Equal(t, phase0.Gwei(250), got)
 }
 
 func TestSubmitBuilderPreferences_Success(t *testing.T) {
@@ -118,7 +80,7 @@ func TestSubmitBuilderPreferences_Success(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	got, ok := srv.builderPrefsStore.Get(pk)
+	got, ok := srv.GetBuilderPreferencesStore().Get(pk)
 	require.True(t, ok, "preference should be stored after successful auth")
 	assert.Equal(t, phase0.Gwei(5_000_000_000), got)
 }
@@ -147,7 +109,7 @@ func TestSubmitBuilderPreferences_SuccessSSZ(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code)
-	got, ok := srv.builderPrefsStore.Get(pk)
+	got, ok := srv.GetBuilderPreferencesStore().Get(pk)
 	require.True(t, ok, "preference should be stored after successful SSZ-decoded auth")
 	assert.Equal(t, phase0.Gwei(5_000_000_000), got)
 }
@@ -200,7 +162,7 @@ func TestSubmitBuilderPreferences_LatestOverwrites(t *testing.T) {
 		require.Equal(t, http.StatusAccepted, rec.Code)
 	}
 
-	got, _ := srv.builderPrefsStore.Get(pk)
+	got, _ := srv.GetBuilderPreferencesStore().Get(pk)
 	assert.Equal(t, phase0.Gwei(250), got, "only the latest preference should be retained")
 }
 
@@ -224,7 +186,7 @@ func TestSubmitBuilderPreferences_WrongBuilderURL(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
-	_, ok := srv.builderPrefsStore.Get(pk)
+	_, ok := srv.GetBuilderPreferencesStore().Get(pk)
 	assert.False(t, ok, "preference must not be stored when builder_url does not match")
 }
 
@@ -250,7 +212,7 @@ func TestSubmitBuilderPreferences_BadSignature(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
-	_, ok := srv.builderPrefsStore.Get(pk)
+	_, ok := srv.GetBuilderPreferencesStore().Get(pk)
 	assert.False(t, ok, "preference must not be stored when signature verification fails")
 }
 

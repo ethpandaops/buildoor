@@ -1,5 +1,4 @@
-// Package fulu provides unblinding of Fulu SignedBlindedBeaconBlock for publishing.
-package fulu
+package legacy
 
 import (
 	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"

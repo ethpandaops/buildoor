@@ -1,4 +1,4 @@
-package builderapi
+package epbs
 
 import (
 	"maps"

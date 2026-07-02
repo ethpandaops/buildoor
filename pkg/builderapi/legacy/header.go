@@ -1,5 +1,4 @@
-// Package fulu provides Fulu (builder-specs) types and helpers for the Builder API.
-package fulu
+package legacy
 
 import (
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"

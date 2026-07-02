@@ -1,5 +1,4 @@
-// Package fulu provides Fulu (builder-specs) bid building from Payload.
-package fulu
+package legacy
 
 import (
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"

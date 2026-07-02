@@ -19,8 +19,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -246,21 +247,48 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
-		// 10. Initialize ePBS service (if Gloas fork is scheduled)
-		var epbsSvc *epbs.Service
+		// 9b. Start shared payment tracker, reveal service, and inclusion tracker.
+		// The inclusion tracker runs on ALL networks (it is the single won_blocks
+		// writer, covering legacy Builder API deliveries too); the reveal service and
+		// payment tracker only exist when Gloas is scheduled. These are independent of
+		// both bid flows and of the epbs_enabled flag.
+		var paymentTracker *payload_bidder.PaymentTracker
+
+		var revealSvc *payload_bidder.RevealService
+
 		epbsAvailable := chainSpec.IsForkScheduled(version.DataVersionGloas)
 
 		if epbsAvailable {
-			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
-			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing ePBS service...")
+			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
-			epbsSvc, err = epbs.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, logger)
+			if err := revealSvc.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start reveal service: %w", err)
+			}
+			defer revealSvc.Stop()
+		}
+
+		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, revealSvc, paymentTracker, logger)
+		inclusionTracker.SetStateDB(stateDB)
+
+		if err := inclusionTracker.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start inclusion tracker: %w", err)
+		}
+		defer inclusionTracker.Stop()
+
+		// 10. Initialize p2p bidder service (if Gloas fork is scheduled)
+		var epbsSvc *p2p_bidder.Service
+
+		if epbsAvailable {
+			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
+			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing p2p bidder service...")
+
+			epbsSvc, err = p2p_bidder.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
 			if err != nil {
-				return fmt.Errorf("failed to initialize ePBS: %w", err)
+				return fmt.Errorf("failed to initialize p2p bidder: %w", err)
 			}
 
 			epbsSvc.SetEnabled(cfg.EPBSEnabled)
-			epbsSvc.SetStateDB(stateDB)
 		}
 
 		// 11. Initialize Builder API server (routes served on --api-port via the shared server)
@@ -283,11 +311,14 @@ and begins building blocks according to configuration.`,
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, builderSvc, blsSigner, validatorStore)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, builderSvc.GetPayloadCache(), blsSigner, validatorStore)
 			builderAPISrv.SetFuluPublisher(clClient)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
-			builderAPISrv.SetStateDB(stateDB)
+
+			if revealSvc != nil {
+				builderAPISrv.SetRevealService(revealSvc)
+			}
 		}
 
 		// 12. Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
@@ -345,7 +376,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
@@ -367,6 +398,9 @@ and begins building blocks according to configuration.`,
 				if builderAPISrv != nil {
 					builderAPISrv.SetBuilderIndex(index)
 				}
+				if revealSvc != nil {
+					revealSvc.SetBuilderIndex(index)
+				}
 			})
 		}
 
@@ -378,20 +412,20 @@ and begins building blocks according to configuration.`,
 		}
 		defer builderSvc.Stop()
 
-		// 18. Start ePBS service (if available)
+		// 18. Start p2p bidder service (if available)
 		if epbsSvc != nil {
-			logger.Info("Starting ePBS service...")
+			logger.Info("Starting p2p bidder service...")
 
 			if err := epbsSvc.Start(ctx, builderSvc); err != nil {
-				return fmt.Errorf("failed to start ePBS: %w", err)
+				return fmt.Errorf("failed to start p2p bidder: %w", err)
 			}
 			defer epbsSvc.Stop()
 		}
 
-		// 19. Start lifecycle manager (after ePBS so bid tracker is available)
+		// 19. Start lifecycle manager
 		if lifecycleMgr != nil {
-			if epbsSvc != nil {
-				lifecycleMgr.SetBidTracker(epbsSvc.GetBidTracker())
+			if paymentTracker != nil {
+				lifecycleMgr.SetPaymentTracker(paymentTracker)
 			}
 
 			if err := lifecycleMgr.Start(ctx); err != nil {
