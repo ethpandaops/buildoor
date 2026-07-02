@@ -24,7 +24,7 @@ import (
 // canonical addresses and match dora's DefaultSystemContractAddresses.
 var (
 	// BuilderDepositContractAddress is the EIP-8282 builder deposit predeploy.
-	BuilderDepositContractAddress = common.HexToAddress("0x0000884d2AA32eAa155F59A2f24eFa73D9008282")
+	BuilderDepositContractAddress = common.HexToAddress("0x00006AE84ed173D4394de5E28F9ED56b28008282")
 	// BuilderExitContractAddress is the EIP-8282 builder exit predeploy.
 	BuilderExitContractAddress = common.HexToAddress("0x000014574A74c805590AFF9499fc7A690f008282")
 )
