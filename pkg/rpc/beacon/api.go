@@ -48,41 +48,36 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.Sig
 }
 
 // signedExecutionPayloadEnvelopeContents is the stateless publish body: the signed
-// envelope nested under "signed_execution_payload_envelope" alongside kzg_proofs and blobs
-// (mirrors Prysm's SignedExecutionPayloadEnvelopeContents struct).
+// envelope nested under "signed_execution_payload_envelope" alongside kzg_proofs and blobs.
+// All three fields are required by the beacon-API schema, so kzg_proofs and blobs must be
+// present (as empty arrays) even when the payload carries no blobs.
 type signedExecutionPayloadEnvelopeContents struct {
 	SignedExecutionPayloadEnvelope json.RawMessage `json:"signed_execution_payload_envelope"`
-	KzgProofs                      []string        `json:"kzg_proofs,omitempty"`
-	Blobs                          []string        `json:"blobs,omitempty"`
+	KzgProofs                      []string        `json:"kzg_proofs"`
+	Blobs                          []string        `json:"blobs"`
 }
 
-// SubmitExecutionPayloadEnvelope submits a signed execution payload envelope.
-// When blobs and kzg proofs are provided they are wrapped in the
-// SignedExecutionPayloadEnvelopeContents body so the beacon node can derive
-// and broadcast data column sidecars; otherwise the bare signed envelope is sent.
+// SubmitExecutionPayloadEnvelope submits a signed execution payload envelope using the
+// stateless flow (SignedExecutionPayloadEnvelopeContents body, Eth-Execution-Payload-Blinded
+// false). The stateful/blinded flow only works when the beacon node cached the full envelope
+// from its own block production (produceBlockV4); buildoor builds payloads externally, so the
+// beacon node never has them cached and the stateless form is the only valid one.
 func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
 	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes", c.baseURL)
 
-	var bodyJSON []byte
-	var err error
-
-	if len(blobs) > 0 {
-		contents := signedExecutionPayloadEnvelopeContents{
-			SignedExecutionPayloadEnvelope: envelope,
-		}
-		contents.Blobs = make([]string, len(blobs))
-		for i, b := range blobs {
-			contents.Blobs[i] = fmt.Sprintf("0x%x", b)
-		}
-		contents.KzgProofs = make([]string, len(kzgProofs))
-		for i, p := range kzgProofs {
-			contents.KzgProofs[i] = fmt.Sprintf("0x%x", p)
-		}
-		bodyJSON, err = json.Marshal(contents)
-	} else {
-		bodyJSON = envelope
+	contents := signedExecutionPayloadEnvelopeContents{
+		SignedExecutionPayloadEnvelope: envelope,
+		KzgProofs:                      make([]string, len(kzgProofs)),
+		Blobs:                          make([]string, len(blobs)),
+	}
+	for i, b := range blobs {
+		contents.Blobs[i] = fmt.Sprintf("0x%x", b)
+	}
+	for i, p := range kzgProofs {
+		contents.KzgProofs[i] = fmt.Sprintf("0x%x", p)
 	}
 
+	bodyJSON, err := json.Marshal(contents)
 	if err != nil {
 		return fmt.Errorf("failed to marshal publish request: %w", err)
 	}
@@ -94,6 +89,9 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "gloas")
+	// Always the stateless form: header "false" selects the Contents body schema. Strict
+	// CLs (Prysm) reject the request when the header is missing.
+	req.Header.Set("Eth-Execution-Payload-Blinded", "false")
 
 	httpClient := &http.Client{}
 
@@ -114,7 +112,6 @@ func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope js
 
 // PayloadEnvelopeInfo contains key fields from a fetched execution payload envelope.
 type PayloadEnvelopeInfo struct {
-	Slot         phase0.Slot
 	BlockRoot    phase0.Root
 	BlockHash    phase0.Hash32
 	BuilderIndex uint64
@@ -155,7 +152,6 @@ func (c *Client) GetExecutionPayloadEnvelope(
 				} `json:"payload"`
 				BuilderIndex    string `json:"builder_index"`
 				BeaconBlockRoot string `json:"beacon_block_root"`
-				Slot            string `json:"slot"`
 			} `json:"message"`
 		} `json:"data"`
 	}
@@ -165,11 +161,6 @@ func (c *Client) GetExecutionPayloadEnvelope(
 	}
 
 	msg := &response.Data.Message
-
-	slot, err := strconv.ParseUint(msg.Slot, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid slot: %w", err)
-	}
 
 	blockRoot, err := parseRoot(msg.BeaconBlockRoot)
 	if err != nil {
@@ -187,7 +178,6 @@ func (c *Client) GetExecutionPayloadEnvelope(
 	}
 
 	return &PayloadEnvelopeInfo{
-		Slot:         phase0.Slot(slot),
 		BlockRoot:    blockRoot,
 		BlockHash:    blockHash,
 		BuilderIndex: builderIndex,
