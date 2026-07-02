@@ -355,7 +355,6 @@ and begins building blocks according to configuration.`,
 			}).Info("Using genesis parameters from beacon node")
 
 			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, builderSvc.GetPayloadCache(), blsSigner, validatorStore)
-			builderAPISrv.SetLegacyPublisher(clClient)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 

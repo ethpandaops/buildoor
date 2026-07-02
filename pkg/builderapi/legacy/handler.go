@@ -7,8 +7,8 @@ import (
 	"context"
 	"sync/atomic"
 
+	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -28,10 +28,10 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string)
 }
 
-// BlockPublisher submits unblinded block contents to the beacon node
-// (implemented by *beacon.Client.SubmitLegacyBlock).
-type BlockPublisher interface {
-	SubmitLegacyBlock(ctx context.Context, contents *apiv1all.SignedBlockContents) error
+// ProposalSubmitter submits a full signed proposal to the beacon node
+// (implemented by *beacon.Client).
+type ProposalSubmitter interface {
+	SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpts) error
 }
 
 // Handler serves the pre-Gloas Builder API dialect endpoints
@@ -45,8 +45,8 @@ type Handler struct {
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
 	blsSigner       *signer.BLSSigner
 
-	publisher BlockPublisher   // optional; set via SetBlockPublisher
-	events    EventBroadcaster // optional; set via SetEventBroadcaster (nil-checked)
+	clClient ProposalSubmitter // optional; set via SetCLClient (nil-checked)
+	events   EventBroadcaster  // optional; set via SetEventBroadcaster (nil-checked)
 
 	enabled          atomic.Bool
 	headersRequested atomic.Uint64
@@ -69,9 +69,9 @@ func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc c
 	}
 }
 
-// SetBlockPublisher sets the publisher for unblinded blocks (e.g. beacon node client).
-func (h *Handler) SetBlockPublisher(p BlockPublisher) {
-	h.publisher = p
+// SetCLClient sets the beacon node client used to publish unblinded blocks.
+func (h *Handler) SetCLClient(c ProposalSubmitter) {
+	h.clClient = c
 }
 
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.

@@ -111,16 +111,12 @@ func (s *Server) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-// SetLegacyPublisher sets the publisher for unblinded blocks used by the
-// legacy dialect (e.g. beacon node client).
-func (s *Server) SetLegacyPublisher(p legacy.BlockPublisher) {
-	s.legacy.SetBlockPublisher(p)
-}
-
-// SetCLClient wires the beacon client used by the post-Gloas dialect to
-// broadcast the proposer's signed beacon block. Envelope publishing is owned
+// SetCLClient wires the beacon client into both dialects: the legacy dialect
+// publishes unblinded block contents through it and the post-Gloas dialect
+// broadcasts the proposer's signed beacon block. Envelope publishing is owned
 // by the shared payload_bidder.RevealService, not this package.
 func (s *Server) SetCLClient(c *beacon.Client) {
+	s.legacy.SetCLClient(c)
 	s.epbs.SetBlockBroadcaster(c)
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -109,19 +110,26 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 
 	log.Infof("submitBlindedBlock: unblinded block for slot %d", slot)
 
-	if h.publisher != nil {
-		if err := h.publisher.SubmitLegacyBlock(r.Context(), contents); err != nil {
-			log.WithError(err).Error("submitBlindedBlock: failed to publish unblinded block")
-			writeError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
-			return
-		}
-
-		log.Info("SubmitBlindedBlock: Successfully published block!")
-	} else {
-		log.Warn("submitBlindedBlock: no publisher available")
-		writeError(w, http.StatusBadRequest, "no publisher available")
+	if h.clClient == nil {
+		log.Warn("submitBlindedBlock: no CL client available")
+		writeError(w, http.StatusBadRequest, "no CL client available")
 		return
 	}
+
+	proposal, err := contents.ToVersioned()
+	if err != nil {
+		log.WithError(err).Error("submitBlindedBlock: failed to convert unblinded contents to proposal")
+		writeError(w, http.StatusInternalServerError, "failed to convert block contents: "+err.Error())
+		return
+	}
+
+	if err := h.clClient.SubmitProposal(r.Context(), &api.SubmitProposalOpts{Proposal: proposal}); err != nil {
+		log.WithError(err).Error("submitBlindedBlock: failed to publish unblinded block")
+		writeError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
+		return
+	}
+
+	log.Info("SubmitBlindedBlock: Successfully published block!")
 
 	h.blocksPublished.Add(1)
 

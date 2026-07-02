@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -283,15 +283,13 @@ func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
 }
 
-// mockLegacyPublisher records the last SubmitLegacyBlock call for tests.
-type mockLegacyPublisher struct {
-	lastContents *apiv1all.SignedBlockContents
-	lastErr      error
+// mockProposalSubmitter records the last SubmitProposal call for tests.
+type mockProposalSubmitter struct {
+	lastProposal *api.VersionedSignedProposal
 }
 
-func (m *mockLegacyPublisher) SubmitLegacyBlock(_ context.Context, contents *apiv1all.SignedBlockContents) error {
-	m.lastContents = contents
-	m.lastErr = nil
+func (m *mockProposalSubmitter) SubmitProposal(_ context.Context, opts *api.SubmitProposalOpts) error {
+	m.lastProposal = opts.Proposal
 	return nil
 }
 
@@ -327,9 +325,9 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
-	publisher := &mockLegacyPublisher{}
+	submitter := &mockProposalSubmitter{}
 	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, cache, nil, nil)
-	srv.SetLegacyPublisher(publisher)
+	srv.legacy.SetCLClient(submitter)
 	srv.SetEnabled(true)
 
 	// Seed cache with a payload matching builder-specs Fulu example block_hash.
@@ -357,9 +355,11 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
-	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
-	require.NotNil(t, publisher.lastContents.SignedBlock, "unblinded contents should have SignedBlock")
-	require.NotNil(t, publisher.lastContents.SignedBlock.Message, "SignedBlock should have Message")
-	assert.Equal(t, phase0.Slot(1), publisher.lastContents.SignedBlock.Message.Slot)
-	assert.Equal(t, blockHashFromBuilderSpecsFulu, common.Hash(publisher.lastContents.SignedBlock.Message.Body.ExecutionPayload.BlockHash), "unblinded block should have matching block hash")
+	require.NotNil(t, submitter.lastProposal, "CL client should be called with the unblinded proposal")
+	assert.Equal(t, version.DataVersionFulu, submitter.lastProposal.Version, "proposal version should match the active fork")
+	require.NotNil(t, submitter.lastProposal.Fulu, "proposal should carry Fulu block contents")
+	require.NotNil(t, submitter.lastProposal.Fulu.SignedBlock, "unblinded contents should have SignedBlock")
+	require.NotNil(t, submitter.lastProposal.Fulu.SignedBlock.Message, "SignedBlock should have Message")
+	assert.Equal(t, phase0.Slot(1), submitter.lastProposal.Fulu.SignedBlock.Message.Slot)
+	assert.Equal(t, blockHashFromBuilderSpecsFulu, common.Hash(submitter.lastProposal.Fulu.SignedBlock.Message.Body.ExecutionPayload.BlockHash), "unblinded block should have matching block hash")
 }

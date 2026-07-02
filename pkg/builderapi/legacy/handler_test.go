@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -80,14 +80,14 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex
 
 func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
-// stubBlockPublisher records the last SubmitLegacyBlock call for tests.
-type stubBlockPublisher struct {
-	lastContents *apiv1all.SignedBlockContents
+// stubProposalSubmitter records the last SubmitProposal call for tests.
+type stubProposalSubmitter struct {
+	lastProposal *api.VersionedSignedProposal
 	err          error
 }
 
-func (p *stubBlockPublisher) SubmitLegacyBlock(_ context.Context, contents *apiv1all.SignedBlockContents) error {
-	p.lastContents = contents
+func (p *stubProposalSubmitter) SubmitProposal(_ context.Context, opts *api.SubmitProposalOpts) error {
+	p.lastProposal = opts.Proposal
 	return p.err
 }
 
@@ -166,8 +166,8 @@ func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
 	h.SetEnabled(true)
 
-	publisher := &stubBlockPublisher{}
-	h.SetBlockPublisher(publisher)
+	submitter := &stubProposalSubmitter{}
+	h.SetCLClient(submitter)
 
 	blockValue := new(big.Int).SetUint64(1_500_000_000_000_000) // 0.0015 ETH in wei
 	seedPayload(h, blockValue)
@@ -179,11 +179,11 @@ func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	h.HandleSubmitBlindedBlock(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
-	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
-	require.NotNil(t, publisher.lastContents.SignedBlock, "unblinded contents should have SignedBlock")
-	assert.Equal(t, version.DataVersionFulu, publisher.lastContents.Version,
-		"contents version should match the active fork")
-	assert.Equal(t, phase0.Slot(1), publisher.lastContents.SignedBlock.Message.Slot)
+	require.NotNil(t, submitter.lastProposal, "CL client should be called with the unblinded proposal")
+	assert.Equal(t, version.DataVersionFulu, submitter.lastProposal.Version,
+		"proposal version should match the active fork")
+	require.NotNil(t, submitter.lastProposal.Fulu, "proposal should carry Fulu block contents")
+	assert.Equal(t, phase0.Slot(1), submitter.lastProposal.Fulu.SignedBlock.Message.Slot)
 	assert.Equal(t, uint64(1), h.BlocksPublished())
 }
 
@@ -194,8 +194,8 @@ func TestHandleSubmitBlindedBlock_ConsensusVersionHeader(t *testing.T) {
 	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
 	h.SetEnabled(true)
 
-	publisher := &stubBlockPublisher{}
-	h.SetBlockPublisher(publisher)
+	submitter := &stubProposalSubmitter{}
+	h.SetCLClient(submitter)
 
 	seedPayload(h, new(big.Int).SetUint64(1_500_000_000_000_000))
 
@@ -207,9 +207,10 @@ func TestHandleSubmitBlindedBlock_ConsensusVersionHeader(t *testing.T) {
 	h.HandleSubmitBlindedBlock(rec, req)
 
 	require.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
-	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
-	assert.Equal(t, version.DataVersionElectra, publisher.lastContents.Version,
-		"contents version should follow the Eth-Consensus-Version header")
+	require.NotNil(t, submitter.lastProposal, "CL client should be called with the unblinded proposal")
+	assert.Equal(t, version.DataVersionElectra, submitter.lastProposal.Version,
+		"proposal version should follow the Eth-Consensus-Version header")
+	require.NotNil(t, submitter.lastProposal.Electra, "proposal should carry Electra block contents")
 }
 
 // TestHandleSubmitBlindedBlock_InvalidConsensusVersionHeader returns 400 for
