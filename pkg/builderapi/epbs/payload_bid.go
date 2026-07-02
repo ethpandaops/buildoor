@@ -33,11 +33,13 @@ type GetExecutionPayloadBidResponse struct {
 // POST /eth/v1/builder/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}.
 //
 // Looks up the cached payload for the requested slot, validates the supplied
-// parent_hash and parent_root against it, then constructs and signs a Gloas
+// parent_hash and parent_root against it, then constructs and signs a
 // SignedExecutionPayloadBid using the proposer's fee recipient from the
-// ProposerPreferences cache. Returns 204 if no payload is cached, 400 if the
-// inputs do not match the cached payload or proposer preferences are missing,
-// and 503 while the chain has not activated Gloas yet.
+// ProposerPreferences cache. The fork version — for the bid signing domain,
+// the response envelope, and the Eth-Consensus-Version header — is the fork
+// active at the requested slot's epoch. Returns 204 if no payload is cached,
+// 400 if the inputs do not match the cached payload or proposer preferences
+// are missing, and 503 while the requested slot is pre-Gloas.
 //
 // If the request body contains a SignedRequestAuthV1, it is validated:
 //   - auth.message.slot must match the requested slot
@@ -101,27 +103,31 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		h.events.BroadcastBuilderAPIGetBidReceived(slotU64, parentHashStr, proposerPubkeyStr)
 	}
 
-	// The post-Gloas dialect only exists once the chain has activated Gloas;
-	// before that, reject cleanly instead of leaking an internal error from the
+	// The bid is for a specific slot, so resolve the fork active at that
+	// slot's epoch — bids are requested ahead of the slot and may cross a
+	// fork boundary. The post-Gloas dialect only serves Gloas+ slots; reject
+	// earlier slots cleanly instead of leaking an internal error from the
 	// fork-version lookup below.
-	if fork := h.chainSvc.GetCurrentFork(); fork < version.DataVersionGloas {
+	fork := h.chainSvc.ActiveForkAtEpoch(h.chainSvc.GetEpochOfSlot(slot))
+	if fork < version.DataVersionGloas {
 		log.WithField("fork", fork.String()).Warn(
 			"getExecutionPayloadBid: 503 — post-Gloas Builder API dialect not available pre-Gloas")
 		writeError(w, http.StatusServiceUnavailable, "post-Gloas builder API dialect not available pre-Gloas")
 		return
 	}
 
-	// Resolve the Gloas fork version once for bid signing (DomainBeaconBuilder is
-	// chain-fork bound). Request auth is NOT signed with this: per the Gloas
+	// Resolve the slot's fork version once for bid signing (DomainBeaconBuilder
+	// is chain-fork bound). Request auth is NOT signed with this: per the Gloas
 	// builder-specs, RequestAuth is signed with compute_domain(DOMAIN_REQUEST_AUTH)
 	// using the genesis fork version and a zero genesis_validators_root — an
 	// application-space domain that mirrors DomainApplicationBuilder. So auth is
-	// verified below with the genesis fork version, not gloasForkVersion.
+	// verified below with the genesis fork version, not bidForkVersion.
 
-	gloasForkVersion, err := h.chainSvc.GetChainSpec().GetForkVersion(version.DataVersionGloas)
+	bidForkVersion, err := h.chainSvc.GetChainSpec().GetForkVersion(fork)
 	if err != nil {
-		log.WithError(err).Warn("getExecutionPayloadBid: failed to get Gloas fork version")
-		writeError(w, http.StatusInternalServerError, "failed to get Gloas fork version")
+		log.WithError(err).WithField("fork", fork.String()).Warn(
+			"getExecutionPayloadBid: failed to get fork version for slot")
+		writeError(w, http.StatusInternalServerError, "failed to get fork version for slot")
 		return
 	}
 
@@ -251,7 +257,7 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		FeeRecipient:     prefs.FeeRecipient,
 		Value:            value,
 		ExecutionPayment: executionPayment,
-	}, h.bidderSigner, gloasForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	}, h.bidderSigner, bidForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")
 		writeError(w, http.StatusInternalServerError, "failed to build signed bid")
@@ -270,7 +276,8 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		"builder_index": signedBid.Message.BuilderIndex,
 		"fee_recipient": prefs.FeeRecipient.String(),
 		"gas_limit":     signedBid.Message.GasLimit,
-	}).Info("getExecutionPayloadBid: delivered Gloas SignedExecutionPayloadBid")
+		"fork":          fork.String(),
+	}).Info("getExecutionPayloadBid: delivered SignedExecutionPayloadBid")
 
 	if h.events != nil {
 		h.events.BroadcastBuilderAPIGetBidDelivered(
@@ -281,10 +288,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Eth-Consensus-Version", "gloas")
+	w.Header().Set("Eth-Consensus-Version", fork.String())
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(GetExecutionPayloadBidResponse{
-		Version: "gloas",
+		Version: fork.String(),
 		Data:    signedBid,
 	})
 }

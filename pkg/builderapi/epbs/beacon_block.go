@@ -3,11 +3,12 @@ package epbs
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ethpandaops/go-eth2-client/api"
-	"github.com/ethpandaops/go-eth2-client/spec"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -21,12 +22,15 @@ import (
 
 // HandleSubmitBeaconBlock handles POST /eth/v1/builder/beacon_block.
 //
-// The proposer submits a full Gloas SignedBeaconBlock that binds them to the
-// builder's bid. If the builder still holds the payload referenced by the
-// bid's block_hash, it broadcasts the beacon block immediately (block
-// publication is time-critical) and schedules the execution payload envelope
-// reveal with the shared RevealService, which publishes it at the configured
-// reveal time (deduped per slot with the p2p flow).
+// The proposer submits a full post-Gloas SignedBeaconBlock that binds them to
+// the builder's bid. The block is decoded fork-agnostically; the wire version
+// is taken from the Eth-Consensus-Version request header, falling back to the
+// chain's current fork when the header is absent. If the builder still holds
+// the payload referenced by the bid's block_hash, it broadcasts the beacon
+// block immediately (block publication is time-critical) and schedules the
+// execution payload envelope reveal with the shared RevealService, which
+// publishes it at the configured reveal time (deduped per slot with the p2p
+// flow).
 //
 // Returns 202 on success, 400 on a malformed block or missing payload,
 // 415 on wrong Content-Type, 500 on broadcast/internal errors, and 503 if the
@@ -53,10 +57,31 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if fork := h.chainSvc.GetCurrentFork(); fork < version.DataVersionGloas {
+	fork := h.chainSvc.GetCurrentFork()
+	if fork < version.DataVersionGloas {
 		log.WithField("fork", fork.String()).Warn(
 			"submitBeaconBlock: 503 — post-Gloas Builder API dialect not available pre-Gloas")
 		writeError(w, http.StatusServiceUnavailable, "post-Gloas builder API dialect not available pre-Gloas")
+		return
+	}
+
+	// The proposer declares the block's wire version in the request header;
+	// without it, assume the chain's current fork.
+	if hdr := r.Header.Get("Eth-Consensus-Version"); hdr != "" {
+		parsed, err := parseConsensusVersion(hdr)
+		if err != nil {
+			log.WithError(err).Warn("submitBeaconBlock: invalid Eth-Consensus-Version header")
+			writeError(w, http.StatusBadRequest, "invalid Eth-Consensus-Version header: "+err.Error())
+			return
+		}
+
+		fork = parsed
+	}
+
+	if fork < version.DataVersionGloas {
+		log.WithField("fork", fork.String()).Warn(
+			"submitBeaconBlock: 400 — beacon_block submissions require Gloas or later")
+		writeError(w, http.StatusBadRequest, "beacon_block submissions require Gloas or later")
 		return
 	}
 
@@ -67,7 +92,7 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var block gloasspec.SignedBeaconBlock
+	block := eth2all.SignedBeaconBlock{Version: fork}
 	if err := json.Unmarshal(body, &block); err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -110,14 +135,17 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	var blockRoot phase0.Root
 	copy(blockRoot[:], beaconBlockRoot[:])
 
+	proposal, err := blockProposal(&block)
+	if err != nil {
+		log.WithError(err).Warn("submitBeaconBlock: failed to build proposal from beacon block")
+		writeError(w, http.StatusInternalServerError, "failed to build proposal: "+err.Error())
+		return
+	}
+
 	// Broadcast the proposer's block immediately — the proposer delegated
 	// time-critical block publication to us.
 	if err := h.broadcaster.SubmitProposal(r.Context(), &api.SubmitProposalOpts{
-		Proposal: &api.VersionedSignedProposal{
-			Version: spec.DataVersionGloas,
-			Blinded: false,
-			Gloas:   &block,
-		},
+		Proposal: proposal,
 	}); err != nil {
 		log.WithError(err).Error("submitBeaconBlock: failed to broadcast beacon block")
 		writeError(w, http.StatusInternalServerError, "failed to broadcast beacon block: "+err.Error())
@@ -149,4 +177,34 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		"submitBeaconBlock: accepted beacon block, reveal scheduled")
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// blockProposal wraps a fork-agnostic post-Gloas signed beacon block into the
+// versioned proposal consumed by the beacon node client.
+func blockProposal(block *eth2all.SignedBeaconBlock) (*api.VersionedSignedProposal, error) {
+	view, err := block.ToView()
+	if err != nil {
+		return nil, err
+	}
+
+	gloasBlock, ok := view.(*gloasspec.SignedBeaconBlock)
+	if !ok {
+		return nil, fmt.Errorf("unexpected view type %T for version %s", view, block.Version)
+	}
+
+	proposal := &api.VersionedSignedProposal{
+		Version: block.Version,
+		Blinded: false,
+	}
+
+	switch block.Version {
+	case version.DataVersionGloas:
+		proposal.Gloas = gloasBlock
+	case version.DataVersionHeze:
+		proposal.Heze = gloasBlock
+	default:
+		return nil, fmt.Errorf("no proposal mapping for version %s", block.Version)
+	}
+
+	return proposal, nil
 }

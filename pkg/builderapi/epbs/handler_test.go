@@ -120,6 +120,17 @@ func (b *stubBlockBroadcaster) callCount() int {
 	return b.calls
 }
 
+func (b *stubBlockBroadcaster) lastProposal() *api.VersionedSignedProposal {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.lastOpts == nil {
+		return nil
+	}
+
+	return b.lastOpts.Proposal
+}
+
 // stubEnvelopePublisher records envelope publishes (the reveal side effect).
 type stubEnvelopePublisher struct {
 	mu    sync.Mutex
@@ -299,6 +310,48 @@ func TestHandleSubmitBeaconBlock_Success(t *testing.T) {
 	reveal := payload.Reveal()
 	require.NotNil(t, reveal, "payload must be marked revealed by the reveal service")
 	assert.Equal(t, payload_builder.BidTransportBuilderAPI, reveal.Transport)
+}
+
+// TestHandleSubmitBeaconBlock_ProposalVersion verifies the broadcast proposal
+// carries the fork-agnostic block in the fork's proposal field: the chain's
+// current fork by default, or the Eth-Consensus-Version header's fork when
+// supplied (Heze reuses the Gloas block schema).
+func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
+	env := newBeaconBlockTestEnv(t, 4*time.Second, 3500)
+
+	require.NoError(t, env.revealSvc.Start(context.Background()))
+	defer env.revealSvc.Stop()
+
+	slot := phase0.Slot(1)
+	blockHash := phase0.Hash32{0xab}
+	seedGloasPayload(env.handler, slot, blockHash)
+
+	// Default: the chain's current fork (Gloas).
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	proposal := env.broadcaster.lastProposal()
+	require.NotNil(t, proposal)
+	assert.Equal(t, version.DataVersionGloas, proposal.Version)
+	require.NotNil(t, proposal.Gloas, "proposal must carry the Gloas block")
+	assert.Nil(t, proposal.Heze)
+
+	// Heze via the Eth-Consensus-Version header (same wire schema as Gloas).
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block",
+		bytes.NewReader(signedBeaconBlockJSON(t, slot, blockHash)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "heze")
+	rec = httptest.NewRecorder()
+
+	env.handler.HandleSubmitBeaconBlock(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+
+	proposal = env.broadcaster.lastProposal()
+	require.NotNil(t, proposal)
+	assert.Equal(t, version.DataVersionHeze, proposal.Version)
+	require.NotNil(t, proposal.Heze, "proposal must carry the Heze block")
+	assert.Nil(t, proposal.Gloas)
 }
 
 // TestHandleSubmitBeaconBlock_NoCachedPayload returns 400 and neither
