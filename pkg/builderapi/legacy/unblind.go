@@ -1,38 +1,29 @@
 package legacy
 
 import (
-	"fmt"
-
 	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
-	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
-	"github.com/ethpandaops/go-eth2-client/spec/version"
 
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
-// UnblindSignedBlindedBeaconBlock builds full SignedBlockContents from a blinded block and
-// the matching Payload (full payload + blobs). The proposer signature is preserved.
-// fork selects the wire version of the returned contents; Electra and Fulu share the
-// Electra block schema, so both are built from the same blinded block layout.
+// UnblindSignedBlindedBeaconBlock builds full SignedBlockContents from a
+// fork-agnostic blinded block and the matching Payload (full payload +
+// blobs). The proposer signature is preserved and the returned contents
+// carry the blinded block's fork version.
 func UnblindSignedBlindedBeaconBlock(
-	blinded *apiv1electra.SignedBlindedBeaconBlock,
+	blinded *apiv1all.SignedBlindedBeaconBlock,
 	event *payload_builder.Payload,
-	fork version.DataVersion,
 ) (*apiv1all.SignedBlockContents, error) {
 	if blinded == nil || blinded.Message == nil || blinded.Message.Body == nil || event == nil || event.ExecutionPayload == nil {
 		return nil, nil
 	}
 
-	fullPayload, err := DenebPayload(event.ExecutionPayload)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build full beacon block body from blinded body, replacing header with full payload.
+	// Build the full beacon block body from the blinded body, replacing the
+	// execution payload header with the full payload from the payload cache.
 	blindedBody := blinded.Message.Body
-	fullBody := &electra.BeaconBlockBody{
+	fullBody := &eth2all.BeaconBlockBody{
+		Version:               blinded.Version,
 		RANDAOReveal:          blindedBody.RANDAOReveal,
 		ETH1Data:              blindedBody.ETH1Data,
 		Graffiti:              blindedBody.Graffiti,
@@ -42,7 +33,7 @@ func UnblindSignedBlindedBeaconBlock(
 		Deposits:              blindedBody.Deposits,
 		VoluntaryExits:        blindedBody.VoluntaryExits,
 		SyncAggregate:         blindedBody.SyncAggregate,
-		ExecutionPayload:      fullPayload,
+		ExecutionPayload:      event.ExecutionPayload,
 		BLSToExecutionChanges: blindedBody.BLSToExecutionChanges,
 		BlobKZGCommitments:    blindedBody.BlobKZGCommitments,
 		ExecutionRequests:     blindedBody.ExecutionRequests,
@@ -53,7 +44,8 @@ func UnblindSignedBlindedBeaconBlock(
 		fullBody.BlobKZGCommitments = event.BlobsBundle.Commitments
 	}
 
-	fullBlock := &electra.BeaconBlock{
+	fullBlock := &eth2all.BeaconBlock{
+		Version:       blinded.Version,
 		Slot:          blinded.Message.Slot,
 		ProposerIndex: blinded.Message.ProposerIndex,
 		ParentRoot:    blinded.Message.ParentRoot,
@@ -61,19 +53,13 @@ func UnblindSignedBlindedBeaconBlock(
 		Body:          fullBody,
 	}
 
-	// Wrap the Electra-schema block in the fork-agnostic signed block pinned
-	// to the active fork (Electra and Fulu share the Electra schema).
-	signedBlock := &eth2all.SignedBeaconBlock{Version: fork}
-	if err := signedBlock.FromView(&electra.SignedBeaconBlock{
-		Message:   fullBlock,
-		Signature: blinded.Signature,
-	}); err != nil {
-		return nil, fmt.Errorf("failed to build fork-agnostic signed block: %w", err)
-	}
-
 	contents := &apiv1all.SignedBlockContents{
-		Version:     fork,
-		SignedBlock: signedBlock,
+		Version: blinded.Version,
+		SignedBlock: &eth2all.SignedBeaconBlock{
+			Version:   blinded.Version,
+			Message:   fullBlock,
+			Signature: blinded.Signature,
+		},
 	}
 	if event.BlobsBundle != nil {
 		contents.KZGProofs = event.BlobsBundle.Proofs

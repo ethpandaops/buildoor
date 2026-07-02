@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 
-	apiv1electra "github.com/ethpandaops/go-eth2-client/api/v1/electra"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 )
 
-// HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks
-// (Electra-shaped SignedBlindedBeaconBlock, serving Electra and Fulu).
+// HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks.
+// The blinded block is decoded fork-agnostically; the wire version is taken
+// from the Eth-Consensus-Version request header, falling back to the chain's
+// current fork when the header is absent.
 // Returns 202 Accepted on success, 400 on validation/match failure, 415 on wrong
 // Content-Type, and 503 when the legacy Builder API dialect is disabled.
 func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +47,20 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var blinded apiv1electra.SignedBlindedBeaconBlock
+	// The proposer declares the block's wire version in the request header;
+	// without it, assume the chain's current fork.
+	if hdr := r.Header.Get("Eth-Consensus-Version"); hdr != "" {
+		parsed, err := parseConsensusVersion(hdr)
+		if err != nil {
+			log.WithError(err).Warn("submitBlindedBlock: invalid Eth-Consensus-Version header")
+			writeError(w, http.StatusBadRequest, "invalid Eth-Consensus-Version header: "+err.Error())
+			return
+		}
+
+		fork = parsed
+	}
+
+	blinded := apiv1all.SignedBlindedBeaconBlock{Version: fork}
 	if err := json.NewDecoder(r.Body).Decode(&blinded); err != nil {
 		log.WithError(err).Warn("submitBlindedBlock: invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -80,7 +95,7 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	contents, err := UnblindSignedBlindedBeaconBlock(&blinded, event, fork)
+	contents, err := UnblindSignedBlindedBeaconBlock(&blinded, event)
 	if err != nil {
 		log.WithError(err).Warn("submitBlindedBlock: unblind failed")
 		writeError(w, http.StatusBadRequest, "unblind failed: "+err.Error())

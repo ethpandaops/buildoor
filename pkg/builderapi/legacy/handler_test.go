@@ -187,6 +187,47 @@ func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	assert.Equal(t, uint64(1), h.BlocksPublished())
 }
 
+// TestHandleSubmitBlindedBlock_ConsensusVersionHeader decodes the blinded
+// block with the fork version from the Eth-Consensus-Version header instead
+// of the chain's current fork.
+func TestHandleSubmitBlindedBlock_ConsensusVersionHeader(t *testing.T) {
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
+	h.SetEnabled(true)
+
+	publisher := &stubBlockPublisher{}
+	h.SetBlockPublisher(publisher)
+
+	seedPayload(h, new(big.Int).SetUint64(1_500_000_000_000_000))
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte(blindedBlockJSON())))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "electra")
+	rec := httptest.NewRecorder()
+
+	h.HandleSubmitBlindedBlock(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
+	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
+	assert.Equal(t, version.DataVersionElectra, publisher.lastContents.Version,
+		"contents version should follow the Eth-Consensus-Version header")
+}
+
+// TestHandleSubmitBlindedBlock_InvalidConsensusVersionHeader returns 400 for
+// an unrecognised Eth-Consensus-Version header.
+func TestHandleSubmitBlindedBlock_InvalidConsensusVersionHeader(t *testing.T) {
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
+	h.SetEnabled(true)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte(blindedBlockJSON())))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Eth-Consensus-Version", "notafork")
+	rec := httptest.NewRecorder()
+
+	h.HandleSubmitBlindedBlock(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "invalid consensus version header should return 400")
+}
+
 // TestHandleSubmitBlindedBlock_Disabled returns 503 when the dialect is disabled.
 func TestHandleSubmitBlindedBlock_Disabled(t *testing.T) {
 	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
