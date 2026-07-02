@@ -24,34 +24,6 @@ func testDB(t *testing.T) *Database {
 	return d
 }
 
-func TestWonBlocksPagination(t *testing.T) {
-	d := testDB(t)
-
-	for i := 1; i <= 5; i++ {
-		require.NoError(t, d.AddWonBlock(WonBlock{
-			Source:    WonBlockSourceBuilderAPI,
-			Slot:      uint64(i),
-			BlockHash: "0xhash",
-			ValueWei:  "1",
-			ValueETH:  "0",
-			Timestamp: int64(i),
-		}))
-	}
-
-	page, total, err := d.GetWonBlocks(0, 2)
-	require.NoError(t, err)
-	require.Equal(t, 5, total)
-	require.Len(t, page, 2)
-	// Newest first (highest id == highest slot here).
-	require.Equal(t, uint64(5), page[0].Slot)
-	require.Equal(t, uint64(4), page[1].Slot)
-
-	page2, _, err := d.GetWonBlocks(2, 2)
-	require.NoError(t, err)
-	require.Len(t, page2, 2)
-	require.Equal(t, uint64(3), page2[0].Slot)
-}
-
 func TestAuditLogRoundTrip(t *testing.T) {
 	d := testDB(t)
 
@@ -86,11 +58,11 @@ func TestDisabledDBNoOps(t *testing.T) {
 	require.False(t, d.Enabled())
 
 	// Writes are dropped, reads are empty — never panic.
-	require.NoError(t, d.AddWonBlock(WonBlock{Slot: 1}))
+	require.NoError(t, d.AppendAuditLog(AuditLog{Timestamp: 1, Action: "noop"}))
 
-	blocks, total, err := d.GetWonBlocks(0, 10)
+	entries, total, err := d.GetAuditLogs(0, 10)
 	require.NoError(t, err)
-	require.Empty(t, blocks)
+	require.Empty(t, entries)
 	require.Zero(t, total)
 
 	rows, err := d.GetSettings()

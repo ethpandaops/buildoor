@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,10 +14,15 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
+
+// maxWonBlocks caps the won-block store (in memory AND, via the flush batch's
+// delete propagation, the kv_store namespace) — matching the old UI cap.
+const maxWonBlocks = 1000
 
 // PayloadIncludedEvent is fired when a beacon block committing to one of our
 // payloads is observed at the head (consumed by the WebUI).
@@ -24,12 +30,13 @@ type PayloadIncludedEvent struct {
 	Payload      *payload_builder.Payload
 	BlockInfo    *beacon.BlockInfo
 	BidValueGwei uint64
+	WonBlock     *WonBlock // the recorded won-block entry for this inclusion
 }
 
 // InclusionTracker watches head events and detects inclusion of our payloads.
-// It records the payment obligation, requests the payload reveal, persists won
-// blocks (it is the single writer of the won_blocks table, covering both
-// flows and all forks), and checks the follow-up block to detect orphaned
+// It records the payment obligation, requests the payload reveal, records won
+// blocks (it is the single owner of won-block records, covering both flows
+// and all forks), and checks the follow-up block to detect orphaned
 // (unrevealed) payloads. Shared by both the p2p and Builder API flows.
 type InclusionTracker struct {
 	clClient   *beacon.Client
@@ -38,6 +45,10 @@ type InclusionTracker struct {
 	revealSvc  *RevealService           // optional; nil pre-Gloas
 	payments   *PaymentTracker          // optional; nil pre-Gloas
 	stateDB    *db.Database             // optional (disabled no-op mode)
+
+	// wonBlocks holds the won-block records keyed by slot; persisted into the
+	// state-db's kv_store (WonBlocksNamespace) when a state-db is attached.
+	wonBlocks *memstore.Store[phase0.Slot, *WonBlock]
 
 	includedDispatch utils.Dispatcher[*PayloadIncludedEvent]
 
@@ -68,12 +79,14 @@ func NewInclusionTracker(
 		builderSvc: builderSvc,
 		revealSvc:  revealSvc,
 		payments:   payments,
+		wonBlocks:  memstore.New[phase0.Slot, *WonBlock](),
 		log:        log.WithField("component", "inclusion-tracker"),
 	}
 }
 
-// SetStateDB sets the optional state-db used to persist won blocks. When
-// unset, won blocks are not persisted.
+// SetStateDB sets the optional state-db used to persist won blocks (attached
+// to the won-block store on Start). When unset, won blocks are kept in memory
+// only.
 func (t *InclusionTracker) SetStateDB(stateDB *db.Database) {
 	t.stateDB = stateDB
 }
@@ -83,9 +96,16 @@ func (t *InclusionTracker) SubscribeIncluded(capacity int) *utils.Subscription[*
 	return t.includedDispatch.Subscribe(capacity, false)
 }
 
-// Start starts the inclusion tracker's main loop.
+// Start starts the inclusion tracker's main loop. When a state-db was set it
+// first attaches the won-block store's persistence, rehydrating wins recorded
+// in prior runs.
 func (t *InclusionTracker) Start(ctx context.Context) error {
 	t.ctx, t.cancel = context.WithCancel(ctx)
+
+	if t.stateDB != nil {
+		t.wonBlocks.SetPersistence(t.ctx,
+			db.NewKVPersistence(t.stateDB, WonBlocksNamespace, WonBlockCodec{}), t.log)
+	}
 
 	t.wg.Add(1)
 
@@ -96,13 +116,18 @@ func (t *InclusionTracker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the inclusion tracker and waits for the main loop to exit.
+// Stop stops the inclusion tracker, waits for the main loop to exit, and
+// flushes the won-block store. Must run before the state-db closes (run.go
+// registers the tracker's Stop defer after the state-db's close defer, so
+// LIFO ordering guarantees this).
 func (t *InclusionTracker) Stop() {
 	if t.cancel != nil {
 		t.cancel()
 	}
 
 	t.wg.Wait()
+
+	t.wonBlocks.Stop()
 
 	t.log.Info("Inclusion tracker stopped")
 }
@@ -233,9 +258,10 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		})
 	}
 
-	// Persist the won block so it survives restarts. The InclusionTracker is
-	// the single writer of won_blocks, for all forks and both flows.
-	t.persistWonBlock(payload, blockInfo.ExecutionBlockHash)
+	// Record the won block (persisted into the kv_store when a state-db is
+	// attached). The InclusionTracker is the single owner of won-block
+	// records, for all forks and both flows.
+	wonBlock := t.recordWonBlock(payload, blockInfo.ExecutionBlockHash)
 
 	t.builderSvc.IncrementBlocksIncluded()
 
@@ -243,6 +269,7 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		Payload:      payload,
 		BlockInfo:    blockInfo,
 		BidValueGwei: bidValueGwei,
+		WonBlock:     wonBlock,
 	})
 
 	// Track for the follow-up orphan check on the next head block.
@@ -250,14 +277,12 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 	t.lastIncludedHash = blockInfo.ExecutionBlockHash
 }
 
-// persistWonBlock records an included payload to the state-db. The source is
-// derived from the payload's bid records: any Builder-API bid marks the win as
-// a Builder API delivery, otherwise it was won via p2p bidding.
-func (t *InclusionTracker) persistWonBlock(payload *payload_builder.Payload, blockHash phase0.Hash32) {
-	if t.stateDB == nil {
-		return
-	}
-
+// recordWonBlock records an included payload in the won-block store and
+// returns the entry. The source is derived from the payload's bid records:
+// any Builder-API bid marks the win as a Builder API delivery, otherwise it
+// was won via p2p bidding.
+func (t *InclusionTracker) recordWonBlock(
+	payload *payload_builder.Payload, blockHash phase0.Hash32) *WonBlock {
 	numTxs := 0
 	if payload.ExecutionPayload != nil {
 		numTxs = len(payload.ExecutionPayload.Transactions)
@@ -276,16 +301,16 @@ func (t *InclusionTracker) persistWonBlock(payload *payload_builder.Payload, blo
 		valueETH = weiToETHString(payload.BlockValue)
 	}
 
-	source := db.WonBlockSourceEPBS
+	source := WonBlockSourceEPBS
 
 	for _, bid := range payload.Bids() {
 		if bid.Transport == payload_builder.BidTransportBuilderAPI {
-			source = db.WonBlockSourceBuilderAPI
+			source = WonBlockSourceBuilderAPI
 			break
 		}
 	}
 
-	if err := t.stateDB.AddWonBlock(db.WonBlock{
+	wonBlock := &WonBlock{
 		Source:          source,
 		Slot:            uint64(payload.Attributes.ProposalSlot),
 		BlockHash:       fmt.Sprintf("%#x", blockHash),
@@ -294,9 +319,62 @@ func (t *InclusionTracker) persistWonBlock(payload *payload_builder.Payload, blo
 		ValueWei:        valueWei,
 		ValueETH:        valueETH,
 		Timestamp:       time.Now().UnixMilli(),
-	}); err != nil {
-		t.log.WithError(err).Warn("failed to persist won block to state-db")
 	}
+
+	t.wonBlocks.Put(payload.Attributes.ProposalSlot, wonBlock)
+	t.pruneWonBlocks()
+
+	return wonBlock
+}
+
+// pruneWonBlocks drops the smallest slots down to maxWonBlocks entries. The
+// deletions propagate to the kv_store namespace via the flush batch, so the
+// durable history is capped at maxWonBlocks too (matching the old UI cap).
+func (t *InclusionTracker) pruneWonBlocks() {
+	excess := t.wonBlocks.Len() - maxWonBlocks
+	if excess <= 0 {
+		return
+	}
+
+	slots := make([]phase0.Slot, 0, t.wonBlocks.Len())
+	for slot := range t.wonBlocks.Entries() {
+		slots = append(slots, slot)
+	}
+
+	sort.Slice(slots, func(i, j int) bool { return slots[i] < slots[j] })
+
+	cutoff := slots[excess-1]
+
+	t.wonBlocks.Prune(func(slot phase0.Slot) bool { return slot <= cutoff })
+}
+
+// GetWonBlocks returns a page of won-block records sorted by slot descending
+// (newest first) plus the total record count.
+func (t *InclusionTracker) GetWonBlocks(offset, limit int) ([]*WonBlock, int) {
+	entries := t.wonBlocks.Entries()
+	total := len(entries)
+
+	if offset < 0 {
+		offset = 0
+	}
+
+	if offset >= total || limit <= 0 {
+		return []*WonBlock{}, total
+	}
+
+	sorted := make([]*WonBlock, 0, total)
+	for _, wonBlock := range entries {
+		sorted = append(sorted, wonBlock)
+	}
+
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Slot > sorted[j].Slot })
+
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+
+	return sorted[offset:end], total
 }
 
 // weiToETHString converts wei to an 18-decimal ETH string.

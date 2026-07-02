@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -753,17 +753,17 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 
 // BidsWonResponse is the response for GetBidsWon.
 type BidsWonResponse struct {
-	BidsWon []db.WonBlock `json:"bids_won"`
-	Total   int           `json:"total"`
-	Offset  int           `json:"offset"`
-	Limit   int           `json:"limit"`
+	BidsWon []*payload_bidder.WonBlock `json:"bids_won"`
+	Total   int                        `json:"total"`
+	Offset  int                        `json:"offset"`
+	Limit   int                        `json:"limit"`
 }
 
 // GetBidsWon godoc
 // @Id getBidsWon
-// @Summary Get bids won (successfully delivered blocks)
+// @Summary Get bids won (blocks of ours included on chain)
 // @Tags Buildoor
-// @Description Returns a paginated list of bids won via Builder API with transaction counts, blob counts, and values.
+// @Description Returns a paginated list of won blocks (Builder API and p2p ePBS) with transaction counts, blob counts, and values, read from the shared inclusion tracker.
 // @Produce json
 // @Param offset query int false "Offset for pagination" default(0)
 // @Param limit query int false "Limit for pagination (max 100)" default(20)
@@ -783,37 +783,13 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 
-	bidsWon := []db.WonBlock{}
+	bidsWon := []*payload_bidder.WonBlock{}
 	total := 0
 
-	switch {
-	case h.stateDB.Enabled():
-		// DB-backed: unified across Builder API and ePBS, survives restarts.
-		blocks, t, err := h.stateDB.GetWonBlocks(offset, limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-
-		bidsWon = blocks
-		total = t
-	case h.builderAPISvc != nil && h.builderAPISvc.GetBidsWonStore() != nil:
-		// In-memory fallback (Builder API only) when no state-db is configured.
-		page, t := h.builderAPISvc.GetBidsWonStore().GetPage(offset, limit)
-		total = t
-
-		for _, e := range page {
-			bidsWon = append(bidsWon, db.WonBlock{
-				Source:          db.WonBlockSourceBuilderAPI,
-				Slot:            e.Slot,
-				BlockHash:       e.BlockHash,
-				NumTransactions: e.NumTransactions,
-				NumBlobs:        e.NumBlobs,
-				ValueWei:        e.ValueWei,
-				ValueETH:        e.ValueETH,
-				Timestamp:       e.Timestamp,
-			})
-		}
+	// The shared inclusion tracker is the single owner of won-block records
+	// (both flows, all forks; persisted via the state-db kv_store when set).
+	if h.inclusionTracker != nil {
+		bidsWon, total = h.inclusionTracker.GetWonBlocks(offset, limit)
 	}
 
 	writeJSON(w, http.StatusOK, BidsWonResponse{

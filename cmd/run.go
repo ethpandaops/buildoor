@@ -270,10 +270,11 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 9b. Start shared payment tracker, reveal service, and inclusion tracker.
-		// The inclusion tracker runs on ALL networks (it is the single won_blocks
-		// writer, covering legacy Builder API deliveries too); the reveal service and
-		// payment tracker only exist when Gloas is scheduled. These are independent of
-		// both bid flows and of the epbs_enabled flag.
+		// The inclusion tracker runs on ALL networks (it is the single owner of
+		// won-block records, covering legacy Builder API deliveries too; persisted
+		// into the state-db's kv_store); the reveal service and payment tracker only
+		// exist when Gloas is scheduled. These are independent of both bid flows and
+		// of the epbs_enabled flag.
 		var paymentTracker *payload_bidder.PaymentTracker
 
 		var revealSvc *payload_bidder.RevealService
@@ -296,6 +297,8 @@ and begins building blocks according to configuration.`,
 		if err := inclusionTracker.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start inclusion tracker: %w", err)
 		}
+		// Registered after stateDB's own close defer (LIFO) → the won-block
+		// store's final flush (inside Stop) runs while the state-db is still open.
 		defer inclusionTracker.Stop()
 
 		// 10. Initialize the proposer preferences service (started later in step

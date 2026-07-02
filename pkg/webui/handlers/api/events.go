@@ -474,6 +474,12 @@ func (m *EventStreamManager) Start() {
 							"bid_value":  event.BidValueGwei,
 						},
 					})
+
+					// The inclusion tracker's won-block record doubles as the
+					// bid_won event (Builder API and p2p wins alike).
+					if event.WonBlock != nil {
+						m.BroadcastBidWon(event.WonBlock)
+					}
 				}
 
 			case <-ticker.C:
@@ -1395,20 +1401,20 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockDelivered(slot uint64
 	})
 }
 
-// BroadcastBidWon broadcasts a bid won event when a block is successfully delivered.
-func (m *EventStreamManager) BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei string) {
-	now := time.Now().UnixMilli()
+// BroadcastBidWon broadcasts a bid won event when one of our blocks is seen
+// included at the head (fed by the inclusion tracker's won-block record).
+func (m *EventStreamManager) BroadcastBidWon(wonBlock *payload_bidder.WonBlock) {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeBidWon,
-		Timestamp: now,
+		Timestamp: time.Now().UnixMilli(),
 		Data: BidWonStreamEvent{
-			Slot:            slot,
-			BlockHash:       blockHash,
-			NumTransactions: numTxs,
-			NumBlobs:        numBlobs,
-			ValueETH:        valueETH,
-			ValueWei:        valueWei,
-			Timestamp:       now,
+			Slot:            wonBlock.Slot,
+			BlockHash:       wonBlock.BlockHash,
+			NumTransactions: wonBlock.NumTransactions,
+			NumBlobs:        wonBlock.NumBlobs,
+			ValueETH:        wonBlock.ValueETH,
+			ValueWei:        wonBlock.ValueWei,
+			Timestamp:       wonBlock.Timestamp,
 		},
 	})
 }

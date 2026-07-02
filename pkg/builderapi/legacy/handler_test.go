@@ -91,25 +91,6 @@ func (p *stubBlockPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1f
 	return p.err
 }
 
-// recordingWinRecorder records the last RecordBidWon call for tests.
-type recordingWinRecorder struct {
-	calls     int
-	slot      phase0.Slot
-	blockHash phase0.Hash32
-	numTxs    int
-	numBlobs  int
-	valueWei  *big.Int
-}
-
-func (r *recordingWinRecorder) RecordBidWon(slot phase0.Slot, blockHash phase0.Hash32, numTxs, numBlobs int, valueWei *big.Int) {
-	r.calls++
-	r.slot = slot
-	r.blockHash = blockHash
-	r.numTxs = numTxs
-	r.numBlobs = numBlobs
-	r.valueWei = valueWei
-}
-
 func newTestHandler(chainSvc chain.Service, blsSigner *signer.BLSSigner) *Handler {
 	return NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
 		payload_builder.NewPayloadCache(10),
@@ -179,17 +160,14 @@ func seedPayload(h *Handler, blockValue *big.Int) *payload_builder.Payload {
 	return event
 }
 
-// TestHandleSubmitBlindedBlock_Success returns 202, publishes the unblinded
-// block, and records the win with the correct values.
+// TestHandleSubmitBlindedBlock_Success returns 202 and publishes the
+// unblinded block.
 func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
 	h.SetEnabled(true)
 
 	publisher := &stubBlockPublisher{}
 	h.SetBlockPublisher(publisher)
-
-	wins := &recordingWinRecorder{}
-	h.SetWinRecorder(wins)
 
 	blockValue := new(big.Int).SetUint64(1_500_000_000_000_000) // 0.0015 ETH in wei
 	seedPayload(h, blockValue)
@@ -204,14 +182,6 @@ func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
 	require.NotNil(t, publisher.lastContents.SignedBlock, "unblinded contents should have SignedBlock")
 	assert.Equal(t, phase0.Slot(1), publisher.lastContents.SignedBlock.Message.Slot)
-
-	require.Equal(t, 1, wins.calls, "WinRecorder should be called exactly once")
-	assert.Equal(t, phase0.Slot(1), wins.slot)
-	assert.Equal(t, phase0.Hash32(blockHashFromBuilderSpecsFulu), wins.blockHash)
-	assert.Equal(t, 0, wins.numTxs)
-	assert.Equal(t, 0, wins.numBlobs)
-	require.NotNil(t, wins.valueWei)
-	assert.Equal(t, 0, wins.valueWei.Cmp(blockValue), "recorded value should equal the payload block value")
 	assert.Equal(t, uint64(1), h.BlocksPublished())
 }
 
@@ -235,9 +205,6 @@ func TestHandleSubmitBlindedBlock_PostGloasForkGuard(t *testing.T) {
 	h := newTestHandler(&stubChainService{currentFork: version.DataVersionGloas}, nil)
 	h.SetEnabled(true)
 
-	wins := &recordingWinRecorder{}
-	h.SetWinRecorder(wins)
-
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte(blindedBlockJSON())))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -245,5 +212,4 @@ func TestHandleSubmitBlindedBlock_PostGloasForkGuard(t *testing.T) {
 	h.HandleSubmitBlindedBlock(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "post-Gloas submit should return 400")
-	assert.Equal(t, 0, wins.calls, "no win should be recorded")
 }

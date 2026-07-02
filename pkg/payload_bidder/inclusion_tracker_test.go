@@ -147,6 +147,9 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 			case ev := <-includedSub.Channel():
 				assert.Same(t, payload, ev.Payload)
 				assert.Equal(t, uint64(3000), ev.BidValueGwei)
+				require.NotNil(t, ev.WonBlock, "event must carry the won-block record")
+				assert.Equal(t, uint64(7), ev.WonBlock.Slot)
+				assert.Equal(t, "3000000000000", ev.WonBlock.ValueWei)
 			default:
 				t.Fatal("expected a PayloadIncludedEvent")
 			}
@@ -154,7 +157,7 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 	}
 }
 
-func TestInclusionTracker_PersistsWonBlockWithSource(t *testing.T) {
+func TestInclusionTracker_RecordsWonBlockWithSource(t *testing.T) {
 	logger, _ := newHookedLogger()
 	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
 	builderSvc := newTestBuilderSvc(chainSvc)
@@ -167,7 +170,11 @@ func TestInclusionTracker_PersistsWonBlockWithSource(t *testing.T) {
 		require.NoError(t, stateDB.Close())
 	}()
 
+	// Attach the won-block store's persistence directly (Start would launch the
+	// head-event loop, which needs a live beacon client).
 	tracker.SetStateDB(stateDB)
+	tracker.wonBlocks.SetPersistence(t.Context(),
+		db.NewKVPersistence(stateDB, WonBlocksNamespace, WonBlockCodec{}), logger)
 
 	// A payload with a Builder API bid record → source builder_api.
 	apiHash := phase0.Hash32{0xaa}
@@ -184,18 +191,39 @@ func TestInclusionTracker_PersistsWonBlockWithSource(t *testing.T) {
 	builderSvc.GetPayloadCache().Store(p2pPayload)
 	tracker.processBlockInfo(&beacon.BlockInfo{Slot: 6, ExecutionBlockHash: p2pHash})
 
-	blocks, total, err := stateDB.GetWonBlocks(0, 10)
-	require.NoError(t, err)
-	require.Equal(t, 2, total, "the inclusion tracker persists every match exactly once")
+	blocks, total := tracker.GetWonBlocks(0, 10)
+	require.Equal(t, 2, total, "the inclusion tracker records every match exactly once")
+	require.Len(t, blocks, 2)
 
-	// Newest first.
+	// Newest first (slot descending).
 	assert.Equal(t, uint64(6), blocks[0].Slot)
-	assert.Equal(t, db.WonBlockSourceEPBS, blocks[0].Source)
+	assert.Equal(t, WonBlockSourceEPBS, blocks[0].Source)
 	assert.Equal(t, "2000000000000", blocks[0].ValueWei)
 
 	assert.Equal(t, uint64(5), blocks[1].Slot)
-	assert.Equal(t, db.WonBlockSourceBuilderAPI, blocks[1].Source)
+	assert.Equal(t, WonBlockSourceBuilderAPI, blocks[1].Source)
 	assert.Equal(t, "0.000001000000000000", blocks[1].ValueETH)
+
+	// The records land in the kv_store's won_blocks namespace after a flush...
+	tracker.wonBlocks.Stop()
+
+	persisted, err := db.NewKVPersistence(stateDB, WonBlocksNamespace, WonBlockCodec{}).Load()
+	require.NoError(t, err)
+	require.Len(t, persisted, 2)
+	assert.Equal(t, WonBlockSourceBuilderAPI, persisted[phase0.Slot(5)].Source)
+	assert.Equal(t, WonBlockSourceEPBS, persisted[phase0.Slot(6)].Source)
+
+	// ...and a fresh tracker rehydrates them on persistence attach.
+	rehydrated := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+	rehydrated.wonBlocks.SetPersistence(t.Context(),
+		db.NewKVPersistence(stateDB, WonBlocksNamespace, WonBlockCodec{}), logger)
+
+	defer rehydrated.wonBlocks.Stop()
+
+	blocks, total = rehydrated.GetWonBlocks(0, 10)
+	require.Equal(t, 2, total, "won blocks must survive a restart")
+	assert.Equal(t, uint64(6), blocks[0].Slot)
+	assert.Equal(t, uint64(5), blocks[1].Slot)
 }
 
 func TestInclusionTracker_NoStateDBIsSafe(t *testing.T) {
@@ -207,8 +235,110 @@ func TestInclusionTracker_NoStateDBIsSafe(t *testing.T) {
 	blockHash := phase0.Hash32{0xab}
 	builderSvc.GetPayloadCache().Store(newTestPayload(3, blockHash, big.NewInt(1)))
 
-	// SetStateDB never called — persistWonBlock must be a no-op, not a panic.
+	// SetStateDB never called — the win is still recorded in memory (p2p wins
+	// must show up in the UI without a state-db).
 	tracker.processBlockInfo(&beacon.BlockInfo{Slot: 3, ExecutionBlockHash: blockHash})
 
 	assert.Equal(t, uint64(1), builderSvc.GetStats().BlocksIncluded)
+
+	blocks, total := tracker.GetWonBlocks(0, 10)
+	assert.Equal(t, 1, total)
+	require.Len(t, blocks, 1)
+	assert.Equal(t, uint64(3), blocks[0].Slot)
+}
+
+func TestInclusionTracker_WonBlocksCap(t *testing.T) {
+	logger, _ := newHookedLogger()
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	builderSvc := newTestBuilderSvc(chainSvc)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+
+	for slot := phase0.Slot(1); slot <= maxWonBlocks+5; slot++ {
+		tracker.recordWonBlock(newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1)), phase0.Hash32{0xab})
+	}
+
+	blocks, total := tracker.GetWonBlocks(0, 1)
+	assert.Equal(t, maxWonBlocks, total, "store must be capped")
+	require.Len(t, blocks, 1)
+	assert.Equal(t, uint64(maxWonBlocks+5), blocks[0].Slot, "newest slot must survive the prune")
+
+	// The smallest slots were pruned.
+	for slot := phase0.Slot(1); slot <= 5; slot++ {
+		assert.False(t, tracker.wonBlocks.Has(slot), "slot %d must be pruned", slot)
+	}
+
+	assert.True(t, tracker.wonBlocks.Has(phase0.Slot(6)), "slot 6 must be kept")
+}
+
+func TestInclusionTracker_GetWonBlocksPagination(t *testing.T) {
+	logger, _ := newHookedLogger()
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	builderSvc := newTestBuilderSvc(chainSvc)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+
+	for slot := phase0.Slot(1); slot <= 5; slot++ {
+		tracker.recordWonBlock(newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1)), phase0.Hash32{0xab})
+	}
+
+	page, total := tracker.GetWonBlocks(0, 2)
+	require.Equal(t, 5, total)
+	require.Len(t, page, 2)
+	// Newest first (slot descending).
+	assert.Equal(t, uint64(5), page[0].Slot)
+	assert.Equal(t, uint64(4), page[1].Slot)
+
+	page2, _ := tracker.GetWonBlocks(2, 2)
+	require.Len(t, page2, 2)
+	assert.Equal(t, uint64(3), page2[0].Slot)
+	assert.Equal(t, uint64(2), page2[1].Slot)
+
+	// Last, partial page.
+	page3, _ := tracker.GetWonBlocks(4, 2)
+	require.Len(t, page3, 1)
+	assert.Equal(t, uint64(1), page3[0].Slot)
+
+	// Out-of-range offset and non-positive limit return an empty page.
+	empty, total := tracker.GetWonBlocks(10, 2)
+	assert.Equal(t, 5, total)
+	assert.Empty(t, empty)
+
+	empty, _ = tracker.GetWonBlocks(0, 0)
+	assert.Empty(t, empty)
+}
+
+func TestWonBlockCodecRoundTrip(t *testing.T) {
+	codec := WonBlockCodec{}
+
+	assert.Equal(t, "12345", codec.EncodeKey(phase0.Slot(12345)))
+
+	slot, err := codec.DecodeKey("12345")
+	require.NoError(t, err)
+	assert.Equal(t, phase0.Slot(12345), slot)
+
+	_, err = codec.DecodeKey("not-a-slot")
+	require.Error(t, err)
+
+	wonBlock := &WonBlock{
+		Source:          WonBlockSourceBuilderAPI,
+		Slot:            12345,
+		BlockHash:       "0xabcdef",
+		NumTransactions: 7,
+		NumBlobs:        2,
+		ValueWei:        "1000000000000",
+		ValueETH:        "0.000001000000000000",
+		Timestamp:       1700000000000,
+	}
+
+	encoded, err := codec.EncodeValue(wonBlock)
+	require.NoError(t, err)
+
+	decoded, err := codec.DecodeValue(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, wonBlock, decoded)
+
+	_, err = codec.EncodeValue(nil)
+	require.Error(t, err)
+
+	_, err = codec.DecodeValue([]byte("not json"))
+	require.Error(t, err)
 }

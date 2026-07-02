@@ -13,7 +13,6 @@ package builderapi
 import (
 	"encoding/hex"
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -38,7 +37,7 @@ import (
 
 // EventBroadcaster provides methods for broadcasting Builder API events to the
 // WebUI. It is the combined surface of both dialects' narrow broadcaster
-// interfaces (which it satisfies structurally) plus the bids-won broadcast.
+// interfaces (which it satisfies structurally).
 type EventBroadcaster interface {
 	BroadcastBuilderAPIGetHeaderReceived(slot uint64, parentHash, pubkey string)
 	BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string)
@@ -49,7 +48,6 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPIGetBidDelivered(slot uint64, blockHash, blockValue string)
 	BroadcastBuilderAPISubmitBlockReceived(slot uint64, blockHash string)
 	BroadcastBuilderAPISubmitBlockDelivered(slot uint64, blockHash string)
-	BroadcastBidWon(slot uint64, blockHash string, numTxs, numBlobs int, valueETH string, valueWei string)
 }
 
 // RequestStats holds counters for Builder API requests, aggregated across both
@@ -61,8 +59,10 @@ type RequestStats struct {
 }
 
 // Server hosts the Builder API dialect handlers and the Buildoor debug API.
-// It owns the route table, the in-memory bids-won store, enable-state fan-out,
-// and request-stat aggregation; all endpoint logic lives in the dialects.
+// It owns the route table, enable-state fan-out, and request-stat
+// aggregation; all endpoint logic lives in the dialects. Won-block tracking
+// is NOT done here — the shared payload_bidder.InclusionTracker is the single
+// owner of won-block records, recording actual inclusion.
 type Server struct {
 	cfg             *config.BuilderAPIConfig
 	log             *logrus.Logger
@@ -71,8 +71,6 @@ type Server struct {
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
 	legacy          *legacy.Handler  // pre-Gloas dialect (Electra/Fulu)
 	epbs            *epbsapi.Handler // post-Gloas dialect (Gloas/Heze+)
-	bidsWonStore    *BidsWonStore    // in-memory store of successfully delivered blocks
-	events          EventBroadcaster // optional: for broadcasting API events to WebUI
 	enabled         atomic.Bool      // runtime toggle for enabling/disabling the builder API
 }
 
@@ -89,7 +87,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		store = memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	}
 
-	s := &Server{
+	return &Server{
 		cfg:             cfg,
 		log:             log,
 		chainSvc:        chainSvc,
@@ -97,11 +95,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		validatorsStore: store,
 		legacy:          legacy.NewHandler(cfg, log, chainSvc, payloadCache, store, blsSigner),
 		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, payloadCache, blsSigner),
-		bidsWonStore:    NewBidsWonStore(1000),
 	}
-	s.legacy.SetWinRecorder(s)
-
-	return s
 }
 
 // SetEnabled sets the enabled state of the Builder API server and both
@@ -137,9 +131,8 @@ func (s *Server) SetRevealService(rs *payload_bidder.RevealService) {
 }
 
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events on
-// the server and both dialect handlers.
+// both dialect handlers.
 func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
-	s.events = b
 	s.legacy.SetEventBroadcaster(b)
 	s.epbs.SetEventBroadcaster(b)
 }
@@ -157,11 +150,6 @@ func (s *Server) SetBuilderIndex(index uint64) {
 	s.epbs.SetBuilderIndex(index)
 }
 
-// GetBidsWonStore returns the bids won store.
-func (s *Server) GetBidsWonStore() *BidsWonStore {
-	return s.bidsWonStore
-}
-
 // GetBuilderPreferencesStore returns the store of latest per-validator builder
 // preferences submitted via the submitBuilderPreferences API.
 func (s *Server) GetBuilderPreferencesStore() *epbsapi.BuilderPreferencesStore {
@@ -175,32 +163,6 @@ func (s *Server) GetRequestStats() RequestStats {
 		HeadersRequested: s.legacy.HeadersRequested() + s.epbs.BidsRequested(),
 		BlocksPublished:  s.legacy.BlocksPublished() + s.epbs.BlocksAccepted(),
 		ValidatorCount:   s.validatorsStore.Len(),
-	}
-}
-
-// RecordBidWon records a successfully delivered block for the UI: in-memory
-// bids-won store and WebUI broadcast. It implements legacy.WinRecorder.
-// Durable won_blocks persistence is NOT done here — the shared
-// payload_bidder.InclusionTracker is the single state-db writer, recording
-// actual inclusion (a delivery-time write here would double-insert every
-// legacy win alongside the head-event path's write).
-func (s *Server) RecordBidWon(slot phase0.Slot, blockHash phase0.Hash32,
-	numTxs, numBlobs int, valueWei *big.Int) {
-	blockHashHex := "0x" + hex.EncodeToString(blockHash[:])
-
-	entry := BidWonEntry{
-		Slot:            uint64(slot),
-		BlockHash:       blockHashHex,
-		NumTransactions: numTxs,
-		NumBlobs:        numBlobs,
-		ValueETH:        weiToETH(valueWei),
-		ValueWei:        valueWei.String(),
-		Timestamp:       time.Now().UnixMilli(),
-	}
-	s.bidsWonStore.Add(entry)
-
-	if s.events != nil {
-		s.events.BroadcastBidWon(entry.Slot, blockHashHex, numTxs, numBlobs, entry.ValueETH, entry.ValueWei)
 	}
 }
 

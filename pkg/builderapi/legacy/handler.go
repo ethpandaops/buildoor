@@ -5,7 +5,6 @@ package legacy
 
 import (
 	"context"
-	"math/big"
 	"sync/atomic"
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
@@ -35,12 +34,6 @@ type BlockPublisher interface {
 	SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error
 }
 
-// WinRecorder records a successfully delivered block (bids-won store, state-db,
-// SSE broadcast). Implemented by *builderapi.Server.
-type WinRecorder interface {
-	RecordBidWon(slot phase0.Slot, blockHash phase0.Hash32, numTxs, numBlobs int, valueWei *big.Int)
-}
-
 // Handler serves the pre-Gloas Builder API dialect endpoints
 // (registerValidators, getHeader, submitBlindedBlock). It is constructed and
 // mounted by the parent builderapi.Server.
@@ -54,7 +47,6 @@ type Handler struct {
 
 	publisher BlockPublisher   // optional; set via SetBlockPublisher
 	events    EventBroadcaster // optional; set via SetEventBroadcaster (nil-checked)
-	wins      WinRecorder      // optional; set via SetWinRecorder (nil-checked)
 
 	enabled          atomic.Bool
 	headersRequested atomic.Uint64
@@ -85,11 +77,6 @@ func (h *Handler) SetBlockPublisher(p BlockPublisher) {
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.
 func (h *Handler) SetEventBroadcaster(b EventBroadcaster) {
 	h.events = b
-}
-
-// SetWinRecorder sets the optional recorder for successfully delivered blocks.
-func (h *Handler) SetWinRecorder(wr WinRecorder) {
-	h.wins = wr
 }
 
 // SetEnabled sets the enabled state of the legacy Builder API dialect.

@@ -142,8 +142,10 @@ npm run clean
      polling); both flows request reveals via `RequestReveal`; dedupes per slot (exactly
      one publish per won slot), publishes at `RevealTime`, retries ×3, fires `RevealResult`
    - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
-     forks), single writer of the `won_blocks` table, requests the p2p-side reveal,
-     fires `PayloadIncludedEvent`, checks follow-up blocks for orphaned payloads
+     forks), single owner of won-block records (memstore capped at 1000, persisted via
+     the `kv_store` `won_blocks` namespace), requests the p2p-side reveal, fires
+     `PayloadIncludedEvent` (carries the `WonBlock`), checks follow-up blocks for
+     orphaned payloads
    - `PaymentTracker`: pending payments + live balance adjustments (fed by
      InclusionTracker/RevealService; consumed by lifecycle and WebUI)
    - `ProposerPreferencesService`: caches Gloas gossip proposer preferences from the
@@ -179,27 +181,23 @@ npm run clean
      submitSignedBeaconBlock (broadcasts the block immediately, then hands the reveal to
      `payload_bidder.RevealService` — no inline envelope publish), submitBuilderPreferences
    - Parent `Server`: route table, shared stores, stats aggregation, enable fan-out,
-     debug endpoints; implements `legacy.WinRecorder` (in-memory bids-won + SSE only;
-     durable won_blocks persistence is the InclusionTracker's job)
+     debug endpoints; no won-block tracking here — the shared
+     `payload_bidder.InclusionTracker` owns won-block records (inclusion-time semantics)
    - Validator fee recipient management: registrations live in a
      `memstore.Store[BLSPubKey, *SignedValidatorRegistration]` created in `cmd/run.go`
      (persisted via the `kv_store` `validator_registrations` namespace) and feed the
      pre-Gloas `legacy.RegistrationSettingsResolver`; builder preferences
      (max_execution_payment) are memstore-backed too and survive restarts
-   - **Bids Won Store**: In-memory tracking of successfully delivered blocks
-     - Thread-safe circular buffer (1000 entries max, ~200KB memory)
-     - Stores: slot, block hash, transaction count, blob count, value (ETH/wei), timestamp
-     - Populated by `Server.RecordBidWon` (called from `legacy.HandleSubmitBlindedBlock`)
-     - Pagination support via `/api/buildoor/bids-won` endpoint
 
 6. **WebUI** (`pkg/webui/`)
    - React/TypeScript dashboard
    - Real-time event stream via Server-Sent Events (SSE)
    - Visual slot timeline, bid tracking, validator registrations
    - Configuration updates via HTTP API
-   - **Bids Won View**: Paginated table of successfully delivered blocks
+   - **Bids Won View**: Paginated table of our blocks included on chain
      - Tab navigation: Dashboard / Bids Won
-     - Real-time updates when new blocks are delivered
+     - Real-time updates when new blocks are included (bid_won SSE from the
+       inclusion tracker's `PayloadIncludedEvent`)
      - Click-to-copy block hashes, relative timestamps
      - Shows: slot, block hash, # transactions, # blobs, value in ETH
 
@@ -220,7 +218,8 @@ Proposer ───Builder API─────────▶ builderapi (legacy: 
 3. p2p_bidder scheduler ticks every 10ms and submits bids between `BidStartTime`
    and `BidEndTime` (gated on `epbs_enabled` + builder registration)
 4. Head event → InclusionTracker matches the block against our payload cache; on a win
-   it records the pending payment, persists the won block, and requests the reveal
+   it records the pending payment, records the won block (memstore → kv_store), and
+   requests the reveal
 5. RevealService publishes the envelope at `RevealTime` (55–75%% window), deduped per
    slot — a Builder-API-won block's reveal was already requested by the epbs dialect
    handler at block submission, so the p2p-side request is a no-op
@@ -276,12 +275,13 @@ resets (`builder.UpdateConfig`, `epbs.UpdateConfig`) and `SetEnabled` syncs.
 The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sqlx`
 + goose migrations) persists across restarts when `--state-db <path>` is set:
 - `settings` — the 3-way (cli/ui + seq) override state
-- `won_blocks` — unified Builder API + ePBS won blocks (source-tagged)
 - `kv_store` — generic namespaced key/value blobs behind `memstore` persistence
   (buffered write-behind). Namespaces: `proposer_preferences` (Gloas gossip prefs,
   SSZ), `validator_registrations` (Builder API registrations, SSZ; codec in
   `builderapi/legacy`), `builder_preferences` (max_execution_payment, LE uint64;
-  codec in `builderapi/epbs`)
+  codec in `builderapi/epbs`), `won_blocks` (unified Builder API + ePBS won blocks,
+  source-tagged, JSON; codec in `payload_bidder`, replaces the old typed
+  `won_blocks` table)
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
@@ -339,7 +339,6 @@ buildoor/
 ├── pkg/
 │   ├── builder/           # Core payload building logic
 │   ├── builderapi/        # Builder API host (route table, shared stores, stats)
-│   │   ├── bids_won.go    # BidsWonStore and BidWonEntry types (in-memory, UI)
 │   │   ├── legacy/        # pre-Gloas dialect (Electra/Fulu): registerValidators,
 │   │   │                  # getHeader, submitBlindedBlockV2, bid build/unblind helpers,
 │   │   │                  # registration signature verify + kv_store codec + pre-Gloas
@@ -351,7 +350,7 @@ buildoor/
 │   │                      # + SSZ types
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
-│   ├── db/                # Optional SQLite state-db (settings, won_blocks, audit, ...)
+│   ├── db/                # Optional SQLite state-db (settings, kv_store, audit, ...)
 │   │   ├── database.go    # Database struct, Init, migrations, disabled no-op mode
 │   │   └── schema/        # Embedded goose migrations
 │   ├── settings/          # Central settings service (3-way default<cli<ui resolution)
@@ -360,7 +359,8 @@ buildoor/
 │   ├── memstore/          # generic thread-safe keyed store w/ buffered persistence
 │   ├── lifecycle/         # Deposit/exit/balance management
 │   ├── payload_bidder/    # shared Gloas+ domain: Signer, bid/envelope build,
-│   │                      # RevealService, InclusionTracker, PaymentTracker,
+│   │                      # RevealService, InclusionTracker (owns the won-block
+│   │                      # store + kv_store codec), PaymentTracker,
 │   │                      # ProposerPreferencesService (gossip prefs store + resolver)
 │   ├── rpc/
 │   │   ├── beacon/        # Beacon node client
@@ -428,13 +428,15 @@ To make frontend changes:
 
 **Buildoor-specific endpoints:**
 - `GET /api/buildoor/validators` - List registered validators
-- `GET /api/buildoor/bids-won` - Paginated list of successfully delivered blocks
+- `GET /api/buildoor/bids-won` - Paginated list of won blocks (read from the shared
+  inclusion tracker; Builder API and p2p ePBS wins alike)
   - Query params: `offset` (default: 0), `limit` (default: 20, max: 100)
   - Returns: `{ bids_won: [], total: number, offset: number, limit: number }`
 - `GET /api/buildoor/builder-api-status` - Builder API configuration and validator count
 
 **Real-time events via SSE** (`/api/events`):
-- `bid_won` - Emitted when a block is successfully delivered via Builder API
+- `bid_won` - Emitted when one of our blocks is seen included at the head (fired from
+  the inclusion tracker's `PayloadIncludedEvent.WonBlock`, alongside `bid_included`)
   - Data: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
   - Auto-refreshes first page of Bids Won table
   - Logged in event stream for debugging
@@ -470,30 +472,40 @@ For Builder API mode, genesis parameters are automatically fetched from the beac
 - `GenesisValidatorsRoot`: Retrieved from the beacon node's genesis endpoint
 - These configure the Builder Domain for signature verification
 
-### Bids Won Feature (Builder API)
+### Bids Won Feature
 
-The Bids Won feature tracks successfully delivered blocks via the Builder API, providing visibility into block production outcomes.
+The Bids Won feature tracks our blocks that were actually included on chain — from
+both the Builder API and p2p ePBS flows — providing visibility into block production
+outcomes. **Inclusion-time semantics**: entries appear when the block is seen at the
+head (via the inclusion tracker's head-event loop), not when it is delivered to a
+proposer.
 
 **Backend Architecture:**
-- **BidsWonStore** (`pkg/builderapi/bids_won.go`):
-  - Thread-safe circular buffer with `sync.RWMutex`
-  - Fixed capacity: 1000 entries (oldest evicted on overflow)
-  - Memory footprint: ~200KB
-  - Stores newest first for efficient pagination
-  - Entry fields: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
-
-- **Integration Point** (`pkg/builderapi/server.go`):
-  - Data captured in `legacy.HandleSubmitBlindedBlock` after successful `SubmitFuluBlock()`, recorded via `Server.RecordBidWon` (in-memory + SSE; durable `won_blocks` rows come from the shared InclusionTracker on actual inclusion)
-  - Extracts transaction count from `event.Payload.Transactions`
-  - Extracts blob count from `event.BlobsBundle.Commitments`
-  - Converts block value from wei to ETH using `weiToETH()` (18 decimal precision)
-  - Broadcasts `bid_won` event to WebUI for real-time updates
+- **Won-block store** (`pkg/payload_bidder/inclusion_tracker.go` + `won_blocks.go`):
+  - Owned by the shared `payload_bidder.InclusionTracker` (the single owner of
+    won-block records, all forks + both flows) as a
+    `memstore.Store[phase0.Slot, *WonBlock]`
+  - Capped at 1000 entries; the smallest slots are pruned after each insert, and
+    the deletions propagate to the kv_store via the flush batch (durable history
+    is capped at 1000 too)
+  - Persisted into the state-db's `kv_store` under the `won_blocks` namespace
+    (`WonBlockCodec`: decimal slot keys, JSON values) when `--state-db` is set;
+    rehydrated on start. Without a state-db the store is in-memory only — p2p
+    wins are tracked either way
+  - `WonBlock` fields: source (builder_api/epbs), slot, block_hash,
+    num_transactions, num_blobs, value_wei, value_eth, timestamp (JSON tags are
+    the wire shape consumed by the WebUI)
+  - Source derived from the payload's bid records: any Builder-API bid →
+    `builder_api`, otherwise `epbs`
+  - `PayloadIncludedEvent` carries the recorded `*WonBlock`, so the WebUI fires
+    the `bid_won` SSE without recomputing tx/blob/value fields
 
 - **REST API** (`pkg/webui/handlers/api/api.go`):
   - Endpoint: `GET /api/buildoor/bids-won?offset=0&limit=20`
-  - Offset-based pagination (simpler than cursor for bounded dataset)
+  - Reads `inclusionTracker.GetWonBlocks(offset, limit)` (slot-descending);
+    offset-based pagination (simpler than cursor for bounded dataset)
   - Returns: `BidsWonResponse` with entries array, total count, offset, limit
-  - Gracefully handles nil builderAPISvc (returns empty array)
+  - Gracefully handles nil inclusionTracker (returns empty array)
 
 **Frontend Architecture:**
 - **Navigation**: Tab-based UI in `App.tsx` (Dashboard / Bids Won)
@@ -514,20 +526,23 @@ The Bids Won feature tracks successfully delivered blocks via the Builder API, p
   - Relative time formatting: "Just now", "5m ago", "3h ago", or full timestamp
 
 **Key Design Decisions:**
-- **Memory Management**: Circular buffer prevents unbounded growth
+- **Single owner**: win detection is the inclusion tracker's job; the Builder API
+  server does no won-block tracking (a delivery-time record would miss p2p wins and
+  count deliveries that never made it on chain)
+- **Memory Management**: slot-keyed memstore capped at 1000 prevents unbounded growth
 - **Pagination Strategy**: Offset-based (not cursor) suitable for 1000-entry cap
 - **Real-time Updates**: Only first page refreshes automatically to avoid offset confusion
-- **Thread Safety**: RWMutex allows concurrent reads during pagination
-- **Value Precision**: Store both wei (uint64 for sorting) and ETH string (for display)
+- **Value Precision**: Store both wei and ETH strings (18-decimal display precision)
 - **ePBS Compatibility**: Uses "Bids Won" terminology (not "Payloads Delivered")
 
 **Testing the Feature:**
 1. Enable Builder API: `--builder-api-enabled --builder-api-port 18550`
-2. Submit a blinded block via `POST /eth/v2/builder/blinded_blocks`
-3. Check backend logs for "Bid won" entry
+2. Submit a blinded block via `POST /eth/v2/builder/blinded_blocks` and wait for the
+   block to appear at the head (or win a slot via p2p bidding)
+3. Check backend logs for "Our payload was included in a beacon block!"
 4. Open WebUI, click "Bids Won" tab
 5. Verify table shows: slot, block hash, transaction count, blob count, value
-6. Submit another block while on first page → should auto-refresh
+6. Win another block while on first page → should auto-refresh
 
 ## Common Issues
 

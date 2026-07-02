@@ -110,17 +110,9 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)
 
-	// Record the delivered block (bids-won store, SSE broadcast) with the parent server.
-	numTxs := len(event.ExecutionPayload.Transactions)
-	numBlobs := 0
-	if event.BlobsBundle != nil && event.BlobsBundle.Commitments != nil {
-		numBlobs = len(event.BlobsBundle.Commitments)
-	}
-
-	if h.wins != nil {
-		h.wins.RecordBidWon(slot, blockHash, numTxs, numBlobs, event.BlockValue)
-	}
-
+	// Won-block tracking is NOT done here: the shared
+	// payload_bidder.InclusionTracker records the win when the block is
+	// actually seen at the head.
 	if h.events != nil {
 		h.events.BroadcastBuilderAPISubmitBlindedDelivered(uint64(slot), blockHashHex)
 	}
