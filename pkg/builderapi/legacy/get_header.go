@@ -14,11 +14,20 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
+// GetHeaderResponse is the JSON response for getHeader:
+// { "version": "<fork>", "data": SignedBuilderBid }.
+type GetHeaderResponse struct {
+	Version string                        `json:"version"`
+	Data    *legacytypes.SignedBuilderBid `json:"data"`
+}
+
 // HandleGetHeader handles GET /eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}.
-// Returns 200 with Fulu SignedBuilderBid, or 204 if no bid, or 400 on invalid params / unregistered proposer.
+// Returns 200 with the active fork's SignedBuilderBid, or 204 if no bid, or 400 on
+// invalid params / unregistered proposer.
 func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/header/...")
 
@@ -115,7 +124,8 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	if chainSpec := h.chainSvc.GetChainSpec(); chainSpec != nil {
 		maxWithdrawalsPerPayload = chainSpec.MaxWithdrawalsPerPayload
 	}
-	signedBid, err := BuildSignedBuilderBid(event, h.blsSigner.PublicKey(), h.blsSigner, subsidyGwei, h.chainSvc.GetGenesis().GenesisForkVersion, maxWithdrawalsPerPayload)
+	signedBid, err := BuildSignedBuilderBid(event, fork, h.blsSigner.PublicKey(), h.blsSigner,
+		subsidyGwei, h.chainSvc.GetGenesis().GenesisForkVersion, maxWithdrawalsPerPayload)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")
 		writeError(w, http.StatusInternalServerError, "failed to build bid")
@@ -131,11 +141,6 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		At:        time.Now(),
 	})
 
-	resp := GetHeaderResponse{
-		Version: fork.String(),
-		Data:    signedBid,
-	}
-
 	log.WithFields(logrus.Fields{
 		"slot":        slotU64,
 		"block_hash":  "0x" + hex.EncodeToString(event.BlockHash[:]),
@@ -150,8 +155,30 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		h.events.BroadcastBuilderAPIGetHeaderDelivered(slotU64, blockHashHex, signedBid.Message.Value.String())
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", fork.String())
+
+	// Per builder-specs the response may be SSZ; the proposer opts in via
+	// the Accept header.
+	if preferSSZ(r.Header.Get("Accept")) {
+		body, err := signedBid.MarshalSSZ()
+		if err != nil {
+			log.WithError(err).Warn("getHeader: failed to SSZ-encode SignedBuilderBid")
+			writeError(w, http.StatusInternalServerError, "failed to encode bid")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+		return
+	}
+
+	resp := GetHeaderResponse{
+		Version: fork.String(),
+		Data:    signedBid,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }

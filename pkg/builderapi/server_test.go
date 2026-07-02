@@ -227,7 +227,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		BlockValue:       new(big.Int).SetUint64(500_000_000_000_000), // 0.0005 ETH in wei
 	}
 	cache.Store(event)
-	srv := NewServer(cfg, log, &mockChainService{}, cache, blsSigner, nil)
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionDeneb}, cache, blsSigner, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))

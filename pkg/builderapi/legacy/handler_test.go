@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -21,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
@@ -122,6 +125,97 @@ func TestHandleGetHeader_PostGloasForkGuard(t *testing.T) {
 	assert.Equal(t, uint64(0), h.HeadersRequested(), "fork guard should reject before counting the request")
 }
 
+// TestHandleGetHeader_Success serves the bid as JSON by default and as SSZ
+// when the Accept header prefers application/octet-stream, with identical
+// bid contents in both representations.
+func TestHandleGetHeader_Success(t *testing.T) {
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+
+	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
+	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(),
+		&stubChainService{currentFork: version.DataVersionFulu},
+		payload_builder.NewPayloadCache(10), store, blsSigner)
+	h.SetEnabled(true)
+
+	pk := blsSigner.PublicKey()
+	store.Put(pk, &apiv1.SignedValidatorRegistration{})
+	seedPayload(h, big.NewInt(1_000_000_000))
+
+	zeroHash := "0x0000000000000000000000000000000000000000000000000000000000000000"
+	newGetHeaderRequest := func() *http.Request {
+		req := httptest.NewRequest(http.MethodGet,
+			"/eth/v1/builder/header/1/"+zeroHash+"/0x"+hex.EncodeToString(pk[:]), nil)
+		return mux.SetURLVars(req, map[string]string{
+			"slot":        "1",
+			"parent_hash": zeroHash,
+			"pubkey":      "0x" + hex.EncodeToString(pk[:]),
+		})
+	}
+
+	// Default (no Accept header): JSON envelope.
+	rec := httptest.NewRecorder()
+	h.HandleGetHeader(rec, newGetHeaderRequest())
+
+	require.Equal(t, http.StatusOK, rec.Code, "getHeader should return 200")
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "fulu", rec.Header().Get("Eth-Consensus-Version"))
+
+	var envelope struct {
+		Version string          `json:"version"`
+		Data    json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "fulu", envelope.Version)
+
+	jsonBid := &legacytypes.SignedBuilderBid{Version: version.DataVersionFulu}
+	require.NoError(t, json.Unmarshal(envelope.Data, jsonBid))
+	require.NotNil(t, jsonBid.Message)
+
+	// Accept: application/octet-stream → SSZ body.
+	rec = httptest.NewRecorder()
+	req := newGetHeaderRequest()
+	req.Header.Set("Accept", "application/octet-stream;q=1.0,application/json;q=0.9")
+	h.HandleGetHeader(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "getHeader (SSZ) should return 200")
+	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "fulu", rec.Header().Get("Eth-Consensus-Version"))
+
+	sszBid := &legacytypes.SignedBuilderBid{Version: version.DataVersionFulu}
+	require.NoError(t, sszBid.UnmarshalSSZ(rec.Body.Bytes()))
+	require.NotNil(t, sszBid.Message)
+
+	// Both representations must carry the same bid.
+	jsonRoot, err := jsonBid.Message.HashTreeRoot()
+	require.NoError(t, err)
+	sszRoot, err := sszBid.Message.HashTreeRoot()
+	require.NoError(t, err)
+	assert.Equal(t, jsonRoot, sszRoot, "JSON and SSZ bids must be identical")
+	assert.Equal(t, jsonBid.Signature, sszBid.Signature)
+	assert.Equal(t, pk, sszBid.Message.Pubkey)
+}
+
+// TestPreferSSZ exercises the Accept-header content negotiation.
+func TestPreferSSZ(t *testing.T) {
+	tests := []struct {
+		accept string
+		ssz    bool
+	}{
+		{accept: "", ssz: false},
+		{accept: "application/json", ssz: false},
+		{accept: "application/octet-stream", ssz: true},
+		{accept: "*/*", ssz: false},
+		{accept: "application/octet-stream;q=1.0,application/json;q=0.9", ssz: true},
+		{accept: "application/octet-stream;q=0.5,application/json", ssz: false},
+		{accept: "application/octet-stream, */*;q=0.1", ssz: true},
+		{accept: "application/json;q=0.9, application/octet-stream;q=0.9", ssz: false},
+	}
+	for _, test := range tests {
+		assert.Equal(t, test.ssz, preferSSZ(test.accept), "accept=%q", test.accept)
+	}
+}
+
 // blockHashFromBuilderSpecsFulu matches the execution_payload.block_hash in builder-specs examples/fulu/.
 var blockHashFromBuilderSpecsFulu = common.HexToHash("0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2")
 
@@ -211,6 +305,38 @@ func TestHandleSubmitBlindedBlock_ConsensusVersionHeader(t *testing.T) {
 	assert.Equal(t, version.DataVersionElectra, submitter.lastProposal.Version,
 		"proposal version should follow the Eth-Consensus-Version header")
 	require.NotNil(t, submitter.lastProposal.Electra, "proposal should carry Electra block contents")
+}
+
+// TestHandleSubmitBlindedBlock_SSZBody accepts an SSZ-encoded blinded block
+// (Content-Type: application/octet-stream) with the version taken from the
+// Eth-Consensus-Version header, per builder-specs.
+func TestHandleSubmitBlindedBlock_SSZBody(t *testing.T) {
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionFulu}, nil)
+	h.SetEnabled(true)
+
+	submitter := &stubProposalSubmitter{}
+	h.SetCLClient(submitter)
+
+	seedPayload(h, new(big.Int).SetUint64(1_500_000_000_000_000))
+
+	blinded := &apiv1all.SignedBlindedBeaconBlock{Version: version.DataVersionFulu}
+	require.NoError(t, json.Unmarshal([]byte(blindedBlockJSON()), blinded))
+
+	body, err := blinded.MarshalSSZ()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Eth-Consensus-Version", "fulu")
+	rec := httptest.NewRecorder()
+
+	h.HandleSubmitBlindedBlock(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "SSZ submit should return 202 Accepted")
+	require.NotNil(t, submitter.lastProposal, "CL client should be called with the unblinded proposal")
+	assert.Equal(t, version.DataVersionFulu, submitter.lastProposal.Version)
+	require.NotNil(t, submitter.lastProposal.Fulu)
+	assert.Equal(t, phase0.Slot(1), submitter.lastProposal.Fulu.SignedBlock.Message.Slot)
 }
 
 // TestHandleSubmitBlindedBlock_InvalidConsensusVersionHeader returns 400 for

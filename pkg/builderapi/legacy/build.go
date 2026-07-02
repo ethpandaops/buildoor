@@ -6,6 +6,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/holiman/uint256"
 
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -15,34 +16,28 @@ type BidSigner interface {
 	SignWithDomain(root phase0.Root, domain phase0.Domain) (phase0.BLSSignature, error)
 }
 
-// BuildSignedBuilderBid builds a Fulu SignedBuilderBid from a Payload and the proposer's pubkey,
-// and signs it with the builder's BLS key using DOMAIN_APPLICATION_BUILDER with the provided genesis fork version
-// and a zero genesis validators root (matches mev-boost-relay behavior).
+// BuildSignedBuilderBid builds a SignedBuilderBid for the given fork from a Payload and the
+// proposer's pubkey, and signs it with the builder's BLS key using DOMAIN_APPLICATION_BUILDER
+// with the provided genesis fork version and a zero genesis validators root (matches
+// mev-boost-relay behavior). The bid carries the fork's field set (blob KZG commitments from
+// Deneb, execution requests from Electra).
 // subsidyGwei is added to the bid value so the proposer sees a higher bid (e.g. for testing).
 func BuildSignedBuilderBid(
 	event *payload_builder.Payload,
+	fork version.DataVersion,
 	proposerPubkey phase0.BLSPubKey,
 	blsSigner BidSigner,
 	subsidyGwei uint64,
 	genesisForkVersion phase0.Version,
 	maxWithdrawalsPerPayload uint64,
-) (*SignedBuilderBid, error) {
+) (*legacytypes.SignedBuilderBid, error) {
 	if event == nil || event.ExecutionPayload == nil {
 		return nil, nil
 	}
 
-	header, err := ExecutionPayloadHeaderFromBeacon(event.ExecutionPayload, maxWithdrawalsPerPayload)
+	header, err := ExecutionPayloadHeaderFromBeacon(event.ExecutionPayload, fork, maxWithdrawalsPerPayload)
 	if err != nil {
 		return nil, err
-	}
-
-	// Fulu Builder API wire format uses the Electra layout; builder
-	// deposit/exit requests (Gloas+) do not exist in this spec version.
-	execRequests := &eth2all.ExecutionRequests{Version: version.DataVersionFulu}
-	if event.ExecutionRequests != nil {
-		execRequests.Deposits = event.ExecutionRequests.Deposits
-		execRequests.Withdrawals = event.ExecutionRequests.Withdrawals
-		execRequests.Consolidations = event.ExecutionRequests.Consolidations
 	}
 
 	value, overflow := uint256.FromBig(event.BlockValue)
@@ -54,14 +49,27 @@ func BuildSignedBuilderBid(
 		value.Add(value, new(uint256.Int).SetUint64(subsidyWei))
 	}
 
-	bid := &BuilderBid{
-		Header:            header,
-		ExecutionRequests: execRequests,
-		Value:             value,
-		Pubkey:            proposerPubkey,
+	bid := &legacytypes.BuilderBid{
+		Version: fork,
+		Header:  header,
+		Value:   value,
+		Pubkey:  proposerPubkey,
 	}
-	if event.BlobsBundle != nil {
+
+	if fork >= version.DataVersionDeneb && event.BlobsBundle != nil {
 		bid.BlobKZGCommitments = event.BlobsBundle.Commitments
+	}
+
+	// Execution requests exist from Electra onwards; builder deposit/exit
+	// requests (Gloas+) do not exist in the legacy dialect's spec versions.
+	if fork >= version.DataVersionElectra {
+		execRequests := &eth2all.ExecutionRequests{Version: fork}
+		if event.ExecutionRequests != nil {
+			execRequests.Deposits = event.ExecutionRequests.Deposits
+			execRequests.Withdrawals = event.ExecutionRequests.Withdrawals
+			execRequests.Consolidations = event.ExecutionRequests.Consolidations
+		}
+		bid.ExecutionRequests = execRequests
 	}
 
 	bidRoot, err := bid.HashTreeRoot()
@@ -84,7 +92,8 @@ func BuildSignedBuilderBid(
 		return nil, err
 	}
 
-	return &SignedBuilderBid{
+	return &legacytypes.SignedBuilderBid{
+		Version:   fork,
 		Message:   bid,
 		Signature: sig,
 	}, nil

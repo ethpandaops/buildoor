@@ -1,0 +1,20 @@
+package: .
+
+types:
+  - name: BuilderBid
+    output: builderbid_ssz.go
+    view-only: true
+    views:
+      - BuilderBidBellatrix
+      - BuilderBidCapella
+      - BuilderBidDeneb
+      - BuilderBidElectra
+
+  - name: SignedBuilderBid
+    output: signedbuilderbid_ssz.go
+    view-only: true
+    views:
+      - SignedBuilderBidBellatrix
+      - SignedBuilderBidCapella
+      - SignedBuilderBidDeneb
+      - SignedBuilderBidElectra

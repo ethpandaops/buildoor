@@ -3,6 +3,8 @@ package legacy
 import (
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"mime"
 	"net/http"
 
 	"github.com/ethpandaops/go-eth2-client/api"
@@ -12,7 +14,8 @@ import (
 )
 
 // HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks.
-// The blinded block is decoded fork-agnostically; the wire version is taken
+// The blinded block is decoded fork-agnostically from either JSON or SSZ
+// (application/octet-stream) per builder-specs; the wire version is taken
 // from the Eth-Consensus-Version request header, falling back to the chain's
 // current fork when the header is absent.
 // Returns 202 Accepted on success, 400 on validation/match failure, 415 on wrong
@@ -36,9 +39,11 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if r.Header.Get("Content-Type") != "application/json" {
-		log.Warn("submitBlindedBlock: Content-Type must be application/json")
-		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || (contentType != "application/json" && contentType != "application/octet-stream") {
+		log.Warn("submitBlindedBlock: Content-Type must be application/json or application/octet-stream")
+		writeError(w, http.StatusUnsupportedMediaType,
+			"Content-Type must be application/json or application/octet-stream")
 		return
 	}
 
@@ -62,7 +67,21 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 	}
 
 	blinded := apiv1all.SignedBlindedBeaconBlock{Version: fork}
-	if err := json.NewDecoder(r.Body).Decode(&blinded); err != nil {
+
+	if contentType == "application/octet-stream" {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.WithError(err).Warn("submitBlindedBlock: failed to read SSZ body")
+			writeError(w, http.StatusBadRequest, "failed to read body: "+err.Error())
+			return
+		}
+
+		if err := blinded.UnmarshalSSZ(body); err != nil {
+			log.WithError(err).Warn("submitBlindedBlock: invalid SSZ body")
+			writeError(w, http.StatusBadRequest, "invalid SSZ: "+err.Error())
+			return
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&blinded); err != nil {
 		log.WithError(err).Warn("submitBlindedBlock: invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
