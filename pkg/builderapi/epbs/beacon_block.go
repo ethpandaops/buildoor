@@ -3,13 +3,12 @@ package epbs
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ethpandaops/go-eth2-client/api"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	dynssz "github.com/pk910/dynamic-ssz"
@@ -180,31 +179,10 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 }
 
 // blockProposal wraps a fork-agnostic post-Gloas signed beacon block into the
-// versioned proposal consumed by the beacon node client.
+// versioned proposal consumed by the beacon node client. Post-Gloas blocks are
+// submitted bare (no block-contents wrapper — blobs travel with the envelope
+// reveal), so this maps via apiv1all.ProposalFromSignedBlock rather than
+// SignedBlockContents.
 func blockProposal(block *eth2all.SignedBeaconBlock) (*api.VersionedSignedProposal, error) {
-	view, err := block.ToView()
-	if err != nil {
-		return nil, err
-	}
-
-	gloasBlock, ok := view.(*gloasspec.SignedBeaconBlock)
-	if !ok {
-		return nil, fmt.Errorf("unexpected view type %T for version %s", view, block.Version)
-	}
-
-	proposal := &api.VersionedSignedProposal{
-		Version: block.Version,
-		Blinded: false,
-	}
-
-	switch block.Version {
-	case version.DataVersionGloas:
-		proposal.Gloas = gloasBlock
-	case version.DataVersionHeze:
-		proposal.Heze = gloasBlock
-	default:
-		return nil, fmt.Errorf("no proposal mapping for version %s", block.Version)
-	}
-
-	return proposal, nil
+	return apiv1all.ProposalFromSignedBlock(block)
 }
