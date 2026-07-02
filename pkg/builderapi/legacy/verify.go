@@ -1,4 +1,4 @@
-package validators
+package legacy
 
 import (
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"

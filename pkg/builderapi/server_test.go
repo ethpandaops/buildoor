@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -35,7 +35,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	log := logrus.New()
 	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(validators.BuilderSpecsExampleJSON))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(legacy.BuilderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -108,7 +108,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 		Message:   msg,
 		Signature: sig,
 	}
-	require.True(t, validators.VerifyRegistration(reg), "test registration must verify")
+	require.True(t, legacy.VerifyRegistration(reg), "test registration must verify")
 
 	body, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
 	require.NoError(t, err)
@@ -125,8 +125,8 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, 1, srv.validatorsStore.Len())
-	stored := srv.validatorsStore.Get(blsSigner.PublicKey())
-	require.NotNil(t, stored)
+	stored, ok := srv.validatorsStore.Get(blsSigner.PublicKey())
+	require.True(t, ok)
 	assert.Equal(t, msg.GasLimit, stored.Message.GasLimit)
 }
 
@@ -204,7 +204,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	sig, err := blsSigner.Sign(signingRoot[:])
 	require.NoError(t, err)
 	reg := &apiv1.SignedValidatorRegistration{Message: msg, Signature: sig}
-	require.True(t, validators.VerifyRegistration(reg), "test registration must verify")
+	require.True(t, legacy.VerifyRegistration(reg), "test registration must verify")
 	regs, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
 	require.NoError(t, err)
 

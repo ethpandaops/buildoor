@@ -14,7 +14,8 @@ type ProposerSettings struct {
 // ProposerSettingsResolver resolves the proposer's announced settings for a
 // build. Implementations self-scope: they return false when they don't apply
 // to the slot's fork or hold no data (gossip preferences post-Gloas in
-// payload_bidder; validator registrations pre-Gloas in builderapi/legacy).
+// payload_bidder; Builder API validator registrations pre-Gloas in the legacy
+// dialect).
 type ProposerSettingsResolver interface {
 	ResolveProposerSettings(slot phase0.Slot, proposerIndex phase0.ValidatorIndex) (ProposerSettings, bool)
 }

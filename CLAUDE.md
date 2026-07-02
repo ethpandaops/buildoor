@@ -181,7 +181,11 @@ npm run clean
    - Parent `Server`: route table, shared stores, stats aggregation, enable fan-out,
      debug endpoints; implements `legacy.WinRecorder` (in-memory bids-won + SSE only;
      durable won_blocks persistence is the InclusionTracker's job)
-   - Validator fee recipient management
+   - Validator fee recipient management: registrations live in a
+     `memstore.Store[BLSPubKey, *SignedValidatorRegistration]` created in `cmd/run.go`
+     (persisted via the `kv_store` `validator_registrations` namespace) and feed the
+     pre-Gloas `legacy.RegistrationSettingsResolver`; builder preferences
+     (max_execution_payment) are memstore-backed too and survive restarts
    - **Bids Won Store**: In-memory tracking of successfully delivered blocks
      - Thread-safe circular buffer (1000 entries max, ~200KB memory)
      - Stores: slot, block hash, transaction count, blob count, value (ETH/wei), timestamp
@@ -273,10 +277,11 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
 + goose migrations) persists across restarts when `--state-db <path>` is set:
 - `settings` — the 3-way (cli/ui + seq) override state
 - `won_blocks` — unified Builder API + ePBS won blocks (source-tagged)
-- `validator_registrations` — Builder API registrations (load on start, write-through)
 - `kv_store` — generic namespaced key/value blobs behind `memstore` persistence
-  (currently the `proposer_preferences` namespace: Gloas gossip prefs, SSZ-encoded,
-  buffered write-behind)
+  (buffered write-behind). Namespaces: `proposer_preferences` (Gloas gossip prefs,
+  SSZ), `validator_registrations` (Builder API registrations, SSZ; codec in
+  `builderapi/legacy`), `builder_preferences` (max_execution_payment, LE uint64;
+  codec in `builderapi/epbs`)
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
@@ -295,11 +300,11 @@ numbered step comments there match this list 1:1):
 6. Open the state-db (`--state-db`) and initialize the central Settings Service (applies persisted overrides into `cfg` in place before any module reads it)
 7. Start chain service
 8. Initialize lifecycle manager (if prerequisites available)
-9. Initialize builder service
+9. Initialize builder service (when Builder API is available, also creates the validator registration memstore — persisted via `kv_store` — and registers the pre-Gloas `legacy.RegistrationSettingsResolver`)
 9b. Start shared payment tracker + reveal service (Gloas scheduled) and inclusion tracker (always) from `pkg/payload_bidder`
 10. Initialize proposer preferences service (if Gloas fork is scheduled; registers the payload builder's Gloas+ settings resolver, store persisted via `kv_store`)
 11. Initialize p2p bidder service (if Gloas fork is scheduled; bid-gates on the proposer preferences store)
-12. Initialize Builder API server (if `--api-port` set; epbs dialect reads the proposer preferences store)
+12. Initialize Builder API server (if `--api-port` set; epbs dialect reads the proposer preferences store; builder preferences persisted via `kv_store`)
 13. Initialize and start validator ranges resolver
 14. Register settings `OnChange` subscribers (push changes to modules)
 15. Start WebUI/API server (if APIPort > 0)
@@ -336,11 +341,14 @@ buildoor/
 │   ├── builderapi/        # Builder API host (route table, shared stores, stats)
 │   │   ├── bids_won.go    # BidsWonStore and BidWonEntry types (in-memory, UI)
 │   │   ├── legacy/        # pre-Gloas dialect (Electra/Fulu): registerValidators,
-│   │   │                  # getHeader, submitBlindedBlockV2, bid build/unblind helpers
-│   │   ├── epbs/          # post-Gloas dialect (Gloas/Heze+): payload bid, beacon block
-│   │   │                  # (block broadcast + scheduled reveal), builder preferences,
-│   │   │                  # request auth + SSZ types
-│   │   └── validators/    # validator registration store + signature verification
+│   │   │                  # getHeader, submitBlindedBlockV2, bid build/unblind helpers,
+│   │   │                  # registration signature verify + kv_store codec + pre-Gloas
+│   │   │                  # settings resolver (registration store itself is a
+│   │   │                  # memstore instance created in cmd/run.go)
+│   │   └── epbs/          # post-Gloas dialect (Gloas/Heze+): payload bid, beacon block
+│   │                      # (block broadcast + scheduled reveal), builder preferences
+│   │                      # (memstore-backed, persisted via kv_store), request auth
+│   │                      # + SSZ types
 │   ├── chain/             # Beacon state management
 │   ├── config/            # Configuration types and defaults
 │   ├── db/                # Optional SQLite state-db (settings, won_blocks, audit, ...)

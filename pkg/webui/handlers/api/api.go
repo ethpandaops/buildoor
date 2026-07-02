@@ -543,7 +543,7 @@ func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, GetValidatorsResponse{Validators: []ValidatorRegistrationResponse{}})
 		return
 	}
-	regs := h.validatorStore.List()
+	regs := h.validatorStore.Values()
 	formatted := make([]ValidatorRegistrationResponse, 0, len(regs))
 	for _, reg := range regs {
 		if reg.Message == nil {

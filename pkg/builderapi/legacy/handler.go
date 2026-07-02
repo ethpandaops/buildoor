@@ -8,13 +8,14 @@ import (
 	"math/big"
 	"sync/atomic"
 
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -48,7 +49,7 @@ type Handler struct {
 	log             logrus.FieldLogger
 	chainSvc        chain.Service
 	payloadCache    *payload_builder.PayloadCache
-	validatorsStore *validators.Store
+	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
 	blsSigner       *signer.BLSSigner
 
 	publisher BlockPublisher   // optional; set via SetBlockPublisher
@@ -63,7 +64,8 @@ type Handler struct {
 // NewHandler creates a new pre-Gloas Builder API dialect handler. cfg is the
 // shared mutable config pointer; values are read live, never copied out.
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
-	payloadCache *payload_builder.PayloadCache, validatorsStore *validators.Store,
+	payloadCache *payload_builder.PayloadCache,
+	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
 	blsSigner *signer.BLSSigner) *Handler {
 	return &Handler{
 		cfg:             cfg,

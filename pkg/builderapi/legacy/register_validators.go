@@ -10,8 +10,6 @@ import (
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	"github.com/sirupsen/logrus"
-
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 )
 
 // HandleRegisterValidators handles POST /eth/v1/builder/validators.
@@ -68,7 +66,7 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		pubkeyHex := hex.EncodeToString(reg.Message.Pubkey[:])
-		if !validators.VerifyRegistrationWithDomain(reg, h.chainSvc.GetGenesis().GenesisForkVersion, forkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot) {
+		if !VerifyRegistrationWithDomain(reg, h.chainSvc.GetGenesis().GenesisForkVersion, forkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot) {
 			// Log first failing registration as JSON for debugging (copy and share).
 			rejJSON, _ := json.Marshal(reg)
 			log.WithFields(logrus.Fields{
@@ -80,7 +78,7 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusBadRequest, "invalid signature for validator "+pubkeyHex)
 			return
 		}
-		h.validatorsStore.Put(reg)
+		h.validatorsStore.Put(reg.Message.Pubkey, reg)
 		log.WithFields(logrus.Fields{"index": i, "pubkey": pubkeyHex}).Debug("Stored validator registration")
 	}
 

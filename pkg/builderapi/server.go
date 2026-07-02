@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/gorilla/mux"
@@ -26,7 +27,6 @@ import (
 
 	epbsapi "github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
@@ -68,24 +68,25 @@ type Server struct {
 	log             *logrus.Logger
 	chainSvc        chain.Service
 	payloadCache    *payload_builder.PayloadCache // debug endpoints + dialect construction
-	validatorsStore *validators.Store             // in-memory validator registrations
-	legacy          *legacy.Handler               // pre-Gloas dialect (Electra/Fulu)
-	epbs            *epbsapi.Handler              // post-Gloas dialect (Gloas/Heze+)
-	bidsWonStore    *BidsWonStore                 // in-memory store of successfully delivered blocks
-	events          EventBroadcaster              // optional: for broadcasting API events to WebUI
-	enabled         atomic.Bool                   // runtime toggle for enabling/disabling the builder API
+	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
+	legacy          *legacy.Handler  // pre-Gloas dialect (Electra/Fulu)
+	epbs            *epbsapi.Handler // post-Gloas dialect (Gloas/Heze+)
+	bidsWonStore    *BidsWonStore    // in-memory store of successfully delivered blocks
+	events          EventBroadcaster // optional: for broadcasting API events to WebUI
+	enabled         atomic.Bool      // runtime toggle for enabling/disabling the builder API
 }
 
 // NewServer creates a new server and constructs both dialect handlers.
 // payloadCache may be nil; endpoints needing it degrade gracefully. blsSigner
-// may be nil; if set, getHeader signs builder bids. validatorStore is optional;
-// when provided it is shared with the builder service for fee recipient lookup.
+// may be nil; if set, getHeader signs builder bids. validatorStore is optional
+// (an in-memory store is created when nil); when provided it is the shared
+// instance also read by the legacy registration settings resolver.
 func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service,
 	payloadCache *payload_builder.PayloadCache, blsSigner *signer.BLSSigner,
-	validatorStore *validators.Store) *Server {
+	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]) *Server {
 	store := validatorStore
 	if store == nil {
-		store = validators.NewStore()
+		store = memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	}
 
 	s := &Server{
@@ -325,7 +326,7 @@ func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) 
 // handleGetValidators handles GET /buildoor/v1/validators.
 // Returns the list of validator registrations stored from POST /eth/v1/builder/validators.
 func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
-	regs := s.validatorsStore.List()
+	regs := s.validatorsStore.Values()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{"validators": regs})

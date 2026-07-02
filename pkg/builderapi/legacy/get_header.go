@@ -81,7 +81,7 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	var pubkey phase0.BLSPubKey
 	copy(pubkey[:], pubkeyBytes)
 
-	if h.validatorsStore.Get(pubkey) == nil {
+	if _, registered := h.validatorsStore.Get(pubkey); !registered {
 		log.WithField("pubkey_hex", "0x"+hex.EncodeToString(pubkey[:])).Info(
 			"getHeader: returning 204 — proposer not in validator store (no registration for this pubkey)")
 		w.WriteHeader(http.StatusNoContent)

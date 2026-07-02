@@ -45,3 +45,45 @@ func TestBuilderPreferencesStore(t *testing.T) {
 	got, _ = store.Get(pk1)
 	assert.Equal(t, phase0.Gwei(250), got)
 }
+
+// TestPreferencesCodecRoundTrip pins the persisted key/value encoding of
+// builder preferences.
+func TestPreferencesCodecRoundTrip(t *testing.T) {
+	codec := PreferencesCodec{}
+
+	var pubkey phase0.BLSPubKey
+	for i := range pubkey {
+		pubkey[i] = byte(i)
+	}
+
+	// Key round trip (0x-hex pubkey).
+	key := codec.EncodeKey(pubkey)
+	assert.Regexp(t, "^0x[0-9a-f]{96}$", key)
+
+	decodedKey, err := codec.DecodeKey(key)
+	require.NoError(t, err)
+	assert.Equal(t, pubkey, decodedKey)
+
+	// Value round trip (8-byte little-endian uint64).
+	value, err := codec.EncodeValue(phase0.Gwei(5_000_000_000))
+	require.NoError(t, err)
+	require.Len(t, value, 8)
+
+	decoded, err := codec.DecodeValue(value)
+	require.NoError(t, err)
+	assert.Equal(t, phase0.Gwei(5_000_000_000), decoded)
+}
+
+// TestPreferencesCodecRejectsInvalid pins garbage rejection.
+func TestPreferencesCodecRejectsInvalid(t *testing.T) {
+	codec := PreferencesCodec{}
+
+	_, err := codec.DecodeKey("not-hex")
+	assert.Error(t, err, "non-hex key must not decode")
+
+	_, err = codec.DecodeKey("0xabcd")
+	assert.Error(t, err, "short key must not decode")
+
+	_, err = codec.DecodeValue([]byte{1, 2, 3})
+	assert.Error(t, err, "short value must not decode")
+}

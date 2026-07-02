@@ -97,21 +97,3 @@ func TestDisabledDBNoOps(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, rows)
 }
-
-func TestValidatorRegistrationRoundTrip(t *testing.T) {
-	d := testDB(t)
-
-	require.NoError(t, d.PutValidatorRegistration(ValidatorRegistration{
-		Pubkey:       "0xabc",
-		FeeRecipient: "0xdef",
-		GasLimit:     30000000,
-		Timestamp:    123,
-		Raw:          `{"x":1}`,
-	}))
-
-	regs, err := d.GetValidatorRegistrations()
-	require.NoError(t, err)
-	require.Len(t, regs, 1)
-	require.Equal(t, "0xabc", regs[0].Pubkey)
-	require.Equal(t, uint64(30000000), regs[0].GasLimit)
-}

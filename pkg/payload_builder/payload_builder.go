@@ -14,7 +14,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -27,7 +26,6 @@ type PayloadBuilder struct {
 	chainSvc     chain.Service
 	feeRecipient common.Address
 
-	validatorStore    *validators.Store          // optional: use fee recipient from validator registrations (pre-Gloas)
 	settingsResolvers []ProposerSettingsResolver // asked in order for proposer settings; first match wins
 	cfg               *config.Config             // shared config; mutable settings are read live, never cached
 	log               logrus.FieldLogger
@@ -47,8 +45,7 @@ type activeBuild struct {
 // NewPayloadBuilder creates a new payload builder.
 // cfg is the shared config pointer; mutable settings (e.g. PayloadBuildTime) are read live from it.
 // settingsResolvers are asked in order for the proposer's announced fee recipient and gas
-// limit; the first match wins. When validatorStore is set (pre-Gloas, no resolver match),
-// the fee recipient is taken from the proposer's validator registration.
+// limit; the first match wins.
 func NewPayloadBuilder(
 	clClient *beacon.Client,
 	engineClient EngineClient,
@@ -56,7 +53,6 @@ func NewPayloadBuilder(
 	feeRecipient common.Address,
 	cfg *config.Config,
 	log logrus.FieldLogger,
-	validatorStore *validators.Store,
 	settingsResolvers []ProposerSettingsResolver,
 ) *PayloadBuilder {
 	return &PayloadBuilder{
@@ -64,7 +60,6 @@ func NewPayloadBuilder(
 		chainSvc:          chainSvc,
 		engineClient:      engineClient,
 		feeRecipient:      feeRecipient,
-		validatorStore:    validatorStore,
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
 		log:               log.WithField("component", "payload-builder"),
@@ -119,16 +114,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	// Resolve the fee recipient (and target gas limit) for the build. The
 	// registered resolvers are asked in order (each self-scoped to its fork /
-	// data source); the first match wins.
+	// data source: gossip preferences post-Gloas, validator registrations
+	// pre-Gloas); the first match wins.
 	// Post-Gloas fallbacks: TargetGasLimit / SuggestedFeeRecipient from the
 	//                       payload_attributes event.
-	// Pre-Gloas fallback:   validator registrations (converted to a resolver
-	//                       in a later step).
 	// Final fallback:       the builder's configured fee recipient.
 	proposerFeeRecipient := b.feeRecipient
 	var targetGasLimit uint64
-
-	resolved := false
 
 	for _, resolver := range b.settingsResolvers {
 		settings, ok := resolver.ResolveProposerSettings(attrs.ProposalSlot, attrs.ProposerIndex)
@@ -138,7 +130,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 		proposerFeeRecipient = settings.FeeRecipient
 		targetGasLimit = settings.TargetGasLimit
-		resolved = true
 
 		b.log.WithFields(logrus.Fields{
 			"proposer_index":   attrs.ProposerIndex,
@@ -165,20 +156,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 				"proposer_index": attrs.ProposerIndex,
 				"fee_recipient":  proposerFeeRecipient.Hex(),
 			}).Debug("Using suggested fee recipient from payload_attributes")
-		}
-	} else if !resolved && b.validatorStore != nil {
-		// Pre-Gloas: look up fee recipient from validator registrations.
-		pubkeyPtr := b.chainSvc.GetValidatorPubkeyByIndex(attrs.ProposerIndex)
-		if pubkeyPtr != nil {
-			reg := b.validatorStore.Get(*pubkeyPtr)
-			if reg != nil && reg.Message != nil {
-				proposerFeeRecipient = common.Address(reg.Message.FeeRecipient)
-				b.log.WithFields(logrus.Fields{
-					"proposer_index": attrs.ProposerIndex,
-					"pubkey":         fmt.Sprintf("%x", pubkeyPtr[:8]),
-					"fee_recipient":  proposerFeeRecipient.Hex(),
-				}).Debug("Using fee recipient from validator registration")
-			}
 		}
 	}
 

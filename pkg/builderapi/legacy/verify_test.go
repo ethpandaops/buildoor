@@ -1,4 +1,4 @@
-package validators
+package legacy
 
 import (
 	"encoding/json"

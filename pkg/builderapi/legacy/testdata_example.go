@@ -1,7 +1,5 @@
-// Package validators provides types and storage for Builder API validator registrations.
-//
 // This file embeds the builder-specs example for use in tests.
-package validators
+package legacy
 
 import _ "embed"
 

@@ -1,12 +1,15 @@
 package api
 
 import (
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -20,14 +23,14 @@ type APIHandler struct {
 	settingsSvc    *config.Service // central settings authority (single writer)
 	stateDB        *db.Database    // optional state-db (may be disabled)
 	builderSvc     *payload_builder.Service
-	epbsSvc        *p2p_bidder.Service                        // May be nil
-	lifecycleMgr   *lifecycle.Manager                         // May be nil
-	chainSvc       chain.Service                              // May be nil
-	validatorStore *validators.Store                          // May be nil (only set when Builder API enabled)
-	builderAPISvc  *builderapi.Server                         // May be nil (only set when Builder API enabled)
-	propPrefSvc    *payload_bidder.ProposerPreferencesService // May be nil (Gloas not scheduled)
-	valRanges      *validatorranges.Resolver                  // May be nil
-	eventStreamMgr *EventStreamManager                        // May be nil
+	epbsSvc        *p2p_bidder.Service                                                   // May be nil
+	lifecycleMgr   *lifecycle.Manager                                                    // May be nil
+	chainSvc       chain.Service                                                         // May be nil
+	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration] // May be nil (only set when Builder API enabled)
+	builderAPISvc  *builderapi.Server                                                    // May be nil (only set when Builder API enabled)
+	propPrefSvc    *payload_bidder.ProposerPreferencesService                            // May be nil (Gloas not scheduled)
+	valRanges      *validatorranges.Resolver                                             // May be nil
+	eventStreamMgr *EventStreamManager                                                   // May be nil
 
 	revealSvc        *payload_bidder.RevealService    // May be nil (Gloas not scheduled)
 	inclusionTracker *payload_bidder.InclusionTracker // May be nil
@@ -43,7 +46,7 @@ func NewAPIHandler(
 	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
 	chainSvc chain.Service,
-	validatorStore *validators.Store,
+	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
 	builderAPISvc *builderapi.Server,
 	propPrefSvc *payload_bidder.ProposerPreferencesService,
 	valRanges *validatorranges.Resolver,

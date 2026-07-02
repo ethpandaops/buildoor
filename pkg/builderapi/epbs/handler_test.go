@@ -174,7 +174,7 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 		currentFork:  version.DataVersionGloas,
 	}
 
-	builderSvc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, common.Address{}, nil, log)
+	builderSvc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	publisher := &stubEnvelopePublisher{}

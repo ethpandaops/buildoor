@@ -10,16 +10,19 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	enginejsonrpc "github.com/ethpandaops/go-eth-engine-client/jsonrpc"
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
+	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -224,7 +227,9 @@ and begins building blocks according to configuration.`,
 			lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
 		}
 
-		// 9. Initialize builder service (standalone block building)
+		// 9. Initialize builder service (standalone block building). When the
+		// Builder API is available this also creates the shared validator
+		// registration memstore and registers the pre-Gloas settings resolver.
 		logger.Info("Initializing builder service...")
 
 		// Get fee recipient from wallet or use default address
@@ -233,17 +238,35 @@ and begins building blocks according to configuration.`,
 			feeRecipient = w.Address()
 		}
 
-		// Validator store and index cache when Builder API is available (port > 0)
-		// (fee recipient from registrations; cache avoids beacon state lookup every build)
-		var validatorStore *validators.Store
+		// Validator registration store when Builder API is available (port > 0):
+		// written by the legacy dialect's registerValidators handler, read by the
+		// pre-Gloas proposer-settings resolver and the WebUI. Buffered persistence
+		// into the state-db's kv_store (registered after stateDB's own close defer,
+		// LIFO ⇒ the final flush runs while the state-db is still open).
+		var validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
+
 		builderAPIAvailable := cfg.APIPort > 0
 		if builderAPIAvailable {
-			validatorStore = validators.NewStore()
-			validatorStore.SetStateDB(stateDB, logger)
+			validatorStore = memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
+			validatorStore.SetPersistence(ctx,
+				db.NewKVPersistence(stateDB, legacy.RegistrationsNamespace, legacy.RegistrationCodec{}),
+				logger)
+
+			defer validatorStore.Stop()
 		}
-		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, validatorStore, logger)
+
+		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
+		}
+
+		if builderAPIAvailable {
+			// Pre-Gloas proposer settings resolve from Builder API validator
+			// registrations; the Gloas+ gossip-preferences resolver is registered
+			// in step 10 below. Both self-scope by fork, so the registration
+			// order is not load-bearing.
+			builderSvc.AddProposerSettingsResolver(
+				legacy.NewRegistrationSettingsResolver(validatorStore, chainSvc))
 		}
 
 		// 9b. Start shared payment tracker, reveal service, and inclusion tracker.
@@ -332,6 +355,11 @@ and begins building blocks according to configuration.`,
 			builderAPISrv.SetFuluPublisher(clClient)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+
+			// Persist builder preferences (max_execution_payment) into the
+			// state-db's kv_store so they survive restarts.
+			builderAPISrv.GetBuilderPreferencesStore().SetPersistence(ctx, stateDB, logger)
+			defer builderAPISrv.GetBuilderPreferencesStore().Stop()
 
 			if revealSvc != nil {
 				builderAPISrv.SetRevealService(revealSvc)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -20,9 +21,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -33,9 +34,10 @@ import (
 // configured genesis, fork version, and current fork; all other accessors
 // return zero values.
 type stubChainService struct {
-	genesis     beacon.Genesis
-	forkVersion phase0.Version
-	currentFork version.DataVersion
+	genesis       beacon.Genesis
+	forkVersion   phase0.Version
+	currentFork   version.DataVersion
+	pubkeyByIndex map[phase0.ValidatorIndex]phase0.BLSPubKey
 }
 
 var _ chain.Service = (*stubChainService)(nil)
@@ -68,7 +70,11 @@ func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo         
 func (m *stubChainService) GetBuilderByPubkey(phase0.BLSPubKey) *chain.BuilderInfo { return nil }
 func (m *stubChainService) GetBuilders() []*chain.BuilderInfo                      { return nil }
 
-func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *phase0.BLSPubKey {
+func (m *stubChainService) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey {
+	if pubkey, ok := m.pubkeyByIndex[index]; ok {
+		return &pubkey
+	}
+
 	return nil
 }
 
@@ -106,7 +112,8 @@ func (r *recordingWinRecorder) RecordBidWon(slot phase0.Slot, blockHash phase0.H
 
 func newTestHandler(chainSvc chain.Service, blsSigner *signer.BLSSigner) *Handler {
 	return NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
-		payload_builder.NewPayloadCache(10), validators.NewStore(), blsSigner)
+		payload_builder.NewPayloadCache(10),
+		memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration](), blsSigner)
 }
 
 // TestHandleGetHeader_PostGloasForkGuard returns 204 once the chain has

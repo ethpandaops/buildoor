@@ -11,7 +11,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -37,7 +36,6 @@ type Service struct {
 	chainSvc               chain.Service
 	engineClient           EngineClient
 	feeRecipient           common.Address
-	validatorStore         *validators.Store          // optional: use fee recipient from validator registrations
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
@@ -82,16 +80,14 @@ type ELClientVersion struct {
 }
 
 // NewService creates a new builder service.
-// validatorStore is optional; when set, fee recipient is taken from the proposer's validator registration.
-// If no registration exists for a proposer, the build is skipped for that slot.
-// validatorIndexCache is optional; when set, proposer index→pubkey is read from cache instead of querying beacon state every build.
+// Proposer settings (fee recipient, target gas limit) are resolved through the
+// resolvers registered via AddProposerSettingsResolver before Start.
 func NewService(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	engineClient EngineClient,
 	feeRecipient common.Address,
-	validatorStore *validators.Store,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "builder-service")
@@ -102,7 +98,6 @@ func NewService(
 		chainSvc:               chainSvc,
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
-		validatorStore:         validatorStore,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*Payload]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
@@ -131,7 +126,6 @@ func (s *Service) Start(ctx context.Context) error {
 		s.feeRecipient,
 		s.cfg,
 		s.log,
-		s.validatorStore,
 		s.settingsResolvers,
 	)
 
