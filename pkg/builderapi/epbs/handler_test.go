@@ -32,7 +32,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -94,8 +93,7 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 	return nil
 }
 
-func (m *stubChainService) RefreshBuilders(context.Context) error                  { return nil }
-func (m *stubChainService) SetProposerPreferencesCache(*proposerpreferences.Cache) {}
+func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
 // stubBlockBroadcaster records SubmitProposal calls and can be set to fail.
 type stubBlockBroadcaster struct {

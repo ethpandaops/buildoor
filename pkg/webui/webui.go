@@ -17,7 +17,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
@@ -39,7 +38,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *proposerpreferences.Service, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *validators.Store, builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")

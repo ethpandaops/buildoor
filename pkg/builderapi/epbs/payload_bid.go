@@ -58,9 +58,9 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	if h.propPrefsCache == nil {
-		log.Warn("getExecutionPayloadBid: proposer preferences cache not configured")
-		writeError(w, http.StatusInternalServerError, "proposer preferences cache not configured")
+	if h.propPrefsStore == nil {
+		log.Warn("getExecutionPayloadBid: proposer preferences store not configured")
+		writeError(w, http.StatusInternalServerError, "proposer preferences store not configured")
 		return
 	}
 
@@ -226,7 +226,7 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	signedPrefs, ok := h.propPrefsCache.Get(slot)
+	signedPrefs, ok := h.propPrefsStore.Get(slot)
 	if !ok || signedPrefs == nil || signedPrefs.Message == nil {
 		log.Info("getExecutionPayloadBid: 400 — no proposer preferences cached for slot")
 		writeError(w, http.StatusBadRequest, "no proposer preferences cached for slot")

@@ -853,11 +853,11 @@ func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Reque
 		return
 	}
 
-	entries := h.propPrefSvc.GetCache().GetAll()
+	entries := h.propPrefSvc.GetStore().Entries()
 	result := make([]ProposerPreferencesEntry, 0, len(entries))
 
 	for slot, pref := range entries {
-		if pref.Message == nil {
+		if pref == nil || pref.Message == nil {
 			continue
 		}
 

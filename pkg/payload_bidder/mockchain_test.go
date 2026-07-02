@@ -15,7 +15,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -81,8 +80,7 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 	return nil
 }
 
-func (m *stubChainService) RefreshBuilders(context.Context) error                  { return nil }
-func (m *stubChainService) SetProposerPreferencesCache(*proposerpreferences.Cache) {}
+func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
 // newTestBuilderSvc creates a real payload_builder.Service (stats + payload
 // cache work without Start).

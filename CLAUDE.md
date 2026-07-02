@@ -146,6 +146,11 @@ npm run clean
      fires `PayloadIncludedEvent`, checks follow-up blocks for orphaned payloads
    - `PaymentTracker`: pending payments + live balance adjustments (fed by
      InclusionTracker/RevealService; consumed by lifecycle and WebUI)
+   - `ProposerPreferencesService`: caches Gloas gossip proposer preferences from the
+     BN SSE stream in a `memstore.Store[Slot, *SignedProposerPreferences]`
+     (first-per-slot, epoch-pruned, persisted via the `kv_store` namespace);
+     implements `payload_builder.ProposerSettingsResolver`; the store is read
+     directly by the p2p bidder (bid gate) and the builderapi epbs dialect (bids)
 
 2b. **P2P Bidder** (`pkg/p2p_bidder/`) — active p2p bidding flow of ePBS only
    - Time-scheduled bidding (10ms tick for bid windows), bid submission via gossip
@@ -269,7 +274,9 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
 - `settings` — the 3-way (cli/ui + seq) override state
 - `won_blocks` — unified Builder API + ePBS won blocks (source-tagged)
 - `validator_registrations` — Builder API registrations (load on start, write-through)
-- `proposer_preferences` — Gloas gossip prefs (best-effort)
+- `kv_store` — generic namespaced key/value blobs behind `memstore` persistence
+  (currently the `proposer_preferences` namespace: Gloas gossip prefs, SSZ-encoded,
+  buffered write-behind)
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
@@ -290,9 +297,9 @@ numbered step comments there match this list 1:1):
 8. Initialize lifecycle manager (if prerequisites available)
 9. Initialize builder service
 9b. Start shared payment tracker + reveal service (Gloas scheduled) and inclusion tracker (always) from `pkg/payload_bidder`
-10. Initialize p2p bidder service (if Gloas fork is scheduled)
-11. Initialize Builder API server (if `--api-port` set)
-12. Initialize proposer preferences service (if ePBS available)
+10. Initialize proposer preferences service (if Gloas fork is scheduled; registers the payload builder's Gloas+ settings resolver, store persisted via `kv_store`)
+11. Initialize p2p bidder service (if Gloas fork is scheduled; bid-gates on the proposer preferences store)
+12. Initialize Builder API server (if `--api-port` set; epbs dialect reads the proposer preferences store)
 13. Initialize and start validator ranges resolver
 14. Register settings `OnChange` subscribers (push changes to modules)
 15. Start WebUI/API server (if APIPort > 0)
@@ -316,7 +323,7 @@ numbered step comments there match this list 1:1):
 3. **Time-Based Scheduling**: ePBS uses precise timing relative to slot boundaries, not just event triggers
 4. **Fork Awareness**: All payload building logic checks current fork and adjusts behavior
 5. **Subscription Model**: Builder doesn't know about ePBS; ePBS subscribes to Builder's events
-6. **No function pointers as struct fields / constructor params**: Don't store callbacks like `func(slot) bool` on a struct or thread them through constructors — they are hard to read and obscure what a type actually depends on. Pass the concrete dependency (the struct that owns the behavior, e.g. `*proposerpreferences.Cache`) and call its method directly. Dispatcher subscriptions (pattern 1/2) are the sanctioned way to decouple; ad-hoc callbacks are not.
+6. **No function pointers as struct fields / constructor params**: Don't store callbacks like `func(slot) bool` on a struct or thread them through constructors — they are hard to read and obscure what a type actually depends on. Pass the concrete dependency (the struct that owns the behavior, e.g. a `*memstore.Store[...]`) and call its method directly. Dispatcher subscriptions (pattern 1/2) are the sanctioned way to decouple; ad-hoc callbacks are not.
 7. **Always hash tree roots via dynssz**: To compute any SSZ hash tree root, use `dynssz.GetGlobalDynSsz().HashTreeRoot(obj)` (`dynssz "github.com/pk910/dynamic-ssz"`), never the type's statically generated `obj.HashTreeRoot()`. The generated method hardcodes mainnet list limits, so it produces wrong roots under the minimal preset; the global dynssz resolves preset-dependent limits from the active spec. See `pkg/payload_bidder/bid.go`.
 
 ## Code Structure
@@ -345,7 +352,8 @@ buildoor/
 │   ├── memstore/          # generic thread-safe keyed store w/ buffered persistence
 │   ├── lifecycle/         # Deposit/exit/balance management
 │   ├── payload_bidder/    # shared Gloas+ domain: Signer, bid/envelope build,
-│   │                      # RevealService, InclusionTracker, PaymentTracker
+│   │                      # RevealService, InclusionTracker, PaymentTracker,
+│   │                      # ProposerPreferencesService (gossip prefs store + resolver)
 │   ├── rpc/
 │   │   ├── beacon/        # Beacon node client
 │   │   ├── engine/        # Engine API client

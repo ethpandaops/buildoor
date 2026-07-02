@@ -10,13 +10,15 @@ import (
 	"sync/atomic"
 
 	"github.com/ethpandaops/go-eth2-client/api"
+	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
@@ -49,11 +51,11 @@ type Handler struct {
 	bidderSigner *payload_bidder.Signer // shared Gloas bid signer (wraps blsSigner)
 	blsSigner    *signer.BLSSigner      // IsBuilderActive pubkey check
 
-	revealSvc      *payload_bidder.RevealService // SetRevealService — the ONLY reveal path
-	propPrefsCache *proposerpreferences.Cache    // SetProposerPreferencesCache
-	prefsStore     *BuilderPreferencesStore      // created in NewHandler
-	broadcaster    BlockBroadcaster              // SetBlockBroadcaster
-	events         EventBroadcaster              // SetEventBroadcaster (nil-checked)
+	revealSvc      *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
+	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
+	prefsStore     *BuilderPreferencesStore                                           // created in NewHandler
+	broadcaster    BlockBroadcaster                                                   // SetBlockBroadcaster
+	events         EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
 
 	builderIndex   atomic.Uint64 // builder index used in Gloas bids; set after lifecycle registration
 	enabled        atomic.Bool
@@ -88,10 +90,12 @@ func (h *Handler) SetRevealService(rs *payload_bidder.RevealService) {
 	h.revealSvc = rs
 }
 
-// SetProposerPreferencesCache wires the proposer preferences cache used to
-// resolve the fee recipient when building Gloas execution payload bids.
-func (h *Handler) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
-	h.propPrefsCache = cache
+// SetProposerPreferencesStore wires the per-slot proposer preferences store
+// (owned by payload_bidder.ProposerPreferencesService) used to resolve the fee
+// recipient when building Gloas execution payload bids.
+func (h *Handler) SetProposerPreferencesStore(
+	store *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]) {
+	h.propPrefsStore = store
 }
 
 // SetBlockBroadcaster wires the broadcaster used to publish the proposer's

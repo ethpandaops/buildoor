@@ -7,14 +7,15 @@ import (
 	"sync"
 	"time"
 
+	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -30,15 +31,15 @@ type SlotState struct {
 // Scheduler handles time-based bid scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg           *config.EPBSConfig
-	chainSvc      chain.Service
-	bidCreator    *BidCreator
-	bidTracker    *BidTracker
-	payloadCache  *payload_builder.PayloadCache
-	service       *Service // Reference to parent service for firing events
-	blsSigner     *signer.BLSSigner
-	propPrefCache *proposerpreferences.Cache
-	log           logrus.FieldLogger
+	cfg            *config.EPBSConfig
+	chainSvc       chain.Service
+	bidCreator     *BidCreator
+	bidTracker     *BidTracker
+	payloadCache   *payload_builder.PayloadCache
+	service        *Service // Reference to parent service for firing events
+	blsSigner      *signer.BLSSigner
+	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
+	log            logrus.FieldLogger
 
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
@@ -54,20 +55,20 @@ func NewScheduler(
 	payloadCache *payload_builder.PayloadCache,
 	service *Service,
 	blsSigner *signer.BLSSigner,
-	propPrefCache *proposerpreferences.Cache,
+	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:           cfg,
-		chainSvc:      chainSvc,
-		bidCreator:    bidCreator,
-		bidTracker:    bidTracker,
-		payloadCache:  payloadCache,
-		service:       service,
-		blsSigner:     blsSigner,
-		propPrefCache: propPrefCache,
-		slotStates:    make(map[phase0.Slot]*SlotState),
-		log:           log.WithField("component", "scheduler"),
+		cfg:            cfg,
+		chainSvc:       chainSvc,
+		bidCreator:     bidCreator,
+		bidTracker:     bidTracker,
+		payloadCache:   payloadCache,
+		service:        service,
+		blsSigner:      blsSigner,
+		propPrefsStore: propPrefsStore,
+		slotStates:     make(map[phase0.Slot]*SlotState),
+		log:            log.WithField("component", "scheduler"),
 	}
 }
 
@@ -139,7 +140,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
-	if s.propPrefCache == nil || !s.propPrefCache.Has(slot) {
+	if s.propPrefsStore == nil || !s.propPrefsStore.Has(slot) {
 		s.log.WithField("slot", slot).Debug("No proposer preferences for slot yet — skipping bid")
 		return
 	}

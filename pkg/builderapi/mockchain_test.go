@@ -8,7 +8,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -59,5 +58,4 @@ func (m *mockChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 	return nil
 }
 
-func (m *mockChainService) RefreshBuilders(context.Context) error                  { return nil }
-func (m *mockChainService) SetProposerPreferencesCache(*proposerpreferences.Cache) {}
+func (m *mockChainService) RefreshBuilders(context.Context) error { return nil }

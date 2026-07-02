@@ -9,12 +9,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -84,6 +86,7 @@ type Service struct {
 	bidTracker            *BidTracker
 	clClient              *beacon.Client
 	chainSvc              chain.Service
+	propPrefsStore        *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	builderIndex          uint64
 	builderPubkey         phase0.BLSPubKey
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
@@ -97,12 +100,17 @@ type Service struct {
 	wg                sync.WaitGroup
 }
 
-// NewService creates a new p2p bidder service.
+// NewService creates a new p2p bidder service. propPrefsStore is the shared
+// per-slot proposer preferences store (owned by
+// payload_bidder.ProposerPreferencesService); it gates bidding — slots without
+// a cached preference are skipped. It may be nil, in which case no bids are
+// submitted.
 func NewService(
 	cfg *config.EPBSConfig,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
+	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "p2p-bidder")
@@ -116,6 +124,7 @@ func NewService(
 		blsSigner:             blsSigner,
 		clClient:              clClient,
 		chainSvc:              chainSvc,
+		propPrefsStore:        propPrefsStore,
 		builderPubkey:         blsSigner.PublicKey(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
 		log:                   serviceLog,
@@ -190,7 +199,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		builderSvc.GetPayloadCache(),
 		s,
 		s.blsSigner,
-		builderSvc.GetProposerPreferencesCache(),
+		s.propPrefsStore,
 		s.log,
 	)
 

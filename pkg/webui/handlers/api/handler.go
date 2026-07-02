@@ -10,7 +10,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -21,14 +20,14 @@ type APIHandler struct {
 	settingsSvc    *config.Service // central settings authority (single writer)
 	stateDB        *db.Database    // optional state-db (may be disabled)
 	builderSvc     *payload_builder.Service
-	epbsSvc        *p2p_bidder.Service          // May be nil
-	lifecycleMgr   *lifecycle.Manager           // May be nil
-	chainSvc       chain.Service                // May be nil
-	validatorStore *validators.Store            // May be nil (only set when Builder API enabled)
-	builderAPISvc  *builderapi.Server           // May be nil (only set when Builder API enabled)
-	propPrefSvc    *proposerpreferences.Service // May be nil (only set when P2P peer addrs configured)
-	valRanges      *validatorranges.Resolver    // May be nil
-	eventStreamMgr *EventStreamManager          // May be nil
+	epbsSvc        *p2p_bidder.Service                        // May be nil
+	lifecycleMgr   *lifecycle.Manager                         // May be nil
+	chainSvc       chain.Service                              // May be nil
+	validatorStore *validators.Store                          // May be nil (only set when Builder API enabled)
+	builderAPISvc  *builderapi.Server                         // May be nil (only set when Builder API enabled)
+	propPrefSvc    *payload_bidder.ProposerPreferencesService // May be nil (Gloas not scheduled)
+	valRanges      *validatorranges.Resolver                  // May be nil
+	eventStreamMgr *EventStreamManager                        // May be nil
 
 	revealSvc        *payload_bidder.RevealService    // May be nil (Gloas not scheduled)
 	inclusionTracker *payload_bidder.InclusionTracker // May be nil
@@ -46,7 +45,7 @@ func NewAPIHandler(
 	chainSvc chain.Service,
 	validatorStore *validators.Store,
 	builderAPISvc *builderapi.Server,
-	propPrefSvc *proposerpreferences.Service,
+	propPrefSvc *payload_bidder.ProposerPreferencesService,
 	valRanges *validatorranges.Resolver,
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,

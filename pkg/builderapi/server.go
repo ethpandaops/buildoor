@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
@@ -28,9 +29,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/validators"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 )
@@ -142,10 +143,11 @@ func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 	s.epbs.SetEventBroadcaster(b)
 }
 
-// SetProposerPreferencesCache wires the proposer preferences cache used by the
-// post-Gloas dialect to resolve fee recipients when building bids.
-func (s *Server) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
-	s.epbs.SetProposerPreferencesCache(cache)
+// SetProposerPreferencesStore wires the per-slot proposer preferences store
+// used by the post-Gloas dialect to resolve fee recipients when building bids.
+func (s *Server) SetProposerPreferencesStore(
+	store *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]) {
+	s.epbs.SetProposerPreferencesStore(store)
 }
 
 // SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.

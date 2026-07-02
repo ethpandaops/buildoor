@@ -23,7 +23,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -276,14 +275,32 @@ and begins building blocks according to configuration.`,
 		}
 		defer inclusionTracker.Stop()
 
-		// 10. Initialize p2p bidder service (if Gloas fork is scheduled)
+		// 10. Initialize the proposer preferences service (started later in step
+		// 20). Its per-slot store feeds the p2p bidder's bid gate, the Builder API
+		// epbs dialect's bid construction, and the payload builder's Gloas+
+		// proposer-settings resolution.
+		var propPrefSvc *payload_bidder.ProposerPreferencesService
+
+		if epbsAvailable {
+			propPrefSvc = payload_bidder.NewProposerPreferencesService(clClient, chainSvc, logger)
+			propPrefSvc.GetStore().SetPersistence(ctx,
+				db.NewKVPersistence(stateDB, payload_bidder.ProposerPreferencesNamespace, payload_bidder.ProposerPreferencesCodec{}),
+				logger)
+			// Registered after stateDB's own close defer (LIFO) → the store's final
+			// flush runs while the state-db is still open.
+			defer propPrefSvc.GetStore().Stop()
+
+			builderSvc.AddProposerSettingsResolver(propPrefSvc)
+		}
+
+		// 11. Initialize p2p bidder service (if Gloas fork is scheduled)
 		var epbsSvc *p2p_bidder.Service
 
 		if epbsAvailable {
 			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
 			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing p2p bidder service...")
 
-			epbsSvc, err = p2p_bidder.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, logger)
+			epbsSvc, err = p2p_bidder.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, propPrefSvc.GetStore(), logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize p2p bidder: %w", err)
 			}
@@ -291,7 +308,7 @@ and begins building blocks according to configuration.`,
 			epbsSvc.SetEnabled(cfg.EPBSEnabled)
 		}
 
-		// 11. Initialize Builder API server (routes served on --api-port via the shared server)
+		// 12. Initialize Builder API server (routes served on --api-port via the shared server)
 		var builderAPISrv *builderapi.Server
 
 		if builderAPIAvailable {
@@ -319,19 +336,10 @@ and begins building blocks according to configuration.`,
 			if revealSvc != nil {
 				builderAPISrv.SetRevealService(revealSvc)
 			}
-		}
 
-		// 12. Initialize proposer preferences service early (not started yet) so it can be passed to the API handler.
-		var propPrefSvc *proposerpreferences.Service
-
-		if epbsAvailable {
-			propPrefSvc = proposerpreferences.NewService(clClient, logger)
-			propPrefSvc.GetCache().SetStateDB(stateDB, logger)
-			builderSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
-			if builderAPISrv != nil {
-				builderAPISrv.SetProposerPreferencesCache(propPrefSvc.GetCache())
+			if propPrefSvc != nil {
+				builderAPISrv.SetProposerPreferencesStore(propPrefSvc.GetStore())
 			}
-			chainSvc.SetProposerPreferencesCache(propPrefSvc.GetCache())
 		}
 
 		// 13. Initialize and start validator ranges resolver.
