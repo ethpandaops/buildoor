@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -29,9 +29,9 @@ type EventBroadcaster interface {
 }
 
 // BlockPublisher submits unblinded block contents to the beacon node
-// (implemented by *beacon.Client.SubmitFuluBlock).
+// (implemented by *beacon.Client.SubmitLegacyBlock).
 type BlockPublisher interface {
-	SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error
+	SubmitLegacyBlock(ctx context.Context, contents *apiv1all.SignedBlockContents) error
 }
 
 // Handler serves the pre-Gloas Builder API dialect endpoints

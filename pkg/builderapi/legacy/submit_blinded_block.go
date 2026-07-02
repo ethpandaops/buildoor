@@ -10,7 +10,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks (Fulu SignedBlindedBeaconBlock).
+// HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks
+// (Electra-shaped SignedBlindedBeaconBlock, serving Electra and Fulu).
 // Returns 202 Accepted on success, 400 on validation/match failure, 415 on wrong
 // Content-Type, and 503 when the legacy Builder API dialect is disabled.
 func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +25,8 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 
 	// The legacy dialect ends at Gloas: post-Gloas blocks carry the payload bid
 	// inside the beacon block and are submitted via the beacon_block endpoint.
-	if fork := h.chainSvc.GetCurrentFork(); fork >= version.DataVersionGloas {
+	fork := h.chainSvc.GetCurrentFork()
+	if fork >= version.DataVersionGloas {
 		log.WithField("fork", fork.String()).Warn(
 			"submitBlindedBlock: 400 — legacy Builder API dialect not served post-Gloas")
 		writeError(w, http.StatusBadRequest, "legacy builder API dialect not available post-Gloas")
@@ -78,7 +80,7 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	contents, err := UnblindSignedBlindedBeaconBlock(&blinded, event)
+	contents, err := UnblindSignedBlindedBeaconBlock(&blinded, event, fork)
 	if err != nil {
 		log.WithError(err).Warn("submitBlindedBlock: unblind failed")
 		writeError(w, http.StatusBadRequest, "unblind failed: "+err.Error())
@@ -93,7 +95,7 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 	log.Infof("submitBlindedBlock: unblinded block for slot %d", slot)
 
 	if h.publisher != nil {
-		if err := h.publisher.SubmitFuluBlock(r.Context(), contents); err != nil {
+		if err := h.publisher.SubmitLegacyBlock(r.Context(), contents); err != nil {
 			log.WithError(err).Error("submitBlindedBlock: failed to publish unblinded block")
 			writeError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
 			return

@@ -13,7 +13,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -283,13 +283,13 @@ func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
 }
 
-// mockFuluPublisher records the last SubmitFuluBlock call for tests.
-type mockFuluPublisher struct {
-	lastContents *apiv1fulu.SignedBlockContents
+// mockLegacyPublisher records the last SubmitLegacyBlock call for tests.
+type mockLegacyPublisher struct {
+	lastContents *apiv1all.SignedBlockContents
 	lastErr      error
 }
 
-func (m *mockFuluPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1fulu.SignedBlockContents) error {
+func (m *mockLegacyPublisher) SubmitLegacyBlock(_ context.Context, contents *apiv1all.SignedBlockContents) error {
 	m.lastContents = contents
 	m.lastErr = nil
 	return nil
@@ -327,9 +327,9 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
-	publisher := &mockFuluPublisher{}
-	srv := NewServer(cfg, log, &mockChainService{}, cache, nil, nil)
-	srv.SetFuluPublisher(publisher)
+	publisher := &mockLegacyPublisher{}
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, cache, nil, nil)
+	srv.SetLegacyPublisher(publisher)
 	srv.SetEnabled(true)
 
 	// Seed cache with a payload matching builder-specs Fulu example block_hash.

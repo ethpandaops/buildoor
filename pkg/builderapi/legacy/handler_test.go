@@ -12,7 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
-	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -80,13 +80,13 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex
 
 func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
-// stubBlockPublisher records the last SubmitFuluBlock call for tests.
+// stubBlockPublisher records the last SubmitLegacyBlock call for tests.
 type stubBlockPublisher struct {
-	lastContents *apiv1fulu.SignedBlockContents
+	lastContents *apiv1all.SignedBlockContents
 	err          error
 }
 
-func (p *stubBlockPublisher) SubmitFuluBlock(_ context.Context, contents *apiv1fulu.SignedBlockContents) error {
+func (p *stubBlockPublisher) SubmitLegacyBlock(_ context.Context, contents *apiv1all.SignedBlockContents) error {
 	p.lastContents = contents
 	return p.err
 }
@@ -181,6 +181,8 @@ func TestHandleSubmitBlindedBlock_Success(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, rec.Code, "submit blinded block should return 202 Accepted")
 	require.NotNil(t, publisher.lastContents, "publisher should be called with unblinded contents")
 	require.NotNil(t, publisher.lastContents.SignedBlock, "unblinded contents should have SignedBlock")
+	assert.Equal(t, version.DataVersionFulu, publisher.lastContents.Version,
+		"contents version should match the active fork")
 	assert.Equal(t, phase0.Slot(1), publisher.lastContents.SignedBlock.Message.Slot)
 	assert.Equal(t, uint64(1), h.BlocksPublished())
 }

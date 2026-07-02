@@ -30,7 +30,8 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 
 	// The legacy dialect ends at Gloas: post-Gloas proposers must use the
 	// execution_payload_bid flow instead.
-	if fork := h.chainSvc.GetCurrentFork(); fork >= version.DataVersionGloas {
+	fork := h.chainSvc.GetCurrentFork()
+	if fork >= version.DataVersionGloas {
 		log.WithField("fork", fork.String()).Info(
 			"getHeader: returning 204 — legacy Builder API dialect not served post-Gloas")
 		w.WriteHeader(http.StatusNoContent)
@@ -131,7 +132,7 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	})
 
 	resp := GetHeaderResponse{
-		Version: "fulu",
+		Version: fork.String(),
 		Data:    signedBid,
 	}
 
@@ -150,7 +151,7 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Eth-Consensus-Version", "fulu")
+	w.Header().Set("Eth-Consensus-Version", fork.String())
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }

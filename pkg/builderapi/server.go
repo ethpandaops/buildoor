@@ -111,9 +111,9 @@ func (s *Server) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-// SetFuluPublisher sets the publisher for unblinded Fulu blocks used by the
+// SetLegacyPublisher sets the publisher for unblinded blocks used by the
 // legacy dialect (e.g. beacon node client).
-func (s *Server) SetFuluPublisher(p legacy.BlockPublisher) {
+func (s *Server) SetLegacyPublisher(p legacy.BlockPublisher) {
 	s.legacy.SetBlockPublisher(p)
 }
 

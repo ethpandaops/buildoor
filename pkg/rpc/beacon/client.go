@@ -14,7 +14,7 @@ import (
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
-	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
+	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	"github.com/ethpandaops/go-eth2-client/http"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/all"
@@ -270,7 +270,7 @@ func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
 }
 
-// SubmitProposal submits a full signed proposal (e.g. Fulu SignedBlockContents) to the beacon node.
+// SubmitProposal submits a full signed proposal (e.g. SignedBlockContents) to the beacon node.
 // Used by the builder API after unblinding a blinded block.
 func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpts) error {
 	submitter, ok := c.client.(eth2client.ProposalSubmitter)
@@ -280,17 +280,21 @@ func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpt
 	return submitter.SubmitProposal(ctx, opts)
 }
 
-// SubmitFuluBlock submits a Fulu SignedBlockContents (full unblinded block + blobs) to the beacon node.
-func (c *Client) SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error {
+// SubmitLegacyBlock submits a pre-Gloas SignedBlockContents (full unblinded
+// block + blobs) to the beacon node. The proposal version — and thereby the
+// Eth-Consensus-Version header — is derived from contents.Version.
+func (c *Client) SubmitLegacyBlock(ctx context.Context, contents *apiv1all.SignedBlockContents) error {
 	if contents == nil {
-		return fmt.Errorf("fulu block contents is nil")
+		return fmt.Errorf("block contents is nil")
 	}
+
+	proposal, err := contents.ToVersioned()
+	if err != nil {
+		return fmt.Errorf("failed to convert block contents to proposal: %w", err)
+	}
+
 	return c.SubmitProposal(ctx, &api.SubmitProposalOpts{
-		Proposal: &api.VersionedSignedProposal{
-			Version: spec.DataVersionFulu,
-			Blinded: false,
-			Fulu:    contents,
-		},
+		Proposal: proposal,
 	})
 }
 

@@ -106,7 +106,8 @@ func (b *BuilderBid) HashTreeRootWith(hh sszutils.HashWalker) error {
 	return nil
 }
 
-// GetHeaderResponse is the JSON response for getHeader: { "version": "fulu", "data": SignedBuilderBid }.
+// GetHeaderResponse is the JSON response for getHeader:
+// { "version": "<fork>", "data": SignedBuilderBid }.
 type GetHeaderResponse struct {
 	Version string            `json:"version"`
 	Data    *SignedBuilderBid `json:"data"`
