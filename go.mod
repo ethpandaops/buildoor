@@ -6,7 +6,7 @@ require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/ethereum/go-ethereum v1.17.4
 	github.com/ethpandaops/go-eth-engine-client v0.0.1
-	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260703011737-9d24daccd908
+	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260703012621-4091920fc715
 	github.com/ethpandaops/service-authenticatoor v0.0.2
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2

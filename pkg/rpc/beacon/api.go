@@ -1,12 +1,8 @@
 package beacon
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
@@ -16,34 +12,18 @@ import (
 )
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
+// The consensus version header and body encoding (SSZ or JSON per the client's content
+// negotiation) are derived from the bid's Version by go-eth2-client.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.SignedExecutionPayloadBid) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bids", c.baseURL)
-
-	bidJSON, err := json.Marshal(bid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal bid: %w", err)
+	submitter, ok := c.client.(eth2client.ExecutionPayloadBidSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support execution payload bid submission")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bidJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", bid.Version.String())
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
+	if err := submitter.SubmitAgnosticExecutionPayloadBid(ctx, &api.SubmitAgnosticExecutionPayloadBidOpts{
+		SignedExecutionPayloadBid: bid,
+	}); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-
-		return fmt.Errorf("failed to submit bid: status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -139,32 +119,13 @@ func (c *Client) GetExecutionPayloadEnvelope(
 
 // SubmitVoluntaryExit submits a signed voluntary exit to the beacon node.
 func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVoluntaryExit) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/pool/voluntary_exits", c.baseURL)
-
-	exitJSON, err := json.Marshal(exit)
-	if err != nil {
-		return fmt.Errorf("failed to marshal the exit: %w", err)
+	submitter, ok := c.client.(eth2client.VoluntaryExitSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support voluntary exit submission")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(exitJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
+	if err := submitter.SubmitVoluntaryExit(ctx, exit); err != nil {
 		return fmt.Errorf("failed to submit exit: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-
-		return fmt.Errorf("failed to submit exit: status %d: %s", resp.StatusCode, string(body))
 	}
 
 	c.log.Info("Submitted exit!")
