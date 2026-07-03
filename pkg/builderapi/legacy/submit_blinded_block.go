@@ -9,19 +9,58 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
+// SubmitBlindedBlockV1Response is the JSON envelope returned by
+// POST /eth/v1/builder/blinded_blocks: { "version": "<fork>", "data": ... }
+// where data is the bare ExecutionPayload pre-Deneb and an
+// ExecutionPayloadAndBlobsBundle from Deneb onwards.
+type SubmitBlindedBlockV1Response struct {
+	Version string `json:"version"`
+	Data    any    `json:"data"`
+}
+
+// executionPayloadAndBlobsBundle is the Deneb+ v1 unblind response payload:
+// the full execution payload plus the blobs bundle the proposer needs to
+// publish the block itself.
+type executionPayloadAndBlobsBundle struct {
+	ExecutionPayload *eth2all.ExecutionPayload    `json:"execution_payload"`
+	BlobsBundle      *payload_builder.BlobsBundle `json:"blobs_bundle"`
+}
+
+// HandleSubmitBlindedBlockV1 handles POST /eth/v1/builder/blinded_blocks
+// (Bellatrix onwards). Unlike v2, the v1 flow returns the unblinded execution
+// payload (plus blobs bundle from Deneb) in the response body so the proposer
+// can publish the block itself; the block is additionally published by the
+// builder, mirroring mev-boost-relay behavior.
+func (h *Handler) HandleSubmitBlindedBlockV1(w http.ResponseWriter, r *http.Request) {
+	h.handleSubmitBlindedBlock(w, r, 1)
+}
+
 // HandleSubmitBlindedBlock handles POST /eth/v2/builder/blinded_blocks.
-// The blinded block is decoded fork-agnostically from either JSON or SSZ
-// (application/octet-stream) per builder-specs; the wire version is taken
-// from the Eth-Consensus-Version request header, falling back to the chain's
-// current fork when the header is absent.
-// Returns 202 Accepted on success, 400 on validation/match failure, 415 on wrong
-// Content-Type, and 503 when the legacy Builder API dialect is disabled.
+// The v2 flow publishes the unblinded block and returns 202 Accepted with no
+// body (the payload and blobs reach the network via the builder's publish).
 func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Request) {
-	log := h.log.WithField("path", "/eth/v2/builder/blinded_blocks")
+	h.handleSubmitBlindedBlock(w, r, 2)
+}
+
+// handleSubmitBlindedBlock implements both blinded-block submit endpoint
+// versions. The blinded block is decoded fork-agnostically from either JSON or
+// SSZ (application/octet-stream) per builder-specs; the wire version is taken
+// from the Eth-Consensus-Version request header, falling back to the chain's
+// current fork when the header is absent. After a successful unblind+publish,
+// apiVersion selects the response shape: v1 returns 200 with the unblinded
+// payload (and blobs bundle from Deneb), v2 returns 202 with no body.
+// Returns 400 on validation/match failure, 415 on wrong Content-Type, and 503
+// when the legacy Builder API dialect is disabled.
+func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Request, apiVersion int) {
+	log := h.log.WithField("path", r.URL.Path)
 
 	if !h.enabled.Load() {
 		log.Warn("submitBlindedBlock: 503 — builder API disabled")
@@ -161,5 +200,49 @@ func (h *Handler) HandleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		h.events.BroadcastBuilderAPISubmitBlindedDelivered(uint64(slot), blockHashHex)
 	}
 
+	if apiVersion == 1 {
+		h.writeUnblindedPayloadResponse(w, log, blinded.Version, event)
+		return
+	}
+
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// writeUnblindedPayloadResponse writes the v1 submitBlindedBlock 200 response:
+// the bare execution payload pre-Deneb, or the payload plus blobs bundle from
+// Deneb onwards (an empty bundle when the block carries no blobs).
+func (h *Handler) writeUnblindedPayloadResponse(
+	w http.ResponseWriter,
+	log logrus.FieldLogger,
+	fork version.DataVersion,
+	event *payload_builder.Payload,
+) {
+	var data any = event.ExecutionPayload
+
+	if fork >= version.DataVersionDeneb {
+		bundle := event.BlobsBundle
+		if bundle == nil {
+			bundle = &payload_builder.BlobsBundle{
+				Commitments: []deneb.KZGCommitment{},
+				Proofs:      []deneb.KZGProof{},
+				Blobs:       []deneb.Blob{},
+			}
+		}
+
+		data = &executionPayloadAndBlobsBundle{
+			ExecutionPayload: event.ExecutionPayload,
+			BlobsBundle:      bundle,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Eth-Consensus-Version", fork.String())
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(SubmitBlindedBlockV1Response{
+		Version: fork.String(),
+		Data:    data,
+	}); err != nil {
+		log.WithError(err).Warn("submitBlindedBlock: failed to encode v1 unblind response")
+	}
 }

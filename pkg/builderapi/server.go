@@ -171,8 +171,12 @@ func (s *Server) RegisterRoutes(router *mux.Router) {
 	builderAPI.HandleFunc("/status", s.handleBuilderStatus).Methods(http.MethodGet)
 	builderAPI.HandleFunc("/validators", s.legacy.HandleRegisterValidators).Methods(http.MethodPost)
 	builderAPI.HandleFunc("/header/{slot}/{parent_hash}/{pubkey}", s.legacy.HandleGetHeader).Methods(http.MethodGet)
+	// v1 blinded-block submit (Bellatrix onwards): returns the unblinded
+	// payload in the response body so v1-only proposers can publish the block
+	// themselves.
+	builderAPI.HandleFunc("/blinded_blocks", s.legacy.HandleSubmitBlindedBlockV1).Methods(http.MethodPost)
 
-	// --- Builder API v2 (Fulu blinded blocks) ---
+	// --- Builder API v2 (blinded-block submit, 202 + no body) ---
 	builderAPIv2 := router.PathPrefix("/eth/v2/builder").Subrouter()
 	builderAPIv2.HandleFunc("/blinded_blocks", s.legacy.HandleSubmitBlindedBlock).Methods(http.MethodPost)
 
@@ -194,6 +198,27 @@ func (s *Server) RegisterRoutes(router *mux.Router) {
 	buildoorAPI := router.PathPrefix("/buildoor/v1").Subrouter()
 	buildoorAPI.HandleFunc("/payloads/{slot}", s.handleGetPayloadBySlot).Methods(http.MethodGet)
 	buildoorAPI.HandleFunc("/validators", s.handleGetValidators).Methods(http.MethodGet)
+
+	// Unmatched /eth/* paths must answer with a JSON 404 rather than falling
+	// through to the WebUI SPA catch-all (which serves index.html with 200 —
+	// an API client decoding that HTML fails with a confusing parse error
+	// instead of a clear "endpoint not found").
+	router.PathPrefix("/eth/").HandlerFunc(s.handleUnknownEndpoint)
+}
+
+// handleUnknownEndpoint answers unmatched /eth/* requests with a JSON 404.
+func (s *Server) handleUnknownEndpoint(w http.ResponseWriter, r *http.Request) {
+	s.log.WithFields(logrus.Fields{
+		"method": r.Method,
+		"path":   r.URL.Path,
+	}).Debug("Builder API: unknown endpoint requested")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"code":    http.StatusNotFound,
+		"message": "endpoint not found",
+	})
 }
 
 // Handler returns an HTTP handler with routes registered; used in tests.

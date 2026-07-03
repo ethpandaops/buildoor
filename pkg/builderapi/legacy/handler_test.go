@@ -19,6 +19,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
+	"github.com/holiman/uint256"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -382,4 +383,68 @@ func TestHandleSubmitBlindedBlock_PostGloasForkGuard(t *testing.T) {
 	h.HandleSubmitBlindedBlock(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "post-Gloas submit should return 400")
+}
+
+// TestWriteUnblindedPayloadResponse_ForkShapes verifies the v1 submit response
+// data shape per fork: the bare execution payload pre-Deneb, and an
+// execution_payload + blobs_bundle wrapper (empty bundle when blobless) from
+// Deneb onwards.
+func TestWriteUnblindedPayloadResponse_ForkShapes(t *testing.T) {
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionCapella}, nil)
+
+	newEvent := func(fork version.DataVersion) *payload_builder.Payload {
+		return &payload_builder.Payload{
+			Attributes: &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+			ExecutionPayload: &eth2all.ExecutionPayload{
+				Version:       fork,
+				BaseFeePerGas: uint256.NewInt(7),
+				BlockHash:     phase0.Hash32{0xab},
+			},
+			BlockHash: phase0.Hash32{0xab},
+		}
+	}
+
+	// Capella: data is the bare execution payload (no blobs bundle pre-Deneb).
+	rec := httptest.NewRecorder()
+	h.writeUnblindedPayloadResponse(rec, logrus.New(), version.DataVersionCapella,
+		newEvent(version.DataVersionCapella))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "capella", rec.Header().Get("Eth-Consensus-Version"))
+
+	var capellaResp struct {
+		Version string `json:"version"`
+		Data    struct {
+			BlockHash   string           `json:"block_hash"`
+			BlobsBundle *json.RawMessage `json:"blobs_bundle"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &capellaResp))
+	assert.Equal(t, "capella", capellaResp.Version)
+	assert.NotEmpty(t, capellaResp.Data.BlockHash, "data must be the bare execution payload")
+	assert.Nil(t, capellaResp.Data.BlobsBundle, "pre-Deneb response must not carry a blobs bundle")
+
+	// Deneb+: data wraps the payload and a (possibly empty) blobs bundle.
+	rec = httptest.NewRecorder()
+	h.writeUnblindedPayloadResponse(rec, logrus.New(), version.DataVersionDeneb,
+		newEvent(version.DataVersionDeneb))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var denebResp struct {
+		Version string `json:"version"`
+		Data    struct {
+			ExecutionPayload struct {
+				BlockHash string `json:"block_hash"`
+			} `json:"execution_payload"`
+			BlobsBundle *struct {
+				Commitments []string `json:"commitments"`
+			} `json:"blobs_bundle"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &denebResp))
+	assert.Equal(t, "deneb", denebResp.Version)
+	assert.NotEmpty(t, denebResp.Data.ExecutionPayload.BlockHash)
+	require.NotNil(t, denebResp.Data.BlobsBundle, "Deneb+ response must carry a blobs bundle")
+	assert.Empty(t, denebResp.Data.BlobsBundle.Commitments)
 }
