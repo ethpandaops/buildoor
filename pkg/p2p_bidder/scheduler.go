@@ -22,10 +22,11 @@ import (
 
 // SlotState tracks the bidding state for a single slot.
 type SlotState struct {
-	LastBidTime time.Time
-	LastBidHash phase0.Hash32
-	BidCount    int
-	BidsClosed  bool // Block received, no more bids possible
+	LastBidTime      time.Time
+	LastBidHash      phase0.Hash32
+	BidCount         int
+	BidsClosed       bool // Block received, no more bids possible
+	NoPrefsWarnedFor bool // Missing-preferences skip already reported for this slot
 }
 
 // Scheduler handles time-based bid scheduling.
@@ -140,8 +141,35 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
+	// Bidding is gated on the proposer's gossip preferences: without them we
+	// don't know the fee recipient to commit to. The cache is empty right
+	// after a restart and refills from gossip within roughly an epoch, so this
+	// is expected transiently — but it must be visible, not silent. Report
+	// once per slot (this runs on a 10ms tick).
 	if s.propPrefsStore == nil || !s.propPrefsStore.Has(slot) {
-		s.log.WithField("slot", slot).Debug("No proposer preferences for slot yet — skipping bid")
+		s.mu.Lock()
+		state := s.getSlotState(slot)
+		alreadyWarned := state.NoPrefsWarnedFor
+		state.NoPrefsWarnedFor = true
+		s.mu.Unlock()
+
+		if !alreadyWarned {
+			s.log.WithFields(logrus.Fields{
+				"slot":       slot,
+				"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+			}).Warn("No proposer preferences for slot — skipping bids " +
+				"(cache refills from gossip within ~1 epoch after a restart)")
+
+			if s.service != nil {
+				s.service.FireBidSubmission(&BidSubmissionEvent{
+					Slot:      slot,
+					BlockHash: payload.BlockHash,
+					Success:   false,
+					Warning:   "no proposer preferences for slot — bid skipped",
+				})
+			}
+		}
+
 		return
 	}
 
