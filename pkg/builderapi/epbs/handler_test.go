@@ -138,7 +138,7 @@ type stubEnvelopePublisher struct {
 }
 
 func (p *stubEnvelopePublisher) SubmitExecutionPayloadEnvelope(
-	_ context.Context, _ json.RawMessage, _ [][]byte, _ [][]byte,
+	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

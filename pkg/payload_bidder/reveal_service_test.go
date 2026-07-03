@@ -2,13 +2,13 @@ package payload_bidder
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math/big"
 	"sync"
 	"testing"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -31,7 +31,7 @@ type mockEnvelopePublisher struct {
 var _ envelopePublisher = (*mockEnvelopePublisher)(nil)
 
 func (p *mockEnvelopePublisher) SubmitExecutionPayloadEnvelope(
-	_ context.Context, _ json.RawMessage, _ [][]byte, _ [][]byte,
+	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

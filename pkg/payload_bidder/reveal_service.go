@@ -2,12 +2,12 @@ package payload_bidder
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -21,7 +21,7 @@ import (
 // envelopePublisher publishes a signed envelope to the beacon node
 // (implemented by *beacon.Client; interface for testability).
 type envelopePublisher interface {
-	SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage,
+	SubmitExecutionPayloadEnvelope(ctx context.Context, envelope *eth2all.SignedExecutionPayloadEnvelope,
 		blobs [][]byte, kzgProofs [][]byte) error
 }
 
@@ -380,11 +380,6 @@ func (s *RevealService) publish(req *RevealRequest) error {
 		return fmt.Errorf("failed to build signed envelope: %w", err)
 	}
 
-	signedEnvelopeJSON, err := json.Marshal(signedEnvelope)
-	if err != nil {
-		return fmt.Errorf("failed to marshal signed envelope: %w", err)
-	}
-
 	if len(blobs) > 0 {
 		s.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),
@@ -395,7 +390,7 @@ func (s *RevealService) publish(req *RevealRequest) error {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, signedEnvelopeJSON, blobs, cellProofs); err != nil {
+	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, signedEnvelope, blobs, cellProofs); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
 
