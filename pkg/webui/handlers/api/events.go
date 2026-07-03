@@ -17,6 +17,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
 // EventType represents the type of event being streamed.
@@ -363,28 +364,36 @@ func (m *EventStreamManager) Start() {
 	payloadAvailSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAvailable()
 	payloadAttrSub := m.builderSvc.GetCLClient().Events().SubscribePayloadAttributes()
 
-	// Subscribe to bid submission events from ePBS service (if available)
+	// Subscribe to bid submission events from ePBS service (if available).
+	// The subscriptions below must stay alive for the event loop's lifetime,
+	// so they are unsubscribed in the goroutine's teardown, not here.
+	var bidSubmitSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent]
+
 	var bidSubmitChan <-chan *p2p_bidder.BidSubmissionEvent
+
 	if m.epbsSvc != nil {
-		bidSubmitSub := m.epbsSvc.SubscribeBidSubmissions(16)
+		bidSubmitSub = m.epbsSvc.SubscribeBidSubmissions(16)
 		bidSubmitChan = bidSubmitSub.Channel()
-		defer bidSubmitSub.Unsubscribe()
 	}
 
 	// Subscribe to reveal results from the shared reveal service (if available)
+	var revealSub *utils.Subscription[*payload_bidder.RevealResult]
+
 	var revealChan <-chan *payload_bidder.RevealResult
+
 	if m.revealSvc != nil {
-		revealSub := m.revealSvc.SubscribeResults(16)
+		revealSub = m.revealSvc.SubscribeResults(16)
 		revealChan = revealSub.Channel()
-		defer revealSub.Unsubscribe()
 	}
 
 	// Subscribe to payload inclusion events from the shared inclusion tracker (if available)
+	var bidIncludedSub *utils.Subscription[*payload_bidder.PayloadIncludedEvent]
+
 	var bidIncludedChan <-chan *payload_bidder.PayloadIncludedEvent
+
 	if m.inclusionTracker != nil {
-		bidIncludedSub := m.inclusionTracker.SubscribeIncluded(16)
+		bidIncludedSub = m.inclusionTracker.SubscribeIncluded(16)
 		bidIncludedChan = bidIncludedSub.Channel()
-		defer bidIncludedSub.Unsubscribe()
 	}
 
 	// Wire lifecycle event callback (if lifecycle manager available)
@@ -395,12 +404,14 @@ func (m *EventStreamManager) Start() {
 	}
 
 	// Subscribe to head vote updates (if chain service available)
+	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
+
 	var headVoteChan <-chan *chain.HeadVoteUpdate
+
 	if m.chainSvc != nil {
 		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
-			hvSub := tracker.SubscribeUpdates()
+			hvSub = tracker.SubscribeUpdates()
 			headVoteChan = hvSub.Channel()
-			defer hvSub.Unsubscribe()
 		}
 	}
 
@@ -415,6 +426,22 @@ func (m *EventStreamManager) Start() {
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
 		defer payloadAttrSub.Unsubscribe()
+
+		if bidSubmitSub != nil {
+			defer bidSubmitSub.Unsubscribe()
+		}
+
+		if revealSub != nil {
+			defer revealSub.Unsubscribe()
+		}
+
+		if bidIncludedSub != nil {
+			defer bidIncludedSub.Unsubscribe()
+		}
+
+		if hvSub != nil {
+			defer hvSub.Unsubscribe()
+		}
 
 		// Slot tracking ticker
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -449,37 +476,50 @@ func (m *EventStreamManager) Start() {
 				m.handlePayloadAttributesEvent(event)
 
 			case event, ok := <-bidSubmitChan:
-				if ok {
-					m.handleBidSubmissionEvent(event)
+				if !ok {
+					// Channel closed: disable this select case (nil channels block forever).
+					bidSubmitChan = nil
+					continue
 				}
+
+				m.handleBidSubmissionEvent(event)
 
 			case event, ok := <-headVoteChan:
-				if ok {
-					m.handleHeadVoteUpdate(event)
+				if !ok {
+					headVoteChan = nil
+					continue
 				}
+
+				m.handleHeadVoteUpdate(event)
 
 			case event, ok := <-revealChan:
-				if ok {
-					m.BroadcastReveal(event)
+				if !ok {
+					revealChan = nil
+					continue
 				}
 
-			case event, ok := <-bidIncludedChan:
-				if ok {
-					m.Broadcast(&StreamEvent{
-						Type:      EventTypeBidIncluded,
-						Timestamp: time.Now().UnixMilli(),
-						Data: map[string]any{
-							"slot":       uint64(event.Payload.Attributes.ProposalSlot),
-							"block_hash": fmt.Sprintf("0x%x", event.BlockInfo.ExecutionBlockHash[:]),
-							"bid_value":  event.BidValueGwei,
-						},
-					})
+				m.BroadcastReveal(event)
 
-					// The inclusion tracker's won-block record doubles as the
-					// bid_won event (Builder API and p2p wins alike).
-					if event.WonBlock != nil {
-						m.BroadcastBidWon(event.WonBlock)
-					}
+			case event, ok := <-bidIncludedChan:
+				if !ok {
+					bidIncludedChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeBidIncluded,
+					Timestamp: time.Now().UnixMilli(),
+					Data: map[string]any{
+						"slot":       uint64(event.Payload.Attributes.ProposalSlot),
+						"block_hash": fmt.Sprintf("0x%x", event.BlockInfo.ExecutionBlockHash[:]),
+						"bid_value":  event.BidValueGwei,
+					},
+				})
+
+				// The inclusion tracker's won-block record doubles as the
+				// bid_won event (Builder API and p2p wins alike).
+				if event.WonBlock != nil {
+					m.BroadcastBidWon(event.WonBlock)
 				}
 
 			case <-ticker.C:

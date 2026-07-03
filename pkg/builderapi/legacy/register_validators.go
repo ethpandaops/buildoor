@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
@@ -33,7 +34,8 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 		"content_length": r.Header.Get("Content-Length"),
 	}).Debug("Validator registration request received")
 
-	if r.Header.Get("Content-Type") != "application/json" {
+	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || contentType != "application/json" {
 		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("Rejected: Content-Type must be application/json")
 		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
 		return
