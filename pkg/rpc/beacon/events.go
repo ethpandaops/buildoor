@@ -753,9 +753,14 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		return nil, fmt.Errorf("invalid prev_randao: %w", err)
 	}
 
-	parentBeaconBlockRoot, err := parseRoot(raw.Data.PayloadAttributes.ParentBeaconBlockRoot)
-	if err != nil {
-		return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
+	// parent_beacon_block_root is a Deneb+ (EIP-4788) field; bellatrix/capella
+	// payload_attributes events don't carry it, so it stays zero there.
+	var parentBeaconBlockRoot phase0.Root
+	if raw.Data.PayloadAttributes.ParentBeaconBlockRoot != "" {
+		parentBeaconBlockRoot, err = parseRoot(raw.Data.PayloadAttributes.ParentBeaconBlockRoot)
+		if err != nil {
+			return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
+		}
 	}
 
 	targetGasLimit, _ := strconv.ParseUint(raw.Data.PayloadAttributes.TargetGasLimit, 10, 64)
