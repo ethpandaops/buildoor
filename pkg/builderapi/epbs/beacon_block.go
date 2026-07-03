@@ -22,9 +22,10 @@ import (
 // HandleSubmitBeaconBlock handles POST /eth/v1/builder/beacon_block.
 //
 // The proposer submits a full post-Gloas SignedBeaconBlock that binds them to
-// the builder's bid. The block is decoded fork-agnostically; the wire version
-// is taken from the Eth-Consensus-Version request header, falling back to the
-// chain's current fork when the header is absent. If the builder still holds
+// the builder's bid. The block is decoded fork-agnostically from either JSON
+// or SSZ (application/octet-stream); the wire version is taken from the
+// Eth-Consensus-Version request header, falling back to the chain's current
+// fork when the header is absent. If the builder still holds
 // the payload referenced by the bid's block_hash, it broadcasts the beacon
 // block immediately (block publication is time-critical) and schedules the
 // execution payload envelope reveal with the shared RevealService, which
@@ -50,9 +51,14 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if r.Header.Get("Content-Type") != "application/json" {
-		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("submitBeaconBlock: rejected — Content-Type must be application/json")
-		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+	// The proposer may submit the block as JSON or SSZ per builder-specs; a
+	// missing Content-Type is treated as JSON for leniency.
+	contentType := normalizeContentType(r.Header.Get("Content-Type"))
+	if contentType != contentTypeJSON && contentType != contentTypeSSZ && contentType != "" {
+		log.WithField("content_type", r.Header.Get("Content-Type")).Warn(
+			"submitBeaconBlock: rejected — Content-Type must be application/json or application/octet-stream")
+		writeError(w, http.StatusUnsupportedMediaType,
+			"Content-Type must be application/json or application/octet-stream")
 		return
 	}
 
@@ -92,7 +98,14 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	}
 
 	block := eth2all.SignedBeaconBlock{Version: fork}
-	if err := json.Unmarshal(body, &block); err != nil {
+
+	if contentType == contentTypeSSZ {
+		if err := block.UnmarshalSSZ(body); err != nil {
+			log.WithError(err).Warn("submitBeaconBlock: invalid SSZ body")
+			writeError(w, http.StatusBadRequest, "invalid SSZ: "+err.Error())
+			return
+		}
+	} else if err := json.Unmarshal(body, &block); err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return

@@ -49,11 +49,21 @@ func TestParseSignedRequestAuth_Errors(t *testing.T) {
 	ssz, err := sampleSignedRequestAuth().MarshalSSZ()
 	require.NoError(t, err)
 
-	// Unknown / empty Content-Type -> errUnsupportedContentType.
+	// Unknown Content-Type -> errUnsupportedContentType.
 	_, err = parseSignedRequestAuth(ssz, "text/plain")
 	require.ErrorIs(t, err, errUnsupportedContentType)
+
+	// Empty Content-Type defaults to JSON: an SSZ body fails to decode, but a
+	// JSON body is accepted.
 	_, err = parseSignedRequestAuth(ssz, "")
-	require.ErrorIs(t, err, errUnsupportedContentType)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errUnsupportedContentType)
+
+	jsonBody, err := json.Marshal(sampleSignedRequestAuth())
+	require.NoError(t, err)
+	fromEmpty, err := parseSignedRequestAuth(jsonBody, "")
+	require.NoError(t, err)
+	require.NotNil(t, fromEmpty.Message)
 
 	// Malformed bodies -> decode error (not the content-type sentinel).
 	_, err = parseSignedRequestAuth([]byte("not json"), "application/json")
@@ -80,6 +90,9 @@ func TestParseBuilderPreferencesRequest_SSZRoundTrip(t *testing.T) {
 	require.NotNil(t, got.Auth)
 	assert.Equal(t, orig.Auth.Message.Slot, got.Auth.Message.Slot)
 
+	// Empty Content-Type defaults to JSON: the SSZ body fails as JSON but not
+	// with the content-type sentinel.
 	_, err = parseBuilderPreferencesRequest(ssz, "")
-	require.ErrorIs(t, err, errUnsupportedContentType)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, errUnsupportedContentType)
 }

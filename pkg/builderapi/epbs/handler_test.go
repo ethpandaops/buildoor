@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,12 +18,14 @@ import (
 	"github.com/ethpandaops/go-eth2-client/api"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/altair"
+	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
+	"github.com/gorilla/mux"
 	"github.com/holiman/uint256"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +33,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -41,10 +45,13 @@ import (
 // slot timing, current fork, and genesis (shape copied from
 // pkg/payload_bidder/mockchain_test.go).
 type stubChainService struct {
-	genesisTime  time.Time
-	slotDuration time.Duration
-	currentFork  version.DataVersion
-	genesis      beacon.Genesis
+	genesisTime    time.Time
+	slotDuration   time.Duration
+	currentFork    version.DataVersion
+	genesis        beacon.Genesis
+	forkSchedule   []chain.ForkSchedule
+	finalizedEpoch phase0.Epoch
+	builderInfo    *chain.BuilderInfo
 }
 
 var _ chain.Service = (*stubChainService)(nil)
@@ -53,7 +60,11 @@ func (m *stubChainService) Start(context.Context) error { return nil }
 func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
-	return &chain.ChainSpec{SecondsPerSlot: m.slotDuration, SlotsPerEpoch: 32}
+	return &chain.ChainSpec{
+		SecondsPerSlot: m.slotDuration,
+		SlotsPerEpoch:  32,
+		ForkSchedule:   m.forkSchedule,
+	}
 }
 func (m *stubChainService) GetGenesis() *beacon.Genesis { return &m.genesis }
 
@@ -83,11 +94,13 @@ func (m *stubChainService) GetEpochStats(phase0.Epoch) *chain.EpochStats { retur
 
 func (m *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.EpochStats] { return nil }
 func (m *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker                  { return nil }
-func (m *stubChainService) GetFinalizedEpoch() phase0.Epoch                             { return 0 }
+func (m *stubChainService) GetFinalizedEpoch() phase0.Epoch                             { return m.finalizedEpoch }
 
-func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo            { return nil }
-func (m *stubChainService) GetBuilderByPubkey(phase0.BLSPubKey) *chain.BuilderInfo { return nil }
-func (m *stubChainService) GetBuilders() []*chain.BuilderInfo                      { return nil }
+func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo { return nil }
+func (m *stubChainService) GetBuilderByPubkey(phase0.BLSPubKey) *chain.BuilderInfo {
+	return m.builderInfo
+}
+func (m *stubChainService) GetBuilders() []*chain.BuilderInfo { return nil }
 
 func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *phase0.BLSPubKey {
 	return nil
@@ -397,4 +410,121 @@ func TestHandleSubmitBeaconBlock_BroadcastFailure(t *testing.T) {
 	time.Sleep(400 * time.Millisecond)
 	assert.Equal(t, 0, env.publisher.callCount(), "no reveal may be requested after a failed broadcast")
 	assert.Nil(t, payload.Reveal())
+}
+
+// TestHandleSubmitBeaconBlock_SSZBody accepts an SSZ-encoded signed beacon
+// block (Content-Type: application/octet-stream), per builder-specs.
+func TestHandleSubmitBeaconBlock_SSZBody(t *testing.T) {
+	env := newBeaconBlockTestEnv(t, 4*time.Second, 3500)
+
+	require.NoError(t, env.revealSvc.Start(context.Background()))
+	defer env.revealSvc.Stop()
+
+	slot := phase0.Slot(1)
+	blockHash := phase0.Hash32{0xab}
+	seedGloasPayload(env.handler, slot, blockHash)
+
+	block := eth2all.SignedBeaconBlock{Version: version.DataVersionGloas}
+	require.NoError(t, json.Unmarshal(signedBeaconBlockJSON(t, slot, blockHash), &block))
+
+	body, err := block.MarshalSSZ()
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+
+	env.handler.HandleSubmitBeaconBlock(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code, "SSZ submitBeaconBlock should return 202")
+	assert.Equal(t, 1, env.broadcaster.callCount(), "beacon block must be broadcast")
+
+	proposal := env.broadcaster.lastProposal()
+	require.NotNil(t, proposal)
+	require.NotNil(t, proposal.Gloas, "proposal must carry the Gloas block")
+	assert.Equal(t, slot, proposal.Gloas.Message.Slot)
+}
+
+// TestHandleGetExecutionPayloadBid_ContentNegotiation serves the signed bid as
+// JSON by default and as SSZ when the Accept header prefers
+// application/octet-stream, with identical bid contents in both
+// representations.
+func TestHandleGetExecutionPayloadBid_ContentNegotiation(t *testing.T) {
+	env := newBeaconBlockTestEnv(t, 4*time.Second, 3500)
+
+	// Make the builder active on chain (deposit finalized, not exiting).
+	env.chainSvc.finalizedEpoch = 10
+	env.chainSvc.builderInfo = &chain.BuilderInfo{
+		DepositEpoch:      1,
+		WithdrawableEpoch: chain.FarFutureEpoch,
+	}
+	env.chainSvc.forkSchedule = []chain.ForkSchedule{
+		{Fork: version.DataVersionGloas, Version: phase0.Version{0x06, 0x00, 0x00, 0x00}},
+	}
+
+	slot := phase0.Slot(1)
+	blockHash := phase0.Hash32{0xab}
+	seedGloasPayload(env.handler, slot, blockHash)
+
+	propPrefs := memstore.New[phase0.Slot, *gloasspec.SignedProposerPreferences]()
+	propPrefs.Put(slot, &gloasspec.SignedProposerPreferences{
+		Message: &gloasspec.ProposerPreferences{
+			ProposalSlot: slot,
+			FeeRecipient: bellatrix.ExecutionAddress{0x42},
+		},
+	})
+	env.handler.SetProposerPreferencesStore(propPrefs)
+
+	zeroHash := "0x0000000000000000000000000000000000000000000000000000000000000000"
+	proposerPubkey := "0x" + strings.Repeat("11", 48)
+	newBidRequest := func() *http.Request {
+		req := httptest.NewRequest(http.MethodPost,
+			"/eth/v1/builder/execution_payload_bid/1/"+zeroHash+"/"+zeroHash+"/"+proposerPubkey, nil)
+		return mux.SetURLVars(req, map[string]string{
+			"slot":            "1",
+			"parent_hash":     zeroHash,
+			"parent_root":     zeroHash,
+			"proposer_pubkey": proposerPubkey,
+		})
+	}
+
+	// Default (no Accept header): JSON envelope.
+	rec := httptest.NewRecorder()
+	env.handler.HandleGetExecutionPayloadBid(rec, newBidRequest())
+
+	require.Equal(t, http.StatusOK, rec.Code, "getExecutionPayloadBid should return 200")
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "gloas", rec.Header().Get("Eth-Consensus-Version"))
+
+	var envelope struct {
+		Version string          `json:"version"`
+		Data    json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "gloas", envelope.Version)
+
+	jsonBid := &eth2all.SignedExecutionPayloadBid{Version: version.DataVersionGloas}
+	require.NoError(t, json.Unmarshal(envelope.Data, jsonBid))
+	require.NotNil(t, jsonBid.Message)
+
+	// Accept: application/octet-stream → SSZ body.
+	rec = httptest.NewRecorder()
+	req := newBidRequest()
+	req.Header.Set("Accept", "application/octet-stream;q=1.0,application/json;q=0.9")
+	env.handler.HandleGetExecutionPayloadBid(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "getExecutionPayloadBid (SSZ) should return 200")
+	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+	assert.Equal(t, "gloas", rec.Header().Get("Eth-Consensus-Version"))
+
+	sszBid := &eth2all.SignedExecutionPayloadBid{Version: version.DataVersionGloas}
+	require.NoError(t, sszBid.UnmarshalSSZ(rec.Body.Bytes()))
+	require.NotNil(t, sszBid.Message)
+
+	// Both representations must carry the same bid.
+	assert.Equal(t, jsonBid.Message.BlockHash, sszBid.Message.BlockHash)
+	assert.Equal(t, jsonBid.Message.FeeRecipient, sszBid.Message.FeeRecipient)
+	assert.Equal(t, jsonBid.Signature, sszBid.Signature)
+	assert.Equal(t, blockHash, sszBid.Message.BlockHash)
+	assert.Equal(t, bellatrix.ExecutionAddress{0x42}, sszBid.Message.FeeRecipient)
 }

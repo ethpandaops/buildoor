@@ -287,8 +287,25 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Eth-Consensus-Version", fork.String())
+
+	// Per builder-specs the response may be SSZ; the proposer opts in via the
+	// Accept header.
+	if preferSSZ(r.Header.Get("Accept")) {
+		body, err := signedBid.MarshalSSZ()
+		if err != nil {
+			log.WithError(err).Warn("getExecutionPayloadBid: failed to SSZ-encode SignedExecutionPayloadBid")
+			writeError(w, http.StatusInternalServerError, "failed to encode bid")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(GetExecutionPayloadBidResponse{
 		Version: fork.String(),

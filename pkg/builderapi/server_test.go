@@ -434,6 +434,68 @@ func TestSubmitBlindedBlockV1_Success_ReturnsPayload(t *testing.T) {
 	assert.Empty(t, resp.Data.BlobsBundle.Blobs, "blobless payload yields an empty bundle")
 }
 
+// TestRegisterValidators_SSZ accepts an SSZ-encoded registration list
+// (Content-Type: application/octet-stream) per builder-specs.
+func TestRegisterValidators_SSZ(t *testing.T) {
+	testPrivkey := "0x0000000000000000000000000000000000000000000000000000000000000001"
+	blsSigner, err := signer.NewBLSSigner(testPrivkey)
+	require.NoError(t, err)
+
+	var feeRecipient bellatrix.ExecutionAddress
+	for i := range feeRecipient {
+		feeRecipient[i] = byte(i)
+	}
+	msg := &apiv1.ValidatorRegistration{
+		FeeRecipient: feeRecipient,
+		GasLimit:     30_000_000,
+		Timestamp:    time.Unix(100, 0),
+		Pubkey:       blsSigner.PublicKey(),
+	}
+
+	messageRoot, err := msg.HashTreeRoot()
+	require.NoError(t, err)
+	var root phase0.Root
+	copy(root[:], messageRoot[:])
+	domain := signer.ComputeDomain(signer.DomainApplicationBuilder, phase0.Version{}, phase0.Root{})
+	signingRoot := signer.ComputeSigningRoot(root, domain)
+	sig, err := blsSigner.Sign(signingRoot[:])
+	require.NoError(t, err)
+
+	reg := &apiv1.SignedValidatorRegistration{Message: msg, Signature: sig}
+	require.True(t, legacy.VerifyRegistration(reg), "test registration must verify")
+
+	// An SSZ list of the fixed-size registration container is a plain
+	// concatenation of elements; encode the same registration twice.
+	elem, err := reg.MarshalSSZ()
+	require.NoError(t, err)
+	body := append(append([]byte{}, elem...), elem...)
+
+	cfg := &config.BuilderAPIConfig{}
+	log := logrus.New()
+	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "SSZ registration should be accepted")
+	assert.Equal(t, 1, srv.validatorsStore.Len())
+	stored, ok := srv.validatorsStore.Get(blsSigner.PublicKey())
+	require.True(t, ok)
+	assert.Equal(t, msg.GasLimit, stored.Message.GasLimit)
+
+	// A body that is not a multiple of the element size is rejected.
+	req = httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(elem[:len(elem)-1]))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	rec = httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "truncated SSZ body should return 400")
+}
+
 // TestUnknownEthEndpoint_JSON404 answers unmatched /eth/* paths with a JSON
 // 404 instead of letting them fall through to another handler (the WebUI SPA
 // serves index.html with 200 for any unmatched path, which silently breaks

@@ -17,8 +17,10 @@ import (
 )
 
 // HandleRegisterValidators handles POST /eth/v1/builder/validators.
-// Accepts a JSON array of SignedValidatorRegistration, verifies each signature,
-// and stores valid registrations. Returns 200 on success, 400 on validation failure.
+// Accepts a list of SignedValidatorRegistration as JSON or SSZ
+// (application/octet-stream), verifies each signature, and stores valid
+// registrations. Returns 200 on success, 400 on validation failure, and 415
+// on an unsupported Content-Type.
 func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/validators")
 	defer func() {
@@ -35,9 +37,11 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 	}).Debug("Validator registration request received")
 
 	contentType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || contentType != "application/json" {
-		log.WithField("content_type", r.Header.Get("Content-Type")).Warn("Rejected: Content-Type must be application/json")
-		writeError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+	if err != nil || (contentType != "application/json" && contentType != "application/octet-stream") {
+		log.WithField("content_type", r.Header.Get("Content-Type")).Warn(
+			"Rejected: Content-Type must be application/json or application/octet-stream")
+		writeError(w, http.StatusUnsupportedMediaType,
+			"Content-Type must be application/json or application/octet-stream")
 		return
 	}
 
@@ -49,7 +53,14 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 	}
 
 	var regs []*apiv1.SignedValidatorRegistration
-	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&regs); err != nil {
+	if contentType == "application/octet-stream" {
+		regs, err = decodeRegistrationsSSZ(body)
+		if err != nil {
+			log.WithError(err).Warn("Rejected: invalid SSZ body")
+			writeError(w, http.StatusBadRequest, "invalid SSZ: "+err.Error())
+			return
+		}
+	} else if err := json.NewDecoder(bytes.NewReader(body)).Decode(&regs); err != nil {
 		log.WithError(err).WithField("request_body_json", string(body)).Warn("Rejected: invalid JSON body")
 		writeError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
@@ -89,6 +100,32 @@ func (h *Handler) HandleRegisterValidators(w http.ResponseWriter, r *http.Reques
 
 	log.WithField("stored_count", len(regs)).Info("Validator registrations accepted")
 	w.WriteHeader(http.StatusOK)
+}
+
+// decodeRegistrationsSSZ decodes an SSZ-encoded list of
+// SignedValidatorRegistration. The registration container is fixed-size, so
+// the list encodes as a plain concatenation of equally sized elements.
+func decodeRegistrationsSSZ(body []byte) ([]*apiv1.SignedValidatorRegistration, error) {
+	elemSize := (&apiv1.SignedValidatorRegistration{
+		Message: &apiv1.ValidatorRegistration{},
+	}).SizeSSZ()
+
+	if len(body)%elemSize != 0 {
+		return nil, fmt.Errorf(
+			"invalid length %d: not a multiple of the registration size %d", len(body), elemSize)
+	}
+
+	regs := make([]*apiv1.SignedValidatorRegistration, 0, len(body)/elemSize)
+	for offset := 0; offset < len(body); offset += elemSize {
+		reg := &apiv1.SignedValidatorRegistration{}
+		if err := reg.UnmarshalSSZ(body[offset : offset+elemSize]); err != nil {
+			return nil, fmt.Errorf("invalid registration at offset %d: %w", offset, err)
+		}
+
+		regs = append(regs, reg)
+	}
+
+	return regs, nil
 }
 
 // VerifyRegistration verifies the BLS signature of a validator registration

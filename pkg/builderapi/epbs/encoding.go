@@ -30,9 +30,9 @@ func normalizeContentType(ct string) string {
 }
 
 // parseSignedRequestAuth decodes a SignedRequestAuthV1 from JSON or SSZ selected
-// by contentType. The Content-Type must be set explicitly to one of the two
-// supported media types; an empty or unrecognized type returns
-// errUnsupportedContentType (which handlers map to 415).
+// by contentType. A missing Content-Type is treated as JSON for leniency; an
+// unrecognized type returns errUnsupportedContentType (which handlers map to
+// 415).
 func parseSignedRequestAuth(data []byte, contentType string) (*gloastypes.SignedRequestAuthV1, error) {
 	var v gloastypes.SignedRequestAuthV1
 	switch normalizeContentType(contentType) {
@@ -40,7 +40,7 @@ func parseSignedRequestAuth(data []byte, contentType string) (*gloastypes.Signed
 		if err := v.UnmarshalSSZ(data); err != nil {
 			return nil, fmt.Errorf("invalid SSZ SignedRequestAuthV1: %w", err)
 		}
-	case contentTypeJSON:
+	case contentTypeJSON, "":
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("invalid SignedRequestAuthV1: %w", err)
 		}
@@ -60,7 +60,7 @@ func parseBuilderPreferencesRequest(data []byte, contentType string) (*gloastype
 		if err := v.UnmarshalSSZ(data); err != nil {
 			return nil, fmt.Errorf("invalid SSZ BuilderPreferencesRequestV1: %w", err)
 		}
-	case contentTypeJSON:
+	case contentTypeJSON, "":
 		if err := json.Unmarshal(data, &v); err != nil {
 			return nil, fmt.Errorf("invalid BuilderPreferencesRequestV1: %w", err)
 		}

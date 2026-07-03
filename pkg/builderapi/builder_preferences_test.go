@@ -251,6 +251,9 @@ func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+// TestSubmitBuilderPreferences_MissingContentType treats a missing
+// Content-Type as JSON: the empty-object body decodes but carries no
+// preferences, so the handler rejects it with 400 (not 415).
 func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
 	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
@@ -259,6 +262,14 @@ func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader([]byte("{}")))
 	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// An unsupported Content-Type is still a 415.
+	req = httptest.NewRequest(http.MethodPost, url, bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "text/plain")
+	rec = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
