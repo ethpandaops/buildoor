@@ -448,3 +448,68 @@ func TestWriteUnblindedPayloadResponse_ForkShapes(t *testing.T) {
 	require.NotNil(t, denebResp.Data.BlobsBundle, "Deneb+ response must carry a blobs bundle")
 	assert.Empty(t, denebResp.Data.BlobsBundle.Commitments)
 }
+
+// capellaBlindedBlockJSON builds a minimal capella SignedBlindedBeaconBlock
+// (no blob commitments, no execution requests) whose
+// execution_payload_header.block_hash matches the builder-specs example hash.
+func capellaBlindedBlockJSON() string {
+	return `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"` + randaoReveal96Hex + `","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","proposer_slashings":[],"attester_slashings":[],"attestations":[],"deposits":[],"voluntary_exits":[],"sync_aggregate":{"sync_committee_bits":"0x","sync_committee_signature":"` + randaoReveal96Hex + `"},"execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"` + logsBloom256Hex + `","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000"},"bls_to_execution_changes":[]}},"signature":"` + randaoReveal96Hex + `"}`
+}
+
+// TestHandleSubmitBlindedBlockV1_Capella unblinds a pre-Deneb (capella)
+// blinded block and publishes it as a bare SignedBeaconBlock proposal —
+// SignedBlockContents is Deneb+ and must not be used there.
+func TestHandleSubmitBlindedBlockV1_Capella(t *testing.T) {
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionCapella}, nil)
+	h.SetEnabled(true)
+
+	submitter := &stubProposalSubmitter{}
+	h.SetCLClient(submitter)
+
+	payload := &eth2all.ExecutionPayload{
+		Version:       version.DataVersionCapella,
+		ParentHash:    phase0.Hash32(blockHashFromBuilderSpecsFulu),
+		BlockNumber:   1,
+		GasLimit:      1,
+		GasUsed:       1,
+		Timestamp:     1,
+		BaseFeePerGas: uint256.NewInt(7),
+		BlockHash:     phase0.Hash32(blockHashFromBuilderSpecsFulu),
+	}
+	event := &payload_builder.Payload{
+		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+		ExecutionPayload: payload,
+		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
+		BlockValue:       big.NewInt(1_000_000_000),
+	}
+	h.payloadCache.Store(event)
+
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/blinded_blocks",
+		bytes.NewReader([]byte(capellaBlindedBlockJSON())))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.HandleSubmitBlindedBlockV1(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, "v1 capella submit should return 200: %s", rec.Body.String())
+	require.NotNil(t, submitter.lastProposal, "CL client should be called with the unblinded proposal")
+	assert.Equal(t, version.DataVersionCapella, submitter.lastProposal.Version)
+	require.NotNil(t, submitter.lastProposal.Capella, "pre-Deneb proposal must be the bare signed block")
+	assert.Equal(t, phase0.Slot(1), submitter.lastProposal.Capella.Message.Slot)
+	assert.Equal(t, phase0.Hash32(blockHashFromBuilderSpecsFulu),
+		submitter.lastProposal.Capella.Message.Body.ExecutionPayload.BlockHash,
+		"unblinded block must carry the full execution payload")
+
+	// v1 response body: the bare execution payload, no blobs bundle pre-Deneb.
+	var resp struct {
+		Version string `json:"version"`
+		Data    struct {
+			BlockHash   string           `json:"block_hash"`
+			BlobsBundle *json.RawMessage `json:"blobs_bundle"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "capella", resp.Version)
+	assert.NotEmpty(t, resp.Data.BlockHash)
+	assert.Nil(t, resp.Data.BlobsBundle)
+}

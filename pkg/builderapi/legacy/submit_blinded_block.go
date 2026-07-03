@@ -174,7 +174,17 @@ func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	proposal, err := contents.ToVersioned()
+	// Deneb onwards the proposal wraps the block with its blobs
+	// (SignedBlockContents); bellatrix/capella proposals are the bare signed
+	// block.
+	var proposal *api.VersionedSignedProposal
+
+	if blinded.Version >= version.DataVersionDeneb {
+		proposal, err = contents.ToVersioned()
+	} else {
+		proposal, err = apiv1all.ProposalFromSignedBlock(contents.SignedBlock)
+	}
+
 	if err != nil {
 		log.WithError(err).Error("submitBlindedBlock: failed to convert unblinded contents to proposal")
 		writeError(w, http.StatusInternalServerError, "failed to convert block contents: "+err.Error())
