@@ -46,8 +46,8 @@ const (
 	builderWithdrawalPrefix = 0x00
 	// validatorWithdrawalPrefix is the withdrawal-credential prefix used for the
 	// pre-Gloas early-onboarding deposit, which goes through the regular validator
-	// deposit contract (execution-address / 0x03-style credentials).
-	validatorWithdrawalPrefix = 0x03
+	// deposit contract (builder-prefix / 0xB0 credentials).
+	validatorWithdrawalPrefix = 0xB0
 )
 
 // excessInhibitor is the EXCESS_INHIBITOR (2^256-1) stored in slot 0 of the
@@ -174,7 +174,7 @@ func BuilderWithdrawalCredentials(walletAddress common.Address) [32]byte {
 
 // ValidatorWithdrawalCredentials builds the withdrawal credentials for the pre-Gloas
 // early-onboarding deposit, which is submitted through the regular validator deposit
-// contract. Format: 0x03 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+// contract. Format: 0xB0 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
 func ValidatorWithdrawalCredentials(walletAddress common.Address) [32]byte {
 	return buildWithdrawalCredentials(validatorWithdrawalPrefix, walletAddress)
 }
