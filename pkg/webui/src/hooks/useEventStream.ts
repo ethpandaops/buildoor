@@ -229,13 +229,26 @@ export function useEventStream(): UseEventStreamResult {
         case 'bid_submitted': {
           const data = event.data as { slot: number; block_hash: string; value: number; bid_count: number; success: boolean; error?: string; warning?: string };
           const bidSuccess = data.success !== false;
+          // A warning without an error on an unsuccessful event is a skip
+          // (e.g. no proposer preferences cached for the slot), not a failed
+          // submission attempt.
+          const bidSkipped = !bidSuccess && !data.error && !!data.warning;
           let bidMsg = bidSuccess
             ? `Bid #${data.bid_count} submitted for slot ${data.slot} (value: ${data.value} gwei)`
-            : `Bid #${data.bid_count} FAILED for slot ${data.slot}: ${data.error || 'unknown error'}`;
+            : bidSkipped
+              ? `Bid skipped for slot ${data.slot}: ${data.warning}`
+              : `Bid #${data.bid_count} FAILED for slot ${data.slot}: ${data.error || 'unknown error'}`;
           if (bidSuccess && data.warning) {
             bidMsg += ` [${data.warning}]`;
           }
-          addEvent(bidSuccess && !data.warning ? 'bid_submitted' : bidSuccess ? 'lifecycle_warning' : 'bid_failed', bidMsg, event.timestamp);
+          addEvent(
+            bidSuccess && !data.warning ? 'bid_submitted' : bidSuccess || bidSkipped ? 'lifecycle_warning' : 'bid_failed',
+            bidMsg,
+            event.timestamp
+          );
+
+          // Skips are not bid attempts — keep them out of the slot's bid list.
+          if (bidSkipped) break;
 
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };

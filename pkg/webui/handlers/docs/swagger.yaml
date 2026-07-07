@@ -16,7 +16,7 @@ definitions:
     properties:
       bids_won:
         items:
-          $ref: '#/definitions/db.WonBlock'
+          $ref: '#/definitions/payload_bidder.WonBlock'
         type: array
       limit:
         type: integer
@@ -296,7 +296,7 @@ definitions:
       timestamp:
         type: integer
     type: object
-  db.WonBlock:
+  payload_bidder.WonBlock:
     properties:
       block_hash:
         type: string
@@ -309,6 +309,7 @@ definitions:
       source:
         type: string
       timestamp:
+        description: Unix milliseconds at inclusion time
         type: integer
       value_eth:
         type: string
@@ -363,8 +364,9 @@ paths:
       - Buildoor
   /api/buildoor/bids-won:
     get:
-      description: Returns a paginated list of bids won via Builder API with transaction
-        counts, blob counts, and values.
+      description: Returns a paginated list of won blocks (Builder API and p2p ePBS)
+        with transaction counts, blob counts, and values, read from the shared inclusion
+        tracker.
       operationId: getBidsWon
       parameters:
       - default: 0
@@ -390,7 +392,7 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Get bids won (successfully delivered blocks)
+      summary: Get bids won (blocks of ours included on chain)
       tags:
       - Buildoor
   /api/buildoor/builder-api-status:

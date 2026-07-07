@@ -42,6 +42,17 @@ func beaconPayloadFromEngine(
 		SlotNumber:      p.SlotNumber,
 	}
 
+	// The agnostic payload carries two base-fee representations: the uint256
+	// (Deneb onwards) and the little-endian bytes (the Bellatrix/Capella wire
+	// format). They are not auto-synced, so derive the LE form here too —
+	// otherwise pre-Deneb payloads would serialize a zero base fee.
+	if p.BaseFeePerGas != nil {
+		be := p.BaseFeePerGas.Bytes32()
+		for i := range 32 {
+			out.BaseFeePerGasLE[i] = be[31-i]
+		}
+	}
+
 	out.Transactions = make([]bellatrix.Transaction, len(p.Transactions))
 	for i, tx := range p.Transactions {
 		out.Transactions[i] = bellatrix.Transaction(tx)
