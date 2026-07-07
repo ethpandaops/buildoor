@@ -38,7 +38,7 @@ func TestBuildBuilderDepositCalldata(t *testing.T) {
 	}
 
 	var wc [32]byte
-	wc[0] = 0x03
+	wc[0] = 0xB0
 
 	sig := make([]byte, 96)
 	for i := range sig {
@@ -95,7 +95,7 @@ func TestWithdrawalCredentials(t *testing.T) {
 		wantPrefix byte
 	}{
 		{"builder uses 0x00 prefix", BuilderWithdrawalCredentials(addr), 0x00},
-		{"validator uses 0x03 prefix", ValidatorWithdrawalCredentials(addr), 0x03},
+		{"validator uses 0xB0 prefix", ValidatorWithdrawalCredentials(addr), 0xB0},
 	}
 
 	for _, tt := range tests {

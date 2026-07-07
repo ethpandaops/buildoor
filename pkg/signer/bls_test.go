@@ -18,7 +18,7 @@ func TestDepositRootComputation(t *testing.T) {
 	}
 
 	var wc [32]byte
-	wc[0] = 0x03
+	wc[0] = 0xB0
 	for i := 12; i < 32; i++ {
 		wc[i] = byte(i)
 	}

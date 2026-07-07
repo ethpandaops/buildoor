@@ -22,7 +22,7 @@ var (
 
 	// DomainDeposit is the standard domain for validator deposit signatures, and for
 	// the genesis builder-onboarding path (a pre-fork deposit to the validator deposit
-	// contract with a 0x03 credential, per the Gloas spec).
+	// contract with a 0xB0 credential, per the Gloas spec).
 	DomainDeposit = phase0.DomainType{0x03, 0x00, 0x00, 0x00}
 
 	// DomainBuilderDeposit is DOMAIN_BUILDER_DEPOSIT (Gloas, 0x0E000000): the dedicated
