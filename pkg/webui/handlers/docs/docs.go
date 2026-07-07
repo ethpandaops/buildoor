@@ -79,14 +79,14 @@ const docTemplate = `{
         },
         "/api/buildoor/bids-won": {
             "get": {
-                "description": "Returns a paginated list of bids won via Builder API with transaction counts, blob counts, and values.",
+                "description": "Returns a paginated list of won blocks (Builder API and p2p ePBS) with transaction counts, blob counts, and values, read from the shared inclusion tracker.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Buildoor"
                 ],
-                "summary": "Get bids won (successfully delivered blocks)",
+                "summary": "Get bids won (blocks of ours included on chain)",
                 "operationId": "getBidsWon",
                 "parameters": [
                     {
@@ -805,7 +805,7 @@ const docTemplate = `{
                 "bids_won": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/db.WonBlock"
+                        "$ref": "#/definitions/payload_bidder.WonBlock"
                     }
                 },
                 "limit": {
@@ -1230,7 +1230,7 @@ const docTemplate = `{
                 }
             }
         },
-        "db.WonBlock": {
+        "payload_bidder.WonBlock": {
             "type": "object",
             "properties": {
                 "block_hash": {
@@ -1249,6 +1249,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "timestamp": {
+                    "description": "Unix milliseconds at inclusion time",
                     "type": "integer"
                 },
                 "value_eth": {

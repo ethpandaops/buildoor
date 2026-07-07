@@ -14,7 +14,6 @@ import (
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
-	apiv1fulu "github.com/ethpandaops/go-eth2-client/api/v1/fulu"
 	"github.com/ethpandaops/go-eth2-client/http"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/all"
@@ -231,37 +230,23 @@ type NodeIdentity struct {
 
 // GetNodeIdentity fetches the beacon node's P2P identity via /eth/v1/node/identity.
 func (c *Client) GetNodeIdentity(ctx context.Context) (*NodeIdentity, error) {
-	url := fmt.Sprintf("%s/eth/v1/node/identity", c.baseURL)
-
-	req, err := nethttp.NewRequestWithContext(ctx, nethttp.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	provider, ok := c.client.(eth2client.NodeIdentityProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support node identity provider")
 	}
 
-	resp, err := (&nethttp.Client{Timeout: 10 * time.Second}).Do(req)
+	resp, err := provider.NodeIdentity(ctx, &api.NodeIdentityOpts{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get node identity: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != nethttp.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get node identity: status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Data struct {
-			PeerID       string   `json:"peer_id"`
-			P2PAddresses []string `json:"p2p_addresses"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode node identity: %w", err)
+	if resp.Data == nil {
+		return nil, fmt.Errorf("node identity response is nil")
 	}
 
 	return &NodeIdentity{
-		PeerID:       result.Data.PeerID,
-		P2PAddresses: result.Data.P2PAddresses,
+		PeerID:       resp.Data.PeerID,
+		P2PAddresses: resp.Data.P2PAddresses,
 	}, nil
 }
 
@@ -270,7 +255,7 @@ func (c *Client) GetRawClient() eth2client.Service {
 	return c.client
 }
 
-// SubmitProposal submits a full signed proposal (e.g. Fulu SignedBlockContents) to the beacon node.
+// SubmitProposal submits a full signed proposal (e.g. SignedBlockContents) to the beacon node.
 // Used by the builder API after unblinding a blinded block.
 func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpts) error {
 	submitter, ok := c.client.(eth2client.ProposalSubmitter)
@@ -278,20 +263,6 @@ func (c *Client) SubmitProposal(ctx context.Context, opts *api.SubmitProposalOpt
 		return fmt.Errorf("client does not support proposal submission")
 	}
 	return submitter.SubmitProposal(ctx, opts)
-}
-
-// SubmitFuluBlock submits a Fulu SignedBlockContents (full unblinded block + blobs) to the beacon node.
-func (c *Client) SubmitFuluBlock(ctx context.Context, contents *apiv1fulu.SignedBlockContents) error {
-	if contents == nil {
-		return fmt.Errorf("fulu block contents is nil")
-	}
-	return c.SubmitProposal(ctx, &api.SubmitProposalOpts{
-		Proposal: &api.VersionedSignedProposal{
-			Version: spec.DataVersionFulu,
-			Blinded: false,
-			Fulu:    contents,
-		},
-	})
 }
 
 // BlockInfo contains execution-relevant information from a beacon block.

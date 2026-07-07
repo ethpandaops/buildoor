@@ -1,60 +1,32 @@
 package beacon
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strconv"
 
+	eth2client "github.com/ethpandaops/go-eth2-client"
+	"github.com/ethpandaops/go-eth2-client/api"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 // SubmitExecutionPayloadBid submits a signed execution payload bid to the beacon node.
+// The consensus version header and body encoding (SSZ or JSON per the client's content
+// negotiation) are derived from the bid's Version by go-eth2-client.
 func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.SignedExecutionPayloadBid) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_bids", c.baseURL)
-
-	bidJSON, err := json.Marshal(bid)
-	if err != nil {
-		return fmt.Errorf("failed to marshal bid: %w", err)
+	submitter, ok := c.client.(eth2client.ExecutionPayloadBidSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support execution payload bid submission")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bidJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", bid.Version.String())
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
+	if err := submitter.SubmitAgnosticExecutionPayloadBid(ctx, &api.SubmitAgnosticExecutionPayloadBidOpts{
+		SignedExecutionPayloadBid: bid,
+	}); err != nil {
 		return fmt.Errorf("failed to submit bid: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-
-		return fmt.Errorf("failed to submit bid: status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
-}
-
-// signedExecutionPayloadEnvelopeContents is the stateless publish body: the signed
-// envelope nested under "signed_execution_payload_envelope" alongside kzg_proofs and blobs.
-// All three fields are required by the beacon-API schema, so kzg_proofs and blobs must be
-// present (as empty arrays) even when the payload carries no blobs.
-type signedExecutionPayloadEnvelopeContents struct {
-	SignedExecutionPayloadEnvelope json.RawMessage `json:"signed_execution_payload_envelope"`
-	KzgProofs                      []string        `json:"kzg_proofs"`
-	Blobs                          []string        `json:"blobs"`
 }
 
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope using the
@@ -62,49 +34,46 @@ type signedExecutionPayloadEnvelopeContents struct {
 // false). The stateful/blinded flow only works when the beacon node cached the full envelope
 // from its own block production (produceBlockV4); buildoor builds payloads externally, so the
 // beacon node never has them cached and the stateless form is the only valid one.
-func (c *Client) SubmitExecutionPayloadEnvelope(ctx context.Context, envelope json.RawMessage, blobs [][]byte, kzgProofs [][]byte) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes", c.baseURL)
-
-	contents := signedExecutionPayloadEnvelopeContents{
-		SignedExecutionPayloadEnvelope: envelope,
-		KzgProofs:                      make([]string, len(kzgProofs)),
-		Blobs:                          make([]string, len(blobs)),
+//
+// The consensus version header and body encoding (SSZ or JSON per the client's content
+// negotiation) are derived from the envelope's Version by go-eth2-client.
+func (c *Client) SubmitExecutionPayloadEnvelope(
+	ctx context.Context,
+	envelope *eth2all.SignedExecutionPayloadEnvelope,
+	blobs [][]byte,
+	kzgProofs [][]byte,
+) error {
+	submitter, ok := c.client.(eth2client.ExecutionPayloadEnvelopeSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support execution payload envelope submission")
 	}
+
+	typedBlobs := make([]deneb.Blob, len(blobs))
+
 	for i, b := range blobs {
-		contents.Blobs[i] = fmt.Sprintf("0x%x", b)
+		if len(b) != len(deneb.Blob{}) {
+			return fmt.Errorf("invalid blob %d: expected %d bytes, got %d", i, len(deneb.Blob{}), len(b))
+		}
+
+		copy(typedBlobs[i][:], b)
 	}
+
+	typedProofs := make([]deneb.KZGProof, len(kzgProofs))
+
 	for i, p := range kzgProofs {
-		contents.KzgProofs[i] = fmt.Sprintf("0x%x", p)
+		if len(p) != len(deneb.KZGProof{}) {
+			return fmt.Errorf("invalid kzg proof %d: expected %d bytes, got %d", i, len(deneb.KZGProof{}), len(p))
+		}
+
+		copy(typedProofs[i][:], p)
 	}
 
-	bodyJSON, err := json.Marshal(contents)
-	if err != nil {
-		return fmt.Errorf("failed to marshal publish request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Eth-Consensus-Version", "gloas")
-	// Always the stateless form: header "false" selects the Contents body schema. Strict
-	// CLs (Prysm) reject the request when the header is missing.
-	req.Header.Set("Eth-Execution-Payload-Blinded", "false")
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
+	if err := submitter.SubmitAgnosticExecutionPayloadEnvelope(ctx, &api.SubmitAgnosticExecutionPayloadEnvelopeOpts{
+		SignedExecutionPayloadEnvelope: envelope,
+		KZGProofs:                      typedProofs,
+		Blobs:                          typedBlobs,
+	}); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-
-		return fmt.Errorf("failed to submit envelope: status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -123,95 +92,40 @@ func (c *Client) GetExecutionPayloadEnvelope(
 	ctx context.Context,
 	blockID string,
 ) (*PayloadEnvelopeInfo, error) {
-	url := fmt.Sprintf("%s/eth/v1/beacon/execution_payload_envelopes/%s", c.baseURL, blockID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	provider, ok := c.client.(eth2client.ExecutionPayloadProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support execution payload envelope provider")
 	}
 
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
+	resp, err := provider.AgnosticSignedExecutionPayloadEnvelope(ctx, &api.SignedExecutionPayloadEnvelopeOpts{
+		Block: blockID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload envelope: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to get payload envelope: status %d: %s",
-			resp.StatusCode, string(body))
+	if resp.Data == nil || resp.Data.Message == nil || resp.Data.Message.Payload == nil {
+		return nil, fmt.Errorf("payload envelope response is nil")
 	}
 
-	var response struct {
-		Data struct {
-			Message struct {
-				Payload struct {
-					BlockHash string `json:"block_hash"`
-				} `json:"payload"`
-				BuilderIndex    string `json:"builder_index"`
-				BeaconBlockRoot string `json:"beacon_block_root"`
-			} `json:"message"`
-		} `json:"data"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	msg := &response.Data.Message
-
-	blockRoot, err := parseRoot(msg.BeaconBlockRoot)
-	if err != nil {
-		return nil, fmt.Errorf("invalid beacon_block_root: %w", err)
-	}
-
-	blockHash, err := parseHash32(msg.Payload.BlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("invalid block_hash: %w", err)
-	}
-
-	builderIndex, err := strconv.ParseUint(msg.BuilderIndex, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid builder_index: %w", err)
-	}
+	msg := resp.Data.Message
 
 	return &PayloadEnvelopeInfo{
-		BlockRoot:    blockRoot,
-		BlockHash:    blockHash,
-		BuilderIndex: builderIndex,
+		BlockRoot:    msg.BeaconBlockRoot,
+		BlockHash:    msg.Payload.BlockHash,
+		BuilderIndex: uint64(msg.BuilderIndex),
 	}, nil
 }
 
 // SubmitVoluntaryExit submits a signed voluntary exit to the beacon node.
 func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVoluntaryExit) error {
-	url := fmt.Sprintf("%s/eth/v1/beacon/pool/voluntary_exits", c.baseURL)
-
-	exitJSON, err := json.Marshal(exit)
-	if err != nil {
-		return fmt.Errorf("failed to marshal the exit: %w", err)
+	submitter, ok := c.client.(eth2client.VoluntaryExitSubmitter)
+	if !ok {
+		return fmt.Errorf("client does not support voluntary exit submission")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(exitJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	httpClient := &http.Client{}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
+	if err := submitter.SubmitVoluntaryExit(ctx, exit); err != nil {
 		return fmt.Errorf("failed to submit exit: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		body, _ := io.ReadAll(resp.Body)
-
-		return fmt.Errorf("failed to submit exit: status %d: %s", resp.StatusCode, string(body))
 	}
 
 	c.log.Info("Submitted exit!")

@@ -3,9 +3,10 @@ module github.com/ethpandaops/buildoor
 go 1.25.7
 
 require (
+	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/ethereum/go-ethereum v1.17.4
-	github.com/ethpandaops/go-eth-engine-client v0.0.1
-	github.com/ethpandaops/go-eth2-client v0.1.5
+	github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28
+	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260703151911-3063991fb1e0
 	github.com/ethpandaops/service-authenticatoor v0.0.2
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2
@@ -36,7 +37,6 @@ require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/MicahParks/keyfunc/v3 v3.8.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
