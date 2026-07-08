@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -107,10 +107,10 @@ func (h *APIHandler) GetOverview(w http.ResponseWriter, r *http.Request) {
 		resp.BuilderPubkey = pubkey.String()
 		resp.BuilderIndex = h.epbsSvc.GetBuilderIndex()
 		resp.IsRegistered = h.epbsSvc.IsRegistered()
-		resp.Services.EPBSRegistrationState = epbs.RegistrationStateName(h.epbsSvc.GetRegistrationState())
+		resp.Services.EPBSRegistrationState = p2p_bidder.RegistrationStateName(h.epbsSvc.GetRegistrationState())
 
-		if tracker := h.epbsSvc.GetBidTracker(); tracker != nil {
-			resp.Balances.PendingPaymentsGwei = tracker.GetTotalPendingPayments()
+		if h.payments != nil {
+			resp.Balances.PendingPaymentsGwei = h.payments.GetTotalPendingPayments()
 		}
 
 		if h.chainSvc != nil {

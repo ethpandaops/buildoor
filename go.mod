@@ -3,10 +3,11 @@ module github.com/ethpandaops/buildoor
 go 1.25.7
 
 require (
-	github.com/ethereum/go-ethereum v1.17.3
-	github.com/ethpandaops/go-eth-engine-client v0.0.1
-	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260629130636-6d2ee1978c4e
-	github.com/ethpandaops/service-authenticatoor v0.0.1
+	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
+	github.com/ethereum/go-ethereum v1.17.4
+	github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28
+	github.com/ethpandaops/go-eth2-client v0.1.6-0.20260707104405-60250e59f0fd
+	github.com/ethpandaops/service-authenticatoor v0.0.2
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -16,7 +17,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/pk910/dynamic-ssz v1.3.2
 	github.com/pkg/errors v0.9.1
-	github.com/pressly/goose/v3 v3.27.1
+	github.com/pressly/goose/v3 v3.27.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.35.1
 	github.com/sirupsen/logrus v1.9.4
@@ -36,7 +37,6 @@ require (
 	github.com/MicahParks/jwkset v0.11.0 // indirect
 	github.com/MicahParks/keyfunc/v3 v3.8.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506 // indirect
 	github.com/ProjectZKM/Ziren/crates/go-runtime/zkvm_runtime v0.0.0-20251001021608-1fe7b43fc4d6 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -52,6 +52,7 @@ require (
 	github.com/emicklei/dot v1.6.4 // indirect
 	github.com/ethereum/c-kzg-4844/v2 v2.1.6 // indirect
 	github.com/ferranbt/fastssz v0.1.4 // indirect
+	github.com/fjl/jsonw v0.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -78,10 +79,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/pion/dtls/v2 v2.2.12 // indirect
-	github.com/pion/logging v0.2.4 // indirect
-	github.com/pion/transport/v2 v2.2.10 // indirect
-	github.com/pion/transport/v3 v3.0.7 // indirect
 	github.com/pk910/hashtree-bindings v0.2.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -113,15 +110,15 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	golang.org/x/time v0.9.0 // indirect
+	golang.org/x/time v0.10.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	modernc.org/libc v1.72.1 // indirect
+	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.49.1 // indirect
+	modernc.org/sqlite v1.53.0 // indirect
 )
 
 tool github.com/pk910/dynamic-ssz/dynssz-gen

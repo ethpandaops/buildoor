@@ -13,7 +13,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -50,7 +50,7 @@ type Manager struct {
 	depositSvc      *DepositService
 	earlyDepositSvc *EarlyDepositService
 	balanceSvc      *BalanceService
-	bidTracker      *epbs.BidTracker
+	payments        *payload_bidder.PaymentTracker
 	exitSvc         *ExitService
 	log             logrus.FieldLogger
 	stopCh          chan struct{}
@@ -306,15 +306,16 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 	}
 }
 
-// SetBidTracker sets the bid tracker for balance service and stores it for direct access.
-func (m *Manager) SetBidTracker(tracker *epbs.BidTracker) {
-	m.bidTracker = tracker
-	m.balanceSvc = NewBalanceService(m.cfg, m.clClient, m.depositSvc, tracker, m.log)
+// SetPaymentTracker sets the shared payment tracker for the balance service and
+// stores it for direct access.
+func (m *Manager) SetPaymentTracker(payments *payload_bidder.PaymentTracker) {
+	m.payments = payments
+	m.balanceSvc = NewBalanceService(m.cfg, m.clClient, m.depositSvc, payments, m.log)
 }
 
-// GetBidTracker returns the bid tracker.
-func (m *Manager) GetBidTracker() *epbs.BidTracker {
-	return m.bidTracker
+// GetPaymentTracker returns the shared payment tracker.
+func (m *Manager) GetPaymentTracker() *payload_bidder.PaymentTracker {
+	return m.payments
 }
 
 // onRegistered marks registration as done and fires the callback.
@@ -664,7 +665,7 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 					}
 				} else {
 					// Immediately reflect the topup in the live balance (no finalization delay)
-					if tracker := m.GetBidTracker(); tracker != nil {
+					if tracker := m.GetPaymentTracker(); tracker != nil {
 						tracker.AddDeposit(amount)
 					}
 
@@ -699,7 +700,7 @@ func (m *Manager) refreshBuilderState() {
 	// Only reset balance adjustment when the chain state actually changed (new epoch).
 	// Between epochs the chain state returns the same stale balance, so we must
 	// keep the local adjustment to avoid re-triggering topups.
-	if info.Balance != oldBalance && m.bidTracker != nil {
-		m.bidTracker.ResetBalanceAdjustment()
+	if info.Balance != oldBalance && m.payments != nil {
+		m.payments.ResetBalanceAdjustment()
 	}
 }

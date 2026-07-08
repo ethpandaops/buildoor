@@ -8,7 +8,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/epbs"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -17,7 +17,7 @@ type BalanceService struct {
 	cfg        *config.Config
 	clClient   *beacon.Client
 	depositSvc *DepositService
-	bidTracker *epbs.BidTracker
+	payments   *payload_bidder.PaymentTracker
 	lastCheck  time.Time
 	log        logrus.FieldLogger
 }
@@ -27,14 +27,14 @@ func NewBalanceService(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	depositSvc *DepositService,
-	bidTracker *epbs.BidTracker,
+	payments *payload_bidder.PaymentTracker,
 	log logrus.FieldLogger,
 ) *BalanceService {
 	return &BalanceService{
 		cfg:        cfg,
 		clClient:   clClient,
 		depositSvc: depositSvc,
-		bidTracker: bidTracker,
+		payments:   payments,
 		log:        log.WithField("component", "balance-service"),
 	}
 }
@@ -69,8 +69,8 @@ func (s *BalanceService) GetEffectiveBalance(ctx context.Context) (uint64, error
 	liveBalance := int64(state.Balance)
 
 	// Apply local adjustments (topups add, revealed bids subtract since last state refresh)
-	if s.bidTracker != nil {
-		liveBalance += s.bidTracker.GetBalanceAdjustment()
+	if s.payments != nil {
+		liveBalance += s.payments.GetBalanceAdjustment()
 	}
 
 	if liveBalance < 0 {

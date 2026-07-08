@@ -10,7 +10,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/proposerpreferences"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -55,10 +54,6 @@ type Service interface {
 
 	// RefreshBuilders re-fetches the beacon state to pick up new builder registrations.
 	RefreshBuilders(ctx context.Context) error
-
-	// SetProposerPreferencesCache registers the proposer preferences cache so
-	// it can be pruned on each epoch transition. Pass nil to disable pruning.
-	SetProposerPreferencesCache(cache *proposerpreferences.Cache)
 }
 
 // Ensure implementation satisfies interface.
@@ -82,9 +77,6 @@ type service struct {
 
 	// Event dispatching
 	epochStatsDispatcher *utils.Dispatcher[*EpochStats]
-
-	// Proposer preferences cache, pruned on epoch transitions. Optional.
-	propPrefCache *proposerpreferences.Cache
 
 	// Lifecycle
 	ctx    context.Context
@@ -295,15 +287,6 @@ func (s *service) GetHeadVoteTracker() *HeadVoteTracker {
 	return s.headVoteTracker
 }
 
-// SetProposerPreferencesCache registers the proposer preferences cache so it
-// can be pruned on each epoch transition.
-func (s *service) SetProposerPreferencesCache(cache *proposerpreferences.Cache) {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
-
-	s.propPrefCache = cache
-}
-
 // RefreshBuilders re-fetches the head state to pick up new builder registrations.
 func (s *service) RefreshBuilders(ctx context.Context) error {
 	s.log.Debug("Refreshing builders from head state")
@@ -375,15 +358,7 @@ func (s *service) handleHeadEvent(event *beacon.HeadEvent) {
 			delete(s.stateCache, epoch)
 		}
 	}
-
-	propPrefCache := s.propPrefCache
 	s.cacheMu.Unlock()
-
-	// Drop any proposer preferences for slots that are now in the past.
-	if propPrefCache != nil {
-		newEpochStartSlot := phase0.Slot(uint64(newEpoch) * s.chainSpec.SlotsPerEpoch)
-		propPrefCache.PruneBefore(newEpochStartSlot)
-	}
 
 	// Fire epoch stats event
 	stats := s.GetEpochStats(newEpoch)
