@@ -30,9 +30,9 @@ const depositContractABI = `[{"name":"deposit","type":"function","stateMutabilit
 	`{"name":"deposit_data_root","type":"bytes32"}]}]`
 
 // EarlyDepositService submits a pre-Gloas builder onboarding deposit via the regular
-// validator deposit contract. Unlike the post-fork builder deposit (EIP-8282 predeploy,
-// 0x00 withdrawal prefix, DOMAIN_BUILDER_DEPOSIT), an early deposit uses 0xB0 withdrawal
-// credentials and is signed with the validator deposit domain — i.e. it is an ordinary
+// validator deposit contract. Both paths use 0xB0 withdrawal credentials, but unlike
+// the post-fork builder deposit (EIP-8282 predeploy, DOMAIN_BUILDER_DEPOSIT), an early
+// deposit is signed with the validator deposit domain — i.e. it is an ordinary
 // validator deposit that sits in the beacon state's pending_deposits queue and is
 // converted into a builder at the Gloas fork boundary.
 type EarlyDepositService struct {
