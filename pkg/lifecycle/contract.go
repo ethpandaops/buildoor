@@ -170,7 +170,7 @@ func buildWithdrawalCredentials(prefix byte, walletAddress common.Address) [32]b
 }
 
 // BuilderWithdrawalCredentials builds the withdrawal credentials for an EIP-8282
-// builder deposit. Format: 0x00 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+// builder deposit. Format: 0xB0 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
 func BuilderWithdrawalCredentials(walletAddress common.Address) [32]byte {
 	return buildWithdrawalCredentials(builderWithdrawalPrefix, walletAddress)
 }

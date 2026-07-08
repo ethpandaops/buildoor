@@ -55,8 +55,8 @@ const referenceSlotTimeMs = 12000
 // the builder has seen attestation weight on the block before committing to
 // reveal — and comfortably before the hard payload deadline (PAYLOAD_DUE_BPS,
 // 50% since consensus-specs#5414), after which the PTC votes the payload
-// absent. The ~8% (1s @12s) margin lets the envelope gossip to PTC members
-// before they attest at 75% (PAYLOAD_ATTESTATION_DUE_BPS).
+// absent. The ~8% (1s @12s) margin before that deadline lets the envelope
+// gossip to PTC members, who attest at 75% (PAYLOAD_ATTESTATION_DUE_BPS).
 func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 	if c.EPBS.BuildStartTime == 0 {
 		c.EPBS.BuildStartTime = -2900 * slotTimeMs / referenceSlotTimeMs
