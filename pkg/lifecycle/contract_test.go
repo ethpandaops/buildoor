@@ -94,7 +94,7 @@ func TestWithdrawalCredentials(t *testing.T) {
 		creds      [32]byte
 		wantPrefix byte
 	}{
-		{"builder uses 0x00 prefix", BuilderWithdrawalCredentials(addr), 0x00},
+		{"builder uses 0xB0 prefix", BuilderWithdrawalCredentials(addr), 0xB0},
 		{"validator uses 0xB0 prefix", ValidatorWithdrawalCredentials(addr), 0xB0},
 	}
 
