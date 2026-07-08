@@ -28,9 +28,13 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const [editingLifecycle, setEditingLifecycle] = useState(false);
   const [lcThreshold, setLcThreshold] = useState('');
   const [lcAmount, setLcAmount] = useState('');
+  const [exitState, setExitState] = useState<'idle' | 'confirm' | 'submitting' | 'done' | 'error'>('idle');
+  const [exitError, setExitError] = useState('');
 
   const lifecycleAvailable = serviceStatus?.lifecycle_available ?? false;
   const lifecycleEnabled = serviceStatus?.lifecycle_enabled ?? false;
+  const registrationState = serviceStatus?.epbs_registration_state;
+  const canExit = registrationState === 'registered' || registrationState === 'pending_finalization';
 
   const startEditingLifecycle = () => {
     setLcThreshold(config ? String(config.topup_threshold / 1e9) : '');
@@ -57,6 +61,28 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
       setEditingLifecycle(false);
     } catch (err) {
       console.error('Failed to update lifecycle config:', err);
+    }
+  };
+
+  const handleExit = async () => {
+    if (!isLoggedIn) return;
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    const authToken = getAuthHeader();
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    setExitState('submitting');
+    try {
+      const resp = await fetch('/api/lifecycle/exit', { method: 'POST', headers });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => null);
+        throw new Error(body?.error || `HTTP ${resp.status}`);
+      }
+      setExitState('done');
+    } catch (err) {
+      console.error('Failed to submit builder exit:', err);
+      setExitError(err instanceof Error ? err.message : String(err));
+      setExitState('error');
     }
   };
 
@@ -304,6 +330,46 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             )}
           </tbody>
         </table>
+
+        {/* Builder exit (irreversible: submits an exit request to the builder
+            exit system contract; the exit then proceeds through the exit queue) */}
+        {lifecycleAvailable && isLoggedIn && (canExit || exitState === 'done') && (
+          <div className="border-top pt-2 mt-1 text-end">
+            {exitState === 'idle' && (
+              <button
+                className="btn btn-sm btn-outline-danger"
+                onClick={() => setExitState('confirm')}
+                title="Submit a builder exit request through the exit queue"
+              >
+                <i className="fas fa-sign-out-alt me-1"></i>Exit Builder
+              </button>
+            )}
+            {exitState === 'confirm' && (
+              <div className="d-flex align-items-center justify-content-end gap-2">
+                <span className="small text-danger">Exit builder from the builder set?</span>
+                <button className="btn btn-sm btn-danger" onClick={handleExit}>Confirm Exit</button>
+                <button className="btn btn-sm btn-secondary" onClick={() => setExitState('idle')}>Cancel</button>
+              </div>
+            )}
+            {exitState === 'submitting' && (
+              <span className="small text-muted">
+                <i className="fas fa-spinner fa-spin me-1"></i>Submitting exit transaction...
+              </span>
+            )}
+            {exitState === 'done' && (
+              <span className="small text-success">
+                <i className="fas fa-check me-1"></i>Exit submitted — waiting for the exit queue
+              </span>
+            )}
+            {exitState === 'error' && (
+              <div className="d-flex align-items-center justify-content-end gap-2">
+                <span className="small text-danger">Exit failed: {exitError}</span>
+                <button className="btn btn-sm btn-outline-danger" onClick={handleExit}>Retry</button>
+                <button className="btn btn-sm btn-secondary" onClick={() => setExitState('idle')}>Dismiss</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
