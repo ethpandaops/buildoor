@@ -42,8 +42,11 @@ const (
 	queueFeeHeadroom = 3
 
 	// builderWithdrawalPrefix is the withdrawal-credential prefix for builder
-	// deposits submitted via the EIP-8282 builder deposit contract.
-	builderWithdrawalPrefix = 0x00
+	// deposits submitted via the EIP-8282 builder deposit contract. Must be
+	// BUILDER_WITHDRAWAL_PREFIX (0xB0): since consensus-specs#5439 (alpha.12),
+	// process_builder_deposit_request silently ignores deposits with any other
+	// prefix.
+	builderWithdrawalPrefix = 0xB0
 	// validatorWithdrawalPrefix is the withdrawal-credential prefix used for the
 	// pre-Gloas early-onboarding deposit, which goes through the regular validator
 	// deposit contract (builder-prefix / 0xB0 credentials).
