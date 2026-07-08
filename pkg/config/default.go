@@ -48,15 +48,15 @@ const referenceSlotTimeMs = 12000
 //	PayloadBuildTime: 2100ms @12s  (e.g.  1050ms @6s)
 //	BidStartTime:     -400ms @12s  (e.g.  -200ms @6s)
 //	BidEndTime:       -100ms @12s  (e.g.   -50ms @6s)
-//	RevealTime:       7000ms @12s  (e.g.  3500ms @6s)
+//	RevealTime:       5000ms @12s  (e.g.  2500ms @6s)
 //
-// RevealTime (58.3% of the slot) is anchored to the Gloas/EIP-7732 deadlines:
-// it sits after the attestation-aggregate deadline (AGGREGATE_DUE_BPS_GLOAS,
-// 50%) — so the builder has seen enough attestation weight to know the block is
-// the canonical head before committing to reveal — and comfortably before the
-// hard payload deadline (PAYLOAD_DUE_BPS / PAYLOAD_ATTESTATION_DUE_BPS, 75%),
-// after which the PTC votes the payload absent. The ~17% (2s @12s) margin lets
-// the envelope gossip to PTC members before they attest at 75%.
+// RevealTime (41.7% of the slot) is anchored to the Gloas/EIP-7732 deadlines:
+// it sits after the attestation deadline (ATTESTATION_DUE_BPS_GLOAS, 25%) — so
+// the builder has seen attestation weight on the block before committing to
+// reveal — and comfortably before the hard payload deadline (PAYLOAD_DUE_BPS,
+// 50% since consensus-specs#5414), after which the PTC votes the payload
+// absent. The ~8% (1s @12s) margin before that deadline lets the envelope
+// gossip to PTC members, who attest at 75% (PAYLOAD_ATTESTATION_DUE_BPS).
 func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 	if c.EPBS.BuildStartTime == 0 {
 		c.EPBS.BuildStartTime = -2900 * slotTimeMs / referenceSlotTimeMs
@@ -75,6 +75,6 @@ func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 	}
 
 	if c.EPBS.RevealTime == 0 {
-		c.EPBS.RevealTime = 7000 * slotTimeMs / referenceSlotTimeMs
+		c.EPBS.RevealTime = 5000 * slotTimeMs / referenceSlotTimeMs
 	}
 }

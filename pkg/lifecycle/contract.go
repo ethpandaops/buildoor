@@ -24,7 +24,7 @@ import (
 // canonical addresses and match dora's DefaultSystemContractAddresses.
 var (
 	// BuilderDepositContractAddress is the EIP-8282 builder deposit predeploy.
-	BuilderDepositContractAddress = common.HexToAddress("0x0000884d2AA32eAa155F59A2f24eFa73D9008282")
+	BuilderDepositContractAddress = common.HexToAddress("0x00006AE84ed173D4394de5E28F9ED56b28008282")
 	// BuilderExitContractAddress is the EIP-8282 builder exit predeploy.
 	BuilderExitContractAddress = common.HexToAddress("0x000014574A74c805590AFF9499fc7A690f008282")
 )
@@ -42,12 +42,15 @@ const (
 	queueFeeHeadroom = 3
 
 	// builderWithdrawalPrefix is the withdrawal-credential prefix for builder
-	// deposits submitted via the EIP-8282 builder deposit contract.
-	builderWithdrawalPrefix = 0x00
+	// deposits submitted via the EIP-8282 builder deposit contract. Must be
+	// BUILDER_WITHDRAWAL_PREFIX (0xB0): since consensus-specs#5439 (alpha.12),
+	// process_builder_deposit_request silently ignores deposits with any other
+	// prefix.
+	builderWithdrawalPrefix = 0xB0
 	// validatorWithdrawalPrefix is the withdrawal-credential prefix used for the
 	// pre-Gloas early-onboarding deposit, which goes through the regular validator
-	// deposit contract (execution-address / 0x03-style credentials).
-	validatorWithdrawalPrefix = 0x03
+	// deposit contract (builder-prefix / 0xB0 credentials).
+	validatorWithdrawalPrefix = 0xB0
 )
 
 // excessInhibitor is the EXCESS_INHIBITOR (2^256-1) stored in slot 0 of the
@@ -167,14 +170,14 @@ func buildWithdrawalCredentials(prefix byte, walletAddress common.Address) [32]b
 }
 
 // BuilderWithdrawalCredentials builds the withdrawal credentials for an EIP-8282
-// builder deposit. Format: 0x00 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+// builder deposit. Format: 0xB0 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
 func BuilderWithdrawalCredentials(walletAddress common.Address) [32]byte {
 	return buildWithdrawalCredentials(builderWithdrawalPrefix, walletAddress)
 }
 
 // ValidatorWithdrawalCredentials builds the withdrawal credentials for the pre-Gloas
 // early-onboarding deposit, which is submitted through the regular validator deposit
-// contract. Format: 0x03 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
+// contract. Format: 0xB0 + 00...00 (11 zero bytes) + wallet_address (20 bytes).
 func ValidatorWithdrawalCredentials(walletAddress common.Address) [32]byte {
 	return buildWithdrawalCredentials(validatorWithdrawalPrefix, walletAddress)
 }

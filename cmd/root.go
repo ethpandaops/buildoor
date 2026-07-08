@@ -82,7 +82,7 @@ func init() {
 	// ePBS time-based flags (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Int64("epbs-bid-start", 0, "First bid time in ms relative to slot start (0 = auto: -400ms @12s, scaled to slot time)")
 	rootCmd.PersistentFlags().Int64("epbs-bid-end", 0, "Last bid time in ms relative to slot start (0 = auto: -100ms @12s, scaled to slot time)")
-	rootCmd.PersistentFlags().Int64("epbs-reveal-time", 0, "Reveal time in ms relative to slot start (0 = auto: 7000ms @12s, scaled to slot time)")
+	rootCmd.PersistentFlags().Int64("epbs-reveal-time", 0, "Reveal time in ms relative to slot start (0 = auto: 5000ms @12s, scaled to slot time)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")

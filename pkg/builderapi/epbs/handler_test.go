@@ -21,7 +21,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
-	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -255,8 +254,8 @@ func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash
 					BlockHash: make([]byte, 32),
 				},
 				ProposerSlashings: []*phase0.ProposerSlashing{},
-				AttesterSlashings: []*electra.AttesterSlashing{},
-				Attestations:      []*electra.Attestation{},
+				AttesterSlashings: []*gloasspec.AttesterSlashing{},
+				Attestations:      []*gloasspec.Attestation{},
 				Deposits:          []*phase0.Deposit{},
 				VoluntaryExits:    []*phase0.SignedVoluntaryExit{},
 				SyncAggregate: &altair.SyncAggregate{
