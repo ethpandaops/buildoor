@@ -171,6 +171,18 @@ func (c *Client) GetStorageAt(
 	return data, nil
 }
 
+// GetCode returns the contract code at the given address at the latest block.
+// Used to verify a system contract predeploy actually exists before submitting
+// requests to it.
+func (c *Client) GetCode(ctx context.Context, address common.Address) ([]byte, error) {
+	code, err := c.ethClient.CodeAt(ctx, address, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get code at %s: %w", address.Hex(), err)
+	}
+
+	return code, nil
+}
+
 // GetBalance returns the balance for an address.
 func (c *Client) GetBalance(ctx context.Context, address common.Address) (*big.Int, error) {
 	balance, err := c.ethClient.BalanceAt(ctx, address, nil)

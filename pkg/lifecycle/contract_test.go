@@ -111,14 +111,24 @@ func TestWithdrawalCredentials(t *testing.T) {
 	}
 }
 
-// fakeStorageReader returns a fixed 32-byte slot value.
+// fakeStorageReader returns a fixed 32-byte slot value and non-empty code
+// unless noCode is set.
 type fakeStorageReader struct {
-	value []byte
-	err   error
+	value  []byte
+	err    error
+	noCode bool
 }
 
 func (f fakeStorageReader) GetStorageAt(_ context.Context, _ common.Address, _ common.Hash) ([]byte, error) {
 	return f.value, f.err
+}
+
+func (f fakeStorageReader) GetCode(_ context.Context, _ common.Address) ([]byte, error) {
+	if f.noCode {
+		return nil, nil
+	}
+
+	return []byte{0x60, 0x00}, nil
 }
 
 func slotBytes(v *big.Int) []byte {
@@ -144,4 +154,11 @@ func TestReadQueueFee(t *testing.T) {
 
 	want := fakeExponential(big.NewInt(minRequestFee), big.NewInt(queueFeeHeadroom), big.NewInt(feeUpdateFraction))
 	assert.Equal(t, want.String(), fee.String(), "fee includes headroom over excess")
+
+	// No code at the address -> ErrContractNotDeployed, never "active": an empty
+	// account reads slot 0 as zero, which must not be mistaken for an empty queue.
+	fee, active, err = ReadQueueFee(ctx, fakeStorageReader{value: slotBytes(big.NewInt(0)), noCode: true}, BuilderExitContractAddress)
+	require.ErrorIs(t, err, ErrContractNotDeployed)
+	assert.False(t, active)
+	assert.Nil(t, fee)
 }

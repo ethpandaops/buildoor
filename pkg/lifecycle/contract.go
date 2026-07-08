@@ -19,14 +19,16 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// Builder system-contract addresses (EIP-8282 genesis predeploys).
-// Hard-coded per ethereum-genesis-generator#297; these are proposal-stage
-// canonical addresses and match dora's DefaultSystemContractAddresses.
+// Builder system-contract addresses (EIP-8282 predeploys, injected by the EL at
+// the Amsterdam fork). Hard-coded per the current EIP-8282 draft
+// (ethereum-genesis-generator#300); ReadQueueFee verifies code exists at the
+// address before any request is submitted, so a stale address fails loudly
+// instead of sending value transfers to an empty account.
 var (
 	// BuilderDepositContractAddress is the EIP-8282 builder deposit predeploy.
-	BuilderDepositContractAddress = common.HexToAddress("0x00006AE84ed173D4394de5E28F9ED56b28008282")
+	BuilderDepositContractAddress = common.HexToAddress("0x0000bFF46984e3725691FA540a8C7589300D8282")
 	// BuilderExitContractAddress is the EIP-8282 builder exit predeploy.
-	BuilderExitContractAddress = common.HexToAddress("0x000014574A74c805590AFF9499fc7A690f008282")
+	BuilderExitContractAddress = common.HexToAddress("0x000064D678505ad48F8cCb093BC65613800E8282")
 )
 
 const (
@@ -58,9 +60,10 @@ const (
 // accepting requests, so callers must wait rather than submit.
 var excessInhibitor = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
-// storageReader reads contract storage; satisfied by *execution.Client.
-type storageReader interface {
+// contractReader reads contract storage and code; satisfied by *execution.Client.
+type contractReader interface {
 	GetStorageAt(ctx context.Context, account common.Address, slot common.Hash) ([]byte, error)
+	GetCode(ctx context.Context, account common.Address) ([]byte, error)
 }
 
 // BuildBuilderDepositCalldata builds the 184-byte builder deposit request calldata:
@@ -114,11 +117,25 @@ func BuildBuilderExitCalldata(pubkey []byte) ([]byte, error) {
 // system contract. It returns active=false while the contract still holds the
 // pre-fork excess inhibitor (i.e. before GLOAS_FORK_EPOCH), signalling the caller
 // to wait. The returned fee prices in queueFeeHeadroom extra slots for safety.
+//
+// It returns ErrContractNotDeployed when there is no code at the contract address:
+// an empty account reads slot 0 as zero, which would otherwise look like an active
+// contract with an empty queue, and requests sent there confirm as plain value
+// transfers without ever reaching the beacon chain.
 func ReadQueueFee(
 	ctx context.Context,
-	reader storageReader,
+	reader contractReader,
 	contract common.Address,
 ) (fee *big.Int, active bool, err error) {
+	code, err := reader.GetCode(ctx, contract)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to read contract code: %w", err)
+	}
+
+	if len(code) == 0 {
+		return nil, false, fmt.Errorf("%w at %s", ErrContractNotDeployed, contract.Hex())
+	}
+
 	raw, err := reader.GetStorageAt(ctx, contract, common.Hash{})
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to read queue excess: %w", err)
