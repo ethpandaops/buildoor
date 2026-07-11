@@ -1,0 +1,453 @@
+// Package action_plan implements the per-slot action plan: sparse, persisted
+// per-slot operation modes for bidding, builder-api serving and reveal, with
+// freeze semantics so a slot's plan becomes immutable once execution for it
+// can begin.
+package action_plan
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+)
+
+// Mode is a per-category plan mode. Only explicit instructions are persisted:
+// an absent category inherits the global baseline; "custom" force-activates
+// the category for the slot (even when the module is globally disabled) with
+// optional setting overrides; "disabled" suppresses it.
+type Mode string
+
+const (
+	// ModeDisabled suppresses the category for the slot.
+	ModeDisabled Mode = "disabled"
+	// ModeCustom force-activates the category for the slot with optional
+	// setting overrides (omitted overrides inherit the global config).
+	ModeCustom Mode = "custom"
+)
+
+func validateMode(category string, mode Mode) error {
+	switch mode {
+	case ModeDisabled, ModeCustom:
+		return nil
+	default:
+		return fmt.Errorf("%s: invalid mode %q (must be %q or %q)", category, mode, ModeDisabled, ModeCustom)
+	}
+}
+
+// BidPlan is the per-slot p2p bidding instruction. All override fields are
+// optional; nil inherits the effective global configuration at freeze time.
+// Timing fields are signed milliseconds relative to slot start (negative =
+// before slot start), matching the global EPBS config semantics.
+type BidPlan struct {
+	Mode Mode `json:"mode"`
+
+	BidStartTime *int64  `json:"bid_start_time,omitempty"`
+	BidEndTime   *int64  `json:"bid_end_time,omitempty"`
+	BidMinAmount *uint64 `json:"bid_min_amount,omitempty"` // gwei
+	BidIncrease  *uint64 `json:"bid_increase,omitempty"`   // gwei
+	BidInterval  *int64  `json:"bid_interval,omitempty"`   // ms, >= 0, 0 = single bid
+	BidSubsidy   *uint64 `json:"bid_subsidy,omitempty"`    // gwei
+
+	// BidValueGwei is an absolute bid base value replacing
+	// max(blockValue, min) + subsidy; BidIncrease still applies per re-bid.
+	// Allows underbidding the block value for testing.
+	BidValueGwei *uint64 `json:"bid_value_gwei,omitempty"`
+
+	// IgnoreMissingPrefs bids with the payload's fee recipient when no gossip
+	// proposer preferences arrived for the slot, bypassing the skip gate.
+	IgnoreMissingPrefs bool `json:"ignore_missing_prefs,omitempty"`
+}
+
+func (p *BidPlan) clone() *BidPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.BidStartTime = cloneScalar(p.BidStartTime)
+	c.BidEndTime = cloneScalar(p.BidEndTime)
+	c.BidMinAmount = cloneScalar(p.BidMinAmount)
+	c.BidIncrease = cloneScalar(p.BidIncrease)
+	c.BidInterval = cloneScalar(p.BidInterval)
+	c.BidSubsidy = cloneScalar(p.BidSubsidy)
+	c.BidValueGwei = cloneScalar(p.BidValueGwei)
+
+	return &c
+}
+
+func (p *BidPlan) hasOverrides() bool {
+	return p.BidStartTime != nil || p.BidEndTime != nil || p.BidMinAmount != nil ||
+		p.BidIncrease != nil || p.BidInterval != nil || p.BidSubsidy != nil ||
+		p.BidValueGwei != nil || p.IgnoreMissingPrefs
+}
+
+func (p *BidPlan) validate(slotMs int64) error {
+	if err := validateMode("bid", p.Mode); err != nil {
+		return err
+	}
+
+	if p.Mode == ModeDisabled && p.hasOverrides() {
+		return errors.New("bid: overrides are only allowed in custom mode")
+	}
+
+	if err := validateTimeBound("bid.bid_start_time", p.BidStartTime, -slotMs, slotMs); err != nil {
+		return err
+	}
+
+	if err := validateTimeBound("bid.bid_end_time", p.BidEndTime, -slotMs, slotMs); err != nil {
+		return err
+	}
+
+	if p.BidStartTime != nil && p.BidEndTime != nil && *p.BidStartTime >= *p.BidEndTime {
+		return fmt.Errorf("bid: bid_start_time (%d) must be before bid_end_time (%d)",
+			*p.BidStartTime, *p.BidEndTime)
+	}
+
+	if p.BidInterval != nil && *p.BidInterval < 0 {
+		return fmt.Errorf("bid: bid_interval must be >= 0, got %d", *p.BidInterval)
+	}
+
+	return nil
+}
+
+// BuilderAPIPlan is the per-slot Builder API serving instruction for both the
+// legacy getHeader and the Gloas getExecutionPayloadBid endpoints.
+type BuilderAPIPlan struct {
+	Mode Mode `json:"mode"`
+
+	// ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot.
+	ValueSubsidyGwei *uint64 `json:"value_subsidy_gwei,omitempty"`
+
+	// TotalValueOverrideGwei is the absolute total proposer-visible bid value
+	// (before the Gloas execution-payment split), replacing block value +
+	// subsidy. May exceed the block value to test payment edge cases.
+	TotalValueOverrideGwei *uint64 `json:"total_value_override_gwei,omitempty"`
+
+	// ResponseDelayMs delays the bid response by this many milliseconds
+	// (context-cancellable, capped at one slot).
+	ResponseDelayMs *int64 `json:"response_delay_ms,omitempty"`
+}
+
+func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.ValueSubsidyGwei = cloneScalar(p.ValueSubsidyGwei)
+	c.TotalValueOverrideGwei = cloneScalar(p.TotalValueOverrideGwei)
+	c.ResponseDelayMs = cloneScalar(p.ResponseDelayMs)
+
+	return &c
+}
+
+func (p *BuilderAPIPlan) hasOverrides() bool {
+	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil || p.ResponseDelayMs != nil
+}
+
+func (p *BuilderAPIPlan) validate(slotMs int64) error {
+	if err := validateMode("builder_api", p.Mode); err != nil {
+		return err
+	}
+
+	if p.Mode == ModeDisabled && p.hasOverrides() {
+		return errors.New("builder_api: overrides are only allowed in custom mode")
+	}
+
+	if p.ResponseDelayMs != nil && (*p.ResponseDelayMs < 0 || *p.ResponseDelayMs > slotMs) {
+		return fmt.Errorf("builder_api: response_delay_ms must be within [0, %d], got %d",
+			slotMs, *p.ResponseDelayMs)
+	}
+
+	return nil
+}
+
+// RevealPlan is the per-slot payload reveal instruction. Reveals have no
+// global enable flag; "disabled" withholds the envelope, "custom" overrides
+// the reveal time (possibly past the in-slot deadline for adverse testing,
+// clamped to at most one additional slot after slot end).
+type RevealPlan struct {
+	Mode Mode `json:"mode"`
+
+	// RevealTimeMs is signed milliseconds relative to slot start.
+	RevealTimeMs *int64 `json:"reveal_time_ms,omitempty"`
+}
+
+func (p *RevealPlan) clone() *RevealPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.RevealTimeMs = cloneScalar(p.RevealTimeMs)
+
+	return &c
+}
+
+func (p *RevealPlan) validate(slotMs int64) error {
+	if err := validateMode("reveal", p.Mode); err != nil {
+		return err
+	}
+
+	if p.Mode == ModeDisabled && p.RevealTimeMs != nil {
+		return errors.New("reveal: overrides are only allowed in custom mode")
+	}
+
+	// Custom reveal times may run into the next slot for late-reveal testing,
+	// but no further, so a typo cannot park a pending timer indefinitely.
+	return validateTimeBound("reveal.reveal_time_ms", p.RevealTimeMs, -slotMs, 2*slotMs)
+}
+
+// SlotPlan is the persisted per-slot instruction set. Each category is
+// optional; an absent category inherits the global baseline (including the
+// module enable flags).
+type SlotPlan struct {
+	Slot       phase0.Slot     `json:"slot"`
+	Bid        *BidPlan        `json:"bid,omitempty"`
+	BuilderAPI *BuilderAPIPlan `json:"builder_api,omitempty"`
+	Reveal     *RevealPlan     `json:"reveal,omitempty"`
+	UpdatedAt  time.Time       `json:"updated_at"`
+	UpdatedBy  string          `json:"updated_by"`
+}
+
+// Clone returns a deep copy. All plan values crossing the package boundary
+// are clones, so callers can never mutate stored state.
+func (p *SlotPlan) Clone() *SlotPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.Bid = p.Bid.clone()
+	c.BuilderAPI = p.BuilderAPI.clone()
+	c.Reveal = p.Reveal.clone()
+
+	return &c
+}
+
+// IsEmpty reports whether the plan carries no instruction at all.
+func (p *SlotPlan) IsEmpty() bool {
+	return p == nil || (p.Bid == nil && p.BuilderAPI == nil && p.Reveal == nil)
+}
+
+// BidOverride returns the per-slot enable override for p2p bidding:
+// nil = inherit the global flag, true = force-active, false = suppressed.
+func (p *SlotPlan) BidOverride() *bool {
+	if p == nil || p.Bid == nil {
+		return nil
+	}
+
+	active := p.Bid.Mode == ModeCustom
+
+	return &active
+}
+
+// BuilderAPIOverride returns the per-slot enable override for Builder API
+// bid serving: nil = inherit, true = force-active, false = suppressed.
+func (p *SlotPlan) BuilderAPIOverride() *bool {
+	if p == nil || p.BuilderAPI == nil {
+		return nil
+	}
+
+	active := p.BuilderAPI.Mode == ModeCustom
+
+	return &active
+}
+
+// RevealOverride returns the per-slot enable override for the reveal:
+// nil = inherit (reveals always run), true = custom, false = suppressed.
+func (p *SlotPlan) RevealOverride() *bool {
+	if p == nil || p.Reveal == nil {
+		return nil
+	}
+
+	active := p.Reveal.Mode == ModeCustom
+
+	return &active
+}
+
+// Validate checks all category plans against the slot duration.
+func (p *SlotPlan) Validate(secondsPerSlot time.Duration) error {
+	slotMs := secondsPerSlot.Milliseconds()
+	if slotMs <= 0 {
+		return fmt.Errorf("invalid slot duration %s", secondsPerSlot)
+	}
+
+	if p.Bid != nil {
+		if err := p.Bid.validate(slotMs); err != nil {
+			return err
+		}
+	}
+
+	if p.BuilderAPI != nil {
+		if err := p.BuilderAPI.validate(slotMs); err != nil {
+			return err
+		}
+	}
+
+	if p.Reveal != nil {
+		if err := p.Reveal.validate(slotMs); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// PlanUpdate is one mutation unit of the bulk-update API. Targets are the
+// union of Slots and the inclusive FromSlot..ToSlot range. Category members
+// are three-state: absent = unchanged, JSON null = clear (back to inherit),
+// object = replace. Delete removes the whole plan for the targeted slots.
+type PlanUpdate struct {
+	Slots    []uint64 `json:"slots,omitempty"`
+	FromSlot *uint64  `json:"from_slot,omitempty"`
+	ToSlot   *uint64  `json:"to_slot,omitempty"`
+	Delete   bool     `json:"delete,omitempty"`
+
+	Bid        json.RawMessage `json:"bid,omitempty"`
+	BuilderAPI json.RawMessage `json:"builder_api,omitempty"`
+	Reveal     json.RawMessage `json:"reveal,omitempty"`
+}
+
+// TargetSlots expands the update's slot list and range into the full target
+// set. The expansion is overflow-safe and bounded by MaxSlotsPerUpdate.
+func (u *PlanUpdate) TargetSlots() ([]phase0.Slot, error) {
+	count := uint64(len(u.Slots))
+
+	if (u.FromSlot == nil) != (u.ToSlot == nil) {
+		return nil, errors.New("from_slot and to_slot must be provided together")
+	}
+
+	if u.FromSlot != nil {
+		if *u.ToSlot < *u.FromSlot {
+			return nil, fmt.Errorf("invalid slot range %d..%d", *u.FromSlot, *u.ToSlot)
+		}
+
+		rangeCount := *u.ToSlot - *u.FromSlot + 1
+		if rangeCount > MaxSlotsPerUpdate {
+			return nil, fmt.Errorf("slot range %d..%d targets %d slots, max %d",
+				*u.FromSlot, *u.ToSlot, rangeCount, MaxSlotsPerUpdate)
+		}
+
+		count += rangeCount
+	}
+
+	if count == 0 {
+		return nil, errors.New("update targets no slots")
+	}
+
+	if count > MaxSlotsPerUpdate {
+		return nil, fmt.Errorf("update targets %d slots, max %d", count, MaxSlotsPerUpdate)
+	}
+
+	targets := make([]phase0.Slot, 0, count)
+	for _, slot := range u.Slots {
+		targets = append(targets, phase0.Slot(slot))
+	}
+
+	if u.FromSlot != nil {
+		for slot := *u.FromSlot; ; slot++ {
+			targets = append(targets, phase0.Slot(slot))
+
+			if slot == *u.ToSlot {
+				break
+			}
+		}
+	}
+
+	return targets, nil
+}
+
+// ApplyUpdateToPlan merges a single update into an existing plan (which may be
+// nil) and returns the resulting plan, or nil when the result carries no
+// instruction anymore. The existing plan is never mutated. The returned plan
+// is not yet validated against the slot duration; callers run Validate.
+func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
+	if u.Delete {
+		return nil, nil
+	}
+
+	result := existing.Clone()
+	if result == nil {
+		result = &SlotPlan{}
+	}
+
+	bid, changed, err := applyCategoryPatch("bid", u.Bid, result.Bid)
+	if err != nil {
+		return nil, err
+	} else if changed {
+		result.Bid = bid
+	}
+
+	builderAPI, changed, err := applyCategoryPatch("builder_api", u.BuilderAPI, result.BuilderAPI)
+	if err != nil {
+		return nil, err
+	} else if changed {
+		result.BuilderAPI = builderAPI
+	}
+
+	reveal, changed, err := applyCategoryPatch("reveal", u.Reveal, result.Reveal)
+	if err != nil {
+		return nil, err
+	} else if changed {
+		result.Reveal = reveal
+	}
+
+	if result.IsEmpty() {
+		return nil, nil
+	}
+
+	return result, nil
+}
+
+// applyCategoryPatch implements the three-state member semantics for one
+// category: absent raw = keep current, JSON null = clear, object = replace
+// (strictly decoded, unknown fields rejected).
+func applyCategoryPatch[T any](category string, raw json.RawMessage, current *T) (*T, bool, error) {
+	if len(raw) == 0 {
+		return current, false, nil
+	}
+
+	if isJSONNull(raw) {
+		return nil, true, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	patch := new(T)
+	if err := dec.Decode(patch); err != nil {
+		return nil, false, fmt.Errorf("%s: %w", category, err)
+	}
+
+	return patch, true, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+func validateTimeBound(name string, value *int64, minMs, maxMs int64) error {
+	if value == nil {
+		return nil
+	}
+
+	if *value < minMs || *value > maxMs {
+		return fmt.Errorf("%s must be within [%d, %d] ms, got %d", name, minMs, maxMs, *value)
+	}
+
+	return nil
+}
+
+func cloneScalar[T any](v *T) *T {
+	if v == nil {
+		return nil
+	}
+
+	c := *v
+
+	return &c
+}
