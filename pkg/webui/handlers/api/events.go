@@ -372,7 +372,7 @@ func (m *EventStreamManager) Start() {
 	var bidSubmitChan <-chan *p2p_bidder.BidSubmissionEvent
 
 	if m.epbsSvc != nil {
-		bidSubmitSub = m.epbsSvc.SubscribeBidSubmissions(16)
+		bidSubmitSub = m.epbsSvc.SubscribeBidSubmissions(16, false)
 		bidSubmitChan = bidSubmitSub.Channel()
 	}
 
