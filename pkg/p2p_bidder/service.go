@@ -9,13 +9,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -60,6 +61,17 @@ func RegistrationStateName(state int32) string {
 	}
 }
 
+// Bid submission statuses reported via BidSubmissionEvent.Status.
+const (
+	// BidStatusSubmitted means the bid was constructed and gossiped.
+	BidStatusSubmitted = "submitted"
+	// BidStatusConstructed means the bid was built and signed, but the network
+	// submission failed.
+	BidStatusConstructed = "constructed"
+	// BidStatusFailed means bid construction itself failed.
+	BidStatusFailed = "failed"
+)
+
 // BidSubmissionEvent represents a bid submission attempt (success or failure).
 type BidSubmissionEvent struct {
 	Slot      phase0.Slot
@@ -69,6 +81,16 @@ type BidSubmissionEvent struct {
 	Success   bool
 	Warning   string // Non-fatal warning (e.g. "no proposer preferences")
 	Error     string
+
+	// Status is one of BidStatusSubmitted/BidStatusConstructed/BidStatusFailed
+	// for submission attempts (empty for pre-construction skip events).
+	Status string
+	// SignedBid is the constructed signed bid; nil when construction failed
+	// (or for pre-construction skip events).
+	SignedBid *eth2all.SignedExecutionPayloadBid
+	// CompetitorHighGwei is the highest competitor bid known for the slot at
+	// fire time (our own builder index excluded); nil when none is known.
+	CompetitorHighGwei *uint64
 }
 
 // Service is the p2p bidder orchestrator that handles time-scheduled bidding.
@@ -78,7 +100,6 @@ type BidSubmissionEvent struct {
 // reveals, inclusion tracking, and payment accounting live in the shared
 // payload_bidder services.
 type Service struct {
-	cfg                   *config.EPBSConfig
 	signer                *payload_bidder.Signer
 	blsSigner             *signer.BLSSigner
 	scheduler             *Scheduler
@@ -87,6 +108,7 @@ type Service struct {
 	clClient              *beacon.Client
 	chainSvc              chain.Service
 	propPrefsStore        *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
+	planSvc               *action_plan.PlanService
 	builderIndex          uint64
 	builderPubkey         phase0.BLSPubKey
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
@@ -104,13 +126,17 @@ type Service struct {
 // per-slot proposer preferences store (owned by
 // payload_bidder.ProposerPreferencesService); it gates bidding — slots without
 // a cached preference are skipped. It may be nil, in which case no bids are
-// submitted.
+// submitted. planSvc is the mandatory per-slot action plan service — the
+// single scheduling/settings authority: the scheduler freezes each slot's
+// plan on first evaluation and the frozen snapshot alone decides whether and
+// how the slot is bid on (a plan may activate bidding for a slot even when
+// ePBS is globally disabled).
 func NewService(
-	cfg *config.EPBSConfig,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	blsSigner *signer.BLSSigner,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
+	planSvc *action_plan.PlanService,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "p2p-bidder")
@@ -119,12 +145,12 @@ func NewService(
 	epbsSigner := payload_bidder.NewSigner(blsSigner)
 
 	s := &Service{
-		cfg:                   cfg,
 		signer:                epbsSigner,
 		blsSigner:             blsSigner,
 		clClient:              clClient,
 		chainSvc:              chainSvc,
 		propPrefsStore:        propPrefsStore,
+		planSvc:               planSvc,
 		builderPubkey:         blsSigner.PublicKey(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
 		log:                   serviceLog,
@@ -136,19 +162,25 @@ func NewService(
 	return s, nil
 }
 
-// SetEnabled sets the enabled state of the p2p bidder service.
+// SetEnabled sets the enabled state of the p2p bidder service. The flag is
+// status reporting only (WebUI/API); the per-slot bid decision comes solely
+// from the action plan's frozen snapshots.
 func (s *Service) SetEnabled(enabled bool) {
 	s.enabled.Store(enabled)
 }
 
-// IsEnabled returns whether the p2p bidder service is enabled.
+// IsEnabled returns whether the p2p bidder service is enabled (status
+// reporting only; not consulted by the bid scheduler).
 func (s *Service) IsEnabled() bool {
 	return s.enabled.Load()
 }
 
-// SubscribeBidSubmissions subscribes to bid submission events.
-func (s *Service) SubscribeBidSubmissions(capacity int) *utils.Subscription[*BidSubmissionEvent] {
-	return s.bidSubmissionDispatch.Subscribe(capacity, false)
+// SubscribeBidSubmissions subscribes to bid submission events. Blocking
+// subscriptions never drop events (authoritative consumers, e.g. the slot
+// results tracker); non-blocking ones drop on a full buffer (e.g. the WebUI
+// SSE bridge).
+func (s *Service) SubscribeBidSubmissions(capacity int, blocking bool) *utils.Subscription[*BidSubmissionEvent] {
+	return s.bidSubmissionDispatch.Subscribe(capacity, blocking)
 }
 
 // FireBidSubmission fires a bid submission event.
@@ -192,7 +224,6 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 	// The scheduler skips bidding for slots without cached proposer preferences:
 	// the BN's gossip validator silently rejects such bids.
 	s.scheduler = NewScheduler(
-		s.cfg,
 		s.chainSvc,
 		s.bidCreator,
 		s.bidTracker,
@@ -200,6 +231,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		s,
 		s.blsSigner,
 		s.propPrefsStore,
+		s.planSvc,
 		s.log,
 	)
 
@@ -257,7 +289,11 @@ func (s *Service) run() {
 			}
 
 		case <-ticker.C:
-			if s.enabled.Load() && s.IsRegistered() {
+			// The enable policy is per slot: the scheduler resolves it from
+			// the frozen action plan (a plan may activate bidding for a slot
+			// even when ePBS is globally disabled). Registration stays a hard
+			// availability gate.
+			if s.IsRegistered() {
 				s.scheduler.ProcessTick(s.ctx)
 			}
 		}
@@ -418,14 +454,4 @@ func (s *Service) GetBuilderIndex() uint64 {
 // GetBuilderPubkey returns the builder public key.
 func (s *Service) GetBuilderPubkey() phase0.BLSPubKey {
 	return s.builderPubkey
-}
-
-// UpdateConfig updates the service configuration at runtime.
-func (s *Service) UpdateConfig(cfg *config.EPBSConfig) {
-	s.cfg = cfg
-	if s.scheduler != nil {
-		s.scheduler.UpdateConfig(cfg)
-	}
-
-	s.log.Info("p2p bidder configuration updated")
 }
