@@ -114,7 +114,7 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 				chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), logger)
 
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, revealSvc, payments, logger)
-			includedSub := tracker.SubscribeIncluded(4)
+			includedSub := tracker.SubscribeIncluded(4, false)
 
 			defer includedSub.Unsubscribe()
 

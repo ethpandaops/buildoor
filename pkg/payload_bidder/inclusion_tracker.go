@@ -74,8 +74,8 @@ func NewInclusionTracker(
 }
 
 // SubscribeIncluded subscribes to payload inclusion events.
-func (t *InclusionTracker) SubscribeIncluded(capacity int) *utils.Subscription[*PayloadIncludedEvent] {
-	return t.includedDispatch.Subscribe(capacity, false)
+func (t *InclusionTracker) SubscribeIncluded(capacity int, blocking bool) *utils.Subscription[*PayloadIncludedEvent] {
+	return t.includedDispatch.Subscribe(capacity, blocking)
 }
 
 // Start starts the inclusion tracker's main loop.

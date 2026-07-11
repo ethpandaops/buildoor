@@ -131,7 +131,7 @@ func waitForResult(t *testing.T, ch <-chan *RevealResult, timeout time.Duration)
 
 func TestRevealService_RevealsAtDueTime(t *testing.T) {
 	env := newRevealTestEnv(t, 4*time.Second, 500)
-	sub := env.svc.SubscribeResults(4)
+	sub := env.svc.SubscribeResults(4, false)
 
 	defer sub.Unsubscribe()
 
@@ -182,7 +182,7 @@ func TestRevealService_RevealsAtDueTime(t *testing.T) {
 
 func TestRevealService_DedupsBySlot(t *testing.T) {
 	env := newRevealTestEnv(t, 4*time.Second, 10)
-	sub := env.svc.SubscribeResults(4)
+	sub := env.svc.SubscribeResults(4, false)
 
 	defer sub.Unsubscribe()
 
@@ -230,7 +230,7 @@ func TestRevealService_DedupsBySlot(t *testing.T) {
 func TestRevealService_RetriesThenGivesUp(t *testing.T) {
 	env := newRevealTestEnv(t, 10*time.Second, 10)
 	env.publisher.fail = true
-	sub := env.svc.SubscribeResults(8)
+	sub := env.svc.SubscribeResults(8, false)
 
 	defer sub.Unsubscribe()
 
@@ -280,7 +280,7 @@ func TestRevealService_SkipsStaleSlot(t *testing.T) {
 	// Slot 1 ended long ago.
 	env.chainSvc.genesisTime = time.Now().Add(-time.Minute)
 
-	sub := env.svc.SubscribeResults(4)
+	sub := env.svc.SubscribeResults(4, false)
 	defer sub.Unsubscribe()
 
 	require.NoError(t, env.svc.Start(context.Background()))
@@ -313,7 +313,7 @@ func TestRevealService_PlanSuppressedReveal(t *testing.T) {
 	slot := phase0.Slot(1)
 	applyRevealPlan(t, env.planSvc, slot, `{"mode":"disabled"}`)
 
-	sub := env.svc.SubscribeResults(4)
+	sub := env.svc.SubscribeResults(4, false)
 	defer sub.Unsubscribe()
 
 	require.NoError(t, env.svc.Start(context.Background()))
@@ -364,7 +364,7 @@ func TestRevealService_BypassDeadlinePublishesLate(t *testing.T) {
 	// within the validation bound of one extra slot.
 	applyRevealPlan(t, env.planSvc, slot, `{"mode":"custom","reveal_time_ms":500}`)
 
-	sub := env.svc.SubscribeResults(4)
+	sub := env.svc.SubscribeResults(4, false)
 	defer sub.Unsubscribe()
 
 	require.NoError(t, env.svc.Start(context.Background()))

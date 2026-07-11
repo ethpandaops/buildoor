@@ -287,24 +287,24 @@ func (s *Service) GetCLClient() *beacon.Client {
 
 // SubscribePayloadReady subscribes to payload ready events.
 // Consumers (like the ePBS service) use this to receive built payloads.
-func (s *Service) SubscribePayloadReady(capacity int) *utils.Subscription[*Payload] {
-	return s.payloadReadyDispatcher.Subscribe(capacity, false)
+func (s *Service) SubscribePayloadReady(capacity int, blocking bool) *utils.Subscription[*Payload] {
+	return s.payloadReadyDispatcher.Subscribe(capacity, blocking)
 }
 
 // SubscribePayloadBuildStarted subscribes to payload build started events.
 // Consumers (like the WebUI) use this to render builds as in-progress.
 func (s *Service) SubscribePayloadBuildStarted(
-	capacity int,
+	capacity int, blocking bool,
 ) *utils.Subscription[*PayloadBuildStartedEvent] {
-	return s.buildStartedDispatcher.Subscribe(capacity, false)
+	return s.buildStartedDispatcher.Subscribe(capacity, blocking)
 }
 
 // SubscribePayloadBuildFailed subscribes to payload build failed events.
 // Consumers (like the WebUI) use this to mark in-progress builds as failed.
 func (s *Service) SubscribePayloadBuildFailed(
-	capacity int,
+	capacity int, blocking bool,
 ) *utils.Subscription[*PayloadBuildFailedEvent] {
-	return s.buildFailedDispatcher.Subscribe(capacity, false)
+	return s.buildFailedDispatcher.Subscribe(capacity, blocking)
 }
 
 // SubscribeBuildSkipped subscribes to build skipped events. Authoritative

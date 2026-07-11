@@ -164,8 +164,8 @@ func (s *RevealService) SetBuilderIndex(index uint64) {
 }
 
 // SubscribeResults subscribes to reveal results (consumed by the WebUI).
-func (s *RevealService) SubscribeResults(capacity int) *utils.Subscription[*RevealResult] {
-	return s.results.Subscribe(capacity, false)
+func (s *RevealService) SubscribeResults(capacity int, blocking bool) *utils.Subscription[*RevealResult] {
+	return s.results.Subscribe(capacity, blocking)
 }
 
 // RequestReveal enqueues a reveal request; non-blocking: a full queue is
