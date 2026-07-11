@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -34,6 +36,7 @@ type Service struct {
 	cfg                    *config.Config
 	clClient               *beacon.Client
 	chainSvc               chain.Service
+	planSvc                *action_plan.PlanService // per-slot scheduling authority
 	engineClient           EngineClient
 	feeRecipient           common.Address
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
@@ -42,7 +45,7 @@ type Service struct {
 	payloadReadyDispatcher *utils.Dispatcher[*Payload]
 	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
 	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
-	slotManager            *SlotManager
+	buildSkippedDispatcher *utils.Dispatcher[*BuildSkippedEvent]
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
@@ -60,10 +63,14 @@ type Service struct {
 	// Build tracking
 	scheduledBuildMu  sync.Mutex
 	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
+	skipFiredSlots    map[phase0.Slot]bool // Slots a BuildSkippedEvent was fired for (dedup per slot)
 
 	// Payload inclusion tracking (deduplication between detection methods)
 	wonPayloadsMu sync.Mutex
 	wonPayloads   map[phase0.Hash32]phase0.Slot
+
+	// lastBuiltSlot tracks the most recently built slot (WebUI status).
+	lastBuiltSlot atomic.Uint64
 
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
@@ -82,10 +89,13 @@ type ELClientVersion struct {
 // NewService creates a new builder service.
 // Proposer settings (fee recipient, target gas limit) are resolved through the
 // resolvers registered via AddProposerSettingsResolver before Start.
+// planSvc is the per-slot scheduling authority: every build decision polls it
+// for the slot's frozen plan (schedule, force/suppress, build timing).
 func NewService(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
+	planSvc *action_plan.PlanService,
 	engineClient EngineClient,
 	feeRecipient common.Address,
 	log logrus.FieldLogger,
@@ -96,15 +106,18 @@ func NewService(
 		cfg:                    cfg,
 		clClient:               clClient,
 		chainSvc:               chainSvc,
+		planSvc:                planSvc,
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*Payload]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
 		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
+		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		buildStartedSlots:      make(map[phase0.Slot]bool),
+		skipFiredSlots:         make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
 	}
 
@@ -114,9 +127,6 @@ func NewService(
 // Start initializes and starts the builder service.
 func (s *Service) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
-
-	// Initialize managers
-	s.slotManager = NewSlotManager(s.cfg)
 
 	// Create payload builder
 	s.payloadBuilder = NewPayloadBuilder(
@@ -245,19 +255,19 @@ func (s *Service) GetConfig() *config.Config {
 	return s.cfg
 }
 
-// UpdateConfig updates the service configuration at runtime.
+// UpdateConfig updates the service configuration at runtime. Schedule
+// changes are handled by the plan service (the scheduling authority).
 func (s *Service) UpdateConfig(cfg *config.Config) error {
 	s.cfg = cfg
-	s.slotManager.UpdateConfig(cfg)
 
 	s.log.Info("Configuration updated")
 
 	return nil
 }
 
-// GetCurrentSlot returns the current slot.
+// GetCurrentSlot returns the most recently built slot.
 func (s *Service) GetCurrentSlot() phase0.Slot {
-	return s.slotManager.GetCurrentSlot()
+	return phase0.Slot(s.lastBuiltSlot.Load())
 }
 
 // GetChainSpec returns the chain specification.
@@ -295,6 +305,16 @@ func (s *Service) SubscribePayloadBuildFailed(
 	capacity int,
 ) *utils.Subscription[*PayloadBuildFailedEvent] {
 	return s.buildFailedDispatcher.Subscribe(capacity, false)
+}
+
+// SubscribeBuildSkipped subscribes to build skipped events. Authoritative
+// consumers (the slot results tracker) should pass blocking=true so no skip
+// is lost; informational consumers should pass blocking=false.
+func (s *Service) SubscribeBuildSkipped(
+	capacity int,
+	blocking bool,
+) *utils.Subscription[*BuildSkippedEvent] {
+	return s.buildSkippedDispatcher.Subscribe(capacity, blocking)
 }
 
 // GetPayloadCache returns the payload cache for direct access.
@@ -383,9 +403,19 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
-	// Check if we should build for this slot
-	if !s.slotManager.ShouldBuildForSlot(event.ProposalSlot) {
-		s.log.WithField("slot", event.ProposalSlot).Debug("Skipping slot per schedule")
+	// Resolve the slot's immutable action plan snapshot once. The plan
+	// service is the scheduling authority: the frozen snapshot carries the
+	// complete build decision (schedule + plan force/suppress + timing).
+	frozen := s.planSvc.Freeze(event.ProposalSlot)
+
+	if !frozen.Build.Build {
+		s.log.WithFields(logrus.Fields{
+			"slot":   event.ProposalSlot,
+			"reason": frozen.Build.SkipReason,
+		}).Debug("Skipping build for slot")
+
+		s.fireBuildSkipped(event.ProposalSlot, frozen.Build)
+
 		return
 	}
 
@@ -398,16 +428,54 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	s.buildStartedSlots[event.ProposalSlot] = true
 	s.scheduledBuildMu.Unlock()
 
-	s.scheduleBuildForSlot(event.ProposalSlot)
+	s.scheduleBuildForSlot(event.ProposalSlot, frozen.Build.BuildStartTimeMs)
+}
+
+// fireBuildSkipped emits a BuildSkippedEvent (once per slot) when the skip is
+// worth recording: a plan exists for the slot or a consumer is effectively
+// active (build.PlanInvolved), so a results tracker can explain why no
+// payload was produced. Other skips stay silent.
+func (s *Service) fireBuildSkipped(slot phase0.Slot, build *action_plan.ResolvedBuildSettings) {
+	if !build.PlanInvolved {
+		return
+	}
+
+	reason := build.SkipReason
+
+	s.scheduledBuildMu.Lock()
+	if s.skipFiredSlots[slot] {
+		s.scheduledBuildMu.Unlock()
+
+		return
+	}
+
+	s.skipFiredSlots[slot] = true
+
+	// Prune inline: the emitPayloadReady cleanup only runs on successful
+	// builds, which never happen when every slot is skipped.
+	if slot > 64 {
+		cutoff := slot - 64
+		for oldSlot := range s.skipFiredSlots {
+			if oldSlot < cutoff {
+				delete(s.skipFiredSlots, oldSlot)
+			}
+		}
+	}
+	s.scheduledBuildMu.Unlock()
+
+	s.buildSkippedDispatcher.Fire(&BuildSkippedEvent{
+		Slot:   slot,
+		Reason: reason,
+	})
 }
 
 // scheduleBuildForSlot schedules payload building for the given slot.
-// BuildStartTime is milliseconds relative to the proposal slot start:
+// buildStartMs is the slot's frozen build start time, milliseconds relative
+// to the proposal slot start:
 //   - Negative values (e.g. -3000) mean before the slot starts.
 //   - Positive values mean after the slot starts.
 //   - Zero means build immediately when the event is received.
-func (s *Service) scheduleBuildForSlot(slot phase0.Slot) {
-	buildStartMs := s.cfg.EPBS.BuildStartTime
+func (s *Service) scheduleBuildForSlot(slot phase0.Slot, buildStartMs int64) {
 	slotStart := s.chainSvc.SlotToTime(slot)
 	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
 	delay := time.Until(buildTime)
@@ -518,8 +586,9 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
-	// Mark slot as built
-	s.slotManager.OnSlotBuilt(slot)
+	// Mark slot as built (next_n schedule accounting + WebUI status).
+	s.planSvc.OnSlotBuilt(slot)
+	s.lastBuiltSlot.Store(uint64(slot))
 
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.SlotsBuilt++
