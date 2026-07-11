@@ -60,6 +60,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
+	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
@@ -87,9 +88,15 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
+
+	// Per-slot result/artifact history
+	rootCmd.PersistentFlags().Uint64("slot-result-retention-epochs", defaults.SlotResultRetentionEpochs, "Epochs of per-slot action plan + result history to keep before pruning (must be > 0)")
+	rootCmd.PersistentFlags().Uint64("slot-artifact-retention-epochs", defaults.SlotArtifactRetentionEpochs, "Epochs of raw SSZ artifacts (payloads, signed bids, envelopes) to keep in the state-db; raw payloads dominate disk usage (must be > 0)")
+	rootCmd.PersistentFlags().Bool("slot-artifact-capture-enabled", defaults.SlotArtifactCaptureEnabled, "Capture raw SSZ artifacts (payloads, signed bids, envelopes) per slot; result summaries are recorded regardless")
 
 	// Validator ranges
 	rootCmd.PersistentFlags().String("validator-ranges-file", "", "Path to validator ranges YAML file (format: '0-127: client-name')")
@@ -165,6 +172,7 @@ func initConfig() error {
 			BuilderURL:            v.GetString("builder-api-url"),
 			RequireRequestAuth:    v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
+			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
 		},
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
@@ -178,16 +186,20 @@ func initConfig() error {
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
 		EPBS: config.EPBSConfig{
-			BuildStartTime: v.GetInt64("build-start-time"),
-			BidStartTime:   v.GetInt64("epbs-bid-start"),
-			BidEndTime:     v.GetInt64("epbs-bid-end"),
-			RevealTime:     v.GetInt64("epbs-reveal-time"),
-			BidMinAmount:   v.GetUint64("epbs-bid-min"),
-			BidIncrease:    v.GetUint64("epbs-bid-increase"),
-			BidInterval:    v.GetInt64("epbs-bid-interval"),
-			BidSubsidy:     v.GetUint64("epbs-bid-subsidy"),
+			BuildStartTime:   v.GetInt64("build-start-time"),
+			BidStartTime:     v.GetInt64("epbs-bid-start"),
+			BidEndTime:       v.GetInt64("epbs-bid-end"),
+			RevealTime:       v.GetInt64("epbs-reveal-time"),
+			BidMinAmount:     v.GetUint64("epbs-bid-min"),
+			BidIncrease:      v.GetUint64("epbs-bid-increase"),
+			BidInterval:      v.GetInt64("epbs-bid-interval"),
+			BidSubsidy:       v.GetUint64("epbs-bid-subsidy"),
+			BidValueOverride: v.GetUint64("epbs-bid-value-override"),
 		},
-		PayloadBuildTime: v.GetUint64("payload-build-time"),
+		PayloadBuildTime:            v.GetUint64("payload-build-time"),
+		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),
+		SlotArtifactRetentionEpochs: v.GetUint64("slot-artifact-retention-epochs"),
+		SlotArtifactCaptureEnabled:  v.GetBool("slot-artifact-capture-enabled"),
 		ValidatorRanges: config.ValidatorRangesConfig{
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),

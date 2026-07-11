@@ -51,6 +51,18 @@ type Config struct {
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+	// SlotResultRetentionEpochs is how many epochs of per-slot result history
+	// (plans + outcome summaries) are kept before pruning, in memory and in the
+	// state-db. Must be > 0.
+	SlotResultRetentionEpochs uint64 `yaml:"slot_result_retention_epochs" json:"slot_result_retention_epochs"`
+	// SlotArtifactRetentionEpochs is how many epochs of raw SSZ artifacts
+	// (payloads, signed bids, envelopes) are kept in the slot_artifacts table.
+	// Raw payloads dominate disk usage — lower this on disk-sensitive
+	// deployments. Must be > 0.
+	SlotArtifactRetentionEpochs uint64 `yaml:"slot_artifact_retention_epochs" json:"slot_artifact_retention_epochs"`
+	// SlotArtifactCaptureEnabled toggles raw SSZ artifact capture. Result
+	// summaries are recorded regardless.
+	SlotArtifactCaptureEnabled bool `yaml:"slot_artifact_capture_enabled" json:"slot_artifact_capture_enabled"`
 	// StateDBPath, when set, enables the optional SQLite state-db at this path.
 	// It persists UI setting overrides, won blocks, validator registrations,
 	// proposer preferences and an audit log across restarts. Startup-only and
@@ -95,6 +107,11 @@ type BuilderAPIConfig struct {
 	// to the getHeader bid value in the Fulu Builder API, and to the block value that
 	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+
+	// ValueOverrideGwei, when non-zero, replaces the served bid's total value
+	// (block value + subsidy) with this absolute amount in gwei — an alternative
+	// to the subsidy for testing. Per-slot action plans override this per slot.
+	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
@@ -129,6 +146,13 @@ type EPBSConfig struct {
 	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
 	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
 	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
+
+	// BidValueOverride, when non-zero, replaces the bid base value
+	// (max(blockValue, BidMinAmount) + BidSubsidy) with this absolute amount in
+	// gwei — an alternative to the subsidy for testing; allows underbidding the
+	// block value. BidIncrease still applies per subsequent bid. Per-slot action
+	// plans override this per slot.
+	BidValueOverride uint64 `yaml:"bid_value_override" json:"bid_value_override"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.
