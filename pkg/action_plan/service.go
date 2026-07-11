@@ -48,6 +48,10 @@ type PlanService struct {
 	mu     sync.Mutex
 	frozen map[phase0.Slot]*FrozenPlan
 
+	// slotsBuilt counts schedule-consuming builds for next_n mode (forced
+	// builds are exempt). Guarded by mu.
+	slotsBuilt uint64
+
 	changes utils.Dispatcher[*PlanChangeEvent]
 
 	ctx    context.Context
@@ -166,10 +170,60 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	}
 
 	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
-	frozen := resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now())
+	frozen := resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
 	s.frozen[slot] = frozen
 
 	return frozen
+}
+
+// OnSlotBuilt records a successfully built slot for the next_n schedule
+// accounting. Forced (plan-activated) builds never consume the budget.
+func (s *PlanService) OnSlotBuilt(slot phase0.Slot) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if frozen, ok := s.frozen[slot]; ok && frozen.Build != nil && frozen.Build.Forced {
+		return
+	}
+
+	s.slotsBuilt++
+}
+
+// UpdateConfig reacts to global settings changes. Switching to next_n mode
+// resets the built-slot counter so the budget restarts (mirroring the
+// previous slot-manager behavior).
+func (s *PlanService) UpdateConfig() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cfg.Schedule.Mode == config.ScheduleModeNextN {
+		s.slotsBuilt = 0
+	}
+}
+
+// GetSlotsBuilt returns the number of schedule-consuming builds so far.
+func (s *PlanService) GetSlotsBuilt() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.slotsBuilt
+}
+
+// GetSlotsRemaining returns the remaining next_n build budget, or -1 when
+// the schedule is unlimited.
+func (s *PlanService) GetSlotsRemaining() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cfg.Schedule.Mode != config.ScheduleModeNextN {
+		return -1
+	}
+
+	if s.slotsBuilt >= s.cfg.Schedule.NextN {
+		return 0
+	}
+
+	return int(s.cfg.Schedule.NextN - s.slotsBuilt)
 }
 
 // IsFrozen reports whether the slot's plan has been frozen already.

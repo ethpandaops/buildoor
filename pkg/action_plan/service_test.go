@@ -371,6 +371,187 @@ func TestGetRangeIsSortedAndBounded(t *testing.T) {
 	require.Equal(t, phase0.Slot(2003), plans[1].Slot)
 }
 
+func TestFreezeBuildDecision(t *testing.T) {
+	customBid := json.RawMessage(`{"mode":"custom"}`)
+	disabledBoth := map[string]json.RawMessage{
+		"bid":         json.RawMessage(`{"mode":"disabled"}`),
+		"builder_api": json.RawMessage(`{"mode":"disabled"}`),
+	}
+
+	tests := []struct {
+		name       string
+		mode       config.ScheduleMode
+		everyNth   uint64
+		nextN      uint64
+		startSlot  uint64
+		slotsBuilt uint64
+		epbsOn     bool
+		apiOn      bool
+		fork       version.DataVersion
+		slot       uint64
+		bidPatch   json.RawMessage
+		apiPatch   json.RawMessage
+		wantBuild  bool
+		wantForced bool
+		wantReason string
+	}{
+		{
+			name: "mode all builds", mode: config.ScheduleModeAll,
+			epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: true,
+		},
+		{
+			name: "every_nth skips off-cadence slots", mode: config.ScheduleModeEveryN,
+			everyNth: 4, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: false, wantReason: BuildSkipReasonSchedule,
+		},
+		{
+			name: "every_nth builds on-cadence slots", mode: config.ScheduleModeEveryN,
+			everyNth: 4, epbsOn: true, fork: version.DataVersionGloas, slot: 7004,
+			wantBuild: true,
+		},
+		{
+			name: "every_nth honors start slot offset", mode: config.ScheduleModeEveryN,
+			everyNth: 4, startSlot: 7001, epbsOn: true, fork: version.DataVersionGloas, slot: 7005,
+			wantBuild: true,
+		},
+		{
+			name: "start slot gates building", mode: config.ScheduleModeAll,
+			startSlot: 8000, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: false, wantReason: BuildSkipReasonSchedule,
+		},
+		{
+			name: "next_n with remaining budget builds", mode: config.ScheduleModeNextN,
+			nextN: 3, slotsBuilt: 2, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: true,
+		},
+		{
+			name: "next_n with exhausted budget skips", mode: config.ScheduleModeNextN,
+			nextN: 3, slotsBuilt: 3, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: false, wantReason: BuildSkipReasonSchedule,
+		},
+		{
+			name: "custom plan forces past exhausted next_n", mode: config.ScheduleModeNextN,
+			nextN: 3, slotsBuilt: 3, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			bidPatch:  customBid,
+			wantBuild: true, wantForced: true,
+		},
+		{
+			name: "custom plan forces past every_nth", mode: config.ScheduleModeEveryN,
+			everyNth: 4, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			bidPatch:  customBid,
+			wantBuild: true, wantForced: true,
+		},
+		{
+			name: "custom on enabled module still forces", mode: config.ScheduleModeEveryN,
+			everyNth: 4, epbsOn: true, apiOn: true, fork: version.DataVersionGloas, slot: 7001,
+			apiPatch:  json.RawMessage(`{"mode":"custom"}`),
+			wantBuild: true, wantForced: true,
+		},
+		{
+			name: "custom on unavailable consumer cannot force", mode: config.ScheduleModeAll,
+			epbsOn: false, apiOn: false, fork: version.DataVersionElectra, slot: 7001,
+			bidPatch:  customBid,
+			wantBuild: false, wantReason: BuildSkipReasonNoConsumer,
+		},
+		{
+			name: "all consumers suppressed by plan", mode: config.ScheduleModeAll,
+			epbsOn: true, apiOn: true, fork: version.DataVersionGloas, slot: 7001,
+			bidPatch: disabledBoth["bid"], apiPatch: disabledBoth["builder_api"],
+			wantBuild: false, wantReason: BuildSkipReasonPlanDisabled,
+		},
+		{
+			name: "globals off without plan", mode: config.ScheduleModeAll,
+			epbsOn: false, apiOn: false, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: false, wantReason: BuildSkipReasonNoConsumer,
+		},
+		{
+			name: "reveal-only plan falls through to schedule", mode: config.ScheduleModeEveryN,
+			everyNth: 4, epbsOn: true, fork: version.DataVersionGloas, slot: 7001,
+			wantBuild: false, wantReason: BuildSkipReasonSchedule,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chainSvc := newStubChain()
+			chainSvc.fork = tt.fork
+
+			cfg := config.DefaultConfig()
+			cfg.EPBSEnabled = tt.epbsOn
+			cfg.BuilderAPIEnabled = tt.apiOn
+			cfg.APIPort = 1
+			cfg.Schedule.Mode = tt.mode
+			cfg.Schedule.EveryNth = tt.everyNth
+			cfg.Schedule.NextN = tt.nextN
+			cfg.Schedule.StartSlot = tt.startSlot
+			cfg.EPBS.BuildStartTime = -1234
+
+			svc := newTestService(chainSvc, cfg)
+			svc.slotsBuilt = tt.slotsBuilt
+
+			if tt.bidPatch != nil || tt.apiPatch != nil {
+				_, err := svc.ApplyUpdates([]*PlanUpdate{{
+					Slots:      []uint64{tt.slot},
+					Bid:        tt.bidPatch,
+					BuilderAPI: tt.apiPatch,
+				}}, "tester")
+				require.NoError(t, err)
+			}
+
+			frozen := svc.Freeze(phase0.Slot(tt.slot))
+			require.NotNil(t, frozen.Build)
+			require.Equal(t, tt.wantBuild, frozen.Build.Build, "build decision")
+			require.Equal(t, tt.wantForced, frozen.Build.Forced, "forced")
+			require.Equal(t, tt.wantReason, frozen.Build.SkipReason, "skip reason")
+			require.Equal(t, int64(-1234), frozen.Build.BuildStartTimeMs)
+		})
+	}
+}
+
+func TestOnSlotBuiltNextNAccounting(t *testing.T) {
+	chainSvc := newStubChain()
+
+	cfg := config.DefaultConfig()
+	cfg.EPBSEnabled = true
+	cfg.Schedule.Mode = config.ScheduleModeNextN
+	cfg.Schedule.NextN = 2
+
+	svc := newTestService(chainSvc, cfg)
+
+	// First two scheduled builds consume the budget.
+	require.True(t, svc.Freeze(2000).Build.Build)
+	svc.OnSlotBuilt(2000)
+	require.Equal(t, uint64(1), svc.GetSlotsBuilt())
+	require.Equal(t, 1, svc.GetSlotsRemaining())
+
+	require.True(t, svc.Freeze(2001).Build.Build)
+	svc.OnSlotBuilt(2001)
+	require.Equal(t, 0, svc.GetSlotsRemaining())
+
+	// Budget exhausted.
+	require.False(t, svc.Freeze(2002).Build.Build)
+
+	// A forced build past the budget does not consume it.
+	_, err := svc.ApplyUpdates([]*PlanUpdate{{
+		Slots: []uint64{2003},
+		Bid:   json.RawMessage(`{"mode":"custom"}`),
+	}}, "tester")
+	require.NoError(t, err)
+
+	frozen := svc.Freeze(2003)
+	require.True(t, frozen.Build.Build)
+	require.True(t, frozen.Build.Forced)
+
+	svc.OnSlotBuilt(2003)
+	require.Equal(t, uint64(2), svc.GetSlotsBuilt(), "forced build must not consume the budget")
+
+	// Switching (back) to next_n via UpdateConfig resets the counter.
+	svc.UpdateConfig()
+	require.Equal(t, uint64(0), svc.GetSlotsBuilt())
+	require.Equal(t, 2, svc.GetSlotsRemaining())
+}
+
 func TestSubscribeChangesDeliversCommittedEvents(t *testing.T) {
 	chainSvc := newStubChain()
 	svc := newTestService(chainSvc, nil)

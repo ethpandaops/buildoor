@@ -9,6 +9,21 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
+// Build skip reasons carried by ResolvedBuildSettings.SkipReason.
+const (
+	// BuildSkipReasonSchedule marks slots skipped by the schedule (start
+	// slot, every_nth cadence or an exhausted next_n budget).
+	BuildSkipReasonSchedule = "schedule"
+	// BuildSkipReasonPlanDisabled marks slots where the per-slot plan
+	// suppressed a consumer that would otherwise be active, leaving no
+	// effectively active consumer.
+	BuildSkipReasonPlanDisabled = "plan_disabled"
+	// BuildSkipReasonNoConsumer marks slots where no consumer is effectively
+	// active (all globally disabled or not applicable) without a plan being
+	// responsible for it.
+	BuildSkipReasonNoConsumer = "no_consumer"
+)
+
 // FrozenPlan is the immutable per-slot execution snapshot taken when execution
 // for the slot can begin: the raw sparse plan plus all effective settings
 // resolved from the live global config at freeze time. Consumers act on the
@@ -21,11 +36,40 @@ type FrozenPlan struct {
 	Fork     string      `json:"fork"`           // fork name at the target slot
 	FrozenAt time.Time   `json:"frozen_at"`
 
+	// Build is the complete resolved build decision for the slot (schedule +
+	// plan force/suppress). Always non-nil.
+	Build *ResolvedBuildSettings `json:"build"`
+
 	// Resolved effective settings; a nil category = suppressed for this slot
 	// (by plan or by the global enable flags / protocol applicability).
 	Bid        *ResolvedBidSettings        `json:"bid,omitempty"`
 	BuilderAPI *ResolvedBuilderAPISettings `json:"builder_api,omitempty"`
 	Reveal     *ResolvedRevealSettings     `json:"reveal,omitempty"`
+}
+
+// ResolvedBuildSettings is the effective build decision and timing for a slot.
+// The plan service is the single scheduling authority: it resolves the global
+// schedule (all/every_nth/next_n, start slot), the per-slot plan's force/
+// suppress instructions and the effective build timing in one place.
+type ResolvedBuildSettings struct {
+	// Build is the final decision: build a payload for this slot or not.
+	Build bool `json:"build"`
+
+	// Forced marks builds the plan pushed past the schedule (they never
+	// consume the next_n budget).
+	Forced bool `json:"forced,omitempty"`
+
+	// SkipReason is one of the BuildSkipReason* constants when Build is
+	// false, empty otherwise.
+	SkipReason string `json:"skip_reason,omitempty"`
+
+	// PlanInvolved marks decisions where a per-slot plan existed or any
+	// consumer was effectively active — i.e. skips worth surfacing.
+	PlanInvolved bool `json:"plan_involved,omitempty"`
+
+	// BuildStartTimeMs is the effective build start time, milliseconds
+	// relative to slot start (signed).
+	BuildStartTimeMs int64 `json:"build_start_time_ms"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -78,9 +122,10 @@ type ResolvedRevealSettings struct {
 }
 
 // resolveFrozenPlan merges the live global config with a slot's plan (which
-// may be nil) into the frozen execution snapshot.
+// may be nil) into the frozen execution snapshot. slotsBuilt is the schedule
+// counter for next_n mode at freeze time.
 func resolveFrozenPlan(slot phase0.Slot, plan *SlotPlan, cfg *config.Config,
-	fork version.DataVersion, frozenAt time.Time) *FrozenPlan {
+	fork version.DataVersion, frozenAt time.Time, slotsBuilt uint64) *FrozenPlan {
 	frozen := &FrozenPlan{
 		Slot:     slot,
 		Plan:     plan,
@@ -91,8 +136,128 @@ func resolveFrozenPlan(slot phase0.Slot, plan *SlotPlan, cfg *config.Config,
 	frozen.Bid = resolveBid(plan, cfg, fork)
 	frozen.BuilderAPI = resolveBuilderAPI(plan, cfg)
 	frozen.Reveal = resolveReveal(plan, cfg)
+	frozen.Build = resolveBuild(frozen, cfg, slotsBuilt)
 
 	return frozen
+}
+
+// resolveBuild derives the complete build decision for the slot from the
+// already-resolved consumer settings, the plan's explicit instructions and
+// the global schedule.
+func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *ResolvedBuildSettings {
+	build := &ResolvedBuildSettings{
+		BuildStartTimeMs: cfg.EPBS.BuildStartTime,
+		PlanInvolved: frozen.Plan != nil || frozen.Bid != nil ||
+			frozen.BuilderAPI != nil,
+	}
+
+	// A plan that explicitly activates (mode custom) an available consumer
+	// forces the build past the schedule. A merely-inherited active consumer
+	// never forces, and a custom category whose consumer is unavailable
+	// (e.g. p2p bidding pre-Gloas) cannot force either.
+	if planForcesConsumer(frozen) {
+		build.Build = true
+		build.Forced = true
+
+		return build
+	}
+
+	// Without any effectively active consumer the payload would have no
+	// taker, so building is pointless.
+	if frozen.Bid == nil && frozen.BuilderAPI == nil {
+		if planSuppressesActiveConsumer(frozen, cfg) {
+			build.SkipReason = BuildSkipReasonPlanDisabled
+		} else {
+			build.SkipReason = BuildSkipReasonNoConsumer
+		}
+
+		return build
+	}
+
+	// Global schedule.
+	startSlot := phase0.Slot(cfg.Schedule.StartSlot)
+	if startSlot > 0 && frozen.Slot < startSlot {
+		build.SkipReason = BuildSkipReasonSchedule
+
+		return build
+	}
+
+	switch cfg.Schedule.Mode {
+	case config.ScheduleModeEveryN:
+		if cfg.Schedule.EveryNth == 0 {
+			build.Build = true
+
+			return build
+		}
+
+		slotsSinceStart := uint64(frozen.Slot)
+		if startSlot > 0 {
+			slotsSinceStart = uint64(frozen.Slot - startSlot)
+		}
+
+		if slotsSinceStart%cfg.Schedule.EveryNth == 0 {
+			build.Build = true
+		} else {
+			build.SkipReason = BuildSkipReasonSchedule
+		}
+
+	case config.ScheduleModeNextN:
+		if cfg.Schedule.NextN > 0 && slotsBuilt < cfg.Schedule.NextN {
+			build.Build = true
+		} else {
+			build.SkipReason = BuildSkipReasonSchedule
+		}
+
+	case config.ScheduleModeAll:
+		build.Build = true
+
+	default:
+		build.Build = true
+	}
+
+	return build
+}
+
+// planForcesConsumer reports whether the plan explicitly activates (mode
+// custom) a consumer that is actually available for the slot.
+func planForcesConsumer(frozen *FrozenPlan) bool {
+	if frozen.Plan == nil {
+		return false
+	}
+
+	if override := frozen.Plan.BidOverride(); override != nil && *override && frozen.Bid != nil {
+		return true
+	}
+
+	if override := frozen.Plan.BuilderAPIOverride(); override != nil && *override &&
+		frozen.BuilderAPI != nil {
+		return true
+	}
+
+	return false
+}
+
+// planSuppressesActiveConsumer reports whether the plan explicitly disabled a
+// consumer whose module is globally enabled — i.e. the plan is the reason no
+// consumer is active for the slot. The pre-Gloas fork gate on p2p bidding is
+// deliberately not re-checked: the reason is informational, and an operator
+// who disabled bidding for a slot gets "plan_disabled" even when the fork
+// alone would already have suppressed it.
+func planSuppressesActiveConsumer(frozen *FrozenPlan, cfg *config.Config) bool {
+	if frozen.Plan == nil {
+		return false
+	}
+
+	if override := frozen.Plan.BidOverride(); override != nil && !*override && cfg.EPBSEnabled {
+		return true
+	}
+
+	if override := frozen.Plan.BuilderAPIOverride(); override != nil && !*override &&
+		cfg.BuilderAPIEnabled && cfg.APIPort > 0 {
+		return true
+	}
+
+	return false
 }
 
 func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *ResolvedBidSettings {
