@@ -48,8 +48,8 @@ type GetExecutionPayloadBidResponse struct {
 func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
 
-	if !h.enabled.Load() || h.payloadCache == nil || h.blsSigner == nil {
-		log.Warn("getExecutionPayloadBid: returning 204 — builder service disabled or signer/payload cache unavailable")
+	if h.payloadCache == nil || h.blsSigner == nil {
+		log.Warn("getExecutionPayloadBid: returning 204 — signer or payload cache unavailable")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -97,6 +97,29 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	}
 	slot := phase0.Slot(slotU64)
 
+	// Bound the request horizon BEFORE freezing the slot's plan: proposers
+	// only ever request the current or next slot, and freezing arbitrary
+	// far-future slots would permanently lock their plans against edits.
+	if currentSlot := h.chainSvc.GetCurrentSlot(); slot > currentSlot+1 {
+		log.WithField("current_slot", currentSlot).Warn("getExecutionPayloadBid: slot too far ahead")
+		writeError(w, http.StatusBadRequest, "slot too far ahead: max current slot + 1")
+
+		return
+	}
+
+	// Effective enable: freeze the slot's action plan (idempotent) and act on
+	// the snapshot — the plan overrides the global enable flag in both
+	// directions for this slot.
+	frozenSettings, serve := h.frozenBuilderAPISettings(slot)
+	if !serve {
+		log.Info("getExecutionPayloadBid: returning 204 — bid serving suppressed (plan or global disable)")
+		h.recordBid(slot, h.chainSvc.ActiveForkAtEpoch(h.chainSvc.GetEpochOfSlot(slot)).String(),
+			"", nil, 0, 0, bidStatusSuppressed, "")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	h.bidsRequested.Add(1)
 
 	if h.events != nil {
@@ -112,7 +135,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	if fork < version.DataVersionGloas {
 		log.WithField("fork", fork.String()).Warn(
 			"getExecutionPayloadBid: 503 — post-Gloas Builder API dialect not available pre-Gloas")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
+			"post-Gloas builder API dialect not available pre-Gloas")
 		writeError(w, http.StatusServiceUnavailable, "post-Gloas builder API dialect not available pre-Gloas")
+
 		return
 	}
 
@@ -127,7 +153,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		log.WithError(err).WithField("fork", fork.String()).Warn(
 			"getExecutionPayloadBid: failed to get fork version for slot")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
+			"failed to get fork version for slot: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to get fork version for slot")
+
 		return
 	}
 
@@ -210,7 +239,9 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	event := h.payloadCache.Get(slot)
 	if event == nil {
 		log.Info("getExecutionPayloadBid: returning 204 — no cached payload for slot")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed, "no cached payload for slot")
 		w.WriteHeader(http.StatusNoContent)
+
 		return
 	}
 
@@ -219,7 +250,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
 			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_hash does not match cached payload")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
+			"parent_hash does not match cached payload")
 		writeError(w, http.StatusBadRequest, "parent_hash does not match cached payload")
+
 		return
 	}
 
@@ -228,14 +262,20 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 			"request_parent_root": "0x" + hex.EncodeToString(parentRoot[:]),
 			"cached_parent_root":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
 		}).Info("getExecutionPayloadBid: 400 — parent_root does not match cached payload")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
+			"parent_root does not match cached payload")
 		writeError(w, http.StatusBadRequest, "parent_root does not match cached payload")
+
 		return
 	}
 
 	signedPrefs, ok := h.propPrefsStore.Get(slot)
 	if !ok || signedPrefs == nil || signedPrefs.Message == nil {
 		log.Info("getExecutionPayloadBid: 400 — no proposer preferences cached for slot")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
+			"no proposer preferences cached for slot")
 		writeError(w, http.StatusBadRequest, "no proposer preferences cached for slot")
+
 		return
 	}
 	prefs := signedPrefs.Message
@@ -246,8 +286,18 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
 	// execution payment allowed in that case). Anything above the cap is paid
 	// trustlessly on-chain via Value.
+	//
+	// Value resolution per the frozen settings: an absolute total value (when
+	// set) replaces blockValue+subsidy entirely — before the execution-payment
+	// split; otherwise the (possibly per-slot overridden) subsidy is added to
+	// the block value.
 	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + h.cfg.BlockValueSubsidyGwei)
+	valueAfterSubsidy := phase0.Gwei(blockValueGwei + frozenSettings.SubsidyGwei)
+
+	if frozenSettings.TotalValueGwei != nil {
+		valueAfterSubsidy = phase0.Gwei(*frozenSettings.TotalValueGwei)
+	}
+
 	maxExecutionPayment := h.prefsStore.GetOrDefault(proposerPubkey)
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment
@@ -260,7 +310,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	}, h.bidderSigner, bidForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")
+		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),
+			bidStatusFailed, "failed to build signed bid: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to build signed bid")
+
 		return
 	}
 
@@ -287,6 +340,25 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		)
 	}
 
+	blockHashHex := "0x" + hex.EncodeToString(event.BlockHash[:])
+	totalValueGwei := uint64(valueAfterSubsidy)
+	executionPaymentGwei := uint64(executionPayment)
+
+	// Planned response delay: wait context-aware immediately before writing
+	// the bid response; a proposer hangup during the wait cancels the serve.
+	if frozenSettings.DelayMs > 0 {
+		select {
+		case <-time.After(time.Duration(frozenSettings.DelayMs) * time.Millisecond):
+		case <-r.Context().Done():
+			log.WithField("delay_ms", frozenSettings.DelayMs).Info(
+				"getExecutionPayloadBid: request cancelled during planned response delay")
+			h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+				bidStatusCancelled, "request context cancelled during planned response delay")
+
+			return
+		}
+	}
+
 	w.Header().Set("Eth-Consensus-Version", fork.String())
 
 	// Per builder-specs the response may be SSZ; the proposer opts in via the
@@ -295,20 +367,44 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		body, err := signedBid.MarshalSSZ()
 		if err != nil {
 			log.WithError(err).Warn("getExecutionPayloadBid: failed to SSZ-encode SignedExecutionPayloadBid")
+			h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+				bidStatusFailed, "failed to SSZ-encode SignedExecutionPayloadBid: "+err.Error())
 			writeError(w, http.StatusInternalServerError, "failed to encode bid")
+
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+
+		if _, err := w.Write(body); err != nil {
+			log.WithError(err).Warn("getExecutionPayloadBid: failed to write SSZ response")
+			h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+				bidStatusFailed, "failed to write SSZ response: "+err.Error())
+
+			return
+		}
+
+		h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+			bidStatusServed, "")
+
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(GetExecutionPayloadBidResponse{
+
+	if err := json.NewEncoder(w).Encode(GetExecutionPayloadBidResponse{
 		Version: fork.String(),
 		Data:    signedBid,
-	})
+	}); err != nil {
+		log.WithError(err).Warn("getExecutionPayloadBid: failed to write JSON response")
+		h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+			bidStatusFailed, "failed to write JSON response: "+err.Error())
+
+		return
+	}
+
+	h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
+		bidStatusServed, "")
 }

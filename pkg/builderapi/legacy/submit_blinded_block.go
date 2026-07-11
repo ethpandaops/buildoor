@@ -142,6 +142,8 @@ func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 	})
 	log.Debug("submitBlindedBlock request received")
 
+	h.recordSubmission(slot, submissionStatusReceived, "")
+
 	// Broadcast submitBlindedBlock received event
 	if h.events != nil {
 		h.events.BroadcastBuilderAPISubmitBlindedReceived(uint64(slot), blockHashHex)
@@ -150,19 +152,25 @@ func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 	event := h.payloadCache.GetByBlockHash(blockHash)
 	if event == nil {
 		log.Info("submitBlindedBlock: no cached payload for block hash (payload may not have been built or already evicted)")
+		h.recordSubmission(slot, submissionStatusFailed, "no matching payload for block hash")
 		writeError(w, http.StatusBadRequest, "no matching payload for block hash")
+
 		return
 	}
 
 	contents, err := UnblindSignedBlindedBeaconBlock(&blinded, event)
 	if err != nil {
 		log.WithError(err).Warn("submitBlindedBlock: unblind failed")
+		h.recordSubmission(slot, submissionStatusFailed, "unblind failed: "+err.Error())
 		writeError(w, http.StatusBadRequest, "unblind failed: "+err.Error())
+
 		return
 	}
 	if contents == nil {
 		log.Warn("submitBlindedBlock: unblind produced no contents")
+		h.recordSubmission(slot, submissionStatusFailed, "unblind produced no contents")
 		writeError(w, http.StatusBadRequest, "unblind produced no contents")
+
 		return
 	}
 
@@ -170,7 +178,9 @@ func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 
 	if h.clClient == nil {
 		log.Warn("submitBlindedBlock: no CL client available")
+		h.recordSubmission(slot, submissionStatusFailed, "no CL client available")
 		writeError(w, http.StatusBadRequest, "no CL client available")
+
 		return
 	}
 
@@ -187,18 +197,23 @@ func (h *Handler) handleSubmitBlindedBlock(w http.ResponseWriter, r *http.Reques
 
 	if err != nil {
 		log.WithError(err).Error("submitBlindedBlock: failed to convert unblinded contents to proposal")
+		h.recordSubmission(slot, submissionStatusFailed, "failed to convert block contents: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to convert block contents: "+err.Error())
+
 		return
 	}
 
 	if err := h.clClient.SubmitProposal(r.Context(), &api.SubmitProposalOpts{Proposal: proposal}); err != nil {
 		log.WithError(err).Error("submitBlindedBlock: failed to publish unblinded block")
+		h.recordSubmission(slot, submissionStatusFailed, "failed to publish block: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to publish block: "+err.Error())
+
 		return
 	}
 
 	log.Info("SubmitBlindedBlock: Successfully published block!")
 
+	h.recordSubmission(slot, submissionStatusAccepted, "")
 	h.blocksPublished.Add(1)
 
 	log.Infof("submitBlindedBlock: submitted unblinded block for slot %d, block hash %s", slot, blockHashHex)

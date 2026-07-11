@@ -160,7 +160,7 @@ func TestHandleRegisterValidators_OverwriteAndFlush(t *testing.T) {
 	defer store.Stop()
 
 	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), &stubChainService{},
-		payload_builder.NewPayloadCache(10), store, blsSigner)
+		newServingPlanService(&stubChainService{}), payload_builder.NewPayloadCache(10), store, blsSigner)
 	h.SetEnabled(true)
 
 	register := func(gasLimit uint64) {

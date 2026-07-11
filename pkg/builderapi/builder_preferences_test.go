@@ -67,7 +67,7 @@ func TestSubmitBuilderPreferences_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	body := signBuilderPrefsRequest(t, blsSigner, testBuilderURL, 100, 5_000_000_000, gfv)
@@ -91,7 +91,7 @@ func TestSubmitBuilderPreferences_SuccessSSZ(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	// Build the same signed request as the JSON path, but submit it SSZ-encoded.
@@ -116,7 +116,7 @@ func TestSubmitBuilderPreferences_SuccessSSZ(t *testing.T) {
 
 func TestSubmitBuilderPreferences_MalformedSSZ(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
@@ -130,7 +130,7 @@ func TestSubmitBuilderPreferences_MalformedSSZ(t *testing.T) {
 
 func TestSubmitBuilderPreferences_UnknownContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
@@ -148,7 +148,7 @@ func TestSubmitBuilderPreferences_LatestOverwrites(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(pk[:])
@@ -172,7 +172,7 @@ func TestSubmitBuilderPreferences_WrongBuilderURL(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	// Validly signed, but for a different builder URL than this builder's.
@@ -198,7 +198,7 @@ func TestSubmitBuilderPreferences_BadSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	// Signed by `other` (correct builder URL), but submitted under `validator`'s pubkey.
@@ -222,7 +222,7 @@ func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := &config.BuilderAPIConfig{} // BuilderURL empty
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	body := signBuilderPrefsRequest(t, blsSigner, testBuilderURL, 100, 5_000_000_000, gfv)
@@ -239,7 +239,7 @@ func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 
 func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
@@ -256,7 +256,7 @@ func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
 // preferences, so the handler rejects it with 400 (not 415).
 func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))
@@ -277,7 +277,7 @@ func TestSubmitBuilderPreferences_MissingContentType(t *testing.T) {
 
 func TestSubmitBuilderPreferences_Disabled(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{BuilderURL: testBuilderURL}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	// not enabled
 
 	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(make([]byte, 48))

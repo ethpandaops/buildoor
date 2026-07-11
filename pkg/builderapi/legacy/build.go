@@ -22,18 +22,25 @@ type BidSigner interface {
 	SignWithDomain(root phase0.Root, domain phase0.Domain) (phase0.BLSSignature, error)
 }
 
+// gweiFactor converts gwei to wei; the multiplication is done in uint256 so
+// large gwei amounts cannot overflow uint64.
+var gweiFactor = uint256.NewInt(1_000_000_000)
+
 // BuildSignedBuilderBid builds a SignedBuilderBid for the given fork from a Payload and the
 // proposer's pubkey, and signs it with the builder's BLS key using DOMAIN_APPLICATION_BUILDER
 // with the provided genesis fork version and a zero genesis validators root (matches
 // mev-boost-relay behavior). The bid carries the fork's field set (blob KZG commitments from
 // Deneb, execution requests from Electra).
 // subsidyGwei is added to the bid value so the proposer sees a higher bid (e.g. for testing).
+// totalValueGwei, when non-nil, is the absolute total bid value in gwei and replaces
+// blockValue+subsidy entirely (it may exceed the block value, e.g. for payment-edge testing).
 func BuildSignedBuilderBid(
 	event *payload_builder.Payload,
 	fork version.DataVersion,
 	proposerPubkey phase0.BLSPubKey,
 	blsSigner BidSigner,
 	subsidyGwei uint64,
+	totalValueGwei *uint64,
 	genesisForkVersion phase0.Version,
 	maxWithdrawalsPerPayload uint64,
 ) (*legacytypes.SignedBuilderBid, error) {
@@ -46,13 +53,22 @@ func BuildSignedBuilderBid(
 		return nil, err
 	}
 
-	value, overflow := uint256.FromBig(event.BlockValue)
-	if overflow || value == nil {
-		value = new(uint256.Int)
-	}
-	if subsidyGwei > 0 {
-		subsidyWei := subsidyGwei * 1_000_000_000
-		value.Add(value, new(uint256.Int).SetUint64(subsidyWei))
+	var value *uint256.Int
+
+	if totalValueGwei != nil {
+		value = new(uint256.Int).Mul(uint256.NewInt(*totalValueGwei), gweiFactor)
+	} else {
+		var overflow bool
+
+		value, overflow = uint256.FromBig(event.BlockValue)
+		if overflow || value == nil {
+			value = new(uint256.Int)
+		}
+
+		if subsidyGwei > 0 {
+			subsidyWei := new(uint256.Int).Mul(uint256.NewInt(subsidyGwei), gweiFactor)
+			value.Add(value, subsidyWei)
+		}
 	}
 
 	bid := &legacytypes.BuilderBid{

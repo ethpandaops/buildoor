@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
@@ -41,7 +42,9 @@ type stubChainService struct {
 	genesis       beacon.Genesis
 	forkVersion   phase0.Version
 	currentFork   version.DataVersion
+	currentSlot   phase0.Slot
 	pubkeyByIndex map[phase0.ValidatorIndex]phase0.BLSPubKey
+	chainSpec     *chain.ChainSpec
 }
 
 var _ chain.Service = (*stubChainService)(nil)
@@ -49,13 +52,13 @@ var _ chain.Service = (*stubChainService)(nil)
 func (m *stubChainService) Start(context.Context) error { return nil }
 func (m *stubChainService) Stop() error                 { return nil }
 
-func (m *stubChainService) GetChainSpec() *chain.ChainSpec { return nil }
+func (m *stubChainService) GetChainSpec() *chain.ChainSpec { return m.chainSpec }
 func (m *stubChainService) GetGenesis() *beacon.Genesis    { return &m.genesis }
 
 func (m *stubChainService) SlotToTime(phase0.Slot) time.Time { return time.Time{} }
 func (m *stubChainService) TimeToSlot(time.Time) phase0.Slot { return 0 }
 func (m *stubChainService) GetCurrentEpoch() phase0.Epoch    { return 0 }
-func (m *stubChainService) GetCurrentSlot() phase0.Slot      { return 0 }
+func (m *stubChainService) GetCurrentSlot() phase0.Slot      { return m.currentSlot }
 
 func (m *stubChainService) GetCurrentFork() version.DataVersion { return m.currentFork }
 func (m *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {
@@ -95,9 +98,17 @@ func (p *stubProposalSubmitter) SubmitProposal(_ context.Context, opts *api.Subm
 	return p.err
 }
 
+// newServingPlanService builds a real plan service whose global baseline
+// serves builder-api bids (API port set, builder API enabled, no per-slot
+// plans stored).
+func newServingPlanService(chainSvc chain.Service) *action_plan.PlanService {
+	return action_plan.NewPlanService(
+		&config.Config{APIPort: 8080, BuilderAPIEnabled: true}, chainSvc, logrus.New())
+}
+
 func newTestHandler(chainSvc chain.Service, blsSigner *signer.BLSSigner) *Handler {
 	return NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
-		payload_builder.NewPayloadCache(10),
+		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10),
 		memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration](), blsSigner)
 }
 
@@ -134,10 +145,9 @@ func TestHandleGetHeader_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
-	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(),
-		&stubChainService{currentFork: version.DataVersionFulu},
-		payload_builder.NewPayloadCache(10), store, blsSigner)
-	h.SetEnabled(true)
+	chainSvc := &stubChainService{currentFork: version.DataVersionFulu}
+	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
+		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10), store, blsSigner)
 
 	pk := blsSigner.PublicKey()
 	store.Put(pk, &apiv1.SignedValidatorRegistration{})
@@ -232,9 +242,15 @@ func blindedBlockJSON() string {
 	return `{"message":{"slot":"1","proposer_index":"0","parent_root":"0x0000000000000000000000000000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","body":{"randao_reveal":"` + randaoReveal96Hex + `","eth1_data":{"deposit_root":"0x0000000000000000000000000000000000000000000000000000000000000000","deposit_count":"0","block_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"graffiti":"0x0000000000000000000000000000000000000000000000000000000000000000","proposer_slashings":[],"attester_slashings":[],"attestations":[],"deposits":[],"voluntary_exits":[],"sync_aggregate":{"sync_committee_bits":"0x","sync_committee_signature":"` + randaoReveal96Hex + `"},"execution_payload_header":{"parent_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","fee_recipient":"0x0000000000000000000000000000000000000000","state_root":"0x0000000000000000000000000000000000000000000000000000000000000000","receipts_root":"0x0000000000000000000000000000000000000000000000000000000000000000","logs_bloom":"` + logsBloom256Hex + `","prev_randao":"0x0000000000000000000000000000000000000000000000000000000000000000","block_number":"0","gas_limit":"0","gas_used":"0","timestamp":"0","extra_data":"0x","base_fee_per_gas":"0","block_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","transactions_root":"0x0000000000000000000000000000000000000000000000000000000000000000","withdrawals_root":"0x0000000000000000000000000000000000000000000000000000000000000000","blob_gas_used":"0","excess_blob_gas":"0"},"bls_to_execution_changes":[],"blob_kzg_commitments":[],"execution_requests":{"deposits":[],"withdrawals":[],"consolidations":[]}}},"signature":"` + randaoReveal96Hex + `"}`
 }
 
-// seedPayload stores a payload matching the builder-specs Fulu example block hash
-// in the handler's payload cache and returns it.
+// seedPayload stores a slot-1 payload matching the builder-specs Fulu example
+// block hash in the handler's payload cache and returns it.
 func seedPayload(h *Handler, blockValue *big.Int) *payload_builder.Payload {
+	return seedPayloadAtSlot(h, 1, blockValue)
+}
+
+// seedPayloadAtSlot stores a payload for the given slot matching the
+// builder-specs Fulu example block hash in the handler's payload cache.
+func seedPayloadAtSlot(h *Handler, slot phase0.Slot, blockValue *big.Int) *payload_builder.Payload {
 	payload := &eth2all.ExecutionPayload{
 		Version:     version.DataVersionFulu,
 		ParentHash:  phase0.Hash32(blockHashFromBuilderSpecsFulu),
@@ -245,7 +261,7 @@ func seedPayload(h *Handler, blockValue *big.Int) *payload_builder.Payload {
 		BlockHash:   phase0.Hash32(blockHashFromBuilderSpecsFulu),
 	}
 	event := &payload_builder.Payload{
-		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+		Attributes:       &beacon.PayloadAttributesEvent{ProposalSlot: slot},
 		ExecutionPayload: payload,
 		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
 		BlockValue:       blockValue,

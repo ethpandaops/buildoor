@@ -127,6 +127,8 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	})
 	log.Debug("submitBeaconBlock request received")
 
+	h.recordSubmission(bid.Slot, submissionStatusReceived, "")
+
 	if h.events != nil {
 		h.events.BroadcastBuilderAPISubmitBlockReceived(uint64(bid.Slot), blockHashHex)
 	}
@@ -134,14 +136,18 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	event := h.payloadCache.GetByBlockHash(bid.BlockHash)
 	if event == nil {
 		log.Info("submitBeaconBlock: 400 — no cached payload for bid block hash")
+		h.recordSubmission(bid.Slot, submissionStatusFailed, "no cached payload for bid block hash")
 		writeError(w, http.StatusBadRequest, "no cached payload for bid block hash")
+
 		return
 	}
 
 	beaconBlockRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(block.Message)
 	if err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: failed to compute beacon block hash tree root")
+		h.recordSubmission(bid.Slot, submissionStatusFailed, "failed to compute beacon block root: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to compute beacon block root")
+
 		return
 	}
 	var blockRoot phase0.Root
@@ -152,7 +158,9 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	proposal, err := apiv1all.ProposalFromSignedBlock(&block)
 	if err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: failed to build proposal from beacon block")
+		h.recordSubmission(bid.Slot, submissionStatusFailed, "failed to build proposal: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to build proposal: "+err.Error())
+
 		return
 	}
 
@@ -162,7 +170,9 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		Proposal: proposal,
 	}); err != nil {
 		log.WithError(err).Error("submitBeaconBlock: failed to broadcast beacon block")
+		h.recordSubmission(bid.Slot, submissionStatusFailed, "failed to broadcast beacon block: "+err.Error())
 		writeError(w, http.StatusInternalServerError, "failed to broadcast beacon block: "+err.Error())
+
 		return
 	}
 	log.Info("submitBeaconBlock: broadcasted beacon block")
@@ -180,6 +190,8 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		},
 		Transport: payload_builder.BidTransportBuilderAPI,
 	})
+
+	h.recordSubmission(bid.Slot, submissionStatusAccepted, "")
 
 	if h.events != nil {
 		h.events.BroadcastBuilderAPISubmitBlockDelivered(uint64(bid.Slot), blockHashHex)
