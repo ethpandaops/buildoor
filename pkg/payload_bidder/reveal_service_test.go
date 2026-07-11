@@ -2,6 +2,7 @@ package payload_bidder
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -59,11 +61,14 @@ type revealTestEnv struct {
 	builderSvc *payload_builder.Service
 	payments   *PaymentTracker
 	publisher  *mockEnvelopePublisher
+	planSvc    *action_plan.PlanService
 	svc        *RevealService
 }
 
 // newRevealTestEnv creates a reveal service whose slot 1 starts "now", with
-// the given slot duration and reveal time (ms into the slot).
+// the given slot duration and reveal time (ms into the slot). A real plan
+// service is always wired in (it is a mandatory dependency); slots without a
+// stored plan resolve to the global reveal time without a deadline bypass.
 func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int64) *revealTestEnv {
 	t.Helper()
 
@@ -84,8 +89,10 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 	builderSvc := newTestBuilderSvc(chainSvc)
 	payments := NewPaymentTracker(chainSvc, log)
 	publisher := &mockEnvelopePublisher{}
+	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
-	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc, payments, log)
+	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc,
+		payments, planSvc, log)
 
 	return &revealTestEnv{
 		cfg:        cfg,
@@ -93,8 +100,20 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 		builderSvc: builderSvc,
 		payments:   payments,
 		publisher:  publisher,
+		planSvc:    planSvc,
 		svc:        svc,
 	}
+}
+
+// applyRevealPlan stores a reveal category plan for the slot.
+func applyRevealPlan(t *testing.T, planSvc *action_plan.PlanService, slot phase0.Slot, revealJSON string) {
+	t.Helper()
+
+	_, err := planSvc.ApplyUpdates([]*action_plan.PlanUpdate{{
+		Slots:  []uint64{uint64(slot)},
+		Reveal: json.RawMessage(revealJSON),
+	}}, "test")
+	require.NoError(t, err)
 }
 
 // waitForResult receives one reveal result or fails the test after timeout.
@@ -142,10 +161,12 @@ func TestRevealService_RevealsAtDueTime(t *testing.T) {
 	res := waitForResult(t, sub.Channel(), 2*time.Second)
 	assert.True(t, res.Success)
 	assert.False(t, res.Skipped)
+	assert.Empty(t, res.SkipReason)
 	assert.Equal(t, slot, res.Slot)
 	assert.Equal(t, payload_builder.BidTransportBuilderAPI, res.Transport)
 	assert.Equal(t, 1, res.Attempt)
 	assert.Equal(t, maxRevealAttempts, res.MaxAttempts)
+	assert.NotNil(t, res.Envelope, "successful result must carry the published envelope")
 
 	reveal := payload.Reveal()
 	require.NotNil(t, reveal, "payload must be marked revealed")
@@ -239,9 +260,12 @@ func TestRevealService_RetriesThenGivesUp(t *testing.T) {
 		res := waitForResult(t, sub.Channel(), 2*time.Second)
 		assert.False(t, res.Success)
 		assert.False(t, res.Skipped)
+		assert.Empty(t, res.SkipReason)
 		assert.Equal(t, attempt, res.Attempt)
 		assert.Equal(t, maxRevealAttempts, res.MaxAttempts)
 		assert.NotEmpty(t, res.Error)
+		assert.NotNil(t, res.Envelope,
+			"failed publish attempt %d must still carry the built envelope", attempt)
 	}
 
 	assert.Nil(t, payload.Reveal(), "payload must not be marked revealed")
@@ -250,6 +274,8 @@ func TestRevealService_RetriesThenGivesUp(t *testing.T) {
 }
 
 func TestRevealService_SkipsStaleSlot(t *testing.T) {
+	// No plan stored for the slot → the frozen plan resolves to the global
+	// reveal time without a deadline bypass, so a stale request is skipped.
 	env := newRevealTestEnv(t, 100*time.Millisecond, 10)
 	// Slot 1 ended long ago.
 	env.chainSvc.genesisTime = time.Now().Add(-time.Minute)
@@ -272,9 +298,94 @@ func TestRevealService_SkipsStaleSlot(t *testing.T) {
 	res := waitForResult(t, sub.Channel(), 2*time.Second)
 	assert.True(t, res.Skipped)
 	assert.False(t, res.Success)
+	assert.Equal(t, RevealSkipReasonLate, res.SkipReason)
 	assert.Equal(t, slot, res.Slot)
+	assert.Nil(t, res.Envelope, "skipped reveals must not carry an envelope")
 
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, 0, env.publisher.callCount(), "stale slot must never publish")
 	assert.Nil(t, payload.Reveal())
+}
+
+func TestRevealService_PlanSuppressedReveal(t *testing.T) {
+	env := newRevealTestEnv(t, 4*time.Second, 10)
+
+	slot := phase0.Slot(1)
+	applyRevealPlan(t, env.planSvc, slot, `{"mode":"disabled"}`)
+
+	sub := env.svc.SubscribeResults(4)
+	defer sub.Unsubscribe()
+
+	require.NoError(t, env.svc.Start(context.Background()))
+	defer env.svc.Stop()
+
+	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1))
+	blockInfo := &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}}
+
+	// Two requests for the suppressed slot — the second must be a no-op too.
+	env.svc.RequestReveal(&RevealRequest{
+		Payload: payload, BlockInfo: blockInfo,
+		Transport: payload_builder.BidTransportBuilderAPI,
+	})
+	env.svc.RequestReveal(&RevealRequest{
+		Payload: payload, BlockInfo: blockInfo,
+		Transport: payload_builder.BidTransportP2P,
+	})
+
+	res := waitForResult(t, sub.Channel(), 2*time.Second)
+	assert.True(t, res.Skipped)
+	assert.False(t, res.Success)
+	assert.Equal(t, RevealSkipReasonPlanDisabled, res.SkipReason)
+	assert.Equal(t, slot, res.Slot)
+	assert.Equal(t, payload_builder.BidTransportBuilderAPI, res.Transport)
+	assert.Nil(t, res.Envelope, "suppressed reveals must not carry an envelope")
+
+	// Neither request may publish, and only one terminal result may fire.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, 0, env.publisher.callCount(), "suppressed slot must never publish")
+	assert.Nil(t, payload.Reveal())
+
+	select {
+	case extra := <-sub.Channel():
+		t.Fatalf("unexpected second reveal result: %+v", extra)
+	default:
+	}
+}
+
+func TestRevealService_BypassDeadlinePublishesLate(t *testing.T) {
+	slotDuration := 300 * time.Millisecond
+	env := newRevealTestEnv(t, slotDuration, 10)
+	// Slot 1 ended 50ms ago: without a deadline bypass this request would be
+	// skipped as late.
+	env.chainSvc.genesisTime = time.Now().Add(-2*slotDuration - 50*time.Millisecond)
+
+	slot := phase0.Slot(1)
+	// Custom reveal time 500ms into the slot — past the slot end (300ms) but
+	// within the validation bound of one extra slot.
+	applyRevealPlan(t, env.planSvc, slot, `{"mode":"custom","reveal_time_ms":500}`)
+
+	sub := env.svc.SubscribeResults(4)
+	defer sub.Unsubscribe()
+
+	require.NoError(t, env.svc.Start(context.Background()))
+	defer env.svc.Stop()
+
+	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1))
+
+	env.svc.RequestReveal(&RevealRequest{
+		Payload:   payload,
+		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
+		Transport: payload_builder.BidTransportP2P,
+	})
+
+	require.Eventually(t, func() bool {
+		return env.publisher.callCount() == 1
+	}, 3*time.Second, 10*time.Millisecond, "bypass-deadline reveal must publish despite the passed slot end")
+
+	res := waitForResult(t, sub.Channel(), 2*time.Second)
+	assert.True(t, res.Success)
+	assert.False(t, res.Skipped)
+	assert.Empty(t, res.SkipReason)
+	assert.NotNil(t, res.Envelope)
+	require.NotNil(t, payload.Reveal(), "payload must be marked revealed")
 }

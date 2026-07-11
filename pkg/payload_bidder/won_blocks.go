@@ -16,8 +16,9 @@ const (
 	WonBlockSourceEPBS       = "epbs"
 )
 
-// WonBlocksNamespace is the kv_store namespace holding the persisted won-block
-// records, owned by the InclusionTracker.
+// WonBlocksNamespace is the kv_store namespace that held the persisted
+// won-block records. Retained (with WonBlock/WonBlockCodec) so the slot
+// results store can migrate the namespace; kept for at least one release.
 const WonBlocksNamespace = "won_blocks"
 
 // WonBlock is a block of ours that was included in a beacon block, won via

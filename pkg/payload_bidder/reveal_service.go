@@ -11,6 +11,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -38,11 +39,27 @@ type RevealResult struct {
 	Slot        phase0.Slot
 	Transport   payload_builder.BidTransport
 	Success     bool
-	Skipped     bool   // request arrived after the slot's reveal deadline
+	Skipped     bool   // reveal was skipped without publishing (see SkipReason)
+	SkipReason  string `json:"skip_reason,omitempty"` // RevealSkipReasonPlanDisabled | RevealSkipReasonLate
 	Error       string // failure reason (when Success is false)
 	Attempt     int    // 1-based
 	MaxAttempts int
+
+	// Envelope is the signed envelope built for the attempt. It is set from
+	// construction onward on every attempt (including failed publishes) and
+	// nil on skips and pre-construction failures.
+	Envelope *eth2all.SignedExecutionPayloadEnvelope `json:"-"`
 }
+
+// Skip reasons carried by RevealResult.SkipReason on skipped reveals.
+const (
+	// RevealSkipReasonPlanDisabled marks a reveal suppressed by the slot's
+	// frozen action plan.
+	RevealSkipReasonPlanDisabled = "plan_disabled"
+	// RevealSkipReasonLate marks a reveal request that arrived after the
+	// slot's deadline (only applies without a deadline bypass).
+	RevealSkipReasonLate = "late"
+)
 
 const (
 	// maxRevealAttempts bounds how many times we retry a failed payload reveal.
@@ -56,14 +73,17 @@ const (
 // times are awaited with a timer (no polling), reveals are deduped per slot
 // (the first request wins regardless of transport), and failed publishes are
 // retried a bounded number of times. It is independent of the p2p bidder and
-// Builder API modules and their enable flags.
+// Builder API modules and their enable flags. Each slot's reveal follows the
+// slot's frozen action plan (suppression, effective reveal time, deadline
+// bypass) — the plan service is the single per-slot settings authority.
 type RevealService struct {
-	cfg          *config.Config // read cfg.EPBS.RevealTime live, never cache
+	cfg          *config.Config // shared live config (reveal timing resolves via planSvc.Freeze)
 	signer       *Signer
 	publisher    envelopePublisher
 	chainSvc     chain.Service
 	builderSvc   *payload_builder.Service // reveal success/failure stats
 	payments     *PaymentTracker          // optional; nil-guarded
+	planSvc      *action_plan.PlanService // per-slot scheduling/settings authority; required
 	builderIndex atomic.Uint64
 
 	requests chan *RevealRequest
@@ -79,12 +99,17 @@ type RevealService struct {
 // revealState is the run-loop-owned schedule/retry state for one slot's reveal.
 type revealState struct {
 	req         *RevealRequest
+	envelope    *eth2all.SignedExecutionPayloadEnvelope // built on the first attempt, reused on retries
+	blobs       [][]byte
+	proofs      [][]byte
 	attempts    int
 	nextAttempt time.Time
 	done        bool
 }
 
-// NewRevealService creates a new reveal service.
+// NewRevealService creates a new reveal service. planSvc is required — every
+// reveal decision resolves the slot's frozen action plan; passing nil is a
+// programming error.
 func NewRevealService(
 	cfg *config.Config,
 	signer *Signer,
@@ -92,6 +117,7 @@ func NewRevealService(
 	chainSvc chain.Service,
 	builderSvc *payload_builder.Service,
 	payments *PaymentTracker,
+	planSvc *action_plan.PlanService,
 	log logrus.FieldLogger,
 ) *RevealService {
 	return &RevealService{
@@ -101,6 +127,7 @@ func NewRevealService(
 		chainSvc:   chainSvc,
 		builderSvc: builderSvc,
 		payments:   payments,
+		planSvc:    planSvc,
 		requests:   make(chan *RevealRequest, 16),
 		pending:    make(map[phase0.Slot]*revealState, 8),
 		log:        log.WithField("component", "reveal-service"),
@@ -175,9 +202,12 @@ func (s *RevealService) run() {
 }
 
 // schedule registers a reveal request for its slot's reveal time. Requests for
-// slots already scheduled (from either flow) are dropped; requests arriving
-// after the slot's end are recorded as skipped — past the slot the 75% payload
-// deadline has long passed and a reveal is worthless.
+// slots already scheduled (from either flow) are dropped. The slot's frozen
+// action plan decides the effective reveal time, whether the reveal is
+// suppressed entirely, and whether the late-arrival deadline check is
+// bypassed; without a bypass, requests arriving after the slot's end are
+// recorded as skipped — past the slot the 75% payload deadline has long
+// passed and a reveal is worthless.
 func (s *RevealService) schedule(req *RevealRequest) {
 	if req == nil || req.Payload == nil || req.BlockInfo == nil {
 		s.log.Warn("Dropping invalid reveal request (missing payload or block info)")
@@ -195,18 +225,42 @@ func (s *RevealService) schedule(req *RevealRequest) {
 		return
 	}
 
-	now := time.Now()
-	slotStart := s.chainSvc.SlotToTime(slot)
-	due := slotStart.Add(time.Duration(s.cfg.EPBS.RevealTime) * time.Millisecond)
-	deadline := slotStart.Add(s.chainSvc.GetChainSpec().SecondsPerSlot)
+	frozen := s.planSvc.Freeze(slot)
 
-	if now.After(deadline) {
+	if frozen.Reveal.Suppressed {
+		// Keep the dedupe entry marked done so a second RequestReveal for
+		// the slot cannot publish either.
 		s.pending[slot] = &revealState{req: req, done: true}
 
 		s.results.Fire(&RevealResult{
 			Slot:        slot,
 			Transport:   req.Transport,
 			Skipped:     true,
+			SkipReason:  RevealSkipReasonPlanDisabled,
+			MaxAttempts: maxRevealAttempts,
+		})
+
+		s.log.WithFields(logrus.Fields{
+			"slot":      slot,
+			"transport": req.Transport,
+		}).Info("Reveal suppressed by the slot's action plan")
+
+		return
+	}
+
+	now := time.Now()
+	slotStart := s.chainSvc.SlotToTime(slot)
+	due := slotStart.Add(time.Duration(frozen.Reveal.RevealTimeMs) * time.Millisecond)
+	deadline := slotStart.Add(s.chainSvc.GetChainSpec().SecondsPerSlot)
+
+	if !frozen.Reveal.BypassDeadline && now.After(deadline) {
+		s.pending[slot] = &revealState{req: req, done: true}
+
+		s.results.Fire(&RevealResult{
+			Slot:        slot,
+			Transport:   req.Transport,
+			Skipped:     true,
+			SkipReason:  RevealSkipReasonLate,
 			MaxAttempts: maxRevealAttempts,
 		})
 
@@ -250,7 +304,17 @@ func (s *RevealService) processDue(now time.Time) {
 			"max_attempts": maxRevealAttempts,
 		}).Info("Revealing payload")
 
-		if err := s.publish(state.req); err != nil {
+		if state.envelope == nil {
+			envelope, blobs, proofs, err := s.buildEnvelope(state.req)
+			if err != nil {
+				s.handlePublishFailure(slot, state, now, err)
+				continue
+			}
+
+			state.envelope, state.blobs, state.proofs = envelope, blobs, proofs
+		}
+
+		if err := s.publish(state.envelope, state.blobs, state.proofs); err != nil {
 			s.handlePublishFailure(slot, state, now, err)
 			continue
 		}
@@ -275,6 +339,7 @@ func (s *RevealService) processDue(now time.Time) {
 			Success:     true,
 			Attempt:     state.attempts,
 			MaxAttempts: maxRevealAttempts,
+			Envelope:    state.envelope,
 		})
 
 		s.log.WithFields(logrus.Fields{
@@ -287,8 +352,10 @@ func (s *RevealService) processDue(now time.Time) {
 	s.pruneDone(now)
 }
 
-// handlePublishFailure surfaces a failed reveal attempt and either schedules a
-// retry or gives up once the retry budget is spent.
+// handlePublishFailure surfaces a failed reveal attempt (envelope construction
+// or network publish) and either schedules a retry or gives up once the retry
+// budget is spent. The fired result carries the built envelope when
+// construction succeeded (nil on pre-construction failures).
 func (s *RevealService) handlePublishFailure(slot phase0.Slot, state *revealState, now time.Time, err error) {
 	s.log.WithError(err).WithFields(logrus.Fields{
 		"slot":         slot,
@@ -303,6 +370,7 @@ func (s *RevealService) handlePublishFailure(slot phase0.Slot, state *revealStat
 		Error:       err.Error(),
 		Attempt:     state.attempts,
 		MaxAttempts: maxRevealAttempts,
+		Envelope:    state.envelope,
 	})
 
 	if state.attempts >= maxRevealAttempts {
@@ -363,34 +431,49 @@ func (s *RevealService) rearm(timer *time.Timer) {
 	timer.Reset(next)
 }
 
-// publish builds and signs the payload's envelope and submits it (with blobs /
-// KZG proofs) to the beacon node under a bounded timeout.
-func (s *RevealService) publish(req *RevealRequest) error {
-	forkVersion, err := s.chainSvc.GetForkVersion()
+// buildEnvelope constructs and signs the payload's envelope for the request's
+// target slot and returns it together with the blobs / KZG proofs to publish
+// alongside. Signing resolves the fork active at the TARGET slot (never the
+// current fork), so deliberately late reveals crossing a slot/fork boundary
+// are still signed under the fork the slot belongs to.
+func (s *RevealService) buildEnvelope(req *RevealRequest) (
+	envelope *eth2all.SignedExecutionPayloadEnvelope, blobs, proofs [][]byte, err error,
+) {
+	slot := req.Payload.Attributes.ProposalSlot
+	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
+
+	forkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(fork)
 	if err != nil {
-		return fmt.Errorf("failed to get current fork version: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to get fork version for slot %d (%s): %w", slot, fork, err)
 	}
 
-	signedEnvelope, blobs, cellProofs, err := BuildSignedEnvelope(req.Payload, RevealContext{
+	envelope, blobs, proofs, err = BuildSignedEnvelope(req.Payload, RevealContext{
 		BuilderIndex:          s.builderIndex.Load(),
 		BeaconBlockRoot:       req.BlockInfo.Root,
 		ParentBeaconBlockRoot: req.BlockInfo.ParentRoot,
 	}, s.signer, forkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
-		return fmt.Errorf("failed to build signed envelope: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to build signed envelope: %w", err)
 	}
 
+	return envelope, blobs, proofs, nil
+}
+
+// publish submits a built signed envelope (with blobs / KZG proofs) to the
+// beacon node under a bounded timeout.
+func (s *RevealService) publish(envelope *eth2all.SignedExecutionPayloadEnvelope,
+	blobs, proofs [][]byte) error {
 	if len(blobs) > 0 {
 		s.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),
-			"kzg_proof_count": len(cellProofs),
+			"kzg_proof_count": len(proofs),
 		}).Info("Including blobs and kzg proofs with envelope publish")
 	}
 
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, signedEnvelope, blobs, cellProofs); err != nil {
+	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, envelope, blobs, proofs); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
 

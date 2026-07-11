@@ -37,7 +37,13 @@ func (m *stubChainService) Start(context.Context) error { return nil }
 func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
-	return &chain.ChainSpec{SecondsPerSlot: m.slotDuration, SlotsPerEpoch: 32}
+	return &chain.ChainSpec{
+		SecondsPerSlot: m.slotDuration,
+		SlotsPerEpoch:  32,
+		ForkSchedule: []chain.ForkSchedule{
+			{Fork: m.currentFork, Version: phase0.Version{0x01, 0x00, 0x00, 0x00}, Epoch: 0},
+		},
+	}
 }
 func (m *stubChainService) GetGenesis() *beacon.Genesis { return &m.genesis }
 
@@ -88,7 +94,7 @@ func newTestBuilderSvc(chainSvc chain.Service) *payload_builder.Service {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	svc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, common.Address{}, log)
+	svc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, nil, common.Address{}, log)
 	if err != nil {
 		panic(err)
 	}
