@@ -30,6 +30,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
+	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
@@ -384,6 +385,26 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
+		// 12b. Start the slot results tracker: the single owner of per-slot
+		// outcome history (build/bid/submission/reveal/inclusion) and raw SSZ
+		// artifacts. Started before the producer services so its blocking
+		// subscriptions never miss an event; SetPersistence migrates any
+		// legacy won_blocks namespace into slot results.
+		resultTracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc,
+			builderSvc, epbsSvc, revealSvc, inclusionTracker, logger)
+		resultTracker.SetPersistence(ctx, stateDB)
+
+		if err := resultTracker.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start slot results tracker: %w", err)
+		}
+		// Registered after stateDB's close defer (LIFO) → the artifact writer
+		// and the result store flush while the state-db is still open.
+		defer resultTracker.Stop()
+
+		if builderAPISrv != nil {
+			builderAPISrv.SetResultRecorder(resultTracker)
+		}
+
 		// 13. Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
@@ -429,7 +450,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

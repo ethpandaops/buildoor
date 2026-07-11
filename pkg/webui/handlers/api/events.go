@@ -350,13 +350,13 @@ func NewEventStreamManager(
 // Start begins the event stream manager.
 func (m *EventStreamManager) Start() {
 	// Subscribe to payload ready events
-	payloadSub := m.builderSvc.SubscribePayloadReady(16)
+	payloadSub := m.builderSvc.SubscribePayloadReady(16, false)
 
 	// Subscribe to payload build started events (in-progress rendering)
-	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16)
+	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16, false)
 
 	// Subscribe to payload build failed events (mark builds as failed)
-	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16)
+	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16, false)
 
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
@@ -382,7 +382,7 @@ func (m *EventStreamManager) Start() {
 	var revealChan <-chan *payload_bidder.RevealResult
 
 	if m.revealSvc != nil {
-		revealSub = m.revealSvc.SubscribeResults(16)
+		revealSub = m.revealSvc.SubscribeResults(16, false)
 		revealChan = revealSub.Channel()
 	}
 
@@ -392,7 +392,7 @@ func (m *EventStreamManager) Start() {
 	var bidIncludedChan <-chan *payload_bidder.PayloadIncludedEvent
 
 	if m.inclusionTracker != nil {
-		bidIncludedSub = m.inclusionTracker.SubscribeIncluded(16)
+		bidIncludedSub = m.inclusionTracker.SubscribeIncluded(16, false)
 		bidIncludedChan = bidIncludedSub.Channel()
 	}
 
