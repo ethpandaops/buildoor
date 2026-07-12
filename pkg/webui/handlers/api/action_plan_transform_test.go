@@ -34,7 +34,7 @@ func TestTestTransformEndpoint(t *testing.T) {
 		resp := postTransform(t, `{"target":"bid","expression":"."}`)
 		assert.Empty(t, resp.Error)
 		assert.Equal(t, "template", resp.InputSource)
-		assert.JSONEq(t, string(resp.Input), string(resp.Output))
+		assert.JSONEq(t, resp.Input, resp.Output)
 	})
 
 	t.Run("field override is reflected in the output", func(t *testing.T) {
@@ -42,7 +42,7 @@ func TestTestTransformEndpoint(t *testing.T) {
 		require.Empty(t, resp.Error)
 
 		var out map[string]any
-		require.NoError(t, json.Unmarshal(resp.Output, &out))
+		require.NoError(t, json.Unmarshal([]byte(resp.Output), &out))
 		assert.Equal(t, "99", out["gas_limit"])
 	})
 
@@ -61,7 +61,7 @@ func TestTestTransformEndpoint(t *testing.T) {
 	t.Run("parse error is reported in the body, not as HTTP error", func(t *testing.T) {
 		resp := postTransform(t, `{"target":"bid","expression":".gas_limit |"}`)
 		assert.NotEmpty(t, resp.Error)
-		assert.Nil(t, resp.Output)
+		assert.Empty(t, resp.Output)
 	})
 
 	t.Run("runtime error is reported", func(t *testing.T) {

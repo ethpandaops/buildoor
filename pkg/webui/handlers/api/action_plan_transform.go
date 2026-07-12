@@ -36,15 +36,17 @@ type TestTransformRequest struct {
 }
 
 // TestTransformResponse reports the transform result against the sample input.
+// Input and Output are pretty-printed JSON as STRINGS (not embedded JSON), so
+// the UI renders them verbatim in a text area.
 type TestTransformResponse struct {
 	Target string `json:"target"`
 	// Input is the JSON the expression ran against (message JSON for bid /
-	// envelope; the payload for payload), pretty-printed.
-	Input json.RawMessage `json:"input"`
-	// InputSource is "artifact:<slot>" or "template".
+	// envelope; the payload for payload), pretty-printed as a string.
+	Input string `json:"input"`
+	// InputSource is "artifact:slot-N" or "template".
 	InputSource string `json:"input_source"`
-	// Output is the transform result (present when Error is empty).
-	Output json.RawMessage `json:"output,omitempty"`
+	// Output is the transform result, pretty-printed (present when Error is empty).
+	Output string `json:"output,omitempty"`
 	// Error is the parse/eval error message (present when the expression fails).
 	Error string `json:"error,omitempty"`
 }
@@ -188,20 +190,18 @@ func artifactToSample(target string, artifact *db.SlotArtifact) ([]byte, bool) {
 	return full, true
 }
 
-// indentJSON pretty-prints JSON for display; on failure returns the input
-// unchanged so the caller always has something to show.
-func indentJSON(raw []byte) json.RawMessage {
-	var buf []byte
-
+// indentJSON pretty-prints JSON as a string for display; on failure returns
+// the input as-is so the caller always has something to show.
+func indentJSON(raw []byte) string {
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return raw
+		return string(raw)
 	}
 
 	buf, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		return raw
+		return string(raw)
 	}
 
-	return buf
+	return string(buf)
 }
