@@ -123,10 +123,12 @@ func (t *Tracker) Start(ctx context.Context) error {
 	}
 
 	includedSub := t.inclusionTracker.SubscribeIncluded(16, true)
+	payloadStatusSub := t.inclusionTracker.SubscribePayloadStatus(16, true)
 
 	t.wg.Add(1)
 
-	go t.run(readySub, startedSub, failedSub, skippedSub, bidSub, revealSub, includedSub, epochSub)
+	go t.run(readySub, startedSub, failedSub, skippedSub, bidSub, revealSub,
+		includedSub, payloadStatusSub, epochSub)
 
 	t.log.Info("Slot results tracker started")
 
@@ -156,6 +158,7 @@ func (t *Tracker) run(
 	bidSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent],
 	revealSub *utils.Subscription[*payload_bidder.RevealResult],
 	includedSub *utils.Subscription[*payload_bidder.PayloadIncludedEvent],
+	payloadStatusSub *utils.Subscription[*payload_bidder.PayloadStatusEvent],
 	epochSub *utils.Subscription[*chain.EpochStats],
 ) {
 	defer t.wg.Done()
@@ -164,6 +167,7 @@ func (t *Tracker) run(
 	defer failedSub.Unsubscribe()
 	defer skippedSub.Unsubscribe()
 	defer includedSub.Unsubscribe()
+	defer payloadStatusSub.Unsubscribe()
 	defer epochSub.Unsubscribe()
 
 	// nil subscriptions must never fire in the select; use closed-nil-safe
@@ -240,6 +244,13 @@ func (t *Tracker) run(
 			}
 
 			t.handleIncluded(event)
+
+		case event, ok := <-payloadStatusSub.Channel():
+			if !ok {
+				return
+			}
+
+			t.handlePayloadStatus(event)
 
 		case epochStats, ok := <-epochSub.Channel():
 			if !ok {
@@ -493,7 +504,16 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 
 	won := event.WonBlock
 
-	t.upsert(phase0.Slot(won.Slot), func(result *SlotResult) {
+	slot := phase0.Slot(won.Slot)
+
+	// Pre-Gloas the payload is embedded in the winning block, so inclusion IS
+	// canonical; from Gloas on the verdict arrives with the follow-up block.
+	payloadStatus := PayloadStatusCanonical
+	if t.chainSvc.ActiveForkAtEpoch(t.chainSvc.GetEpochOfSlot(slot)) >= version.DataVersionGloas {
+		payloadStatus = PayloadStatusPending
+	}
+
+	t.upsert(slot, func(result *SlotResult) {
 		result.Inclusion = &InclusionResult{
 			Source:          won.Source,
 			BlockHash:       won.BlockHash,
@@ -502,7 +522,24 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 			ValueWei:        won.ValueWei,
 			ValueETH:        won.ValueETH,
 			Timestamp:       time.UnixMilli(won.Timestamp),
+			PayloadStatus:   payloadStatus,
 		}
+	})
+}
+
+// handlePayloadStatus records the canonical verdict for a won slot's payload,
+// derived from the canonical chain's ancestry. Reorg-revised verdicts simply
+// overwrite the previous status (the event fires once per change).
+func (t *Tracker) handlePayloadStatus(event *payload_bidder.PayloadStatusEvent) {
+	t.upsert(event.Slot, func(result *SlotResult) {
+		if result.Inclusion == nil {
+			// A verdict without a recorded inclusion (e.g. record pruned or
+			// created fresh by this upsert) has nothing to attach to.
+			return
+		}
+
+		result.Inclusion.PayloadStatus = PayloadStatus(event.Verdict)
+		result.Inclusion.PayloadCheckSlot = event.NextBlockSlot
 	})
 }
 

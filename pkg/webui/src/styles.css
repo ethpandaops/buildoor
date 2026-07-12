@@ -999,7 +999,15 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   text-decoration: line-through;
 }
 
-/* Result status dots */
+/* Result status dots: left = bid outcome; right = payload canonical verdict
+   (only rendered for won slots). */
+.ap-dots {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 8px;
+}
+
 .ap-dot {
   width: 8px;
   height: 8px;
@@ -1008,7 +1016,6 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
 }
 
 .ap-dot-included { background: #28a745; }
-.ap-dot-revealed { background: #0d6efd; }
 .ap-dot-bidding { background: #ffc107; }
 .ap-dot-failed { background: #dc3545; }
 .ap-dot-built { background: #6c757d; }
@@ -1017,6 +1024,26 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
 .ap-dot-idle {
   background: transparent;
   border: 2px solid #6f42c1;
+}
+
+/* Hollow red: the winning block was reorged out */
+.ap-dot-orphaned {
+  background: transparent;
+  border: 2px solid #dc3545;
+}
+
+/* Payload canonical verdict (right dot, won slots only) */
+.ap-dot-payload-canonical { background: #28a745; }
+.ap-dot-payload-missed { background: #dc3545; }
+
+.ap-dot-payload-orphaned {
+  background: transparent;
+  border: 2px solid #dc3545;
+}
+
+.ap-dot-payload-pending {
+  background: transparent;
+  border: 2px solid #6c757d;
 }
 
 /* Range/jump inputs in the toolbar */

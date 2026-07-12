@@ -176,8 +176,12 @@ npm run clean
      the TARGET slot's fork; retries ×3
    - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
      forks), requests the p2p-side reveal, fires `PayloadIncludedEvent` (carries the
-     `WonBlock` summary — storage is owned by the slot results tracker), checks
-     follow-up blocks for orphaned payloads
+     `WonBlock` summary — storage is owned by the slot results tracker). Reorg-aware
+     canonical verdicts (Gloas+): every won slot is re-evaluated against each new
+     head's ancestry (parent-root walk over a cached block map, 16-slot window) and
+     each verdict CHANGE fires `PayloadStatusEvent` (canonical | missed | orphaned) —
+     recorded on the slot result's `inclusion.payload_status` (pending until the
+     first follow-up block; the Action Plan cell renders it as the right dot)
    - `PaymentTracker`: pending payments + live balance adjustments (fed by
      InclusionTracker/RevealService; consumed by lifecycle and WebUI)
    - `ProposerPreferencesService`: caches Gloas gossip proposer preferences from the

@@ -1,40 +1,44 @@
 import React from 'react';
 import type { SlotPlan, SlotResult } from '../../types';
 
-// Derived cell status, ordered by display priority.
-export type SlotCellStatus =
-  | 'included' // green: our payload was included at the head
-  | 'failed' // red: build failed OR reveal suppressed/skipped/failed
-  | 'revealed' // blue: reveal published
-  | 'bidding' // yellow: bids submitted/served but no inclusion
-  | 'idle' // purple hollow: planned/active but nothing happened
+// Left dot: bid outcome, ordered by display priority.
+export type BidDotStatus =
+  | 'included' // green: our bid won (block committed to our payload)
+  | 'orphaned' // hollow red: won, but the block was reorged out
+  | 'failed' // red: build failed
+  | 'bidding' // yellow: bids submitted/served but not included
   | 'built' // gray: payload built, nothing further
+  | 'idle' // purple hollow: planned/active but nothing happened
   | null; // no record
 
-const STATUS_LABELS: Record<Exclude<SlotCellStatus, null>, string> = {
-  included: 'Included',
+// Right dot: canonical payload verdict, only rendered for won slots.
+export type PayloadDotStatus = 'canonical' | 'missed' | 'orphaned' | 'pending' | null;
+
+const BID_LABELS: Record<Exclude<BidDotStatus, null>, string> = {
+  included: 'Bid included',
+  orphaned: 'Bid reorged out',
   failed: 'Failed',
-  revealed: 'Revealed',
-  bidding: 'Bid submitted/served',
-  idle: 'Active, nothing happened',
+  bidding: 'Bid submitted/served, not included',
   built: 'Payload built',
+  idle: 'Active, nothing happened',
 };
 
-// deriveSlotCellStatus maps a slot result onto the compact cell indicator.
-export function deriveSlotCellStatus(result?: SlotResult): SlotCellStatus {
+const PAYLOAD_LABELS: Record<Exclude<PayloadDotStatus, null>, string> = {
+  canonical: 'Payload canonical',
+  missed: 'Payload missed',
+  orphaned: 'Block orphaned',
+  pending: 'Payload verdict pending',
+};
+
+// deriveBidStatus maps a slot result onto the left (bid outcome) dot.
+export function deriveBidStatus(result?: SlotResult): BidDotStatus {
   if (!result) return null;
 
-  if (result.inclusion) return 'included';
-
-  const reveals = result.reveal_attempts || [];
-  const revealPublished = reveals.some((r) => r.status === 'published');
-  const revealBad = reveals.some(
-    (r) => r.status === 'failed' || r.status === 'suppressed' || r.status === 'skipped'
-  );
+  if (result.inclusion) {
+    return result.inclusion.payload_status === 'orphaned' ? 'orphaned' : 'included';
+  }
 
   if (result.build?.status === 'failed') return 'failed';
-  if (revealPublished) return 'revealed';
-  if (revealBad) return 'failed';
 
   const bids = result.bids || [];
   if (bids.some((b) => b.status === 'submitted' || b.status === 'served')) return 'bidding';
@@ -48,6 +52,26 @@ export function deriveSlotCellStatus(result?: SlotResult): SlotCellStatus {
   ) {
     return 'idle';
   }
+
+  return null;
+}
+
+// derivePayloadStatus maps a won slot's canonical verdict onto the right dot.
+// Only won slots get a payload dot — without a win there is nothing to reveal.
+export function derivePayloadStatus(result?: SlotResult): PayloadDotStatus {
+  if (!result?.inclusion) return null;
+
+  return result.inclusion.payload_status || 'pending';
+}
+
+// describeReveal summarizes the slot's reveal attempts for the tooltip.
+function describeReveal(result?: SlotResult): string | null {
+  const reveals = result?.reveal_attempts || [];
+  if (reveals.length === 0) return null;
+
+  if (reveals.some((r) => r.status === 'published')) return 'revealed';
+  if (reveals.some((r) => r.status === 'suppressed' || r.status === 'skipped')) return 'reveal withheld';
+  if (reveals.some((r) => r.status === 'failed')) return 'reveal failed';
 
   return null;
 }
@@ -72,13 +96,18 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
   selected,
   onCellClick,
 }) => {
-  const status = deriveSlotCellStatus(result);
+  const bidStatus = deriveBidStatus(result);
+  const payloadStatus = derivePayloadStatus(result);
 
   const titleParts = [`Slot ${slot}`];
   if (plan?.bid) titleParts.push(`bid: ${plan.bid.mode}`);
   if (plan?.builder_api) titleParts.push(`builder api: ${plan.builder_api.mode}`);
   if (plan?.reveal) titleParts.push(`reveal: ${plan.reveal.mode}`);
-  if (status) titleParts.push(STATUS_LABELS[status]);
+  if (bidStatus) titleParts.push(BID_LABELS[bidStatus]);
+  if (payloadStatus) titleParts.push(PAYLOAD_LABELS[payloadStatus]);
+
+  const revealSummary = describeReveal(result);
+  if (revealSummary) titleParts.push(revealSummary);
 
   return (
     <td className="ap-cell-td">
@@ -93,7 +122,10 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
           {plan?.builder_api && <span className={chipClass(plan.builder_api.mode)}>A</span>}
           {plan?.reveal && <span className={chipClass(plan.reveal.mode)}>R</span>}
         </span>
-        {status && <span className={`ap-dot ap-dot-${status}`}></span>}
+        <span className="ap-dots">
+          {bidStatus && <span className={`ap-dot ap-dot-${bidStatus}`}></span>}
+          {payloadStatus && <span className={`ap-dot ap-dot-payload-${payloadStatus}`}></span>}
+        </span>
       </button>
     </td>
   );

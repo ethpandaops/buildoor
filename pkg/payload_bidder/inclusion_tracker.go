@@ -27,6 +27,51 @@ type PayloadIncludedEvent struct {
 	WonBlock     *WonBlock // the won-block summary for this inclusion
 }
 
+// PayloadVerdict is the canonical outcome of a won slot's payload, derived
+// from the current head's ancestry (Gloas+ only). Verdicts are re-evaluated
+// on every head event within the tracking window, so a reorg can flip them;
+// each change fires a new PayloadStatusEvent.
+type PayloadVerdict string
+
+const (
+	// PayloadVerdictCanonical: the canonical chain's first block after the
+	// won slot builds on our payload.
+	PayloadVerdictCanonical PayloadVerdict = "canonical"
+	// PayloadVerdictMissed: the won block is canonical but the next block
+	// builds on an older execution block — the payload was withheld, revealed
+	// too late, or voted empty.
+	PayloadVerdictMissed PayloadVerdict = "missed"
+	// PayloadVerdictOrphaned: the won beacon block itself was reorged out of
+	// the canonical chain.
+	PayloadVerdictOrphaned PayloadVerdict = "orphaned"
+)
+
+// PayloadStatusEvent reports the (possibly revised) canonical verdict for a
+// won slot's payload.
+type PayloadStatusEvent struct {
+	Slot           phase0.Slot // the won slot
+	Verdict        PayloadVerdict
+	NextBlockSlot  phase0.Slot   // canonical block the verdict was derived from
+	NextParentHash phase0.Hash32 // execution parent hash that block committed to
+}
+
+const (
+	// wonTrackingWindowSlots is how long (in slots) a won slot's verdict keeps
+	// being re-evaluated against the head's ancestry; reorgs deeper than this
+	// window no longer revise the recorded status.
+	wonTrackingWindowSlots = 16
+	// blockCacheExtraSlots keeps ancestry blocks slightly longer than the
+	// tracking window so verdict walks rarely refetch.
+	blockCacheExtraSlots = 4
+)
+
+// wonTracking is the run-loop-owned reorg-aware state for one won slot.
+type wonTracking struct {
+	blockRoot phase0.Root    // beacon block that committed to our payload
+	execHash  phase0.Hash32  // our payload's execution block hash
+	verdict   PayloadVerdict // last fired verdict; empty until first resolution
+}
+
 // InclusionTracker watches head events and detects inclusion of our payloads.
 // It records the payment obligation, requests the payload reveal, fires
 // inclusion events carrying the won-block summary (won-block storage is owned
@@ -40,11 +85,14 @@ type InclusionTracker struct {
 	revealSvc  *RevealService           // optional; nil pre-Gloas
 	payments   *PaymentTracker          // optional; nil pre-Gloas
 
-	includedDispatch utils.Dispatcher[*PayloadIncludedEvent]
+	includedDispatch      utils.Dispatcher[*PayloadIncludedEvent]
+	payloadStatusDispatch utils.Dispatcher[*PayloadStatusEvent]
 
-	// Follow-up orphan check state, owned by the run loop.
-	lastIncludedSlot phase0.Slot
-	lastIncludedHash phase0.Hash32
+	// Reorg-aware verdict state, owned by the run loop (no mutex): every won
+	// slot is re-evaluated against each new head's ancestry until it leaves
+	// the tracking window. blockCache holds resolved ancestry blocks by root.
+	trackedWins map[phase0.Slot]*wonTracking
+	blockCache  map[phase0.Root]*beacon.BlockInfo
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -64,18 +112,26 @@ func NewInclusionTracker(
 	log logrus.FieldLogger,
 ) *InclusionTracker {
 	return &InclusionTracker{
-		clClient:   clClient,
-		chainSvc:   chainSvc,
-		builderSvc: builderSvc,
-		revealSvc:  revealSvc,
-		payments:   payments,
-		log:        log.WithField("component", "inclusion-tracker"),
+		clClient:    clClient,
+		chainSvc:    chainSvc,
+		builderSvc:  builderSvc,
+		revealSvc:   revealSvc,
+		payments:    payments,
+		trackedWins: make(map[phase0.Slot]*wonTracking, 4),
+		blockCache:  make(map[phase0.Root]*beacon.BlockInfo, 32),
+		log:         log.WithField("component", "inclusion-tracker"),
 	}
 }
 
 // SubscribeIncluded subscribes to payload inclusion events.
 func (t *InclusionTracker) SubscribeIncluded(capacity int, blocking bool) *utils.Subscription[*PayloadIncludedEvent] {
 	return t.includedDispatch.Subscribe(capacity, blocking)
+}
+
+// SubscribePayloadStatus subscribes to the canonical/missed verdicts derived
+// from the follow-up block after a won slot (Gloas+ only).
+func (t *InclusionTracker) SubscribePayloadStatus(capacity int, blocking bool) *utils.Subscription[*PayloadStatusEvent] {
+	return t.payloadStatusDispatch.Subscribe(capacity, blocking)
 }
 
 // Start starts the inclusion tracker's main loop.
@@ -142,52 +198,165 @@ func (t *InclusionTracker) processHead(event *beacon.HeadEvent) {
 }
 
 // processBlockInfo handles a resolved head block:
-//  1. Check the follow-up for our previously included bid — if this block does
-//     not build on a revealed payload of ours, the payload was orphaned.
-//  2. Check if this block commits to one of our payloads.
+//  1. Check if this block commits to one of our payloads (arms tracking).
+//  2. Re-evaluate the canonical verdict of every tracked won slot against
+//     this head's ancestry — reorgs flip verdicts, each change fires an event.
+//  3. Prune tracking state that left the window.
 func (t *InclusionTracker) processBlockInfo(blockInfo *beacon.BlockInfo) {
-	t.checkFollowUpBlock(blockInfo)
+	t.blockCache[blockInfo.Root] = blockInfo
+
 	t.checkForOurPayload(blockInfo)
+	t.evaluateTrackedWins(blockInfo)
+	t.pruneTracking(blockInfo.Slot)
 }
 
-// checkFollowUpBlock checks if the previous slot's included bid was confirmed
-// or orphaned. The RevealService stamps the shared payload on a successful
-// reveal, so the payload's own reveal record is the source of truth.
-func (t *InclusionTracker) checkFollowUpBlock(blockInfo *beacon.BlockInfo) {
-	prevSlot := t.lastIncludedSlot
-	prevHash := t.lastIncludedHash
+// evaluateTrackedWins re-derives every tracked won slot's canonical verdict
+// from the new head's ancestry and fires a PayloadStatusEvent whenever the
+// verdict changed (first resolution included). The verdict comes from the
+// chain itself: walking parent roots from the head yields the canonical block
+// at the won slot (bid included vs. orphaned) and the first canonical block
+// after it, whose committed parent execution hash
+// (BlockInfo.FinalitySafeExecutionBlockHash = the Gloas bid's
+// parent_block_hash) proves whether our payload became canonical.
+func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
+	for slot, win := range t.trackedWins {
+		if head.Slot <= slot {
+			continue
+		}
 
-	if prevSlot == 0 {
+		verdict, nextBlock := t.resolveVerdict(head, slot, win)
+		if verdict == "" || verdict == win.verdict {
+			continue
+		}
+
+		firstVerdict := win.verdict == ""
+		win.verdict = verdict
+
+		t.payloadStatusDispatch.Fire(&PayloadStatusEvent{
+			Slot:           slot,
+			Verdict:        verdict,
+			NextBlockSlot:  nextBlock.Slot,
+			NextParentHash: nextBlock.FinalitySafeExecutionBlockHash,
+		})
+
+		logFields := logrus.Fields{
+			"slot":            slot,
+			"block_hash":      fmt.Sprintf("%x", win.execHash[:8]),
+			"next_block_slot": nextBlock.Slot,
+			"verdict":         verdict,
+		}
+
+		if verdict == PayloadVerdictCanonical {
+			t.log.WithFields(logFields).Info("Won payload is canonical — the chain builds on it")
+		} else {
+			t.log.WithFields(logFields).Warn("Won payload is NOT canonical")
+		}
+
+		if firstVerdict {
+			t.logPaymentState(slot)
+		}
+	}
+}
+
+// resolveVerdict walks the head's ancestry down to the won slot. Returns an
+// empty verdict when an ancestor cannot be resolved (transient fetch failure;
+// retried on the next head event).
+func (t *InclusionTracker) resolveVerdict(
+	head *beacon.BlockInfo, slot phase0.Slot, win *wonTracking,
+) (PayloadVerdict, *beacon.BlockInfo) {
+	// next is the earliest visited canonical block with Slot > slot; cursor
+	// descends until it reaches the canonical block at or before the won slot.
+	next := head
+	cursor := head
+
+	for cursor.Slot > slot {
+		next = cursor
+
+		parent, ok := t.getBlock(cursor.ParentRoot)
+		if !ok {
+			return "", nil
+		}
+
+		cursor = parent
+	}
+
+	if cursor.Root != win.blockRoot {
+		// The canonical chain no longer contains the block that committed to
+		// our payload.
+		return PayloadVerdictOrphaned, next
+	}
+
+	if next.FinalitySafeExecutionBlockHash == win.execHash {
+		return PayloadVerdictCanonical, next
+	}
+
+	return PayloadVerdictMissed, next
+}
+
+// getBlock resolves a block by root through the ancestry cache, fetching from
+// the beacon node on a miss.
+func (t *InclusionTracker) getBlock(root phase0.Root) (*beacon.BlockInfo, bool) {
+	if info, ok := t.blockCache[root]; ok {
+		return info, true
+	}
+
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+
+	info, err := t.clClient.GetBlockInfo(ctx, fmt.Sprintf("%#x", root))
+	if err != nil {
+		t.log.WithError(err).WithField("root", fmt.Sprintf("%#x", root)).
+			Debug("Failed to resolve ancestry block")
+		return nil, false
+	}
+
+	t.blockCache[root] = info
+
+	return info, true
+}
+
+// pruneTracking drops won-slot tracking and ancestry-cache entries that left
+// the reorg window.
+func (t *InclusionTracker) pruneTracking(headSlot phase0.Slot) {
+	if headSlot <= wonTrackingWindowSlots {
 		return
 	}
 
-	// Only check blocks after the included slot.
-	if blockInfo.Slot <= prevSlot {
+	minWinSlot := headSlot - wonTrackingWindowSlots
+	for slot := range t.trackedWins {
+		if slot < minWinSlot {
+			delete(t.trackedWins, slot)
+		}
+	}
+
+	if headSlot <= wonTrackingWindowSlots+blockCacheExtraSlots {
 		return
 	}
 
-	// Clear the tracking regardless — we only check once.
-	t.lastIncludedSlot = 0
-	t.lastIncludedHash = phase0.Hash32{}
+	minCacheSlot := headSlot - wonTrackingWindowSlots - blockCacheExtraSlots
+	for root, info := range t.blockCache {
+		if info.Slot < minCacheSlot {
+			delete(t.blockCache, root)
+		}
+	}
+}
 
-	payload := t.builderSvc.GetPayloadCache().Get(prevSlot)
+// logPaymentState logs the payment consequence once the first verdict for a
+// won slot is known. The RevealService stamps the shared payload on a
+// successful reveal, so the payload's own reveal record is the source of
+// truth: revealed payments were already deducted from the live balance via
+// PaymentTracker.MarkRevealed; unrevealed ones stay pending for 2 epochs and
+// settle through the beacon state's BuilderPendingPayments quorum logic.
+func (t *InclusionTracker) logPaymentState(slot phase0.Slot) {
+	payload := t.builderSvc.GetPayloadCache().Get(slot)
 	if payload != nil && payload.Reveal() != nil {
-		// We revealed — the payment was already deducted from the live balance
-		// via PaymentTracker.MarkRevealed.
-		t.log.WithFields(logrus.Fields{
-			"slot":       prevSlot,
-			"block_hash": fmt.Sprintf("%x", prevHash[:8]),
-		}).Debug("Previous bid was revealed, payment already deducted")
-
+		t.log.WithField("slot", slot).
+			Debug("Won bid was revealed, payment already deducted")
 		return
 	}
 
-	// We did NOT reveal — the payment stays pending for 2 epochs and is settled
-	// by the beacon state's BuilderPendingPayments quorum logic.
-	t.log.WithFields(logrus.Fields{
-		"slot":       prevSlot,
-		"block_hash": fmt.Sprintf("%x", prevHash[:8]),
-	}).Warn("Previous bid was NOT revealed — payment pending for 2 epochs")
+	t.log.WithField("slot", slot).
+		Warn("Won bid was NOT revealed — payment pending for 2 epochs")
 }
 
 // checkForOurPayload checks if the beacon block commits to one of our payloads
@@ -242,9 +411,17 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		WonBlock:     wonBlock,
 	})
 
-	// Track for the follow-up orphan check on the next head block.
-	t.lastIncludedSlot = payload.Attributes.ProposalSlot
-	t.lastIncludedHash = blockInfo.ExecutionBlockHash
+	// Arm the reorg-aware canonical tracking (Gloas+ only: pre-Gloas the
+	// payload is embedded in the winning block and canonical immediately).
+	// A re-inclusion after a reorg overwrites the entry and resets the
+	// verdict, so the revised outcome fires again.
+	slot := payload.Attributes.ProposalSlot
+	if t.chainSvc.ActiveForkAtEpoch(t.chainSvc.GetEpochOfSlot(slot)) >= version.DataVersionGloas {
+		t.trackedWins[slot] = &wonTracking{
+			blockRoot: blockInfo.Root,
+			execHash:  blockInfo.ExecutionBlockHash,
+		}
+	}
 }
 
 // buildWonBlock derives the won-block summary for an included payload (no

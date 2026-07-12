@@ -52,6 +52,13 @@ const BUILD_BADGES: Record<string, string> = {
   no_attributes: 'warning',
 };
 
+const PAYLOAD_STATUS_BADGES: Record<string, string> = {
+  canonical: 'success',
+  missed: 'danger',
+  orphaned: 'danger',
+  pending: 'secondary',
+};
+
 const BID_BADGES: Record<string, string> = {
   served: 'success',
   submitted: 'success',
@@ -676,6 +683,16 @@ const ResultView: React.FC<{
           <div className="card-header py-1 d-flex align-items-center gap-2">
             <strong className="small">Inclusion</strong>
             <span className={badgeClass('success')}>{result.inclusion.source}</span>
+            {result.inclusion.payload_status && (
+              <span
+                className={badgeClass(
+                  PAYLOAD_STATUS_BADGES[result.inclusion.payload_status] || 'secondary'
+                )}
+                title="Canonical payload verdict from the next canonical block's committed parent hash (revised on reorgs)"
+              >
+                payload {result.inclusion.payload_status}
+              </span>
+            )}
           </div>
           <div className="card-body py-2">
             <div className="row g-2">
@@ -692,6 +709,9 @@ const ResultView: React.FC<{
               </KV>
               <KV label="Value">{parseFloat(result.inclusion.value_eth).toFixed(6)} ETH</KV>
               <KV label="At">{formatDateTime(result.inclusion.timestamp)}</KV>
+              {result.inclusion.payload_check_slot !== undefined && (
+                <KV label="Verdict from slot">{String(result.inclusion.payload_check_slot)}</KV>
+              )}
             </div>
           </div>
         </div>

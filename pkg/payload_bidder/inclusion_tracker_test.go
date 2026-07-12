@@ -42,14 +42,154 @@ func hasWarnContaining(hook *test.Hook, msg string) bool {
 	return false
 }
 
-func TestInclusionTracker_FollowUpOrphanDetection(t *testing.T) {
+// drainVerdicts reads all immediately available payload status events.
+func drainVerdicts(ch <-chan *PayloadStatusEvent) []*PayloadStatusEvent {
+	events := make([]*PayloadStatusEvent, 0, 4)
+
+	for {
+		select {
+		case ev := <-ch:
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
+
+func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
+	ourHash := phase0.Hash32{0xab}
+	ourRoot := phase0.Root{0x05}
+
+	// Head blocks: our win at slot 5, then a follow-up at slot 6 built either
+	// on our payload, on an older execution block, or on a competing slot-5
+	// block (orphaning ours).
+	winBlock := &beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash}
+	competing5 := &beacon.BlockInfo{
+		Slot: 5, Root: phase0.Root{0x55}, ExecutionBlockHash: phase0.Hash32{0x55},
+	}
+
+	tests := []struct {
+		name        string
+		followUp    *beacon.BlockInfo
+		wantVerdict PayloadVerdict
+	}{
+		{
+			name: "next block builds on our payload",
+			followUp: &beacon.BlockInfo{
+				Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+				FinalitySafeExecutionBlockHash: ourHash,
+			},
+			wantVerdict: PayloadVerdictCanonical,
+		},
+		{
+			name: "next block builds on an older execution block",
+			followUp: &beacon.BlockInfo{
+				Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+				FinalitySafeExecutionBlockHash: phase0.Hash32{0x99},
+			},
+			wantVerdict: PayloadVerdictMissed,
+		},
+		{
+			name: "won block reorged out",
+			followUp: &beacon.BlockInfo{
+				Slot: 6, Root: phase0.Root{0x06}, ParentRoot: competing5.Root,
+				FinalitySafeExecutionBlockHash: competing5.ExecutionBlockHash,
+			},
+			wantVerdict: PayloadVerdictOrphaned,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, _ := newHookedLogger()
+			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+			builderSvc := newTestBuilderSvc(chainSvc)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+
+			statusSub := tracker.SubscribePayloadStatus(4, false)
+			defer statusSub.Unsubscribe()
+
+			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
+			builderSvc.GetPayloadCache().Store(payload)
+
+			tracker.processBlockInfo(winBlock)
+			require.Contains(t, tracker.trackedWins, phase0.Slot(5), "win must be tracked")
+			// Seed the competing branch into the ancestry cache (as a head
+			// event would).
+			tracker.blockCache[competing5.Root] = competing5
+
+			tracker.processBlockInfo(tt.followUp)
+
+			events := drainVerdicts(statusSub.Channel())
+			require.Len(t, events, 1, "first resolution must fire exactly one verdict")
+			assert.Equal(t, phase0.Slot(5), events[0].Slot)
+			assert.Equal(t, tt.wantVerdict, events[0].Verdict)
+			assert.Equal(t, phase0.Slot(6), events[0].NextBlockSlot)
+
+			// The same head again must not re-fire an unchanged verdict.
+			tracker.processBlockInfo(tt.followUp)
+			assert.Empty(t, drainVerdicts(statusSub.Channel()), "unchanged verdict must not re-fire")
+		})
+	}
+}
+
+func TestInclusionTracker_ReorgRevisesVerdict(t *testing.T) {
+	logger, hook := newHookedLogger()
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	builderSvc := newTestBuilderSvc(chainSvc)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+
+	statusSub := tracker.SubscribePayloadStatus(8, false)
+	defer statusSub.Unsubscribe()
+
+	ourHash := phase0.Hash32{0xab}
+	ourRoot := phase0.Root{0x05}
+	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
+	builderSvc.GetPayloadCache().Store(payload)
+
+	// Win at slot 5, canonical follow-up at slot 6.
+	tracker.processBlockInfo(&beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash})
+
+	onChain6 := &beacon.BlockInfo{
+		Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+		FinalitySafeExecutionBlockHash: ourHash,
+	}
+	tracker.processBlockInfo(onChain6)
+
+	// Reorg: a competing slot-5 block and a slot-6 head on top of it.
+	competing5 := &beacon.BlockInfo{
+		Slot: 5, Root: phase0.Root{0x55}, ExecutionBlockHash: phase0.Hash32{0x55},
+	}
+	tracker.processBlockInfo(competing5)
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot: 6, Root: phase0.Root{0x66}, ParentRoot: competing5.Root,
+		FinalitySafeExecutionBlockHash: competing5.ExecutionBlockHash,
+	})
+
+	// Reorg back: slot 7 head descending from the original slot-6 block.
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot: 7, Root: phase0.Root{0x07}, ParentRoot: onChain6.Root,
+		FinalitySafeExecutionBlockHash: phase0.Hash32{0x06},
+	})
+
+	events := drainVerdicts(statusSub.Channel())
+	require.Len(t, events, 3, "each verdict change must fire once")
+	assert.Equal(t, PayloadVerdictCanonical, events[0].Verdict)
+	assert.Equal(t, PayloadVerdictOrphaned, events[1].Verdict)
+	assert.Equal(t, PayloadVerdictCanonical, events[2].Verdict)
+
+	// The unrevealed payment warning fires with the first verdict only.
+	assert.True(t, hasWarnContaining(hook, "NOT revealed"))
+}
+
+func TestInclusionTracker_PaymentStateLogging(t *testing.T) {
 	tests := []struct {
 		name       string
 		revealed   bool
 		expectWarn bool
 	}{
 		{name: "revealed payload is confirmed", revealed: true, expectWarn: false},
-		{name: "unrevealed payload is orphaned", revealed: false, expectWarn: true},
+		{name: "unrevealed payload warns", revealed: false, expectWarn: true},
 	}
 
 	for _, tt := range tests {
@@ -59,14 +199,12 @@ func TestInclusionTracker_FollowUpOrphanDetection(t *testing.T) {
 			builderSvc := newTestBuilderSvc(chainSvc)
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
 
-			blockHash := phase0.Hash32{0xab}
-			payload := newTestPayload(5, blockHash, big.NewInt(1_000_000_000_000))
+			ourHash := phase0.Hash32{0xab}
+			ourRoot := phase0.Root{0x05}
+			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
 			builderSvc.GetPayloadCache().Store(payload)
 
-			// Head block for slot 5 commits to our payload.
-			tracker.processBlockInfo(&beacon.BlockInfo{Slot: 5, ExecutionBlockHash: blockHash})
-			require.Equal(t, phase0.Slot(5), tracker.lastIncludedSlot)
-			require.Equal(t, blockHash, tracker.lastIncludedHash)
+			tracker.processBlockInfo(&beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash})
 
 			if tt.revealed {
 				payload.MarkRevealed(payload_builder.RevealRecord{
@@ -75,13 +213,13 @@ func TestInclusionTracker_FollowUpOrphanDetection(t *testing.T) {
 				})
 			}
 
-			// Follow-up head block for slot 6 triggers the orphan check.
-			tracker.processBlockInfo(&beacon.BlockInfo{Slot: 6, ExecutionBlockHash: phase0.Hash32{0xcd}})
+			tracker.processBlockInfo(&beacon.BlockInfo{
+				Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+				FinalitySafeExecutionBlockHash: ourHash,
+			})
 
-			assert.Equal(t, phase0.Slot(0), tracker.lastIncludedSlot, "follow-up tracking must be cleared")
-			assert.Equal(t, phase0.Hash32{}, tracker.lastIncludedHash)
 			assert.Equal(t, tt.expectWarn, hasWarnContaining(hook, "NOT revealed"),
-				"orphan warning expectation")
+				"payment warning expectation")
 		})
 	}
 }

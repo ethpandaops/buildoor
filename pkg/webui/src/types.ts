@@ -510,6 +510,8 @@ export interface SlotRevealAttempt {
   at: string;
 }
 
+export type PayloadCanonicalStatus = 'pending' | 'canonical' | 'missed' | 'orphaned';
+
 export interface SlotInclusionResult {
   source: string; // "epbs" | "builder_api"
   block_hash: string;
@@ -518,6 +520,10 @@ export interface SlotInclusionResult {
   value_wei: string;
   value_eth: string;
   timestamp: string;
+  // Canonical verdict for the won payload, derived from the canonical chain's
+  // next block (revised on reorgs while inside the tracking window).
+  payload_status?: PayloadCanonicalStatus;
+  payload_check_slot?: number | string;
 }
 
 export interface SlotResult {

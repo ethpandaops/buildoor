@@ -62,6 +62,26 @@ const (
 	RevealStatusSkipped    RevealStatus = "skipped"
 )
 
+// PayloadStatus tracks whether a won slot's payload became canonical.
+type PayloadStatus string
+
+// Payload canonical statuses (Gloas+; decided by the canonical chain's first
+// block after the won slot and revised on reorgs while the slot is inside
+// the inclusion tracker's reorg window).
+const (
+	// PayloadStatusPending: won, but no follow-up block seen yet.
+	PayloadStatusPending PayloadStatus = "pending"
+	// PayloadStatusCanonical: the next canonical block builds on our payload.
+	PayloadStatusCanonical PayloadStatus = "canonical"
+	// PayloadStatusMissed: the won block is canonical but the next block
+	// builds on an older execution block — the payload was withheld, revealed
+	// too late, or voted empty.
+	PayloadStatusMissed PayloadStatus = "missed"
+	// PayloadStatusOrphaned: the won beacon block itself was reorged out of
+	// the canonical chain.
+	PayloadStatusOrphaned PayloadStatus = "orphaned"
+)
+
 // maxAttemptsPerKind caps the retained attempts per kind on one slot result;
 // beyond the cap the DroppedAttempts counter grows instead (protects against
 // unauthenticated Builder API traffic growing a record without bound while
@@ -133,6 +153,14 @@ type InclusionResult struct {
 	ValueWei        string    `json:"value_wei"`
 	ValueETH        string    `json:"value_eth"`
 	Timestamp       time.Time `json:"timestamp"`
+
+	// PayloadStatus is the canonical verdict for the won payload: pending
+	// until the first follow-up block is seen, then canonical or missed based
+	// on that block's committed parent execution hash. Pre-Gloas wins are
+	// canonical immediately (the payload is embedded in the block).
+	PayloadStatus PayloadStatus `json:"payload_status,omitempty"`
+	// PayloadCheckSlot is the follow-up block's slot the verdict came from.
+	PayloadCheckSlot phase0.Slot `json:"payload_check_slot,omitempty"`
 }
 
 // SlotResult is the complete recorded history of one slot. Values held by the

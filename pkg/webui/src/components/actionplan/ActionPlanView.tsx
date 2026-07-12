@@ -176,13 +176,17 @@ export const ActionPlanView: React.FC = () => {
             <span><span className="ap-chip ap-chip-custom">A</span> builder api</span>
             <span><span className="ap-chip ap-chip-custom">R</span> reveal</span>
             <span><span className="ap-chip ap-chip-disabled">B</span> disabled</span>
-            <span className="legend-section">Result:</span>
+            <span className="legend-section">Bid (left dot):</span>
             <span><span className="ap-dot ap-dot-included d-inline-block"></span> included</span>
-            <span><span className="ap-dot ap-dot-revealed d-inline-block"></span> revealed</span>
             <span><span className="ap-dot ap-dot-bidding d-inline-block"></span> bid, not included</span>
             <span><span className="ap-dot ap-dot-failed d-inline-block"></span> failed</span>
             <span><span className="ap-dot ap-dot-idle d-inline-block"></span> nothing happened</span>
             <span><span className="ap-dot ap-dot-built d-inline-block"></span> built only</span>
+            <span className="legend-section">Payload (right dot, won slots):</span>
+            <span><span className="ap-dot ap-dot-payload-canonical d-inline-block"></span> canonical</span>
+            <span><span className="ap-dot ap-dot-payload-missed d-inline-block"></span> missed</span>
+            <span><span className="ap-dot ap-dot-payload-orphaned d-inline-block"></span> reorged out</span>
+            <span><span className="ap-dot ap-dot-payload-pending d-inline-block"></span> pending</span>
             <span className="text-muted">Click a slot for details; shift-click selects a range.</span>
           </div>
         </div>
