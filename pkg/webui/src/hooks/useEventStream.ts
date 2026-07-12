@@ -1,5 +1,72 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
+
+// ---------------------------------------------------------------------------
+// Module-level SSE fan-out: lets other hooks/components subscribe to raw
+// stream events through the page's EXISTING EventSource connection instead of
+// opening a second one. Every event handled by useEventStream is also
+// dispatched to the callbacks registered for its type.
+// ---------------------------------------------------------------------------
+
+type StreamEventCallback = (data: unknown) => void;
+
+const streamEventListeners = new Map<string, Set<StreamEventCallback>>();
+
+/**
+ * Subscribe to raw SSE events of one type on the shared connection.
+ * Returns an unsubscribe function.
+ */
+export function onStreamEvent(type: string, cb: StreamEventCallback): () => void {
+  let set = streamEventListeners.get(type);
+  if (!set) {
+    set = new Set();
+    streamEventListeners.set(type, set);
+  }
+  set.add(cb);
+  return () => {
+    const listeners = streamEventListeners.get(type);
+    if (!listeners) return;
+    listeners.delete(cb);
+    if (listeners.size === 0) {
+      streamEventListeners.delete(type);
+    }
+  };
+}
+
+function dispatchStreamEvent(type: string, data: unknown) {
+  const listeners = streamEventListeners.get(type);
+  if (!listeners) return;
+  // Copy so callbacks may unsubscribe (or subscribe) during dispatch.
+  for (const cb of [...listeners]) {
+    try {
+      cb(data);
+    } catch (err) {
+      console.error(`Stream event callback failed for '${type}':`, err);
+    }
+  }
+}
+
+// Connection generation: incremented on every successful (re)connect of the
+// SSE stream, so views can refetch REST state after a reconnect (events that
+// occurred during the gap were never delivered).
+let connectionGeneration = 0;
+const generationListeners = new Set<() => void>();
+
+export function getConnectionGeneration(): number {
+  return connectionGeneration;
+}
+
+export function subscribeConnectionGeneration(listener: () => void): () => void {
+  generationListeners.add(listener);
+  return () => {
+    generationListeners.delete(listener);
+  };
+}
+
+function bumpConnectionGeneration() {
+  connectionGeneration++;
+  generationListeners.forEach((listener) => listener());
+}
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -14,6 +81,7 @@ interface UseEventStreamResult {
   slotServiceStatuses: Record<number, ServiceStatus>;
   events: LogEvent[];
   clearEvents: () => void;
+  connectionGeneration: number;
 }
 
 export function useEventStream(): UseEventStreamResult {
@@ -465,6 +533,9 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
       }
+
+      // Fan out every event to module-level subscribers (shared connection).
+      dispatchStreamEvent(event.type, event.data);
     };
 
     const connect = () => {
@@ -477,6 +548,7 @@ export function useEventStream(): UseEventStreamResult {
 
       eventSource.onopen = () => {
         setConnected(true);
+        bumpConnectionGeneration();
       };
 
       eventSource.onerror = () => {
@@ -508,6 +580,8 @@ export function useEventStream(): UseEventStreamResult {
     };
   }, []); // Empty dependency array - connection is stable
 
+  const generation = useSyncExternalStore(subscribeConnectionGeneration, getConnectionGeneration);
+
   return {
     connected,
     config,
@@ -520,6 +594,7 @@ export function useEventStream(): UseEventStreamResult {
     slotConfigs,
     slotServiceStatuses,
     events,
-    clearEvents
+    clearEvents,
+    connectionGeneration: generation
   };
 }
