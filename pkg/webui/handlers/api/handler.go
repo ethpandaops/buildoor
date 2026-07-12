@@ -85,6 +85,7 @@ func NewAPIHandler(
 		h.eventStreamMgr = NewEventStreamManager(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
 			builderAPISvc, revealSvc, inclusionTracker, payments,
+			planSvc, resultTracker,
 		)
 		h.eventStreamMgr.Start()
 	}

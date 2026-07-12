@@ -84,6 +84,18 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	// Builder API config endpoint
 	apiRouter.HandleFunc("/config/builder-api", apiHandler.UpdateBuilderAPIConfig).Methods(http.MethodPost)
 
+	// Generic path-based settings endpoint (partial updates by canonical key)
+	apiRouter.HandleFunc("/config/settings", apiHandler.UpdateSettings).Methods(http.MethodPost)
+
+	// Per-slot action plan + results endpoints
+	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.GetActionPlan).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.UpdateActionPlan).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/slot-results", apiHandler.GetSlotResults).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payload", apiHandler.GetSlotPayloadArtifact).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids", apiHandler.GetSlotBidArtifacts).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids/{index}", apiHandler.GetSlotBidArtifact).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/envelope", apiHandler.GetSlotEnvelopeArtifact).Methods(http.MethodGet)
+
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)

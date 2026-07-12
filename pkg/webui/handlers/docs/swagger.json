@@ -4,6 +4,137 @@
         "contact": {}
     },
     "paths": {
+        "/api/buildoor/action-plan": {
+            "get": {
+                "description": "Returns all per-slot action plans within the inclusive slot range.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get per-slot action plans",
+                "operationId": "getActionPlan",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Range start slot (inclusive)",
+                        "name": "min_slot",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Range end slot (inclusive)",
+                        "name": "max_slot",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ActionPlanResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Plan service unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Applies a bulk per-slot action plan mutation atomically (all\ntargeted slots update or none). Category members are\nthree-state (absent = unchanged, null = clear, object =\nreplace); the \"set\" member supports fine-grained path updates\nlike {\"bid.bid_min_amount\": 5000} for partial edits. Updates\ntargeting past or already-frozen slots fail with 409.\nRequires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Update per-slot action plans",
+                "operationId": "updateActionPlan",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Plan updates",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateActionPlanRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Authoritative normalized result",
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateActionPlanResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Slot in the past or frozen",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Plan service unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/audit-log": {
             "get": {
                 "description": "Returns a paginated list of authenticated mutating actions. Empty when no state-db is configured.",
@@ -223,6 +354,293 @@
                 }
             }
         },
+        "/api/buildoor/slot-results": {
+            "get": {
+                "description": "Returns the recorded outcome history (build, bids, block\nsubmissions, reveals, inclusion, applied plan) for every\nactive slot within the inclusive slot range.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get per-slot results",
+                "operationId": "getSlotResults",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Range start slot (inclusive)",
+                        "name": "min_slot",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Range end slot (inclusive)",
+                        "name": "max_slot",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SlotResultsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Results tracker unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/slot-results/{slot}/bids": {
+            "get": {
+                "description": "Lists the metadata of every signed bid stored for the slot\n(JSON only; fetch individual bids by index for SSZ). Returns\nan empty list for slots without bid artifacts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "List a slot's signed bid artifacts",
+                "operationId": "getSlotBidArtifacts",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.SlotBidArtifactsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Results tracker unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/slot-results/{slot}/bids/{index}": {
+            "get": {
+                "description": "Returns one signed bid created for the slot, addressed by its\nartifact index (see the bid listing endpoint). Pre-Gloas bids\nare SignedBuilderBid, Gloas+ bids SignedExecutionPayloadBid.\nContent negotiation as with the payload artifact endpoint.",
+                "produces": [
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get one signed bid of a slot",
+                "operationId": "getSlotBidArtifact",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Bid artifact index",
+                        "name": "index",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Versioned signed bid (or raw SSZ)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No artifact for this slot/index",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "406": {
+                        "description": "No acceptable content type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/slot-results/{slot}/envelope": {
+            "get": {
+                "description": "Returns the signed execution payload envelope constructed for\nthe slot's reveal (stored at construction time, so failed\npublishes remain inspectable). Content negotiation as with the\npayload artifact endpoint.",
+                "produces": [
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get the signed payload envelope of a slot",
+                "operationId": "getSlotEnvelopeArtifact",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Versioned envelope (or raw SSZ)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No artifact for this slot",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "406": {
+                        "description": "No acceptable content type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/slot-results/{slot}/payload": {
+            "get": {
+                "description": "Returns the exact execution payload built for the slot. With\n\"Accept: application/octet-stream\" the raw SSZ bytes are\nserved; otherwise a {\"version\", \"data\"} JSON envelope. The\nEth-Consensus-Version response header carries the fork name.",
+                "produces": [
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get the built execution payload of a slot",
+                "operationId": "getSlotPayloadArtifact",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Versioned payload (or raw SSZ)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No artifact for this slot",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "406": {
+                        "description": "No acceptable content type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/validators": {
             "get": {
                 "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
@@ -418,6 +836,69 @@
                     },
                     "500": {
                         "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/config/settings": {
+            "post": {
+                "description": "Applies partial global settings updates keyed by canonical\nsettings paths (e.g. {\"epbs.bid_subsidy\": 1000,\n\"schedule.mode\": \"all\"}) without requiring full config\nobjects. Unknown keys are rejected. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Update global settings by key path",
+                "operationId": "updateSettings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Map of settings key paths to values",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Unknown key or invalid value",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -768,6 +1249,313 @@
         }
     },
     "definitions": {
+        "action_plan.BidPlan": {
+            "type": "object",
+            "properties": {
+                "bid_end_time": {
+                    "type": "integer"
+                },
+                "bid_increase": {
+                    "description": "gwei",
+                    "type": "integer"
+                },
+                "bid_interval": {
+                    "description": "ms, \u003e= 0, 0 = single bid",
+                    "type": "integer"
+                },
+                "bid_min_amount": {
+                    "description": "gwei",
+                    "type": "integer"
+                },
+                "bid_start_time": {
+                    "type": "integer"
+                },
+                "bid_subsidy": {
+                    "description": "gwei",
+                    "type": "integer"
+                },
+                "bid_value_gwei": {
+                    "description": "BidValueGwei is an absolute bid base value replacing\nmax(blockValue, min) + subsidy; BidIncrease still applies per re-bid.\nAllows underbidding the block value for testing.",
+                    "type": "integer"
+                },
+                "ignore_missing_prefs": {
+                    "description": "IgnoreMissingPrefs bids with the payload's fee recipient when no gossip\nproposer preferences arrived for the slot, bypassing the skip gate.",
+                    "type": "boolean"
+                },
+                "mode": {
+                    "$ref": "#/definitions/action_plan.Mode"
+                }
+            }
+        },
+        "action_plan.BuilderAPIPlan": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "$ref": "#/definitions/action_plan.Mode"
+                },
+                "response_delay_ms": {
+                    "description": "ResponseDelayMs delays the bid response by this many milliseconds\n(context-cancellable, capped at one slot).",
+                    "type": "integer"
+                },
+                "total_value_override_gwei": {
+                    "description": "TotalValueOverrideGwei is the absolute total proposer-visible bid value\n(before the Gloas execution-payment split), replacing block value +\nsubsidy. May exceed the block value to test payment edge cases.",
+                    "type": "integer"
+                },
+                "value_subsidy_gwei": {
+                    "description": "ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot.",
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.FrozenPlan": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "description": "Resolved effective settings; a nil category = suppressed for this slot\n(by plan or by the global enable flags / protocol applicability).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedBidSettings"
+                        }
+                    ]
+                },
+                "build": {
+                    "description": "Build is the complete resolved build decision for the slot (schedule +\nplan force/suppress). Always non-nil.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedBuildSettings"
+                        }
+                    ]
+                },
+                "builder_api": {
+                    "$ref": "#/definitions/action_plan.ResolvedBuilderAPISettings"
+                },
+                "fork": {
+                    "description": "fork name at the target slot",
+                    "type": "string"
+                },
+                "frozen_at": {
+                    "type": "string"
+                },
+                "plan": {
+                    "description": "raw sparse plan; nil = none existed",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.SlotPlan"
+                        }
+                    ]
+                },
+                "reveal": {
+                    "$ref": "#/definitions/action_plan.ResolvedRevealSettings"
+                },
+                "slot": {
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.Mode": {
+            "type": "string",
+            "enum": [
+                "disabled",
+                "custom"
+            ],
+            "x-enum-varnames": [
+                "ModeDisabled",
+                "ModeCustom"
+            ]
+        },
+        "action_plan.PlanUpdate": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "builder_api": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "delete": {
+                    "type": "boolean"
+                },
+                "from_slot": {
+                    "type": "integer"
+                },
+                "reveal": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "set": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "slots": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "to_slot": {
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedBidSettings": {
+            "type": "object",
+            "properties": {
+                "end_ms": {
+                    "type": "integer"
+                },
+                "forced": {
+                    "description": "Forced marks that the plan activated bidding although the module is\nglobally disabled.",
+                    "type": "boolean"
+                },
+                "ignore_missing_prefs": {
+                    "description": "IgnoreMissingPrefs bids without gossip proposer preferences.",
+                    "type": "boolean"
+                },
+                "increase_gwei": {
+                    "type": "integer"
+                },
+                "interval_ms": {
+                    "type": "integer"
+                },
+                "min_gwei": {
+                    "type": "integer"
+                },
+                "start_ms": {
+                    "type": "integer"
+                },
+                "subsidy_gwei": {
+                    "type": "integer"
+                },
+                "value_gwei": {
+                    "description": "ValueGwei, when set, is the absolute bid base value replacing the\nmax(blockValue, min) + subsidy formula (IncreaseGwei still applies).",
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedBuildSettings": {
+            "type": "object",
+            "properties": {
+                "build": {
+                    "description": "Build is the final decision: build a payload for this slot or not.",
+                    "type": "boolean"
+                },
+                "build_start_time_ms": {
+                    "description": "BuildStartTimeMs is the effective build start time, milliseconds\nrelative to slot start (signed).",
+                    "type": "integer"
+                },
+                "forced": {
+                    "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
+                    "type": "boolean"
+                },
+                "plan_involved": {
+                    "description": "PlanInvolved marks decisions where a per-slot plan existed or any\nconsumer was effectively active — i.e. skips worth surfacing.",
+                    "type": "boolean"
+                },
+                "skip_reason": {
+                    "description": "SkipReason is one of the BuildSkipReason* constants when Build is\nfalse, empty otherwise.",
+                    "type": "string"
+                }
+            }
+        },
+        "action_plan.ResolvedBuilderAPISettings": {
+            "type": "object",
+            "properties": {
+                "delay_ms": {
+                    "type": "integer"
+                },
+                "forced": {
+                    "description": "Forced marks that the plan activated serving although the module is\nglobally disabled.",
+                    "type": "boolean"
+                },
+                "subsidy_gwei": {
+                    "type": "integer"
+                },
+                "total_value_gwei": {
+                    "description": "TotalValueGwei, when set, is the absolute total proposer-visible bid\nvalue (before the Gloas execution-payment split).",
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedRevealSettings": {
+            "type": "object",
+            "properties": {
+                "bypass_deadline": {
+                    "description": "BypassDeadline disables the \"past the in-slot deadline → skip\" check so\ndeliberately late reveals are attempted.",
+                    "type": "boolean"
+                },
+                "reveal_time_ms": {
+                    "type": "integer"
+                },
+                "suppressed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "action_plan.RevealPlan": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "$ref": "#/definitions/action_plan.Mode"
+                },
+                "reveal_time_ms": {
+                    "description": "RevealTimeMs is signed milliseconds relative to slot start.",
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.SlotPlan": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "$ref": "#/definitions/action_plan.BidPlan"
+                },
+                "builder_api": {
+                    "$ref": "#/definitions/action_plan.BuilderAPIPlan"
+                },
+                "reveal": {
+                    "$ref": "#/definitions/action_plan.RevealPlan"
+                },
+                "slot": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "updated_by": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.ActionPlanResponse": {
+            "type": "object",
+            "properties": {
+                "max_slot": {
+                    "type": "integer"
+                },
+                "min_slot": {
+                    "type": "integer"
+                },
+                "plans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.SlotPlan"
+                    }
+                }
+            }
+        },
         "api.AuditLogResponse": {
             "type": "object",
             "properties": {
@@ -785,6 +1573,30 @@
                 },
                 "total": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.BidArtifactMetaEntry": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "description": "unix milliseconds",
+                    "type": "integer"
+                },
+                "execution_payment_gwei": {
+                    "type": "integer"
+                },
+                "fork": {
+                    "type": "string"
+                },
+                "index": {
+                    "type": "integer"
+                },
+                "total_value_gwei": {
+                    "type": "integer"
+                },
+                "transport": {
+                    "type": "string"
                 }
             }
         },
@@ -1036,6 +1848,37 @@
                 }
             }
         },
+        "api.SlotBidArtifactsResponse": {
+            "type": "object",
+            "properties": {
+                "bids": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.BidArtifactMetaEntry"
+                    }
+                },
+                "slot": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.SlotResultsResponse": {
+            "type": "object",
+            "properties": {
+                "max_slot": {
+                    "type": "integer"
+                },
+                "min_slot": {
+                    "type": "integer"
+                },
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.SlotResult"
+                    }
+                }
+            }
+        },
         "api.StatsResponse": {
             "type": "object",
             "properties": {
@@ -1116,6 +1959,37 @@
                 },
                 "withdrawable_epoch": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.UpdateActionPlanRequest": {
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.PlanUpdate"
+                    }
+                }
+            }
+        },
+        "api.UpdateActionPlanResponse": {
+            "type": "object",
+            "properties": {
+                "plans": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.SlotPlan"
+                    }
+                },
+                "slots": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "status": {
+                    "type": "string"
                 }
             }
         },
@@ -1248,6 +2122,262 @@
                     "type": "string"
                 }
             }
+        },
+        "slot_results.BidAttempt": {
+            "type": "object",
+            "properties": {
+                "artifact_index": {
+                    "description": "ArtifactIndex references the slot's stored 'bid' SSZ artifact; nil when\nno artifact exists (suppressed, pre-construction failure, or capture\ndisabled/failed).",
+                    "type": "integer"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "competitor_high_gwei": {
+                    "description": "CompetitorHighGwei is the highest known competitor bid at submission\ntime (p2p only, our own builder index excluded).",
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "execution_payment_gwei": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.BidStatus"
+                },
+                "total_value_gwei": {
+                    "type": "integer"
+                },
+                "transport": {
+                    "description": "payload_builder.BidTransport values",
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.BidStatus": {
+            "type": "string",
+            "enum": [
+                "suppressed",
+                "constructed",
+                "submitted",
+                "served",
+                "failed",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "BidStatusSuppressed",
+                "BidStatusConstructed",
+                "BidStatusSubmitted",
+                "BidStatusServed",
+                "BidStatusFailed",
+                "BidStatusCancelled"
+            ]
+        },
+        "slot_results.BlockSubmission": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "dialect": {
+                    "description": "\"legacy\" | \"epbs\"",
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.SubmissionStatus"
+                }
+            }
+        },
+        "slot_results.BuildOutcome": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "block_hash": {
+                    "type": "string"
+                },
+                "block_value_wei": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "fee_recipient": {
+                    "type": "string"
+                },
+                "num_blobs": {
+                    "type": "integer"
+                },
+                "num_transactions": {
+                    "type": "integer"
+                },
+                "skip_reason": {
+                    "description": "action_plan.BuildSkipReason* when skipped",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.BuildStatus"
+                }
+            }
+        },
+        "slot_results.BuildStatus": {
+            "type": "string",
+            "enum": [
+                "waiting_attributes",
+                "no_attributes",
+                "started",
+                "ready",
+                "failed",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "BuildStatusWaitingAttributes",
+                "BuildStatusNoAttributes",
+                "BuildStatusStarted",
+                "BuildStatusReady",
+                "BuildStatusFailed",
+                "BuildStatusSkipped"
+            ]
+        },
+        "slot_results.InclusionResult": {
+            "type": "object",
+            "properties": {
+                "block_hash": {
+                    "type": "string"
+                },
+                "num_blobs": {
+                    "type": "integer"
+                },
+                "num_transactions": {
+                    "type": "integer"
+                },
+                "source": {
+                    "description": "\"epbs\" | \"builder_api\"",
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "value_eth": {
+                    "type": "string"
+                },
+                "value_wei": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.RevealAttempt": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "attempt": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "skip_reason": {
+                    "description": "plan_disabled | late",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.RevealStatus"
+                },
+                "transport": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.RevealStatus": {
+            "type": "string",
+            "enum": [
+                "suppressed",
+                "published",
+                "failed",
+                "skipped"
+            ],
+            "x-enum-varnames": [
+                "RevealStatusSuppressed",
+                "RevealStatusPublished",
+                "RevealStatusFailed",
+                "RevealStatusSkipped"
+            ]
+        },
+        "slot_results.SlotResult": {
+            "type": "object",
+            "properties": {
+                "applied_plan": {
+                    "description": "AppliedPlan is the frozen plan snapshot the slot executed under.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.FrozenPlan"
+                        }
+                    ]
+                },
+                "bids": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.BidAttempt"
+                    }
+                },
+                "block_submissions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.BlockSubmission"
+                    }
+                },
+                "build": {
+                    "$ref": "#/definitions/slot_results.BuildOutcome"
+                },
+                "dropped_attempts": {
+                    "description": "DroppedAttempts counts attempts beyond the per-kind retention cap,\nkeyed by kind (\"bids\", \"block_submissions\", \"reveal_attempts\").",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "epoch": {
+                    "type": "integer"
+                },
+                "fork": {
+                    "type": "string"
+                },
+                "inclusion": {
+                    "$ref": "#/definitions/slot_results.InclusionResult"
+                },
+                "reveal_attempts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.RevealAttempt"
+                    }
+                },
+                "slot": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.SubmissionStatus": {
+            "type": "string",
+            "enum": [
+                "received",
+                "accepted",
+                "failed"
+            ],
+            "x-enum-varnames": [
+                "SubmissionStatusReceived",
+                "SubmissionStatusAccepted",
+                "SubmissionStatusFailed"
+            ]
         }
     }
 }

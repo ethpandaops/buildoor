@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -17,6 +18,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -50,6 +52,8 @@ const (
 	EventTypeBuilderAPISubmitBlockRcvd   EventType = "builder_api_submit_block_received"
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
+	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
+	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
 	EventTypeLifecycle                   EventType = "lifecycle"
 	EventTypeBidIncluded                 EventType = "bid_included"
 )
@@ -294,6 +298,8 @@ type EventStreamManager struct {
 	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
 	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
 	payments         *payload_bidder.PaymentTracker   // Optional shared payment tracker (Gloas+)
+	planSvc          *action_plan.PlanService         // Optional action plan service
+	resultTracker    *slot_results.Tracker            // Optional slot results tracker
 
 	clients map[chan *StreamEvent]struct{}
 	mu      sync.RWMutex
@@ -328,6 +334,8 @@ func NewEventStreamManager(
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,
 	payments *payload_bidder.PaymentTracker,
+	planSvc *action_plan.PlanService,
+	resultTracker *slot_results.Tracker,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -340,6 +348,8 @@ func NewEventStreamManager(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		planSvc:          planSvc,
+		resultTracker:    resultTracker,
 		clients:          make(map[chan *StreamEvent]struct{}, 8),
 		ctx:              ctx,
 		cancel:           cancel,
@@ -403,6 +413,28 @@ func (m *EventStreamManager) Start() {
 		})
 	}
 
+	// Subscribe to action plan changes (if plan service available)
+	var planChangeSub *utils.Subscription[*action_plan.PlanChangeEvent]
+
+	var planChangeChan <-chan *action_plan.PlanChangeEvent
+
+	if m.planSvc != nil {
+		planChangeSub = m.planSvc.SubscribeChanges(16)
+		planChangeChan = planChangeSub.Channel()
+	}
+
+	// Subscribe to slot result updates (if results tracker available). SSE is
+	// an invalidation/fast-update channel; the REST range endpoints are the
+	// source of truth, so lossy non-blocking delivery is fine.
+	var resultUpdateSub *utils.Subscription[*slot_results.SlotResult]
+
+	var resultUpdateChan <-chan *slot_results.SlotResult
+
+	if m.resultTracker != nil {
+		resultUpdateSub = m.resultTracker.SubscribeUpdates(64)
+		resultUpdateChan = resultUpdateSub.Channel()
+	}
+
 	// Subscribe to head vote updates (if chain service available)
 	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
 
@@ -441,6 +473,14 @@ func (m *EventStreamManager) Start() {
 
 		if hvSub != nil {
 			defer hvSub.Unsubscribe()
+		}
+
+		if planChangeSub != nil {
+			defer planChangeSub.Unsubscribe()
+		}
+
+		if resultUpdateSub != nil {
+			defer resultUpdateSub.Unsubscribe()
 		}
 
 		// Slot tracking ticker
@@ -491,6 +531,30 @@ func (m *EventStreamManager) Start() {
 				}
 
 				m.handleHeadVoteUpdate(event)
+
+			case event, ok := <-planChangeChan:
+				if !ok {
+					planChangeChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeActionPlanUpdated,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      event,
+				})
+
+			case event, ok := <-resultUpdateChan:
+				if !ok {
+					resultUpdateChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeSlotResultUpdated,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      event,
+				})
 
 			case event, ok := <-revealChan:
 				if !ok {
@@ -1131,6 +1195,7 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 			Data: map[string]any{
 				"genesis_time":     genesis.GenesisTime.UnixMilli(),
 				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
+				"slots_per_epoch":  chainSpec.SlotsPerEpoch,
 			},
 		}) {
 			return
