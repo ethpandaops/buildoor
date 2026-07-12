@@ -121,6 +121,51 @@ func TestUpsertCreatesRecordWithFrozenPlan(t *testing.T) {
 	require.Nil(t, env.tracker.Get(2001))
 }
 
+// drainUpdates reads all immediately available update events.
+func drainUpdates(ch <-chan *SlotResult) []*SlotResult {
+	events := make([]*SlotResult, 0, 4)
+
+	for {
+		select {
+		case ev := <-ch:
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
+
+func TestUpdateCoalescingDeliversTrailingState(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+
+	sub := env.tracker.SubscribeUpdates(16)
+	defer sub.Unsubscribe()
+
+	// Two rapid updates inside the 1s coalescing window: the first fires
+	// immediately (leading edge), the second is suppressed but must still be
+	// delivered by the trailing flush — otherwise the UI keeps the stale state.
+	env.tracker.RecordBlockSubmission(2000, "epbs", string(SubmissionStatusReceived), "")
+	env.tracker.RecordBlockSubmission(2000, "epbs", string(SubmissionStatusAccepted), "")
+
+	leading := drainUpdates(sub.Channel())
+	require.Len(t, leading, 1, "only the leading update fires synchronously")
+	require.Len(t, leading[0].BlockSubmissions, 1)
+
+	// The trailing flush lands within ~1 coalescing interval.
+	var trailing *SlotResult
+	require.Eventually(t, func() bool {
+		for _, ev := range drainUpdates(sub.Channel()) {
+			trailing = ev
+		}
+
+		return trailing != nil
+	}, 2*time.Second, 20*time.Millisecond, "trailing state must be delivered")
+
+	require.Len(t, trailing.BlockSubmissions, 2,
+		"the trailing update must carry the final (latest) state")
+	require.Equal(t, SubmissionStatusAccepted, trailing.BlockSubmissions[1].Status)
+}
+
 func TestGetReturnsClones(t *testing.T) {
 	env := newTrackerTestEnv(t, false)
 

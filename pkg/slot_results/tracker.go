@@ -54,6 +54,10 @@ type Tracker struct {
 
 	mu        sync.Mutex
 	lastFired map[phase0.Slot]time.Time // update-event coalescing per slot
+	// pending holds the latest result suppressed inside a slot's coalescing
+	// window, awaiting a trailing flush so the FINAL state is always delivered.
+	pending      map[phase0.Slot]*SlotResult
+	flushPending map[phase0.Slot]bool // a trailing flush is already scheduled
 
 	updates utils.Dispatcher[*SlotResult]
 
@@ -84,6 +88,8 @@ func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database
 		store:            memstore.New[phase0.Slot, *SlotResult](),
 		artifacts:        NewArtifactStore(stateDB, trackerLog),
 		lastFired:        make(map[phase0.Slot]time.Time, 8),
+		pending:          make(map[phase0.Slot]*SlotResult, 8),
+		flushPending:     make(map[phase0.Slot]bool, 8),
 		log:              trackerLog,
 	}
 }
@@ -647,25 +653,71 @@ func (t *Tracker) upsert(slot phase0.Slot, mutate func(*SlotResult)) {
 }
 
 // fireUpdate emits the updated record to subscribers, coalescing bursts per
-// slot. Callers must hold t.mu.
+// slot with BOTH edges: the first update in a window fires immediately, and
+// the latest update suppressed inside the window is flushed once the window
+// closes. Without the trailing flush a burst's final state (e.g. "included")
+// would be dropped and the UI would sit on a stale record until a manual
+// refetch. Callers must hold t.mu.
 func (t *Tracker) fireUpdate(slot phase0.Slot, result *SlotResult) {
 	now := time.Now()
+
 	if last, ok := t.lastFired[slot]; ok && now.Sub(last) < updateFireInterval {
+		// Inside the window: remember the latest state and make sure a trailing
+		// flush is scheduled for when the window closes.
+		t.pending[slot] = result.Clone()
+
+		if !t.flushPending[slot] {
+			t.flushPending[slot] = true
+			delay := updateFireInterval - now.Sub(last)
+
+			time.AfterFunc(delay, func() { t.flushTrailing(slot) })
+		}
+
 		return
 	}
 
 	t.lastFired[slot] = now
+	delete(t.pending, slot)
 
-	// Bound the coalescing map.
-	if len(t.lastFired) > 64 {
-		for firedSlot := range t.lastFired {
-			if firedSlot+64 < slot {
-				delete(t.lastFired, firedSlot)
-			}
-		}
-	}
+	t.pruneCoalescing(slot)
 
 	t.updates.Fire(result.Clone())
+}
+
+// flushTrailing emits the latest result suppressed during a slot's coalescing
+// window, so the final state is always delivered. Runs from a timer goroutine.
+func (t *Tracker) flushTrailing(slot phase0.Slot) {
+	t.mu.Lock()
+
+	delete(t.flushPending, slot)
+
+	result, ok := t.pending[slot]
+	if !ok || (t.ctx != nil && t.ctx.Err() != nil) {
+		t.mu.Unlock()
+		return
+	}
+
+	delete(t.pending, slot)
+	t.lastFired[slot] = time.Now()
+	t.mu.Unlock()
+
+	// result is already a clone; fire outside the lock is unnecessary but
+	// harmless, and keeps parity with the non-blocking dispatcher.
+	t.updates.Fire(result)
+}
+
+// pruneCoalescing bounds the per-slot coalescing maps. Callers must hold t.mu.
+func (t *Tracker) pruneCoalescing(slot phase0.Slot) {
+	if len(t.lastFired) <= 64 {
+		return
+	}
+
+	for firedSlot := range t.lastFired {
+		if firedSlot+64 < slot {
+			delete(t.lastFired, firedSlot)
+			delete(t.pending, firedSlot)
+		}
+	}
 }
 
 // Get returns a deep copy of the slot's result, or nil when none exists.
