@@ -518,6 +518,13 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 	}).Info("Starting payload build")
 
+	// The frozen plan (idempotent Freeze) decides whether to build this slot's
+	// payload on the grandparent execution payload (a parent-reorg test). When
+	// so, we build from an effective attributes copy whose parent fields point
+	// at the grandparent, so the build, the stored payload and the bid all
+	// agree on the parent.
+	event = s.effectiveBuildAttributes(slot, event)
+
 	// Notify subscribers that building has started so the build can be rendered
 	// as in-progress before the payload is ready.
 	s.buildStartedDispatcher.Fire(&PayloadBuildStartedEvent{
@@ -550,6 +557,78 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 	}
 
 	s.emitPayloadReady(slot, payloadEvent)
+}
+
+// effectiveBuildAttributes returns the payload attributes to build the slot
+// from. Normally that is the current attributes unchanged; when the slot's
+// frozen plan requests a parent-payload reorg it returns a copy whose parent
+// fields (parent block hash, parent block number and withdrawals) are sourced
+// from the PARENT slot's cached attributes (whose parent is the grandparent
+// payload), while every other property — including the beacon parent root —
+// stays from the current slot. The payload thus builds on the grandparent
+// execution payload while keeping the current beacon-chain position, a
+// deliberate parent-payload reorg. Building the copy here (rather than only
+// overriding the engine call) means the built Payload carries the reorged
+// parent, so the bid advertises the parent it actually built on.
+//
+// When the parent slot's attributes are unavailable — or already share our
+// parent (nothing to reorg) — the reorg cannot be constructed and the current
+// attributes are returned unchanged (logged), rather than silently pretending
+// the flag were unset.
+func (s *Service) effectiveBuildAttributes(
+	slot phase0.Slot, current *beacon.PayloadAttributesEvent,
+) *beacon.PayloadAttributesEvent {
+	frozen := s.planSvc.Freeze(slot)
+	if !frozen.Build.ReorgParentPayload {
+		return current
+	}
+
+	if slot == 0 {
+		s.log.WithField("slot", slot).Warn(
+			"Parent-reorg build requested for slot 0, building normally",
+		)
+
+		return current
+	}
+
+	parentAttrs := s.clClient.Events().GetLatestPayloadAttributes(slot - 1)
+	if parentAttrs == nil {
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"parent_slot": slot - 1,
+		}).Warn("Parent-reorg build requested but parent slot attributes are unavailable, building normally")
+
+		return current
+	}
+
+	if parentAttrs.ParentBlockHash == current.ParentBlockHash {
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"parent_slot": slot - 1,
+			"parent_hash": fmt.Sprintf("%x", current.ParentBlockHash[:8]),
+		}).Warn("Parent-reorg build requested but parent slot shares our parent payload, building normally")
+
+		return current
+	}
+
+	// Shallow copy the current event, then redirect only the parent fields to
+	// the grandparent payload. The cached events must never be mutated, so we
+	// copy the struct and swap the withdrawals slice reference (not its
+	// contents).
+	effective := *current
+	effective.ParentBlockHash = parentAttrs.ParentBlockHash
+	effective.ParentBlockNumber = parentAttrs.ParentBlockNumber
+	effective.Withdrawals = parentAttrs.Withdrawals
+
+	s.log.WithFields(logrus.Fields{
+		"slot":                slot,
+		"reorg_parent_hash":   fmt.Sprintf("%x", effective.ParentBlockHash[:8]),
+		"reorg_parent_number": effective.ParentBlockNumber,
+		"original_parent":     fmt.Sprintf("%x", current.ParentBlockHash[:8]),
+		"withdrawals":         len(effective.Withdrawals),
+	}).Warn("Building on grandparent payload (parent-reorg test)")
+
+	return &effective
 }
 
 // handlePayloadAvailableEvent processes an execution_payload_available event (Gloas only).

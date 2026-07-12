@@ -357,6 +357,44 @@ const CategoryForm: React.FC<{
 );
 
 // ---------------------------------------------------------------------------
+// Build category (modeless single flag)
+// ---------------------------------------------------------------------------
+
+// 'unchanged' only exists in bulk mode; 'off' = normal parent, 'on' = reorg.
+type BuildFlagMode = 'unchanged' | 'off' | 'on';
+
+const BuildForm: React.FC<{
+  bulk: boolean;
+  value: BuildFlagMode;
+  disabled: boolean;
+  onChange: (next: BuildFlagMode) => void;
+}> = ({ bulk, value, disabled, onChange }) => (
+  <div className="mb-3">
+    <div className="d-flex align-items-center gap-2 mb-1">
+      <div className="section-header">Build</div>
+      <select
+        className="form-select form-select-sm w-auto"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value as BuildFlagMode)}
+      >
+        {bulk && <option value="unchanged">unchanged</option>}
+        <option value="off">normal parent</option>
+        <option value="on">reorg parent (build on n-2)</option>
+      </select>
+    </div>
+    {value === 'on' && (
+      <div className="form-text mt-0">
+        Builds the payload on the grandparent (n-2) execution payload instead of the immediate
+        parent — parent hash, parent number and withdrawals come from the parent slot, everything
+        else from this slot. A deliberate parent-payload reorg attempt; rejected by mainnet
+        forkchoice, useful for testing.
+      </div>
+    )}
+  </div>
+);
+
+// ---------------------------------------------------------------------------
 // Read-only frozen plan + result views
 // ---------------------------------------------------------------------------
 
@@ -383,6 +421,11 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
             <span className={badgeClass('success')}>build{frozen.build.forced ? ' (forced)' : ''}</span>
           ) : (
             <span className={badgeClass('secondary')}>skip ({frozen.build.skip_reason || '—'})</span>
+          )}
+          {frozen.build.reorg_parent_payload && (
+            <span className={`ms-1 ${badgeClass('warning')}`} title="Built on the grandparent (n-2) payload">
+              reorg parent
+            </span>
           )}
         </KV>
         <KV label="Build Start">{frozen.build.build_start_time_ms} ms</KV>
@@ -760,6 +803,10 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   const [revealState, setRevealState] = useState<CategoryFormState>(() =>
     initCategoryState(initialPlan?.reveal, REVEAL_FIELDS, bulk)
   );
+  // Build is a modeless single-flag category: tri-state in bulk, on/off single.
+  const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(() =>
+    bulk ? 'unchanged' : initialPlan?.build?.reorg_parent_payload ? 'on' : 'off'
+  );
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -835,6 +882,18 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
           break;
         case 'none':
           break;
+      }
+    }
+
+    // Build (modeless single flag), resolved as a fine-grained set path.
+    if (buildReorg !== 'unchanged') {
+      const initialReorg = initialPlan?.build?.reorg_parent_payload === true;
+      const wantOn = buildReorg === 'on';
+      // In single mode skip a no-op; in bulk always write so every targeted
+      // slot converges (setting false drops the build category server-side).
+      if (!isSingle || wantOn !== initialReorg) {
+        setPaths['build.reorg_parent_payload'] = wantOn;
+        hasChange = true;
       }
     }
 
@@ -937,6 +996,12 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     fields={REVEAL_FIELDS}
                     disabled={formDisabled}
                     onChange={setRevealState}
+                  />
+                  <BuildForm
+                    bulk={bulk}
+                    value={buildReorg}
+                    disabled={formDisabled}
+                    onChange={setBuildReorg}
                   />
                 </form>
               )}

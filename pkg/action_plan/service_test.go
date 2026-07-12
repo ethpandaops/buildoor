@@ -330,6 +330,26 @@ func TestFreezeRevealSuppressionAndCustomTiming(t *testing.T) {
 	require.Equal(t, int64(15000), late.Reveal.RevealTimeMs)
 }
 
+func TestFreezeReorgParentPayload(t *testing.T) {
+	chainSvc := newStubChain()
+	svc := newTestService(chainSvc, nil)
+
+	_, err := svc.ApplyUpdates([]*PlanUpdate{
+		{Slots: []uint64{9100}, Build: json.RawMessage(`{"reorg_parent_payload":true}`)},
+		{Slots: []uint64{9101}, Bid: json.RawMessage(`{"mode":"custom"}`)},
+	}, "tester")
+	require.NoError(t, err)
+
+	// The build category alone modifies HOW a build happens; it never forces a
+	// build (no active consumer for slot 9100), but the flag is still resolved.
+	reorg := svc.Freeze(9100)
+	require.True(t, reorg.Build.ReorgParentPayload)
+
+	// A slot without a build plan resolves the flag to false.
+	plain := svc.Freeze(9101)
+	require.False(t, plain.Build.ReorgParentPayload)
+}
+
 func TestPruneForEpochKeepsFuturePlans(t *testing.T) {
 	chainSvc := newStubChain()
 

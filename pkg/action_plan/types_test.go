@@ -379,3 +379,50 @@ func TestApplyUpdateToPlanSetAfterCategoryPatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(20), *result.Bid.BidSubsidy, "set paths apply after category patches")
 }
+
+func TestApplyUpdateToPlanBuildCategory(t *testing.T) {
+	t.Run("set flag via path creates the modeless build category", func(t *testing.T) {
+		result, err := ApplyUpdateToPlan(nil, &PlanUpdate{
+			Set: map[string]json.RawMessage{"build.reorg_parent_payload": json.RawMessage("true")},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result.Build)
+		require.True(t, result.Build.ReorgParentPayload, "build has no mode; the flag is set directly")
+	})
+
+	t.Run("category object sets the flag", func(t *testing.T) {
+		result, err := ApplyUpdateToPlan(nil, &PlanUpdate{
+			Build: json.RawMessage(`{"reorg_parent_payload":true}`),
+		})
+		require.NoError(t, err)
+		require.True(t, result.Build.ReorgParentPayload)
+	})
+
+	t.Run("flag false drops the empty build category and plan", func(t *testing.T) {
+		result, err := ApplyUpdateToPlan(nil, &PlanUpdate{
+			Build: json.RawMessage(`{"reorg_parent_payload":false}`),
+		})
+		require.NoError(t, err)
+		require.Nil(t, result, "an all-false build plan carries no instruction")
+	})
+
+	t.Run("clearing the flag on an existing plan drops build but keeps siblings", func(t *testing.T) {
+		existing := &SlotPlan{
+			Bid:   &BidPlan{Mode: ModeCustom},
+			Build: &BuildPlan{ReorgParentPayload: true},
+		}
+		result, err := ApplyUpdateToPlan(existing, &PlanUpdate{
+			Set: map[string]json.RawMessage{"build.reorg_parent_payload": json.RawMessage("false")},
+		})
+		require.NoError(t, err)
+		require.Nil(t, result.Build, "build category dropped once its only flag is false")
+		require.NotNil(t, result.Bid, "sibling category survives")
+	})
+
+	t.Run("unknown build field rejected", func(t *testing.T) {
+		_, err := ApplyUpdateToPlan(nil, &PlanUpdate{
+			Set: map[string]json.RawMessage{"build.nope": json.RawMessage("true")},
+		})
+		require.ErrorContains(t, err, "nope")
+	})
+}

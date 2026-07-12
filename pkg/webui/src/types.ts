@@ -365,11 +365,18 @@ export interface RevealPlan {
   reveal_time_ms?: number;
 }
 
+// The build category has no custom/disabled mode: it only tweaks how the
+// slot's payload is built when a build happens.
+export interface BuildPlan {
+  reorg_parent_payload?: boolean;
+}
+
 export interface SlotPlan {
   slot: number;
   bid?: BidPlan;
   builder_api?: BuilderAPIPlan;
   reveal?: RevealPlan;
+  build?: BuildPlan;
   updated_at: string;
   updated_by: string;
 }
@@ -386,6 +393,7 @@ export interface PlanUpdate {
   bid?: BidPlan | null;
   builder_api?: BuilderAPIPlan | null;
   reveal?: RevealPlan | null;
+  build?: BuildPlan | null;
   set?: Record<string, number | string | boolean | null>;
 }
 
@@ -410,6 +418,7 @@ export interface ResolvedBuildSettings {
   skip_reason?: string; // "schedule" | "plan_disabled" | "no_consumer"
   plan_involved?: boolean;
   build_start_time_ms: number;
+  reorg_parent_payload?: boolean;
 }
 
 export interface ResolvedBidSettings {

@@ -70,6 +70,11 @@ type ResolvedBuildSettings struct {
 	// BuildStartTimeMs is the effective build start time, milliseconds
 	// relative to slot start (signed).
 	BuildStartTimeMs int64 `json:"build_start_time_ms"`
+
+	// ReorgParentPayload builds the slot's payload on the grandparent (n-2)
+	// execution payload instead of the immediate parent — a deliberate
+	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
+	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -149,6 +154,12 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 		BuildStartTimeMs: cfg.EPBS.BuildStartTime,
 		PlanInvolved: frozen.Plan != nil || frozen.Bid != nil ||
 			frozen.BuilderAPI != nil,
+	}
+
+	// The reorg-parent flag modifies HOW a build happens; it never forces or
+	// suppresses the build decision itself.
+	if frozen.Plan != nil && frozen.Plan.Build != nil {
+		build.ReorgParentPayload = frozen.Plan.Build.ReorgParentPayload
 	}
 
 	// A plan that explicitly activates (mode custom) an available consumer

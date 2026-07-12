@@ -203,6 +203,42 @@ func (p *RevealPlan) validate(slotMs int64) error {
 	return validateTimeBound("reveal.reveal_time_ms", p.RevealTimeMs, -slotMs, 2*slotMs)
 }
 
+// BuildPlan is the per-slot payload-build instruction. Unlike the consumer
+// categories it carries no custom/disabled mode: it only tweaks HOW the slot's
+// payload is built when a build happens (the build decision itself stays with
+// the schedule + consumer plans).
+type BuildPlan struct {
+	// ReorgParentPayload builds on the grandparent (n-2) execution payload
+	// instead of the immediate parent: the FCU head block hash and the payload
+	// attributes' withdrawals are taken from the PARENT slot's payload
+	// attributes (whose parent is n-2), while every other property comes from
+	// the current slot. This is a deliberate parent-payload reorg attempt —
+	// rejected by mainnet forkchoice, but useful for exercising the reveal /
+	// inclusion path against a withheld parent.
+	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
+}
+
+func (p *BuildPlan) clone() *BuildPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+
+	return &c
+}
+
+// isZero reports whether the build plan carries no active instruction; such a
+// plan is dropped rather than persisted.
+func (p *BuildPlan) isZero() bool {
+	return p == nil || !p.ReorgParentPayload
+}
+
+func (p *BuildPlan) validate() error {
+	// No mode and no bounded fields yet; the boolean flag is always valid.
+	return nil
+}
+
 // SlotPlan is the persisted per-slot instruction set. Each category is
 // optional; an absent category inherits the global baseline (including the
 // module enable flags).
@@ -211,6 +247,7 @@ type SlotPlan struct {
 	Bid        *BidPlan        `json:"bid,omitempty"`
 	BuilderAPI *BuilderAPIPlan `json:"builder_api,omitempty"`
 	Reveal     *RevealPlan     `json:"reveal,omitempty"`
+	Build      *BuildPlan      `json:"build,omitempty"`
 	UpdatedAt  time.Time       `json:"updated_at"`
 	UpdatedBy  string          `json:"updated_by"`
 }
@@ -226,13 +263,15 @@ func (p *SlotPlan) Clone() *SlotPlan {
 	c.Bid = p.Bid.clone()
 	c.BuilderAPI = p.BuilderAPI.clone()
 	c.Reveal = p.Reveal.clone()
+	c.Build = p.Build.clone()
 
 	return &c
 }
 
 // IsEmpty reports whether the plan carries no instruction at all.
 func (p *SlotPlan) IsEmpty() bool {
-	return p == nil || (p.Bid == nil && p.BuilderAPI == nil && p.Reveal == nil)
+	return p == nil || (p.Bid == nil && p.BuilderAPI == nil && p.Reveal == nil &&
+		p.Build.isZero())
 }
 
 // BidOverride returns the per-slot enable override for p2p bidding:
@@ -296,6 +335,12 @@ func (p *SlotPlan) Validate(secondsPerSlot time.Duration) error {
 		}
 	}
 
+	if p.Build != nil {
+		if err := p.Build.validate(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -322,6 +367,7 @@ type PlanUpdate struct {
 	Bid        json.RawMessage `json:"bid,omitempty"`
 	BuilderAPI json.RawMessage `json:"builder_api,omitempty"`
 	Reveal     json.RawMessage `json:"reveal,omitempty"`
+	Build      json.RawMessage `json:"build,omitempty"`
 
 	Set map[string]json.RawMessage `json:"set,omitempty"`
 }
@@ -410,8 +456,21 @@ func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
 		result.Reveal = reveal
 	}
 
+	build, changed, err := applyCategoryPatch("build", u.Build, result.Build)
+	if err != nil {
+		return nil, err
+	} else if changed {
+		result.Build = build
+	}
+
 	if err := applySetPaths(result, u.Set); err != nil {
 		return nil, err
+	}
+
+	// A build plan with no active flag carries no instruction — drop it so it
+	// does not keep an otherwise-empty plan alive.
+	if result.Build.isZero() {
+		result.Build = nil
 	}
 
 	if result.IsEmpty() {
@@ -460,12 +519,25 @@ func applySetPaths(plan *SlotPlan, set map[string]json.RawMessage) error {
 			}
 
 			plan.Reveal = patched
+		case "build":
+			patched, err := applyFieldPatch("build", field, hasField, set[path], plan.Build)
+			if err != nil {
+				return err
+			}
+
+			plan.Build = patched
 		default:
-			return fmt.Errorf("set: unknown path %q (categories: bid, builder_api, reveal)", path)
+			return fmt.Errorf("set: unknown path %q (categories: bid, builder_api, reveal, build)", path)
 		}
 	}
 
 	return nil
+}
+
+// categoryHasMode reports whether a category uses the custom/disabled mode
+// model. The build category is a pure override set with no mode field.
+func categoryHasMode(category string) bool {
+	return category != "build"
 }
 
 // applyFieldPatch applies one set-path onto a category: whole-category
@@ -496,9 +568,10 @@ func applyFieldPatch[T any](category, field string, hasField bool,
 		if err := json.Unmarshal(encoded, &fields); err != nil {
 			return nil, fmt.Errorf("%s: %w", category, err)
 		}
-	} else if field != "mode" {
-		// Creating a category through a field edit defaults it to custom
-		// (fields only carry meaning in custom mode).
+	} else if field != "mode" && categoryHasMode(category) {
+		// Creating a mode-based category through a field edit defaults it to
+		// custom (fields only carry meaning in custom mode). The build
+		// category has no mode, so nothing is injected.
 		fields["mode"] = json.RawMessage(`"custom"`)
 	}
 

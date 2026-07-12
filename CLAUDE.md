@@ -130,12 +130,23 @@ npm run clean
 ### Core Components
 
 0. **Action Plan Service** (`pkg/action_plan/`) — the per-slot scheduling authority
-   - Sparse, persisted per-slot operation modes for three categories: `bid` (p2p),
-     `builder_api` (bid serving) and `reveal`. A category is an explicit instruction:
-     absent = inherit the global baseline (incl. `epbs_enabled`/`builder_api_enabled`),
-     `disabled` = suppress for the slot, `custom` = force-ACTIVE for the slot (even
-     when the module is globally disabled) with optional setting overrides.
-     Availability still wins over plans (API port, fork at slot, registration, signer).
+   - Sparse, persisted per-slot operation modes for three consumer categories:
+     `bid` (p2p), `builder_api` (bid serving) and `reveal`. A category is an explicit
+     instruction: absent = inherit the global baseline (incl.
+     `epbs_enabled`/`builder_api_enabled`), `disabled` = suppress for the slot,
+     `custom` = force-ACTIVE for the slot (even when the module is globally disabled)
+     with optional setting overrides. Availability still wins over plans (API port,
+     fork at slot, registration, signer).
+   - A fourth `build` category is MODELESS (no custom/disabled — just build tweaks):
+     `reorg_parent_payload` builds the slot's payload on the grandparent (n-2)
+     execution payload instead of the immediate parent. payload_builder sources the
+     parent block hash, parent block NUMBER and withdrawals from the PARENT slot's
+     cached payload attributes (whose parent is n-2) while keeping every other
+     property — incl. the beacon parent root — from the current slot, so the built
+     payload AND the bid derived from it agree on the reorged parent. A deliberate
+     parent-payload reorg (invalid on mainnet forkchoice; a testing knob). Falls back
+     to a normal build (logged) when the parent slot's attributes are unavailable.
+     It only modifies HOW a build happens, never forces/suppresses the build decision.
    - **Freeze semantics**: `Freeze(slot)` resolves the immutable `FrozenPlan` (raw plan
      + effective settings merged from the live global config + target-slot fork + the
      COMPLETE build decision incl. schedule modes and next_n accounting) the first time

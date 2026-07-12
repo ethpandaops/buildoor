@@ -999,6 +999,12 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   text-decoration: line-through;
 }
 
+/* Build-modifier chip (parent-payload reorg): amber to read as "adverse". */
+.ap-chip-reorg {
+  background: #fd7e14;
+  color: #000;
+}
+
 /* Result status dots: left = bid outcome; right = payload canonical verdict
    (only rendered for won slots). */
 .ap-dots {

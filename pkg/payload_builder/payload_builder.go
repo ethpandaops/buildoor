@@ -69,6 +69,11 @@ func NewPayloadBuilder(
 // BuildPayloadFromAttributes builds a payload using data from a payload_attributes event.
 // This is the primary build path, triggered when the beacon node emits payload_attributes.
 // The event contains all necessary information: timestamp, randao, withdrawals, etc.
+//
+// The attributes may be an effective copy with the parent fields redirected to
+// the grandparent payload (parent-reorg test); this method treats whatever
+// parent it is given as authoritative and stores it on the returned Payload,
+// so the bid built from that payload advertises the same parent it built on.
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,

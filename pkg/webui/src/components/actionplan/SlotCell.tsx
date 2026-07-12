@@ -99,10 +99,13 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
   const bidStatus = deriveBidStatus(result);
   const payloadStatus = derivePayloadStatus(result);
 
+  const reorgParent = plan?.build?.reorg_parent_payload === true;
+
   const titleParts = [`Slot ${slot}`];
   if (plan?.bid) titleParts.push(`bid: ${plan.bid.mode}`);
   if (plan?.builder_api) titleParts.push(`builder api: ${plan.builder_api.mode}`);
   if (plan?.reveal) titleParts.push(`reveal: ${plan.reveal.mode}`);
+  if (reorgParent) titleParts.push('build: reorg parent (n-2)');
   if (bidStatus) titleParts.push(BID_LABELS[bidStatus]);
   if (payloadStatus) titleParts.push(PAYLOAD_LABELS[payloadStatus]);
 
@@ -121,6 +124,7 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
           {plan?.bid && <span className={chipClass(plan.bid.mode)}>B</span>}
           {plan?.builder_api && <span className={chipClass(plan.builder_api.mode)}>A</span>}
           {plan?.reveal && <span className={chipClass(plan.reveal.mode)}>R</span>}
+          {reorgParent && <span className="ap-chip ap-chip-reorg" title="Build on n-2 payload">P</span>}
         </span>
         <span className="ap-dots">
           {bidStatus && <span className={`ap-dot ap-dot-${bidStatus}`}></span>}
