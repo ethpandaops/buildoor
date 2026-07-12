@@ -129,23 +129,55 @@ npm run clean
 
 ### Core Components
 
+0. **Action Plan Service** (`pkg/action_plan/`) — the per-slot scheduling authority
+   - Sparse, persisted per-slot operation modes for three categories: `bid` (p2p),
+     `builder_api` (bid serving) and `reveal`. A category is an explicit instruction:
+     absent = inherit the global baseline (incl. `epbs_enabled`/`builder_api_enabled`),
+     `disabled` = suppress for the slot, `custom` = force-ACTIVE for the slot (even
+     when the module is globally disabled) with optional setting overrides.
+     Availability still wins over plans (API port, fork at slot, registration, signer).
+   - **Freeze semantics**: `Freeze(slot)` resolves the immutable `FrozenPlan` (raw plan
+     + effective settings merged from the live global config + target-slot fork + the
+     COMPLETE build decision incl. schedule modes and next_n accounting) the first time
+     any decision point touches the slot; all later callers get the identical snapshot.
+     Consumers (payload_builder, p2p_bidder, RevealService, builderapi) poll frozen
+     snapshots — no module interprets raw plans or schedule config itself. Edits to
+     past or frozen slots fail with `ErrSlotLocked` (HTTP 409). Slots freeze in
+     practice ~1 slot ahead (payload_attributes / first scheduler tick); the Builder
+     API bid handlers reject slots beyond `currentSlot+1` BEFORE freezing so clients
+     cannot lock future plans.
+   - Bulk mutations (`ApplyUpdates`) are atomic all-or-nothing, support slot lists +
+     inclusive ranges, three-state category patches (absent/null/object) and
+     fine-grained `set` paths (`"bid.bid_min_amount": 5000`); overlapping updates
+     apply in request order; committed changes fire `PlanChangeEvent`.
+   - Persisted via the `kv_store` `slot_plans` namespace; past plans prune to
+     `slot-result-retention-epochs`, future plans never.
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
-   - Schedules builds at configurable times relative to slot start
+   - Freezes the slot's action plan and acts on `frozen.Build`: decision, skip
+     reason, build start time; reports `OnSlotBuilt` back for next_n accounting
+     (plan-forced builds don't consume the budget)
    - Calls Engine API to construct execution payloads (forkchoiceUpdated → getPayload)
-   - Emits `PayloadReadyEvent` to subscribers
+   - Emits `PayloadReadyEvent` to subscribers; plan-involved skips fire
+     `BuildSkippedEvent` (deduped per slot) for the slot results tracker
 
 2. **Payload Bidder** (`pkg/payload_bidder/`) — shared Gloas+ bid/reveal domain
    - `Signer`, `BuildSignedBid`, `BuildSignedEnvelope`: bid/envelope construction + signing
    - `RevealService`: the ONLY envelope publisher. Own main loop (channel + timer, no
      polling); both flows request reveals via `RequestReveal`; dedupes per slot (exactly
-     one publish per won slot), publishes at `RevealTime`, retries ×3, fires `RevealResult`
+     one publish per won slot); timing/suppression come from the slot's frozen plan
+     (`frozen.Reveal`: plan-disabled slots fire a terminal skipped result with reason
+     `plan_disabled`; custom reveal times may bypass the in-slot deadline for
+     late-reveal testing, clamped to slot end + 1 slot); envelope construction is
+     split from publish (`buildEnvelope`) so every per-attempt `RevealResult` carries
+     the built envelope — failed publishes stay inspectable; envelope signing uses
+     the TARGET slot's fork; retries ×3
    - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
-     forks), single owner of won-block records (memstore capped at 1000, persisted via
-     the `kv_store` `won_blocks` namespace), requests the p2p-side reveal, fires
-     `PayloadIncludedEvent` (carries the `WonBlock`), checks follow-up blocks for
-     orphaned payloads
+     forks), requests the p2p-side reveal, fires `PayloadIncludedEvent` (carries the
+     `WonBlock` summary — storage is owned by the slot results tracker), checks
+     follow-up blocks for orphaned payloads
    - `PaymentTracker`: pending payments + live balance adjustments (fed by
      InclusionTracker/RevealService; consumed by lifecycle and WebUI)
    - `ProposerPreferencesService`: caches Gloas gossip proposer preferences from the
@@ -155,11 +187,18 @@ npm run clean
      directly by the p2p bidder (bid gate) and the builderapi epbs dialect (bids)
 
 2b. **P2P Bidder** (`pkg/p2p_bidder/`) — active p2p bidding flow of ePBS only
-   - Time-scheduled bidding (10ms tick for bid windows), bid submission via gossip
+   - Time-scheduled bidding (10ms tick), bid submission via gossip; each slot's
+     window/interval/amounts come exclusively from the frozen plan snapshot
+     (`frozen.Bid`, cached on the slot state) — the scheduler holds no config.
+     A plan may activate bidding for a slot while ePBS is globally disabled and
+     vice versa; `epbs_enabled`/`SetEnabled` are status reporting only
+   - Custom plans support an absolute bid base (`bid_value_gwei`, allows
+     underbidding) and a proposer-preferences-gate bypass (`ignore_missing_prefs`)
+   - `CreateAndSubmitBid` returns the constructed signed bid even on gossip failure
+     and signs with the target slot's fork; `BidSubmissionEvent` carries status,
+     the signed bid, and the highest competitor bid (own index excluded)
    - Competitor bid tracking, registration state machine
-   - Subscribes to nothing after bidding closes for a slot — reveals/inclusion/payments
-     are handled by the shared `payload_bidder` services
-   - `epbs_enabled` gates ONLY this module (p2p bidding); reveals always run
+   - Reveals/inclusion/payments are handled by the shared `payload_bidder` services
 
 3. **Chain Service** (`pkg/chain/`)
    - Manages epoch-level beacon state
@@ -174,15 +213,47 @@ npm run clean
    - Deposit and exit operations
    - Optional component (only active with `--lifecycle` flag)
 
+4b. **Slot Results Tracker** (`pkg/slot_results/`) — generic per-slot outcome history
+   - One attempt-aware `SlotResult` per slot where ePBS or the Builder API was active:
+     build lifecycle (incl. `waiting_attributes`/`no_attributes` baselines from a slot
+     clock so "planned but nothing happened" is visible), bid attempts (both
+     transports, with statuses/competitor context/artifact refs), block submissions,
+     reveal attempts, inclusion — plus the frozen `applied_plan` snapshotted at record
+     creation. Copy-on-write records; attempts cap at 256/kind with a dropped counter;
+     SSE updates coalesce per slot
+   - Consumes the services' BLOCKING subscriptions (loss-free history) and implements
+     the `builderapi.SlotResultRecorder` interface for request-scoped recording
+   - `ArtifactStore`: raw SSZ artifacts per slot — built payload, every signed bid
+     (restart-safe per-slot indices via `MAX(idx)+1`), the signed envelope at
+     construction time — write-through to a bounded 64-slot memory buffer (works
+     without a state-db) + async batching writer into the `slot_artifacts` table;
+     hot paths never wait on SQLite; toggled by `slot-artifact-capture-enabled`
+   - Serves the Bids Won view (unchanged wire shape) as a filtered included-slot view;
+     migrates the legacy `won_blocks` kv namespace once (merge-safe, idempotent,
+     crash-safe); prunes summaries to `slot-result-retention-epochs` and artifacts to
+     `slot-artifact-retention-epochs` (both default 100) on epoch transitions
+
 5. **Builder API Server** (`pkg/builderapi/`) — thin host + two dialect subpackages
    - `builderapi/legacy/`: pre-Gloas dialect (Electra/Fulu via agnostic types) —
      registerValidators, getHeader, submitBlindedBlockV2 (unblind + publish)
    - `builderapi/epbs/`: post-Gloas dialect (Gloas/Heze+) — getExecutionPayloadBid,
      submitSignedBeaconBlock (broadcasts the block immediately, then hands the reveal to
      `payload_bidder.RevealService` — no inline envelope publish), submitBuilderPreferences
+   - **Bid serving is decided exclusively by the slot's frozen plan** (resolved at
+     request time): suppressed slots 204; plan-activated slots serve even when the
+     module is globally disabled. The `enabled` flag keeps gating only the
+     non-slot-scoped endpoints (registrations, preferences, block submission).
+     Frozen per-slot values drive subsidy, absolute total bid value (uint256 wei
+     math) and a context-cancellable response delay. Bid requests beyond
+     `currentSlot+1` are rejected with 400 before freezing
+   - Outcomes are recorded through the narrow `SlotResultRecorder` interface
+     (implemented by the slot results tracker): bids `served` only after a
+     successful response write, `suppressed`/`failed`/`cancelled` otherwise, with
+     the exact signed object for artifact capture and polling dedupe; block
+     submissions record `received`/`accepted`/`failed` on all submit paths
    - Parent `Server`: route table, shared stores, stats aggregation, enable fan-out,
-     debug endpoints; no won-block tracking here — the shared
-     `payload_bidder.InclusionTracker` owns won-block records (inclusion-time semantics)
+     debug endpoints; no won-block tracking here — the slot results tracker owns
+     outcome records (inclusion-time semantics)
    - Validator fee recipient management: registrations live in a
      `memstore.Store[BLSPubKey, *SignedValidatorRegistration]` created in `cmd/run.go`
      (persisted via the `kv_store` `validator_registrations` namespace) and feed the
@@ -193,9 +264,15 @@ npm run clean
    - React/TypeScript dashboard
    - Real-time event stream via Server-Sent Events (SSE)
    - Visual slot timeline, bid tracking, validator registrations
-   - Configuration updates via HTTP API
+   - Configuration updates via HTTP API (incl. the generic path-based
+     `POST /api/config/settings`)
+   - **Action Plan View**: epoch × slot timetable (rows = epochs, columns =
+     slots) rendering plan chips + result status per cell; click-to-edit modal
+     for future slots, full outcome detail + SSZ/JSON artifact downloads for
+     past slots; multi-slot/range bulk editing; live via the
+     `action_plan_updated`/`slot_result_updated` SSE events
    - **Bids Won View**: Paginated table of our blocks included on chain
-     - Tab navigation: Dashboard / Bids Won
+     - Tab navigation: Dashboard / Bids Won / Action Plan
      - Real-time updates when new blocks are included (bid_won SSE from the
        inclusion tracker's `PayloadIncludedEvent`)
      - Click-to-copy block hashes, relative timestamps
@@ -215,15 +292,18 @@ Proposer ───Builder API─────────▶ builderapi (legacy: 
 1. Beacon node emits `payload_attributes` event
 2. Builder validates slot against schedule and builds at `BuildStartTime`
    (Engine API: forkchoiceUpdated → getPayload), emits `PayloadReadyEvent`
-3. p2p_bidder scheduler ticks every 10ms and submits bids between `BidStartTime`
-   and `BidEndTime` (gated on `epbs_enabled` + builder registration)
+3. p2p_bidder scheduler ticks every 10ms and submits bids inside the slot's FROZEN
+   bid window (per-slot plan > global config; gated on builder registration and, per
+   slot, on the frozen enable resolution)
 4. Head event → InclusionTracker matches the block against our payload cache; on a win
-   it records the pending payment, records the won block (memstore → kv_store), and
-   requests the reveal
-5. RevealService publishes the envelope at `RevealTime` (55–75%% window), deduped per
+   it records the pending payment, requests the reveal, and fires the inclusion event
+   (the slot results tracker stores the outcome)
+5. RevealService publishes the envelope at the slot's frozen reveal time, deduped per
    slot — a Builder-API-won block's reveal was already requested by the epbs dialect
-   handler at block submission, so the p2p-side request is a no-op
-6. RevealResult → payment moves from pending to balance deduction; WebUI event fires
+   handler at block submission, so the p2p-side request is a no-op. Plan-suppressed
+   slots skip with reason `plan_disabled`
+6. RevealResult → payment moves from pending to balance deduction; WebUI event fires;
+   the slot results tracker records the attempt + envelope artifact
 
 ### Fork Compatibility
 
@@ -244,7 +324,12 @@ Key config sections:
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`, `--epbs-reveal-time`
-- **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`
+- **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
+  `--epbs-bid-value-override` (absolute p2p bid base, 0 = off),
+  `--builder-api-value-override` (absolute served total value, 0 = off)
+- **Slot history**: `--slot-result-retention-epochs` (default 100),
+  `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
+  `--slot-artifact-capture-enabled` (default true)
 - **State persistence**: `--state-db <path>` (optional SQLite; see below)
 
 ### Settings Service & State Persistence (`--state-db`)
@@ -279,9 +364,14 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
   (buffered write-behind). Namespaces: `proposer_preferences` (Gloas gossip prefs,
   SSZ), `validator_registrations` (Builder API registrations, SSZ; codec in
   `builderapi/legacy`), `builder_preferences` (max_execution_payment, LE uint64;
-  codec in `builderapi/epbs`), `won_blocks` (unified Builder API + ePBS won blocks,
-  source-tagged, JSON; codec in `payload_bidder`, replaces the old typed
-  `won_blocks` table)
+  codec in `builderapi/epbs`), `slot_plans` (per-slot action plans, JSON; codec in
+  `action_plan`), `slot_results` (per-slot outcome summaries, JSON; codec in
+  `slot_results`; the legacy `won_blocks` namespace is migrated into it once on
+  startup and then deleted)
+- `slot_artifacts` — dedicated table (NOT a kv namespace: blobs are too large for
+  the in-RAM memstore pattern and pruning needs a SQL range delete on the integer
+  slot column) holding raw SSZ artifacts per slot (payload/bid/envelope), fed by
+  the tracker's async batching writer. SQLite does not shrink the file on delete
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
@@ -299,14 +389,16 @@ numbered step comments there match this list 1:1):
 5. Fetch chain spec & genesis (wait for the beacon node), apply slot-time timing defaults
 6. Open the state-db (`--state-db`) and initialize the central Settings Service (applies persisted overrides into `cfg` in place before any module reads it)
 7. Start chain service
+7b. Start the action plan service (the per-slot scheduling authority; persisted via the `kv_store` `slot_plans` namespace; a mandatory constructor dependency of every action module below)
 8. Initialize lifecycle manager (if prerequisites available)
 9. Initialize builder service (when Builder API is available, also creates the validator registration memstore — persisted via `kv_store` — and registers the pre-Gloas `legacy.RegistrationSettingsResolver`)
 9b. Start shared payment tracker + reveal service (Gloas scheduled) and inclusion tracker (always) from `pkg/payload_bidder`
 10. Initialize proposer preferences service (if Gloas fork is scheduled; registers the payload builder's Gloas+ settings resolver, store persisted via `kv_store`)
 11. Initialize p2p bidder service (if Gloas fork is scheduled; bid-gates on the proposer preferences store)
 12. Initialize Builder API server (if `--api-port` set; epbs dialect reads the proposer preferences store; builder preferences persisted via `kv_store`)
+12b. Start the slot results tracker (before the producer services so its blocking subscriptions never miss an event; runs the `won_blocks` migration; registers as the Builder API's result recorder)
 13. Initialize and start validator ranges resolver
-14. Register settings `OnChange` subscribers (push changes to modules)
+14. Register settings `OnChange` subscribers (push changes to modules; schedule changes reset the plan service's next_n accounting)
 15. Start WebUI/API server (if APIPort > 0)
 16. Wire lifecycle manager callbacks to ePBS (if both present)
 17. Start builder service
@@ -337,6 +429,15 @@ numbered step comments there match this list 1:1):
 buildoor/
 ├── cmd/                    # CLI commands (root, run, deposit, exit)
 ├── pkg/
+│   ├── action_plan/       # per-slot scheduling authority: sparse SlotPlan store,
+│   │                      # freeze semantics (FrozenPlan = raw plan + resolved
+│   │                      # effective settings + complete build decision), atomic
+│   │                      # bulk updates w/ path-based partial edits, kv codec
+│   ├── slot_results/      # generic per-slot outcome history: attempt-aware
+│   │                      # SlotResult tracker (blocking subscriptions, baseline
+│   │                      # slot clock, won-block view, won_blocks migration) +
+│   │                      # ArtifactStore (raw SSZ payload/bids/envelope, async
+│   │                      # batched writer into the slot_artifacts table)
 │   ├── builder/           # Core payload building logic
 │   ├── builderapi/        # Builder API host (route table, shared stores, stats)
 │   │   ├── legacy/        # pre-Gloas dialect (Electra/Fulu): registerValidators,
@@ -359,8 +460,9 @@ buildoor/
 │   ├── memstore/          # generic thread-safe keyed store w/ buffered persistence
 │   ├── lifecycle/         # Deposit/exit/balance management
 │   ├── payload_bidder/    # shared Gloas+ domain: Signer, bid/envelope build,
-│   │                      # RevealService, InclusionTracker (owns the won-block
-│   │                      # store + kv_store codec), PaymentTracker,
+│   │                      # RevealService (plan-aware timing/suppression),
+│   │                      # InclusionTracker (detection + events; storage in
+│   │                      # slot_results), PaymentTracker,
 │   │                      # ProposerPreferencesService (gossip prefs store + resolver)
 │   ├── rpc/
 │   │   ├── beacon/        # Beacon node client
@@ -428,18 +530,41 @@ To make frontend changes:
 
 **Buildoor-specific endpoints:**
 - `GET /api/buildoor/validators` - List registered validators
-- `GET /api/buildoor/bids-won` - Paginated list of won blocks (read from the shared
-  inclusion tracker; Builder API and p2p ePBS wins alike)
+- `GET /api/buildoor/bids-won` - Paginated list of won blocks (read from the slot
+  results tracker's included-slot view; Builder API and p2p ePBS wins alike)
   - Query params: `offset` (default: 0), `limit` (default: 20, max: 100)
   - Returns: `{ bids_won: [], total: number, offset: number, limit: number }`
 - `GET /api/buildoor/builder-api-status` - Builder API configuration and validator count
+- `GET /api/buildoor/action-plan?min_slot=&max_slot=` - Per-slot action plans in the
+  inclusive range (max span 320 epochs)
+- `POST /api/buildoor/action-plan` - Atomic bulk plan mutation (auth + audit).
+  Body `{updates: [...]}`; each update targets `slots` and/or `from_slot..to_slot`,
+  with three-state category members (absent/null/object) and fine-grained `set`
+  paths (`{"bid.bid_min_amount": 5000}`). Past/frozen slots → 409. Returns the
+  authoritative normalized plans
+- `GET /api/buildoor/slot-results?min_slot=&max_slot=` - Attempt-level outcome
+  history per slot (build, bids, submissions, reveals, inclusion, applied plan)
+- `GET /api/buildoor/slot-results/{slot}/payload|envelope|bids|bids/{index}` - Raw
+  SSZ artifacts with beacon-API content negotiation: `Accept:
+  application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
+  JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
+  is JSON-only metadata
+- `POST /api/config/settings` - Generic path-based global settings update keyed by
+  canonical registry keys (`{"epbs.bid_subsidy": 1000, "schedule.mode": "all"}`);
+  atomic, unknown keys rejected (auth + audit)
 
 **Real-time events via SSE** (`/api/events`):
+- `chain_info` - genesis_time, seconds_per_slot, slots_per_epoch (initial state)
 - `bid_won` - Emitted when one of our blocks is seen included at the head (fired from
   the inclusion tracker's `PayloadIncludedEvent.WonBlock`, alongside `bid_included`)
   - Data: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
   - Auto-refreshes first page of Bids Won table
   - Logged in event stream for debugging
+- `action_plan_updated` - Fired on committed plan mutations; data is the
+  authoritative `{slots: [...], plans: [...]}` change set (null plan = deleted)
+- `slot_result_updated` - Fired when a slot's result record changes (coalesced to
+  ~1/s per slot); data is the full SlotResult. SSE is an invalidation channel —
+  the REST range endpoints are the source of truth
 
 #### WebUI Components Pattern
 
@@ -481,31 +606,25 @@ head (via the inclusion tracker's head-event loop), not when it is delivered to 
 proposer.
 
 **Backend Architecture:**
-- **Won-block store** (`pkg/payload_bidder/inclusion_tracker.go` + `won_blocks.go`):
-  - Owned by the shared `payload_bidder.InclusionTracker` (the single owner of
-    won-block records, all forks + both flows) as a
-    `memstore.Store[phase0.Slot, *WonBlock]`
-  - Capped at 1000 entries; the smallest slots are pruned after each insert, and
-    the deletions propagate to the kv_store via the flush batch (durable history
-    is capped at 1000 too)
-  - Persisted into the state-db's `kv_store` under the `won_blocks` namespace
-    (`WonBlockCodec`: decimal slot keys, JSON values) when `--state-db` is set;
-    rehydrated on start. Without a state-db the store is in-memory only — p2p
-    wins are tracked either way
-  - `WonBlock` fields: source (builder_api/epbs), slot, block_hash,
-    num_transactions, num_blobs, value_wei, value_eth, timestamp (JSON tags are
-    the wire shape consumed by the WebUI)
-  - Source derived from the payload's bid records: any Builder-API bid →
-    `builder_api`, otherwise `epbs`
-  - `PayloadIncludedEvent` carries the recorded `*WonBlock`, so the WebUI fires
-    the `bid_won` SSE without recomputing tx/blob/value fields
+- **Detection** (`pkg/payload_bidder/inclusion_tracker.go`): the shared
+  `InclusionTracker` detects inclusion at the head (all forks + both flows),
+  builds the `WonBlock` summary (source derived from the payload's bid records:
+  any Builder-API bid → `builder_api`, otherwise `epbs`) and fires
+  `PayloadIncludedEvent` carrying it — no storage here
+- **Storage** (`pkg/slot_results/`): the slot results tracker records the
+  inclusion on the slot's `SlotResult` and serves the Bids Won wire shape as a
+  filtered included-slot view (`GetWonBlocks`, slot-descending). History length
+  follows `slot-result-retention-epochs` (default 100 epochs) instead of the old
+  1000-entry cap; the legacy `won_blocks` kv namespace is migrated once on start
+- `WonBlock` wire fields (unchanged): source, slot, block_hash, num_transactions,
+  num_blobs, value_wei, value_eth, timestamp
 
 - **REST API** (`pkg/webui/handlers/api/api.go`):
   - Endpoint: `GET /api/buildoor/bids-won?offset=0&limit=20`
-  - Reads `inclusionTracker.GetWonBlocks(offset, limit)` (slot-descending);
-    offset-based pagination (simpler than cursor for bounded dataset)
+  - Reads `resultTracker.GetWonBlocks(offset, limit)` (slot-descending);
+    offset-based pagination
   - Returns: `BidsWonResponse` with entries array, total count, offset, limit
-  - Gracefully handles nil inclusionTracker (returns empty array)
+  - Gracefully handles nil resultTracker (returns empty array)
 
 **Frontend Architecture:**
 - **Navigation**: Tab-based UI in `App.tsx` (Dashboard / Bids Won)
@@ -526,11 +645,11 @@ proposer.
   - Relative time formatting: "Just now", "5m ago", "3h ago", or full timestamp
 
 **Key Design Decisions:**
-- **Single owner**: win detection is the inclusion tracker's job; the Builder API
-  server does no won-block tracking (a delivery-time record would miss p2p wins and
-  count deliveries that never made it on chain)
-- **Memory Management**: slot-keyed memstore capped at 1000 prevents unbounded growth
-- **Pagination Strategy**: Offset-based (not cursor) suitable for 1000-entry cap
+- **Single owner**: win detection is the inclusion tracker's job; storage is the
+  slot results tracker's job; the Builder API server does neither (a delivery-time
+  record would miss p2p wins and count deliveries that never made it on chain)
+- **Memory Management**: epoch-window retention (`slot-result-retention-epochs`)
+  prunes memory and the state-db together
 - **Real-time Updates**: Only first page refreshes automatically to avoid offset confusion
 - **Value Precision**: Store both wei and ETH strings (18-decimal display precision)
 - **ePBS Compatibility**: Uses "Bids Won" terminology (not "Payloads Delivered")
@@ -544,6 +663,46 @@ proposer.
 5. Verify table shows: slot, block hash, transaction count, blob count, value
 6. Win another block while on first page → should auto-refresh
 
+### Per-Slot Action Plan Feature
+
+The action plan lets operators script different behavior per slot for Gloas fork
+testing: force or suppress bidding/builder-api serving on individual slots (even
+against the global enable flags), override bid amounts/windows, delay or inflate
+builder-api responses, withhold or delay reveals — and inspect what actually
+happened afterwards, down to the exact SSZ objects.
+
+**Semantics** (see `pkg/action_plan/`):
+- Global config is the baseline; a slot plan fully overrides it for that slot.
+  Categories: `bid`, `builder_api`, `reveal` — absent = inherit, `disabled` =
+  suppress, `custom` = force-active with optional overrides
+- Plans FREEZE when execution for their slot can begin (~1 slot ahead); frozen and
+  past slots reject edits with 409. Operators should plan ≥2 slots ahead
+- At-least-once semantics across restarts: an in-flight future slot may be
+  re-frozen after a restart
+
+**Outcome inspection** (see `pkg/slot_results/`): every active slot gets an
+attempt-level `SlotResult` (REST range queries + `slot_result_updated` SSE) and
+raw SSZ artifacts (built payload, every signed bid, the signed envelope — stored
+at construction, so withheld/failed reveals stay inspectable) served with
+SSZ/JSON content negotiation. Blobs bundles are not captured (documented future
+artifact kind).
+
+**WebUI**: the Action Plan tab renders an epoch × slot timetable (rows = epochs,
+columns = slots) with plan chips + result status per cell, click-to-edit modal
+(future slots) / full outcome detail with artifact downloads (past slots), and
+multi-slot/range bulk editing.
+
+**Testing the feature:**
+1. Plan a future slot: `curl -X POST .../api/buildoor/action-plan -d
+   '{"updates":[{"slots":[N],"set":{"bid.bid_value_gwei":5000}}]}'`
+2. Watch the slot execute (grid cell updates live; `slot_results` records the
+   bid attempts with the frozen applied plan)
+3. Fetch the exact gossiped bid: `curl -H 'Accept: application/octet-stream'
+   .../api/buildoor/slot-results/N/bids/0 > bid.ssz`
+4. Test a withheld reveal: `{"set":{"reveal.mode":"disabled"}}` on a future slot →
+   the reveal attempt records `suppressed`/`plan_disabled`, the envelope artifact
+   still exists
+
 ## Common Issues
 
 1. **"builder-privkey is required"**: Must provide BLS private key (64 hex chars without 0x prefix)
@@ -551,3 +710,8 @@ proposer.
 3. **Payload building fails**: Ensure `--payload-build-time` is sufficient (default 500ms)
 4. **Bids rejected**: Check ePBS timing flags align with network's slot timing
 5. **Builder API signature failures**: Genesis parameters are automatically fetched from beacon node; verify beacon node is accessible
+6. **Plan edits fail with 409**: The slot is in the past or its plan is already
+   frozen (execution began ~1 slot ahead). Plan at least 2 slots into the future
+7. **Artifact endpoints return 404 without `--state-db`**: only the newest 64
+   slots are kept in the in-memory artifact buffer; set `--state-db` for durable
+   artifact history
