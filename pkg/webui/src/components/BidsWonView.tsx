@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BidsWonTable } from './BidsWonTable';
 import { useBidsWon } from '../hooks/useBidsWon';
-import { onStreamEvent } from '../hooks/useEventStream';
+import { onStreamEvent, useEventStream } from '../hooks/useEventStream';
 
 export const BidsWonView: React.FC = () => {
+  // Establishes the shared SSE connection for this view (pages are mounted
+  // exclusively, so no other component provides one on this tab); the
+  // onStreamEvent subscription below feeds off it.
+  useEventStream();
+
   const [offset, setOffset] = useState(0);
   const limit = 50;
   const { bidsWon, total, loading, refetch } = useBidsWon(offset, limit);

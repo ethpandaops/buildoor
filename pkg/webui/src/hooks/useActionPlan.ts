@@ -14,6 +14,14 @@ import {
   subscribeConnectionGeneration,
 } from './useEventStream';
 
+// The backend marshals slot numbers (phase0.Slot) as JSON strings; normalize
+// to a real number at every ingest point so range checks and typeof guards
+// behave.
+function toSlotNumber(value: unknown): number {
+  const slot = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(slot) ? slot : -1;
+}
+
 export interface ApplyUpdatesResult {
   ok: boolean;
   error?: string;
@@ -51,7 +59,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     setPlans((prev) => {
       let next: Record<number, SlotPlan> | null = null;
       for (let i = 0; i < slots.length; i++) {
-        const slot = slots[i];
+        const slot = toSlotNumber(slots[i]);
         if (slot < rangeRef.current.min || slot > rangeRef.current.max) continue;
         const plan = changed[i] ?? null;
         if (plan === null) {
@@ -92,12 +100,12 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
       const planMap: Record<number, SlotPlan> = {};
       for (const plan of planData.plans || []) {
-        planMap[plan.slot] = plan;
+        planMap[toSlotNumber(plan.slot)] = plan;
       }
 
       const resultMap: Record<number, SlotResult> = {};
       for (const result of resultData.results || []) {
-        resultMap[result.slot] = result;
+        resultMap[toSlotNumber(result.slot)] = result;
       }
 
       setPlans(planMap);
@@ -125,9 +133,10 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
     const offResult = onStreamEvent('slot_result_updated', (data) => {
       const result = data as SlotResult;
-      if (typeof result?.slot !== 'number') return;
-      if (result.slot < rangeRef.current.min || result.slot > rangeRef.current.max) return;
-      setResults((prev) => ({ ...prev, [result.slot]: result }));
+      const slot = toSlotNumber(result?.slot);
+      if (slot < 0) return;
+      if (slot < rangeRef.current.min || slot > rangeRef.current.max) return;
+      setResults((prev) => ({ ...prev, [slot]: result }));
     });
 
     return () => {
