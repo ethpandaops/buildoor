@@ -1,0 +1,47 @@
+name: Kurtosis E2E
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  kurtosis_e2e:
+    name: Minimal pre/post-Gloas block production
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Kurtosis
+        run: |
+          echo "deb [trusted=yes] https://sdk.kurtosis.com/kurtosis-cli-release-artifacts/ /" | sudo tee /etc/apt/sources.list.d/kurtosis.list
+          sudo apt-get update
+          sudo apt-get install --yes kurtosis-cli jq
+          kurtosis analytics disable
+
+      - name: Build Buildoor image
+        run: docker build --tag buildoor:e2e .
+
+      - name: Run end-to-end test
+        run: .github/scripts/e2e-kurtosis.sh
+        env:
+          ENCLAVE_NAME: buildoor-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_DIR: ${{ runner.temp }}/buildoor-e2e
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kurtosis-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/buildoor-e2e
+          if-no-files-found: warn
+          retention-days: 7

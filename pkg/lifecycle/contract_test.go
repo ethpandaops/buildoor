@@ -11,6 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuilderSystemContractAddresses(t *testing.T) {
+	assert.Equal(t,
+		common.HexToAddress("0x0000bff46984e3725691fa540a8c7589300d8282"),
+		BuilderDepositContractAddress,
+	)
+	assert.Equal(t,
+		common.HexToAddress("0x000064d678505ad48f8ccb093bc65613800e8282"),
+		BuilderExitContractAddress,
+	)
+}
+
 func TestFakeExponential(t *testing.T) {
 	// Reference values from the EIP-7002 fee mechanism: factor=1, denominator=17,
 	// approximating floor(e^(excess/17)).
