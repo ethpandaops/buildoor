@@ -178,6 +178,9 @@ func (t *InclusionTracker) run() {
 		case epochStats, ok := <-epochSub.Channel():
 			if ok && t.payments != nil {
 				t.payments.PruneExpiredPayments(epochStats.Epoch)
+				// The new epoch's builder snapshot is authoritative, so drop
+				// local balance deltas anchored to earlier epochs.
+				t.payments.ReconcileToEpoch(epochStats.Epoch)
 			}
 		}
 	}
