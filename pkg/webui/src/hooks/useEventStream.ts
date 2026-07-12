@@ -360,12 +360,12 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean; error?: string; attempt?: number; max_attempts?: number };
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string; attempt?: number; max_attempts?: number };
           const failed = !data.success && !data.skipped;
           const attempt = data.attempt || 0;
           const maxAttempts = data.max_attempts || 0;
           const revealMsg = data.skipped
-            ? 'Reveal skipped'
+            ? `Reveal skipped${data.skip_reason ? ` (${data.skip_reason})` : ''}`
             : data.success
               ? 'Reveal successful'
               : `Reveal failed${attempt ? ` (attempt ${attempt}/${maxAttempts})` : ''}${data.error ? `: ${data.error}` : ''}`;
@@ -377,6 +377,7 @@ export function useEventStream(): UseEventStreamResult {
               time: event.timestamp,
               success: data.success,
               skipped: data.skipped,
+              skipReason: data.skip_reason,
               error: data.error,
               attempt,
               maxAttempts

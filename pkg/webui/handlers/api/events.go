@@ -153,6 +153,7 @@ type RevealStreamEvent struct {
 	Slot        uint64 `json:"slot"`
 	Success     bool   `json:"success"`
 	Skipped     bool   `json:"skipped"`
+	SkipReason  string `json:"skip_reason,omitempty"` // plan_disabled | late (skips only)
 	Error       string `json:"error,omitempty"`
 	Attempt     int    `json:"attempt,omitempty"`
 	MaxAttempts int    `json:"max_attempts,omitempty"`
@@ -1452,6 +1453,7 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 			Slot:        slot,
 			Success:     event.Success,
 			Skipped:     event.Skipped,
+			SkipReason:  event.SkipReason,
 			Error:       event.Error,
 			Attempt:     event.Attempt,
 			MaxAttempts: event.MaxAttempts,

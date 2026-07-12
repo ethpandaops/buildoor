@@ -154,6 +154,7 @@ export interface RevealAttempt {
   time: number;
   success: boolean;
   skipped: boolean;
+  skipReason?: string;
   error?: string;
   attempt: number;
   maxAttempts: number;

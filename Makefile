@@ -60,6 +60,7 @@ devnet-run: devnet
 		--builder-mnemonic "$${BUILDER_MNEMONIC}" \
 		--builder-key-index "$${BUILDER_KEY_INDEX}" \
 		--builder-privkey "$${BUILDER_PRIVKEY}" \
+		--state-db ".hack/devnet/generated-state-db.sqlite" \
 		--cl-client "$${BEACON_API}" \
 		--el-engine-api "$${ENGINE_API}" \
 		--el-jwt-secret "$${JWT_SECRET}" \
