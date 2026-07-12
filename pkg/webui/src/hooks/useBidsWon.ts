@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BidWonEntry, BidsWonResponse } from '../types';
 import { authStore } from '../stores/authStore';
 
@@ -8,7 +8,7 @@ export function useBidsWon(offset: number, limit: number) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchBidsWon = async () => {
+  const fetchBidsWon = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -38,11 +38,11 @@ export function useBidsWon(offset: number, limit: number) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [offset, limit]);
 
   useEffect(() => {
     fetchBidsWon();
-  }, [offset, limit]);
+  }, [fetchBidsWon]);
 
   return { bidsWon, total, loading, error, refetch: fetchBidsWon };
 }
