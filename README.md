@@ -184,6 +184,13 @@ make devnet-run-docker
 make devnet-clean
 ```
 
+The devnet launches canonical buildoor instances via the ethereum-package
+(`buildoor_params.instances` in `.hack/devnet/custom-kurtosis.devnet.config.yaml`).
+`make devnet-run` / `make devnet-run-docker` stop the first canonical instance and
+run your local build in its place — same builder key, wallet and service name — so
+it receives the CL's builder API calls. Use `BUILDOOR_INDEX=<n>` (or
+`BUILDOOR_SERVICE=<name>`) to replace a different instance.
+
 For frontend development:
 
 ```bash

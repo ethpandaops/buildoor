@@ -37,40 +37,71 @@ docker:
 docker-run: docker
 	docker run --rm -it buildoor:$(VERSION) run --help
 
-NODE_INDEX ?= 1
+# Which canonical buildoor instance to replace (1-based, sorted by service
+# name). Set BUILDOOR_SERVICE to target a specific instance by name instead.
+BUILDOOR_INDEX ?= 1
+BUILDOOR_SERVICE ?=
 
 devnet:
-	NODE_INDEX=$(NODE_INDEX) .hack/devnet/run.sh
+	BUILDOOR_INDEX=$(BUILDOOR_INDEX) BUILDOOR_SERVICE=$(BUILDOOR_SERVICE) .hack/devnet/run.sh
 
+# Run the replacement locally. A socat sidecar claims the replaced instance's
+# service name on the kurtosis network and forwards its builder API port to the
+# local process, so the CL's builder API calls reach us.
 devnet-run: devnet
 	@. .hack/devnet/generated-vars.env && \
+	docker rm -f buildoor-devnet-proxy > /dev/null 2>&1 || true && \
+	GATEWAY_IP=$$(docker network inspect "$${DOCKER_NETWORK}" --format '{{(index .IPAM.Config 0).Gateway}}') && \
+	docker run -d --rm --name buildoor-devnet-proxy \
+		--network "$${DOCKER_NETWORK}" --network-alias "$${BUILDOOR_SERVICE}" \
+		alpine/socat tcp-listen:8080,fork,reuseaddr tcp:$${GATEWAY_IP}:8086 > /dev/null && \
+	trap 'docker rm -f buildoor-devnet-proxy > /dev/null 2>&1' EXIT INT TERM && \
 	go run main.go run \
-		--builder-privkey "607a11b45a7219cc61a3d9c5fd08c7eebd602a6a19a977f8d3771d5711a550f2" \
+		--builder-mnemonic "$${BUILDER_MNEMONIC}" \
+		--builder-key-index "$${BUILDER_KEY_INDEX}" \
+		--builder-privkey "$${BUILDER_PRIVKEY}" \
 		--cl-client "$${BEACON_API}" \
 		--el-engine-api "$${ENGINE_API}" \
 		--el-jwt-secret "$${JWT_SECRET}" \
 		--el-rpc "$${EXECUTION_API}" \
-		--wallet-privkey "04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59" \
+		--wallet-privkey "$${WALLET_PRIVKEY}" \
 		--api-port 8086 \
-		--lifecycle \
+		--builder-api-url "$${BUILDER_API_URL}" \
+		--extra-data "$${EXTRA_DATA}" \
+		--validator-ranges-file "$${VALIDATOR_RANGES_FILE}" \
+		--builder-api-enabled \
 		--epbs-enabled \
+		--lifecycle \
 		--log-level debug
 
+# Run the replacement as a container on the kurtosis network, claiming the
+# replaced instance's service name so the CL's builder API calls reach it.
 devnet-run-docker: devnet
-	docker build --file ./Dockerfile -t buildoor:devnet-run --build-arg userid=$(CURRENT_UID) --build-arg groupid=$(CURRENT_GID) .
+	docker build --file ./Dockerfile -t buildoor:devnet-run .
 	@. .hack/devnet/generated-vars-docker.env && \
-	docker run --rm -v $${JWT_SECRET}:/jwtsecret -p 8086:8080 -u $(CURRENT_UID):$(CURRENT_GID) --network kt-buildoor --hostname buildoor -it buildoor:devnet-run \
+	docker run --rm -v "$${JWT_SECRET}:/jwtsecret" \
+		$${VALIDATOR_RANGES_FILE:+-v "$${VALIDATOR_RANGES_FILE}:/validator-ranges.yaml"} \
+		-p 8086:8080 \
+		--network "$${DOCKER_NETWORK}" \
+		--network-alias "$${BUILDOOR_SERVICE}" \
+		--hostname "$${BUILDOOR_SERVICE}" \
+		-it buildoor:devnet-run \
 		run \
-		--builder-privkey "607a11b45a7219cc61a3d9c5fd08c7eebd602a6a19a977f8d3771d5711a550f2" \
+		--builder-mnemonic "$${BUILDER_MNEMONIC}" \
+		--builder-key-index "$${BUILDER_KEY_INDEX}" \
+		--builder-privkey "$${BUILDER_PRIVKEY}" \
 		--cl-client "$${BEACON_API}" \
 		--el-engine-api "$${ENGINE_API}" \
 		--el-jwt-secret "/jwtsecret" \
 		--el-rpc "$${EXECUTION_API}" \
-		--wallet-privkey "04b9f63ecf84210c5366c66d68fa1f5da1fa4f634fad6dfc86178e4d79ff9e59" \
+		--wallet-privkey "$${WALLET_PRIVKEY}" \
 		--api-port 8080 \
-		--builder-api-url=http://buildoor:8080 \
+		--builder-api-url "$${BUILDER_API_URL}" \
+		--extra-data "$${EXTRA_DATA}" \
+		$${VALIDATOR_RANGES_FILE:+--validator-ranges-file /validator-ranges.yaml} \
 		--builder-api-enabled \
-		--gloas-builder-api-subsidy=1000000 \
+		--epbs-enabled \
+		--lifecycle \
 		--log-level debug
 
 devnet-clean:
