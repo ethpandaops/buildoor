@@ -1,0 +1,29 @@
+participants:
+  - el_type: nethermind
+    el_image: ethpandaops/nethermind:glamsterdam-devnet-7
+    cl_type: lodestar
+    cl_image: ethpandaops/lodestar:glamsterdam-devnet-7
+    vc_image: ethpandaops/lodestar:glamsterdam-devnet-7
+    validator_count: 32
+    supernode: true
+
+network_params:
+  preset: minimal
+  genesis_delay: 20
+  gloas_fork_epoch: 1
+
+mev_type: buildoor
+buildoor_params:
+  image: buildoor:e2e
+  builder_api: true
+  epbs_builder: true
+  lifecycle: true
+  extra_args:
+    - --deposit-max-fee=0
+    - --builder-api-subsidy=100000000
+    - --epbs-bid-min=1000000
+    - --epbs-bid-subsidy=100000000
+    - --log-level=debug
+
+ethereum_genesis_generator_params:
+  image: ethpandaops/ethereum-genesis-generator@sha256:399cfc4582d21c51d89f8cad1bfcfe59d88d95c47b9f78706d7c265bb1e348a1
