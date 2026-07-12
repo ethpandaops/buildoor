@@ -100,12 +100,18 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
   const payloadStatus = derivePayloadStatus(result);
 
   const reorgParent = plan?.build?.reorg_parent_payload === true;
+  const t = plan?.transforms;
+  const hasTransform = !!(t && (t.payload || t.bid || t.envelope));
 
   const titleParts = [`Slot ${slot}`];
   if (plan?.bid) titleParts.push(`bid: ${plan.bid.mode}`);
   if (plan?.builder_api) titleParts.push(`builder api: ${plan.builder_api.mode}`);
   if (plan?.reveal) titleParts.push(`reveal: ${plan.reveal.mode}`);
   if (reorgParent) titleParts.push('build: reorg parent (n-2)');
+  if (hasTransform) {
+    const targets = ['payload', 'bid', 'envelope'].filter((k) => t?.[k as keyof typeof t]);
+    titleParts.push(`jq transform: ${targets.join(', ')}`);
+  }
   if (bidStatus) titleParts.push(BID_LABELS[bidStatus]);
   if (payloadStatus) titleParts.push(PAYLOAD_LABELS[payloadStatus]);
 
@@ -125,6 +131,7 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
           {plan?.builder_api && <span className={chipClass(plan.builder_api.mode)}>A</span>}
           {plan?.reveal && <span className={chipClass(plan.reveal.mode)}>R</span>}
           {reorgParent && <span className="ap-chip ap-chip-reorg" title="Build on n-2 payload">P</span>}
+          {hasTransform && <span className="ap-chip ap-chip-transform" title="jq transform">jq</span>}
         </span>
         <span className="ap-dots">
           {bidStatus && <span className={`ap-dot ap-dot-${bidStatus}`}></span>}

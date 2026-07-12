@@ -45,6 +45,18 @@ type FrozenPlan struct {
 	Bid        *ResolvedBidSettings        `json:"bid,omitempty"`
 	BuilderAPI *ResolvedBuilderAPISettings `json:"builder_api,omitempty"`
 	Reveal     *ResolvedRevealSettings     `json:"reveal,omitempty"`
+
+	// Transforms carries the effective jq transform expressions (empty when no
+	// transform plan applies). Nil only when no plan expression is set.
+	Transforms *ResolvedTransforms `json:"transforms,omitempty"`
+}
+
+// ResolvedTransforms are the effective jq transform expressions for the slot.
+// An empty string means no transform for that object.
+type ResolvedTransforms struct {
+	Payload  string `json:"payload,omitempty"`
+	Bid      string `json:"bid,omitempty"`
+	Envelope string `json:"envelope,omitempty"`
 }
 
 // ResolvedBuildSettings is the effective build decision and timing for a slot.
@@ -142,8 +154,24 @@ func resolveFrozenPlan(slot phase0.Slot, plan *SlotPlan, cfg *config.Config,
 	frozen.BuilderAPI = resolveBuilderAPI(plan, cfg)
 	frozen.Reveal = resolveReveal(plan, cfg)
 	frozen.Build = resolveBuild(frozen, cfg, slotsBuilt)
+	frozen.Transforms = resolveTransforms(plan)
 
 	return frozen
+}
+
+// resolveTransforms lifts the plan's jq transform expressions into the frozen
+// snapshot. Transforms have no global config baseline, so an absent plan (or
+// category) yields nil.
+func resolveTransforms(plan *SlotPlan) *ResolvedTransforms {
+	if plan == nil || plan.Transforms == nil {
+		return nil
+	}
+
+	return &ResolvedTransforms{
+		Payload:  plan.Transforms.Payload,
+		Bid:      plan.Transforms.Bid,
+		Envelope: plan.Transforms.Envelope,
+	}
 }
 
 // resolveBuild derives the complete build decision for the slot from the

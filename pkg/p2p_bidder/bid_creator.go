@@ -58,6 +58,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 	ctx context.Context,
 	payload *payload_builder.Payload,
 	bidValue uint64,
+	bidTransform string,
 ) (*eth2all.SignedExecutionPayloadBid, error) {
 	var feeRecipient bellatrix.ExecutionAddress
 
@@ -74,11 +75,12 @@ func (c *BidCreator) CreateAndSubmitBid(
 		return nil, fmt.Errorf("failed to get fork version for slot %d: %w", targetSlot, err)
 	}
 
-	signedBid, err := payload_bidder.BuildSignedBid(payload, payload_bidder.BidParams{
+	signedBid, err := payload_bidder.BuildSignedBid(ctx, payload, payload_bidder.BidParams{
 		BuilderIndex:     c.builderIndex,
 		FeeRecipient:     feeRecipient,
 		Value:            phase0.Gwei(bidValue),
 		ExecutionPayment: 0,
+		Transform:        bidTransform,
 	}, c.signer, forkVersion, c.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build signed bid: %w", err)

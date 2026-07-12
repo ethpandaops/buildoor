@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+
+	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 )
 
 // Mode is a per-category plan mode. Only explicit instructions are persisted:
@@ -239,6 +241,50 @@ func (p *BuildPlan) validate() error {
 	return nil
 }
 
+// TransformPlan carries operator-supplied jq expressions applied to the JSON
+// form of builder objects for arbitrary custom modifications. Like build it is
+// modeless. Each expression is empty (no-op) or a valid jq program (validated
+// on update). Semantics (see payload_builder / payload_bidder):
+//   - Payload rewrites the built execution payload before it feeds both the
+//     bid commitment and the envelope reveal.
+//   - Bid rewrites the bid MESSAGE just before signing; the modified message is
+//     then re-signed, so the result is validly signed but customized.
+//   - Envelope rewrites the envelope MESSAGE just before signing, then re-signs.
+type TransformPlan struct {
+	Payload  string `json:"payload,omitempty"`
+	Bid      string `json:"bid,omitempty"`
+	Envelope string `json:"envelope,omitempty"`
+}
+
+func (p *TransformPlan) clone() *TransformPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+
+	return &c
+}
+
+// isZero reports whether the transform plan carries no expression.
+func (p *TransformPlan) isZero() bool {
+	return p == nil || (p.Payload == "" && p.Bid == "" && p.Envelope == "")
+}
+
+func (p *TransformPlan) validate() error {
+	for name, expr := range map[string]string{
+		"transforms.payload":  p.Payload,
+		"transforms.bid":      p.Bid,
+		"transforms.envelope": p.Envelope,
+	} {
+		if err := jqtransform.Validate(expr); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
 // SlotPlan is the persisted per-slot instruction set. Each category is
 // optional; an absent category inherits the global baseline (including the
 // module enable flags).
@@ -248,6 +294,7 @@ type SlotPlan struct {
 	BuilderAPI *BuilderAPIPlan `json:"builder_api,omitempty"`
 	Reveal     *RevealPlan     `json:"reveal,omitempty"`
 	Build      *BuildPlan      `json:"build,omitempty"`
+	Transforms *TransformPlan  `json:"transforms,omitempty"`
 	UpdatedAt  time.Time       `json:"updated_at"`
 	UpdatedBy  string          `json:"updated_by"`
 }
@@ -264,6 +311,7 @@ func (p *SlotPlan) Clone() *SlotPlan {
 	c.BuilderAPI = p.BuilderAPI.clone()
 	c.Reveal = p.Reveal.clone()
 	c.Build = p.Build.clone()
+	c.Transforms = p.Transforms.clone()
 
 	return &c
 }
@@ -271,7 +319,7 @@ func (p *SlotPlan) Clone() *SlotPlan {
 // IsEmpty reports whether the plan carries no instruction at all.
 func (p *SlotPlan) IsEmpty() bool {
 	return p == nil || (p.Bid == nil && p.BuilderAPI == nil && p.Reveal == nil &&
-		p.Build.isZero())
+		p.Build.isZero() && p.Transforms.isZero())
 }
 
 // BidOverride returns the per-slot enable override for p2p bidding:
@@ -341,6 +389,12 @@ func (p *SlotPlan) Validate(secondsPerSlot time.Duration) error {
 		}
 	}
 
+	if p.Transforms != nil {
+		if err := p.Transforms.validate(); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -368,6 +422,7 @@ type PlanUpdate struct {
 	BuilderAPI json.RawMessage `json:"builder_api,omitempty"`
 	Reveal     json.RawMessage `json:"reveal,omitempty"`
 	Build      json.RawMessage `json:"build,omitempty"`
+	Transforms json.RawMessage `json:"transforms,omitempty"`
 
 	Set map[string]json.RawMessage `json:"set,omitempty"`
 }
@@ -463,6 +518,13 @@ func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
 		result.Build = build
 	}
 
+	transforms, changed, err := applyCategoryPatch("transforms", u.Transforms, result.Transforms)
+	if err != nil {
+		return nil, err
+	} else if changed {
+		result.Transforms = transforms
+	}
+
 	if err := applySetPaths(result, u.Set); err != nil {
 		return nil, err
 	}
@@ -471,6 +533,11 @@ func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
 	// does not keep an otherwise-empty plan alive.
 	if result.Build.isZero() {
 		result.Build = nil
+	}
+
+	// Likewise drop a transforms plan once all its expressions are empty.
+	if result.Transforms.isZero() {
+		result.Transforms = nil
 	}
 
 	if result.IsEmpty() {
@@ -526,8 +593,16 @@ func applySetPaths(plan *SlotPlan, set map[string]json.RawMessage) error {
 			}
 
 			plan.Build = patched
+		case "transforms":
+			patched, err := applyFieldPatch("transforms", field, hasField, set[path], plan.Transforms)
+			if err != nil {
+				return err
+			}
+
+			plan.Transforms = patched
 		default:
-			return fmt.Errorf("set: unknown path %q (categories: bid, builder_api, reveal, build)", path)
+			return fmt.Errorf(
+				"set: unknown path %q (categories: bid, builder_api, reveal, build, transforms)", path)
 		}
 	}
 
@@ -535,9 +610,10 @@ func applySetPaths(plan *SlotPlan, set map[string]json.RawMessage) error {
 }
 
 // categoryHasMode reports whether a category uses the custom/disabled mode
-// model. The build category is a pure override set with no mode field.
+// model. The build and transforms categories are pure override sets with no
+// mode field.
 func categoryHasMode(category string) bool {
-	return category != "build"
+	return category != "build" && category != "transforms"
 }
 
 // applyFieldPatch applies one set-path onto a category: whole-category

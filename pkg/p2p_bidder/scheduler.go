@@ -274,8 +274,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
-	// Submit bid
-	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
+	// Submit bid, applying the slot's frozen bid transform if any.
+	var bidTransform string
+	if state.Frozen != nil && state.Frozen.Transforms != nil {
+		bidTransform = state.Frozen.Transforms.Bid
+	}
+
+	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue, bidTransform)
 
 	// Update state regardless of success - we don't want to spam on failure
 	s.mu.Lock()

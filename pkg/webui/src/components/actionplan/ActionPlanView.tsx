@@ -176,6 +176,7 @@ export const ActionPlanView: React.FC = () => {
             <span><span className="ap-chip ap-chip-custom">A</span> builder api</span>
             <span><span className="ap-chip ap-chip-custom">R</span> reveal</span>
             <span><span className="ap-chip ap-chip-reorg">P</span> reorg parent</span>
+            <span><span className="ap-chip ap-chip-transform">jq</span> transform</span>
             <span><span className="ap-chip ap-chip-disabled">B</span> disabled</span>
             <span className="legend-section">Bid (left dot):</span>
             <span><span className="ap-dot ap-dot-included d-inline-block"></span> included</span>

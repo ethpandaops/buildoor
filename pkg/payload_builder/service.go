@@ -9,12 +9,14 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth-engine-client/spec/identification"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -22,6 +24,9 @@ import (
 // buildCallTimeout is the margin added on top of the configured PayloadBuildTime
 // for the engine getPayload and finality lookups that run after the build wait.
 const buildCallTimeout = 10 * time.Second
+
+// transformTimeout bounds how long an operator jq payload transform may run.
+const transformTimeout = 2 * time.Second
 
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
@@ -556,7 +561,51 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		return
 	}
 
+	// Apply the slot's frozen payload transform (if any) before the payload
+	// feeds the bid commitment and the envelope reveal.
+	if err := s.applyPayloadTransform(ctx, slot, payloadEvent); err != nil {
+		s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed")
+
+		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
+			Slot:     slot,
+			Error:    err.Error(),
+			FailedAt: time.Now(),
+		})
+
+		return
+	}
+
 	s.emitPayloadReady(slot, payloadEvent)
+}
+
+// applyPayloadTransform rewrites the built execution payload with the slot's
+// frozen jq payload transform (idempotent Freeze), in place. Because the bid
+// commits to the payload's block hash, Payload.BlockHash is re-synced to the
+// (possibly modified) payload block hash so the bid and the revealed payload
+// stay consistent. A no-op when no transform is set.
+func (s *Service) applyPayloadTransform(ctx context.Context, slot phase0.Slot, p *Payload) error {
+	transforms := s.planSvc.Freeze(slot).Transforms
+	if transforms == nil || transforms.Payload == "" {
+		return nil
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, transformTimeout)
+	defer cancel()
+
+	transformed := &eth2all.ExecutionPayload{Version: p.ExecutionPayload.Version}
+	if err := jqtransform.ApplyTyped(tctx, transforms.Payload, p.ExecutionPayload, transformed); err != nil {
+		return err
+	}
+
+	p.ExecutionPayload = transformed
+	p.BlockHash = transformed.BlockHash
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"block_hash": fmt.Sprintf("%x", p.BlockHash[:8]),
+	}).Warn("Applied payload jq transform")
+
+	return nil
 }
 
 // effectiveBuildAttributes returns the payload attributes to build the slot

@@ -371,12 +371,21 @@ export interface BuildPlan {
   reorg_parent_payload?: boolean;
 }
 
+// The transforms category has no mode: each field is a jq expression applied
+// to the object's JSON (empty = no transform).
+export interface TransformPlan {
+  payload?: string;
+  bid?: string;
+  envelope?: string;
+}
+
 export interface SlotPlan {
   slot: number;
   bid?: BidPlan;
   builder_api?: BuilderAPIPlan;
   reveal?: RevealPlan;
   build?: BuildPlan;
+  transforms?: TransformPlan;
   updated_at: string;
   updated_by: string;
 }
@@ -394,6 +403,7 @@ export interface PlanUpdate {
   builder_api?: BuilderAPIPlan | null;
   reveal?: RevealPlan | null;
   build?: BuildPlan | null;
+  transforms?: TransformPlan | null;
   set?: Record<string, number | string | boolean | null>;
 }
 
@@ -448,6 +458,12 @@ export interface ResolvedRevealSettings {
 
 // FrozenPlan is the immutable per-slot execution snapshot; a nil bid /
 // builder_api category means the category is suppressed for the slot.
+export interface ResolvedTransforms {
+  payload?: string;
+  bid?: string;
+  envelope?: string;
+}
+
 export interface FrozenPlan {
   slot: number;
   plan?: SlotPlan;
@@ -457,6 +473,7 @@ export interface FrozenPlan {
   bid?: ResolvedBidSettings;
   builder_api?: ResolvedBuilderAPISettings;
   reveal?: ResolvedRevealSettings;
+  transforms?: ResolvedTransforms;
 }
 
 // Per-slot result types (wire shapes of pkg/slot_results).

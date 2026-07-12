@@ -447,10 +447,21 @@ func (s *RevealService) buildEnvelope(req *RevealRequest) (
 		return nil, nil, nil, fmt.Errorf("failed to get fork version for slot %d (%s): %w", slot, fork, err)
 	}
 
-	envelope, blobs, proofs, err = BuildSignedEnvelope(req.Payload, RevealContext{
+	// The slot's frozen plan may carry a jq transform applied to the envelope
+	// message before signing (idempotent Freeze).
+	var envelopeTransform string
+	if t := s.planSvc.Freeze(slot).Transforms; t != nil {
+		envelopeTransform = t.Envelope
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, transformTimeout)
+	defer cancel()
+
+	envelope, blobs, proofs, err = BuildSignedEnvelope(ctx, req.Payload, RevealContext{
 		BuilderIndex:          s.builderIndex.Load(),
 		BeaconBlockRoot:       req.BlockInfo.Root,
 		ParentBeaconBlockRoot: req.BlockInfo.ParentRoot,
+		Transform:             envelopeTransform,
 	}, s.signer, forkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to build signed envelope: %w", err)

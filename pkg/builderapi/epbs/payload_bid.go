@@ -1,6 +1,7 @@
 package epbs
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -302,11 +303,22 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
 	value := valueAfterSubsidy - executionPayment
 
-	signedBid, err := payload_bidder.BuildSignedBid(event, payload_bidder.BidParams{
+	// The slot's frozen plan may carry a jq transform applied to the bid
+	// message before signing (idempotent Freeze).
+	var bidTransform string
+	if t := h.planSvc.Freeze(slot).Transforms; t != nil {
+		bidTransform = t.Bid
+	}
+
+	tctx, cancel := context.WithTimeout(r.Context(), transformTimeout)
+	defer cancel()
+
+	signedBid, err := payload_bidder.BuildSignedBid(tctx, event, payload_bidder.BidParams{
 		BuilderIndex:     h.builderIndex.Load(),
 		FeeRecipient:     prefs.FeeRecipient,
 		Value:            value,
 		ExecutionPayment: executionPayment,
+		Transform:        bidTransform,
 	}, h.bidderSigner, bidForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")

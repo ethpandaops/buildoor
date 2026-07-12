@@ -1,6 +1,7 @@
 package payload_bidder
 
 import (
+	"context"
 	"fmt"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	dynssz "github.com/pk910/dynamic-ssz"
 
+	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
@@ -21,6 +23,11 @@ type BidParams struct {
 	FeeRecipient     bellatrix.ExecutionAddress
 	Value            phase0.Gwei
 	ExecutionPayment phase0.Gwei
+
+	// Transform, when set, is an operator-supplied jq expression applied to the
+	// bid MESSAGE (JSON) before signing; the modified message is then signed,
+	// so the resulting bid is validly signed but customized.
+	Transform string
 }
 
 // BuildSignedBid constructs and signs a fork-agnostic SignedExecutionPayloadBid
@@ -29,6 +36,7 @@ type BidParams struct {
 // requests root, slot) are filled here, and only the transport's economics +
 // identity come in via params.
 func BuildSignedBid(
+	ctx context.Context,
 	p *payload_builder.Payload,
 	params BidParams,
 	s *Signer,
@@ -66,6 +74,17 @@ func BuildSignedBid(
 		BlobKZGCommitments:    commitments,
 		ExecutionRequestsRoot: phase0.Root(execRequestsRoot),
 		InclusionListBits:     []byte{0xff, 0xff}, // TODO: set a proper inclusion-list bitfield
+	}
+
+	// Apply the operator's jq transform to the bid message before signing, so
+	// the signature covers the customized message.
+	if params.Transform != "" {
+		transformed := &eth2all.ExecutionPayloadBid{Version: bid.Version}
+		if err := jqtransform.ApplyTyped(ctx, params.Transform, bid, transformed); err != nil {
+			return nil, fmt.Errorf("bid transform failed: %w", err)
+		}
+
+		bid = transformed
 	}
 
 	sig, err := s.SignBid(bid, forkVersion, genesisValidatorsRoot)

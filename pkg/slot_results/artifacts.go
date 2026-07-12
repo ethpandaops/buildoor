@@ -302,6 +302,45 @@ func (s *ArtifactStore) Get(slot phase0.Slot, kind string, idx int) (*db.SlotArt
 	return s.stateDB.GetSlotArtifact(uint64(slot), kind, idx)
 }
 
+// LatestByKind returns the artifact of the given kind (idx 0) for the highest
+// slot currently held in the memory buffer, for use as a live-test sample.
+// Returns ok=false when no such artifact is buffered (the caller may fall back
+// to a template); it deliberately scans only the buffer (the most recent
+// slots), not the full database.
+func (s *ArtifactStore) LatestByKind(kind string) (*db.SlotArtifact, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var (
+		bestSlot phase0.Slot
+		best     *db.SlotArtifact
+	)
+
+	for slot, kinds := range s.buffer {
+		if best != nil && slot <= bestSlot {
+			continue
+		}
+
+		for _, artifact := range kinds[kind] {
+			if artifact.Idx == 0 {
+				bestSlot = slot
+				best = artifact
+
+				break
+			}
+		}
+	}
+
+	if best == nil {
+		return nil, false
+	}
+
+	clone := *best
+	clone.Data = append([]byte(nil), best.Data...)
+
+	return &clone, true
+}
+
 // ListBids lists the slot's bid artifact metadata (no data blobs),
 // idx-ascending.
 func (s *ArtifactStore) ListBids(slot phase0.Slot) ([]db.SlotArtifact, error) {

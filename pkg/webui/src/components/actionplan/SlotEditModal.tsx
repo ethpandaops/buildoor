@@ -7,6 +7,7 @@ import type {
   SlotResult,
 } from '../../types';
 import type { ApplyUpdatesResult } from '../../hooks/useActionPlan';
+import { TransformEditor, type TransformState } from './TransformEditor';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -492,6 +493,23 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
         <p className="text-muted small mb-2">—</p>
       )}
 
+      {frozen.transforms &&
+        (frozen.transforms.payload || frozen.transforms.bid || frozen.transforms.envelope) && (
+          <>
+            <div className="section-header mb-1">Transforms (jq)</div>
+            <div className="mb-2">
+              {(['payload', 'bid', 'envelope'] as const).map((k) =>
+                frozen.transforms?.[k] ? (
+                  <div key={k} className="mb-1">
+                    <div className="ap-transform-io-label">{k}</div>
+                    <pre className="ap-transform-io mb-0">{frozen.transforms[k]}</pre>
+                  </div>
+                ) : null
+              )}
+            </div>
+          </>
+        )}
+
       <div className="section-header mb-1">Raw Plan</div>
       {frozen.plan ? (
         <pre className="ap-raw-plan mb-0">{JSON.stringify(frozen.plan, null, 2)}</pre>
@@ -808,6 +826,14 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
     bulk ? 'unchanged' : initialPlan?.build?.reorg_parent_payload ? 'on' : 'off'
   );
 
+  // Transforms (modeless jq expressions). In bulk mode we start empty and only
+  // send the ones the operator fills in.
+  const [transforms, setTransforms] = useState<TransformState>(() => ({
+    payload: (!bulk && initialPlan?.transforms?.payload) || '',
+    bid: (!bulk && initialPlan?.transforms?.bid) || '',
+    envelope: (!bulk && initialPlan?.transforms?.envelope) || '',
+  }));
+
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
@@ -896,6 +922,25 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
         hasChange = true;
       }
     }
+
+    // Transforms (modeless jq expressions) as fine-grained set paths. Single
+    // mode sends changed fields (empty clears); bulk sends only filled fields
+    // (empty leaves each slot as it is), matching the other bulk categories.
+    (['payload', 'bid', 'envelope'] as const).forEach((key) => {
+      const val = transforms[key].trim();
+      if (bulk) {
+        if (val !== '') {
+          setPaths[`transforms.${key}`] = val;
+          hasChange = true;
+        }
+        return;
+      }
+      const old = (initialPlan?.transforms?.[key] || '').trim();
+      if (val !== old) {
+        setPaths[`transforms.${key}`] = val; // empty string clears (dropped server-side)
+        hasChange = true;
+      }
+    });
 
     if (Object.keys(setPaths).length > 0) {
       update.set = setPaths;
@@ -1002,6 +1047,13 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     value={buildReorg}
                     disabled={formDisabled}
                     onChange={setBuildReorg}
+                  />
+                  <TransformEditor
+                    bulk={bulk}
+                    value={transforms}
+                    disabled={formDisabled}
+                    sampleSlot={isSingle ? singleSlot : undefined}
+                    onChange={setTransforms}
                   />
                 </form>
               )}

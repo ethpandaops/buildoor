@@ -563,7 +563,7 @@ func TestBidCreatorReturnsBidOnSubmitFailure(t *testing.T) {
 
 			payload := newSchedulerTestPayload(testSlot, gweiToWei(100))
 
-			signedBid, err := creator.CreateAndSubmitBid(context.Background(), payload, 42)
+			signedBid, err := creator.CreateAndSubmitBid(context.Background(), payload, 42, "")
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {

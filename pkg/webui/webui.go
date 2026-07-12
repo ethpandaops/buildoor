@@ -90,6 +90,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	// Per-slot action plan + results endpoints
 	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.GetActionPlan).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.UpdateActionPlan).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/action-plan/test-transform", apiHandler.TestTransform).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/buildoor/slot-results", apiHandler.GetSlotResults).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payload", apiHandler.GetSlotPayloadArtifact).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids", apiHandler.GetSlotBidArtifacts).Methods(http.MethodGet)

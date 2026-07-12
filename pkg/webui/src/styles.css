@@ -1005,6 +1005,46 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   color: #000;
 }
 
+/* jq transform chip (custom object modification). */
+.ap-chip-transform {
+  background: #6610f2;
+  color: #fff;
+}
+
+/* Transform editor */
+.ap-transform-field {
+  margin-bottom: 0.75rem;
+}
+
+.ap-transform-input {
+  resize: vertical;
+}
+
+.ap-transform-io-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--bs-secondary-color);
+  margin-bottom: 2px;
+}
+
+.ap-transform-io {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  padding: 6px 8px;
+  margin: 0;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 4px;
+  white-space: pre;
+}
+
+.ap-transform-io-stale {
+  opacity: 0.5;
+}
+
 /* Result status dots: left = bid outcome; right = payload canonical verdict
    (only rendered for won slots). */
 .ap-dots {

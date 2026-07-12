@@ -9,6 +9,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethpandaops/go-eth2-client/api"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
@@ -138,6 +139,10 @@ func (h *Handler) SetResultRecorder(rec SlotResultRecorder) {
 // and with which effective settings. The frozen plan is the single authority:
 // it can activate a globally disabled dialect and suppress an enabled one
 // (frozen.BuilderAPI == nil → suppressed).
+// transformThreshold bounds how long an operator jq transform may run before
+// it is cancelled, so a pathological expression cannot hang a request.
+const transformTimeout = 2 * time.Second
+
 func (h *Handler) frozenBuilderAPISettings(slot phase0.Slot) (*action_plan.ResolvedBuilderAPISettings, bool) {
 	frozen := h.planSvc.Freeze(slot)
 	if frozen.BuilderAPI == nil {

@@ -147,6 +147,22 @@ npm run clean
      parent-payload reorg (invalid on mainnet forkchoice; a testing knob). Falls back
      to a normal build (logged) when the parent slot's attributes are unavailable.
      It only modifies HOW a build happens, never forces/suppresses the build decision.
+   - A fifth `transforms` category is MODELESS: operator-supplied jq expressions
+     (`payload`/`bid`/`envelope`) applied to the object's JSON via `pkg/jqtransform`
+     (wraps `itchyny/gojq`; env access disabled, single-output, ctx-timeout 2s) for
+     arbitrary custom builder testing. Payload rewrites the built execution payload
+     before it feeds both the bid commitment and the reveal (Payload.BlockHash
+     re-synced from the result); bid/envelope rewrite the MESSAGE just before signing
+     and are then RE-SIGNED (target-slot fork) — so results are validly signed but
+     customized, and a bid commitment can deliberately diverge from the revealed
+     payload. Expressions are jq-Validated at plan-update time (400 on bad jq); a
+     runtime transform failure fails that construction (loud, recorded). Round-trip is
+     MarshalJSON→gojq→UnmarshalJSON into a fresh object with Version preset (via
+     `jqtransform.ApplyTyped`). Live-tested from the UI through
+     `POST /api/buildoor/action-plan/test-transform` (target+expression+optional
+     sample_slot → runs the exact production gojq against a captured artifact, else
+     the latest buffered one, else an illustrative template; bid/envelope reduced to
+     `.message`).
    - **Freeze semantics**: `Freeze(slot)` resolves the immutable `FrozenPlan` (raw plan
      + effective settings merged from the live global config + target-slot fork + the
      COMPLETE build decision incl. schedule modes and next_n accounting) the first time
