@@ -250,3 +250,132 @@ func TestSlotPlanCloneIsDeep(t *testing.T) {
 	require.Equal(t, uint64(42), *original.Bid.BidValueGwei)
 	require.Equal(t, ModeCustom, original.Bid.Mode)
 }
+
+func TestApplyUpdateToPlanSetPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing *SlotPlan
+		set      map[string]json.RawMessage
+		wantErr  string
+		check    func(t *testing.T, result *SlotPlan)
+	}{
+		{
+			name:     "field on absent category creates it as custom",
+			existing: nil,
+			set:      map[string]json.RawMessage{"bid.bid_min_amount": json.RawMessage("5000")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Equal(t, ModeCustom, result.Bid.Mode)
+				require.Equal(t, uint64(5000), *result.Bid.BidMinAmount)
+			},
+		},
+		{
+			name:     "mode path alone creates the category",
+			existing: nil,
+			set:      map[string]json.RawMessage{"reveal.mode": json.RawMessage(`"disabled"`)},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Equal(t, ModeDisabled, result.Reveal.Mode)
+			},
+		},
+		{
+			name: "field update preserves sibling overrides",
+			existing: &SlotPlan{Bid: &BidPlan{
+				Mode:         ModeCustom,
+				BidMinAmount: uint64Ptr(5000),
+				BidSubsidy:   uint64Ptr(77),
+			}},
+			set: map[string]json.RawMessage{"bid.bid_min_amount": json.RawMessage("9000")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Equal(t, uint64(9000), *result.Bid.BidMinAmount)
+				require.Equal(t, uint64(77), *result.Bid.BidSubsidy, "sibling override must survive")
+			},
+		},
+		{
+			name: "null field clears one override",
+			existing: &SlotPlan{Bid: &BidPlan{
+				Mode:         ModeCustom,
+				BidMinAmount: uint64Ptr(5000),
+				BidSubsidy:   uint64Ptr(77),
+			}},
+			set: map[string]json.RawMessage{"bid.bid_min_amount": json.RawMessage("null")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Nil(t, result.Bid.BidMinAmount)
+				require.Equal(t, uint64(77), *result.Bid.BidSubsidy)
+			},
+		},
+		{
+			name:     "category path with null clears the category",
+			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeDisabled}, Reveal: &RevealPlan{Mode: ModeDisabled}},
+			set:      map[string]json.RawMessage{"reveal": json.RawMessage("null")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Nil(t, result.Reveal)
+				require.NotNil(t, result.Bid)
+			},
+		},
+		{
+			name:     "category path with object replaces the category",
+			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeCustom, BidSubsidy: uint64Ptr(1)}},
+			set:      map[string]json.RawMessage{"bid": json.RawMessage(`{"mode":"disabled"}`)},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Equal(t, ModeDisabled, result.Bid.Mode)
+				require.Nil(t, result.Bid.BidSubsidy)
+			},
+		},
+		{
+			name:     "signed negative field value",
+			existing: nil,
+			set:      map[string]json.RawMessage{"builder_api.response_delay_ms": json.RawMessage("250")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Equal(t, int64(250), *result.BuilderAPI.ResponseDelayMs)
+			},
+		},
+		{
+			name:     "unknown category path",
+			existing: nil,
+			set:      map[string]json.RawMessage{"nope.field": json.RawMessage("1")},
+			wantErr:  "unknown path",
+		},
+		{
+			name:     "unknown field rejected",
+			existing: nil,
+			set:      map[string]json.RawMessage{"bid.no_such_field": json.RawMessage("1")},
+			wantErr:  "no_such_field",
+		},
+		{
+			name:     "null mode rejected",
+			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeCustom}},
+			set:      map[string]json.RawMessage{"bid.mode": json.RawMessage("null")},
+			wantErr:  "cannot be null",
+		},
+		{
+			name:     "clearing the only category deletes the plan",
+			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeDisabled}},
+			set:      map[string]json.RawMessage{"bid": json.RawMessage("null")},
+			check: func(t *testing.T, result *SlotPlan) {
+				require.Nil(t, result)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ApplyUpdateToPlan(tt.existing, &PlanUpdate{Set: tt.set})
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			tt.check(t, result)
+		})
+	}
+}
+
+func TestApplyUpdateToPlanSetAfterCategoryPatch(t *testing.T) {
+	// Category member and set path in one update: set applies after.
+	result, err := ApplyUpdateToPlan(nil, &PlanUpdate{
+		Bid: json.RawMessage(`{"mode":"custom","bid_subsidy":10}`),
+		Set: map[string]json.RawMessage{"bid.bid_subsidy": json.RawMessage("20")},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(20), *result.Bid.BidSubsidy, "set paths apply after category patches")
+}

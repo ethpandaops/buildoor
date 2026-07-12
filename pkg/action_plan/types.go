@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -301,6 +303,16 @@ func (p *SlotPlan) Validate(secondsPerSlot time.Duration) error {
 // union of Slots and the inclusive FromSlot..ToSlot range. Category members
 // are three-state: absent = unchanged, JSON null = clear (back to inherit),
 // object = replace. Delete removes the whole plan for the targeted slots.
+//
+// Set applies fine-grained path updates AFTER the category members, so
+// consumers never need to send a full category object for partial edits:
+//
+//	"bid"                    → whole category (null = clear, object = replace)
+//	"bid.mode"               → single field ("custom" | "disabled")
+//	"bid.bid_min_amount"     → single override (null = back to inherit)
+//
+// Setting a field on an absent category creates it with mode "custom".
+// Paths are applied in lexicographic order (deterministic).
 type PlanUpdate struct {
 	Slots    []uint64 `json:"slots,omitempty"`
 	FromSlot *uint64  `json:"from_slot,omitempty"`
@@ -310,6 +322,8 @@ type PlanUpdate struct {
 	Bid        json.RawMessage `json:"bid,omitempty"`
 	BuilderAPI json.RawMessage `json:"builder_api,omitempty"`
 	Reveal     json.RawMessage `json:"reveal,omitempty"`
+
+	Set map[string]json.RawMessage `json:"set,omitempty"`
 }
 
 // TargetSlots expands the update's slot list and range into the full target
@@ -396,11 +410,116 @@ func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
 		result.Reveal = reveal
 	}
 
+	if err := applySetPaths(result, u.Set); err != nil {
+		return nil, err
+	}
+
 	if result.IsEmpty() {
 		return nil, nil
 	}
 
 	return result, nil
+}
+
+// applySetPaths applies the fine-grained path updates of a PlanUpdate onto
+// the (already category-patched) plan, in lexicographic path order.
+func applySetPaths(plan *SlotPlan, set map[string]json.RawMessage) error {
+	if len(set) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(set))
+	for path := range set {
+		paths = append(paths, path)
+	}
+
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		category, field, hasField := strings.Cut(path, ".")
+
+		switch category {
+		case "bid":
+			patched, err := applyFieldPatch("bid", field, hasField, set[path], plan.Bid)
+			if err != nil {
+				return err
+			}
+
+			plan.Bid = patched
+		case "builder_api":
+			patched, err := applyFieldPatch("builder_api", field, hasField, set[path], plan.BuilderAPI)
+			if err != nil {
+				return err
+			}
+
+			plan.BuilderAPI = patched
+		case "reveal":
+			patched, err := applyFieldPatch("reveal", field, hasField, set[path], plan.Reveal)
+			if err != nil {
+				return err
+			}
+
+			plan.Reveal = patched
+		default:
+			return fmt.Errorf("set: unknown path %q (categories: bid, builder_api, reveal)", path)
+		}
+	}
+
+	return nil
+}
+
+// applyFieldPatch applies one set-path onto a category: whole-category
+// (null = clear, object = replace) or a single field via a JSON object
+// round-trip so unknown fields are rejected by the strict decoder. A field
+// set on an absent category creates it with mode "custom"; a null field
+// value removes the override (back to inherit).
+func applyFieldPatch[T any](category, field string, hasField bool,
+	value json.RawMessage, current *T) (*T, error) {
+	if !hasField {
+		patched, _, err := applyCategoryPatch(category, value, current)
+
+		return patched, err
+	}
+
+	if field == "" {
+		return nil, fmt.Errorf("set: empty field on category %q", category)
+	}
+
+	fields := make(map[string]json.RawMessage, 8)
+
+	if current != nil {
+		encoded, err := json.Marshal(current)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", category, err)
+		}
+
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			return nil, fmt.Errorf("%s: %w", category, err)
+		}
+	} else if field != "mode" {
+		// Creating a category through a field edit defaults it to custom
+		// (fields only carry meaning in custom mode).
+		fields["mode"] = json.RawMessage(`"custom"`)
+	}
+
+	if isJSONNull(value) {
+		if field == "mode" {
+			return nil, fmt.Errorf("set: %s.mode cannot be null (clear the whole category instead)", category)
+		}
+
+		delete(fields, field)
+	} else {
+		fields[field] = value
+	}
+
+	merged, err := json.Marshal(fields)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", category, err)
+	}
+
+	patched, _, err := applyCategoryPatch(category, merged, current)
+
+	return patched, err
 }
 
 // applyCategoryPatch implements the three-state member semantics for one
