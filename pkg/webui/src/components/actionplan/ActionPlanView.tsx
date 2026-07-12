@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useActionPlan } from '../../hooks/useActionPlan';
 import { useAuthContext } from '../../context/AuthContext';
@@ -23,18 +23,24 @@ export const ActionPlanView: React.FC = () => {
   const slotsPerEpoch = chainInfo?.slots_per_epoch ?? 0;
   const currentEpoch = slotsPerEpoch > 0 ? Math.floor(currentSlot / slotsPerEpoch) : 0;
 
-  const [window, setWindow] = useState<EpochWindow | null>(null);
+  // The view follows the current epoch by default; navigating (Older/Newer/
+  // jump) pins an explicit window until "Now" resumes following.
+  const [follow, setFollow] = useState(true);
+  const [pinned, setPinned] = useState<EpochWindow | null>(null);
   const [jumpInput, setJumpInput] = useState('');
 
-  // Initialize the window once chain info + a plausible current slot exist.
-  useEffect(() => {
-    if (window === null && slotsPerEpoch > 0 && currentSlot > 0) {
-      setWindow({ start: Math.max(0, currentEpoch - EPOCHS_BACK), end: currentEpoch + EPOCHS_AHEAD });
-    }
-  }, [window, slotsPerEpoch, currentSlot, currentEpoch]);
+  const ready = !!chainInfo && slotsPerEpoch > 0 && currentSlot > 0;
 
-  const minSlot = window && slotsPerEpoch > 0 ? window.start * slotsPerEpoch : 0;
-  const maxSlot = window && slotsPerEpoch > 0 ? (window.end + 1) * slotsPerEpoch - 1 : -1;
+  // The effective window: derived live from the current epoch while following
+  // (so it advances as epochs pass), otherwise the pinned range.
+  const window: EpochWindow | null = !ready
+    ? null
+    : follow
+      ? { start: Math.max(0, currentEpoch - EPOCHS_BACK), end: currentEpoch + EPOCHS_AHEAD }
+      : pinned;
+
+  const minSlot = window ? window.start * slotsPerEpoch : 0;
+  const maxSlot = window ? (window.end + 1) * slotsPerEpoch - 1 : -1;
 
   const { plans, results, loading, error, refetch, applyUpdates } = useActionPlan(minSlot, maxSlot);
 
@@ -77,24 +83,25 @@ export const ActionPlanView: React.FC = () => {
     setModalTarget({ fromSlot, toSlot });
   }, []);
 
+  // Shifting pins the window (stops following) so the manual position sticks.
   const shiftWindow = (epochs: number) => {
-    setWindow((prev) => {
-      if (!prev) return prev;
-      const span = prev.end - prev.start;
-      const start = Math.max(0, prev.start + epochs);
-      return { start, end: start + span };
-    });
+    if (!window) return;
+    const span = window.end - window.start;
+    const start = Math.max(0, window.start + epochs);
+    setPinned({ start, end: start + span });
+    setFollow(false);
   };
 
   const jumpToCurrent = () => {
-    setWindow({ start: Math.max(0, currentEpoch - EPOCHS_BACK), end: currentEpoch + EPOCHS_AHEAD });
+    setFollow(true);
   };
 
   const handleJump = (e: React.FormEvent) => {
     e.preventDefault();
     const epoch = parseInt(jumpInput, 10);
     if (isNaN(epoch) || epoch < 0) return;
-    setWindow({ start: Math.max(0, epoch - EPOCHS_BACK), end: epoch + EPOCHS_AHEAD });
+    setPinned({ start: Math.max(0, epoch - EPOCHS_BACK), end: epoch + EPOCHS_AHEAD });
+    setFollow(false);
   };
 
   if (!chainInfo || window === null) {
@@ -113,6 +120,7 @@ export const ActionPlanView: React.FC = () => {
           <h5 className="mb-0">Action Plan</h5>
           <span className="text-muted small">
             epochs {window.start}–{window.end} (current: {currentEpoch})
+            {follow && <span className="badge bg-success ms-2">live</span>}
           </span>
           {loading && <span className="spinner-border spinner-border-sm text-primary"></span>}
 
@@ -121,7 +129,7 @@ export const ActionPlanView: React.FC = () => {
               <button type="button" className="btn btn-outline-secondary" onClick={() => shiftWindow(-(window.end - window.start + 1))} disabled={window.start === 0} title="Older epochs">
                 <i className="fas fa-chevron-left"></i> Older
               </button>
-              <button type="button" className="btn btn-outline-secondary" onClick={jumpToCurrent} title="Jump to the current epoch">
+              <button type="button" className={`btn ${follow ? 'btn-primary' : 'btn-outline-secondary'}`} onClick={jumpToCurrent} title="Follow the current epoch">
                 Now
               </button>
               <button type="button" className="btn btn-outline-secondary" onClick={() => shiftWindow(window.end - window.start + 1)} title="Newer epochs">
