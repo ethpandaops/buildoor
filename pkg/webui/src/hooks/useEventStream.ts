@@ -97,6 +97,12 @@ export function useEventStream(): UseEventStreamResult {
   const [slotServiceStatuses, setSlotServiceStatuses] = useState<Record<number, ServiceStatus>>({});
   const [events, setEvents] = useState<LogEvent[]>([]);
   const eventIdRef = useRef(0);
+  // Highest server-side sequence number processed so far. On connect the
+  // server bursts a replay of the last slots' events (each carrying the seq
+  // it was originally broadcast with); after a reconnect, anything at or
+  // below this watermark is a duplicate we already processed, while replayed
+  // events above it fill the gap the connection loss created.
+  const lastSeqRef = useRef(0);
 
   // Use refs to access current values in event handlers without causing reconnection
   const configRef = useRef<Config | null>(null);
@@ -155,7 +161,14 @@ export function useEventStream(): UseEventStreamResult {
       }));
     };
 
-    const handleEvent = (event: { type: string; timestamp: number; data: unknown }) => {
+    const handleEvent = (event: { type: string; timestamp: number; seq?: number; data: unknown }) => {
+      // Drop already-processed events from a reconnect replay. Events
+      // without a seq (per-client initial-state snapshots) always pass.
+      if (event.seq) {
+        if (event.seq <= lastSeqRef.current) return;
+        lastSeqRef.current = event.seq;
+      }
+
       switch (event.type) {
         case 'config':
           setConfig(event.data as Config);

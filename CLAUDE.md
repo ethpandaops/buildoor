@@ -554,6 +554,19 @@ To make frontend changes:
   atomic, unknown keys rejected (auth + audit)
 
 **Real-time events via SSE** (`/api/events`):
+- **Connect-time replay burst**: every slot-scoped event is kept in a server-side
+  replay cache for the last 5 slots (hard cap 2000 entries) and prefilled into a
+  new client's channel at registration, so the UI restores the slot graph and
+  event log instead of starting empty. Registration and broadcasting serialize
+  on one mutex — replay + live events form a single ordered, gapless stream.
+  Every broadcast event carries a monotonic `seq` (seeded from wall-clock micros
+  so it survives restarts); the frontend keeps a high-watermark and skips
+  replayed events at/below it on reconnect (gap events above it still apply).
+  Not cached: `config`/`stats`/`builder_info`/`service_status`/`slot_state`
+  (per-client initial-state snapshots, sent without `seq`) and
+  `action_plan_updated`/`slot_result_updated` (REST is the source of truth;
+  views refetch via `connectionGeneration`). `lifecycle` events are tagged with
+  the current slot so they replay too
 - `chain_info` - genesis_time, seconds_per_slot, slots_per_epoch (initial state)
 - `bid_won` - Emitted when one of our blocks is seen included at the head (fired from
   the inclusion tracker's `PayloadIncludedEvent.WonBlock`, alongside `bid_included`)
