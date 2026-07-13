@@ -58,6 +58,7 @@ func init() {
 	rootCmd.PersistentFlags().String("overview-url", "", "Optional URL of the multi-instance overview UI. When set, the dashboard renders an Overview entry as the first top-nav item so navigation stays consistent across instances.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
+	rootCmd.PersistentFlags().Bool("epbs-legacy-gloas-ssz", false, "Use pre-EIP-7688 bounded SSZ roots for Glamsterdam devnet-6 compatibility")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
@@ -178,6 +179,7 @@ func initConfig() error {
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
 		EPBS: config.EPBSConfig{
+			LegacyGloasSSZ: v.GetBool("epbs-legacy-gloas-ssz"),
 			BuildStartTime: v.GetInt64("build-start-time"),
 			BidStartTime:   v.GetInt64("epbs-bid-start"),
 			BidEndTime:     v.GetInt64("epbs-bid-end"),

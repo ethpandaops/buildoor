@@ -32,12 +32,29 @@ var DomainBeaconBuilder = phase0.DomainType{0x0B, 0x00, 0x00, 0x00}
 
 // Signer signs execution payload bids and envelopes with the builder's BLS key.
 type Signer struct {
-	blsSigner *signer.BLSSigner
+	blsSigner      *signer.BLSSigner
+	legacyGloasSSZ bool
+}
+
+// SignerOption configures a payload bidder signer.
+type SignerOption func(*Signer)
+
+// WithLegacyGloasSSZ enables the bounded-list, binary-container Gloas schema
+// used by Glamsterdam devnet-6. The default remains EIP-7688 progressive SSZ.
+func WithLegacyGloasSSZ(enabled bool) SignerOption {
+	return func(s *Signer) {
+		s.legacyGloasSSZ = enabled
+	}
 }
 
 // NewSigner creates a new payload bidder signer.
-func NewSigner(blsSigner *signer.BLSSigner) *Signer {
-	return &Signer{blsSigner: blsSigner}
+func NewSigner(blsSigner *signer.BLSSigner, opts ...SignerOption) *Signer {
+	s := &Signer{blsSigner: blsSigner}
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
 }
 
 // SignBid signs an execution payload bid. forkVersion must be the fork version
@@ -47,8 +64,8 @@ func (s *Signer) SignBid(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
-	if bid.Version == version.DataVersionGloas {
-		root, err := hashGloasBid(bid)
+	if s.legacyGloasSSZ && bid.Version == version.DataVersionGloas {
+		root, err := hashLegacyGloasBid(bid)
 		if err != nil {
 			return phase0.BLSSignature{}, err
 		}
@@ -65,8 +82,8 @@ func (s *Signer) SignEnvelope(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
-	if envelope.Version == version.DataVersionGloas {
-		root, err := hashGloasEnvelope(envelope)
+	if s.legacyGloasSSZ && envelope.Version == version.DataVersionGloas {
+		root, err := hashLegacyGloasEnvelope(envelope)
 		if err != nil {
 			return phase0.BLSSignature{}, err
 		}
@@ -107,11 +124,22 @@ func (s *Signer) signRoot(
 	return s.blsSigner.SignWithDomain(root, domain)
 }
 
-// gloasBidSigningView pins the Gloas commitments field to the bounded-list
-// schema used by the Glamsterdam consensus specification. go-eth2-client
-// v0.1.6 models this field as a progressive list, which produces a different
-// signing root even though its JSON and wire fields are otherwise identical.
-type gloasBidSigningView struct {
+func (s *Signer) hashExecutionRequests(requests *eth2all.ExecutionRequests) (phase0.Root, error) {
+	if s.legacyGloasSSZ && requests.Version == version.DataVersionGloas {
+		return hashLegacyGloasExecutionRequests(requests)
+	}
+
+	root, err := dynssz.GetGlobalDynSsz().HashTreeRoot(requests)
+	if err != nil {
+		return phase0.Root{}, fmt.Errorf("failed to compute execution requests root: %w", err)
+	}
+
+	return phase0.Root(root), nil
+}
+
+// legacyGloasBidSigningView pins the Gloas commitments field to the
+// bounded-list, binary-container schema used by Glamsterdam devnet-6.
+type legacyGloasBidSigningView struct {
 	ParentBlockHash       phase0.Hash32              `ssz-size:"32"`
 	ParentBlockRoot       phase0.Root                `ssz-size:"32"`
 	BlockHash             phase0.Hash32              `ssz-size:"32"`
@@ -126,8 +154,8 @@ type gloasBidSigningView struct {
 	ExecutionRequestsRoot phase0.Root           `ssz-size:"32"`
 }
 
-func hashGloasBid(bid *eth2all.ExecutionPayloadBid) (phase0.Root, error) {
-	view := &gloasBidSigningView{
+func hashLegacyGloasBid(bid *eth2all.ExecutionPayloadBid) (phase0.Root, error) {
+	view := &legacyGloasBidSigningView{
 		ParentBlockHash:       bid.ParentBlockHash,
 		ParentBlockRoot:       bid.ParentBlockRoot,
 		BlockHash:             bid.BlockHash,
@@ -150,7 +178,7 @@ func hashGloasBid(bid *eth2all.ExecutionPayloadBid) (phase0.Root, error) {
 	return phase0.Root(root), nil
 }
 
-type gloasPayloadSigningView struct {
+type legacyGloasPayloadSigningView struct {
 	ParentHash      phase0.Hash32              `ssz-size:"32"`
 	FeeRecipient    bellatrix.ExecutionAddress `ssz-size:"20"`
 	StateRoot       phase0.Root                `ssz-size:"32"`
@@ -172,23 +200,23 @@ type gloasPayloadSigningView struct {
 	SlotNumber      uint64
 }
 
-type gloasEnvelopeSigningView struct {
-	Payload               *gloasPayloadSigningView
-	ExecutionRequests     *gloasExecutionRequestsSigningView
+type legacyGloasEnvelopeSigningView struct {
+	Payload               *legacyGloasPayloadSigningView
+	ExecutionRequests     *legacyGloasExecutionRequestsSigningView
 	BuilderIndex          gloas.BuilderIndex
 	BeaconBlockRoot       phase0.Root `ssz-size:"32"`
 	ParentBeaconBlockRoot phase0.Root `ssz-size:"32"`
 }
 
-func hashGloasEnvelope(envelope *eth2all.ExecutionPayloadEnvelope) (phase0.Root, error) {
+func hashLegacyGloasEnvelope(envelope *eth2all.ExecutionPayloadEnvelope) (phase0.Root, error) {
 	payload := envelope.Payload
 	requests := envelope.ExecutionRequests
 	if payload == nil || requests == nil {
 		return phase0.Root{}, fmt.Errorf("gloas envelope payload and execution requests are required")
 	}
 
-	view := &gloasEnvelopeSigningView{
-		Payload: &gloasPayloadSigningView{
+	view := &legacyGloasEnvelopeSigningView{
+		Payload: &legacyGloasPayloadSigningView{
 			ParentHash:      payload.ParentHash,
 			FeeRecipient:    payload.FeeRecipient,
 			StateRoot:       payload.StateRoot,
@@ -209,7 +237,7 @@ func hashGloasEnvelope(envelope *eth2all.ExecutionPayloadEnvelope) (phase0.Root,
 			BlockAccessList: payload.BlockAccessList,
 			SlotNumber:      payload.SlotNumber,
 		},
-		ExecutionRequests: &gloasExecutionRequestsSigningView{
+		ExecutionRequests: &legacyGloasExecutionRequestsSigningView{
 			Deposits:        requests.Deposits,
 			Withdrawals:     requests.Withdrawals,
 			Consolidations:  requests.Consolidations,

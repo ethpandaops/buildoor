@@ -298,7 +298,10 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
-			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, logger)
+			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(
+				blsSigner,
+				payload_bidder.WithLegacyGloasSSZ(cfg.EPBS.LegacyGloasSSZ),
+			), clClient, chainSvc, builderSvc, paymentTracker, logger)
 			if err := revealSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start reveal service: %w", err)
 			}

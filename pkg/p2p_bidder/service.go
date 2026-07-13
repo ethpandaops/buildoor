@@ -116,7 +116,10 @@ func NewService(
 	serviceLog := log.WithField("component", "p2p-bidder")
 
 	// Create the shared payload bidder signer
-	epbsSigner := payload_bidder.NewSigner(blsSigner)
+	epbsSigner := payload_bidder.NewSigner(
+		blsSigner,
+		payload_bidder.WithLegacyGloasSSZ(cfg.LegacyGloasSSZ),
+	)
 
 	s := &Service{
 		cfg:                   cfg,

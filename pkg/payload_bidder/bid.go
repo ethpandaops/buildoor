@@ -41,7 +41,7 @@ func BuildSignedBid(
 		execRequests = &eth2all.ExecutionRequests{Version: p.ExecutionPayload.Version}
 	}
 
-	execRequestsRoot, err := hashGloasExecutionRequests(execRequests)
+	execRequestsRoot, err := s.hashExecutionRequests(execRequests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute execution requests root: %w", err)
 	}
@@ -80,11 +80,10 @@ func BuildSignedBid(
 	}, nil
 }
 
-// gloasExecutionRequestsSigningView pins the five request collections to the
-// bounded-list schema used by the Glamsterdam Gloas specification. The
-// go-eth2-client v0.1.6 fork-agnostic view uses progressive lists, which is a
-// different SSZ type and therefore commits a different root into the bid.
-type gloasExecutionRequestsSigningView struct {
+// legacyGloasExecutionRequestsSigningView pins the five request collections
+// to the bounded-list schema used by Glamsterdam devnet-6. Current Buildoor
+// defaults to the EIP-7688 progressive schema used by devnet-7 and later.
+type legacyGloasExecutionRequestsSigningView struct {
 	Deposits        []*electra.DepositRequest       `ssz-max:"8192"`
 	Withdrawals     []*electra.WithdrawalRequest    `ssz-max:"16"`
 	Consolidations  []*electra.ConsolidationRequest `ssz-max:"2"`
@@ -92,8 +91,8 @@ type gloasExecutionRequestsSigningView struct {
 	BuilderExits    []*gloas.BuilderExitRequest     `ssz-max:"16"`
 }
 
-func hashGloasExecutionRequests(requests *eth2all.ExecutionRequests) (phase0.Root, error) {
-	view := &gloasExecutionRequestsSigningView{
+func hashLegacyGloasExecutionRequests(requests *eth2all.ExecutionRequests) (phase0.Root, error) {
+	view := &legacyGloasExecutionRequestsSigningView{
 		Deposits:        requests.Deposits,
 		Withdrawals:     requests.Withdrawals,
 		Consolidations:  requests.Consolidations,

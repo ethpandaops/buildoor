@@ -9,10 +9,26 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
+	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGloasBidUsesBoundedCommitmentsListRoot(t *testing.T) {
+func TestSignerDefaultsToProgressiveGloasSSZ(t *testing.T) {
+	requests := &eth2all.ExecutionRequests{Version: version.DataVersionGloas}
+
+	want, err := dynssz.GetGlobalDynSsz().HashTreeRoot(requests)
+	require.NoError(t, err)
+
+	got, err := NewSigner(nil).hashExecutionRequests(requests)
+	require.NoError(t, err)
+	require.Equal(t, phase0.Root(want), got)
+
+	legacy, err := NewSigner(nil, WithLegacyGloasSSZ(true)).hashExecutionRequests(requests)
+	require.NoError(t, err)
+	require.NotEqual(t, got, legacy)
+}
+
+func TestLegacyGloasBidUsesBoundedCommitmentsListRoot(t *testing.T) {
 	decode := func(value string) []byte {
 		decoded, err := hex.DecodeString(value)
 		require.NoError(t, err)
@@ -39,7 +55,7 @@ func TestGloasBidUsesBoundedCommitmentsListRoot(t *testing.T) {
 		ExecutionRequestsRoot: root("87b69a306c8e430d0857f7c4ac5e27cecffa1108d43c2e5df7388056fea7a423"),
 	}
 
-	actual, err := hashGloasBid(bid)
+	actual, err := hashLegacyGloasBid(bid)
 	require.NoError(t, err)
 	require.Equal(t,
 		"05443306d810e015f5c790dc4be85203a1b7d1c9e4e5819e711c8b730500a598",
@@ -47,8 +63,8 @@ func TestGloasBidUsesBoundedCommitmentsListRoot(t *testing.T) {
 	)
 }
 
-func TestGloasExecutionRequestsUseBoundedListRoots(t *testing.T) {
-	actual, err := hashGloasExecutionRequests(&eth2all.ExecutionRequests{
+func TestLegacyGloasExecutionRequestsUseBoundedListRoots(t *testing.T) {
+	actual, err := hashLegacyGloasExecutionRequests(&eth2all.ExecutionRequests{
 		Version: version.DataVersionGloas,
 	})
 	require.NoError(t, err)
@@ -58,8 +74,8 @@ func TestGloasExecutionRequestsUseBoundedListRoots(t *testing.T) {
 	)
 }
 
-func TestGloasEnvelopeUsesBoundedNestedListRoots(t *testing.T) {
-	actual, err := hashGloasEnvelope(&eth2all.ExecutionPayloadEnvelope{
+func TestLegacyGloasEnvelopeUsesBoundedNestedListRoots(t *testing.T) {
+	actual, err := hashLegacyGloasEnvelope(&eth2all.ExecutionPayloadEnvelope{
 		Version:           version.DataVersionGloas,
 		Payload:           &eth2all.ExecutionPayload{Version: version.DataVersionGloas},
 		ExecutionRequests: &eth2all.ExecutionRequests{Version: version.DataVersionGloas},

@@ -99,6 +99,11 @@ type BuilderAPIConfig struct {
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
 type EPBSConfig struct {
+	// LegacyGloasSSZ uses the bounded-list, binary-container SSZ schema from
+	// Glamsterdam devnet-6. It is disabled by default so current networks keep
+	// the EIP-7688 progressive schema introduced for devnet-7.
+	LegacyGloasSSZ bool `yaml:"legacy_gloas_ssz" json:"legacy_gloas_ssz"`
+
 	// BuildStartTime is milliseconds relative to the proposal slot start when we
 	// start building. Negative values mean before the slot starts (e.g. -3000 =
 	// 3 seconds before slot start). Positive values mean after slot start.
