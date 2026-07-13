@@ -64,6 +64,7 @@ export function getEventTypeClass(type: string): string {
     'bid_event': 'event-color-external-bid',               // external-bid dot
     'payload_available': 'event-color-payload-available',  // payload-available dot
     'reveal': 'event-color-reveal',                        // reveal-sent dot
+    'reveal_withheld': 'event-warning',                    // intentional test fault
     'bid_won': 'event-color-bid-won',                      // bid-won crown
     'builder_api': 'event-color-builder-api'               // builder-api dot
 
@@ -90,6 +91,7 @@ const EVENT_TYPE_CATEGORY: Record<string, string> = {
   bid_event: 'external_bid',
   payload_available: 'available',
   reveal: 'reveal',
+  reveal_withheld: 'reveal',
   bid_won: 'bid_won',
   builder_api: 'builder_api',
   payload_build_failed: 'error',

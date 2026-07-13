@@ -47,6 +47,11 @@ export interface EPBSConfig {
   bid_interval: number;
   bid_subsidy: number;
   payload_build_delay?: number;
+  slot_actions?: Record<string, SlotAction>;
+}
+
+export interface SlotAction {
+  reveal: 'withhold';
 }
 
 export interface ServiceStatus {
@@ -148,6 +153,15 @@ export interface RevealEvent {
   timestamp: number;
 }
 
+export interface IntentionallyWithheldEvent {
+  slot: number;
+  builder_index: number;
+  builder_pubkey: string;
+  action: 'withhold';
+  status: 'intentionally_withheld';
+  timestamp: number;
+}
+
 // A single payload reveal attempt (the reveal may be retried on failure).
 export interface RevealAttempt {
   time: number;
@@ -191,6 +205,9 @@ export interface SlotState {
   revealFailed?: boolean;
   revealSentAt?: number;
   revealAttempts?: RevealAttempt[];
+  revealWithheldAt?: number;
+  revealWithheldBuilderIndex?: number;
+  revealWithheldBuilderPubkey?: string;
   headVotes?: HeadVoteDataPoint[];
   getHeaderReceivedAt?: number;
   getHeaderDeliveredAt?: number;

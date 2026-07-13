@@ -35,6 +35,7 @@ type APIHandler struct {
 	revealSvc        *payload_bidder.RevealService    // May be nil (Gloas not scheduled)
 	inclusionTracker *payload_bidder.InclusionTracker // May be nil
 	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
+	slotActions      *payload_bidder.SlotActionsStore // May be nil (Gloas not scheduled)
 }
 
 // NewAPIHandler creates a new API handler.
@@ -53,6 +54,7 @@ func NewAPIHandler(
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,
 	payments *payload_bidder.PaymentTracker,
+	slotActions *payload_bidder.SlotActionsStore,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -70,13 +72,14 @@ func NewAPIHandler(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		slotActions:      slotActions,
 	}
 
 	// Create and start event stream manager
 	if builderSvc != nil {
 		h.eventStreamMgr = NewEventStreamManager(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
-			builderAPISvc, revealSvc, inclusionTracker, payments,
+			builderAPISvc, revealSvc, inclusionTracker, payments, slotActions,
 		)
 		h.eventStreamMgr.Start()
 	}

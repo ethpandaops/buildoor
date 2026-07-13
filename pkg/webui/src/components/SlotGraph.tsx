@@ -560,6 +560,31 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 `reveal-${idx}`
               );
             })}
+
+            {/* Configured fault receipt — distinct from a failed publication,
+                because no envelope publication was attempted. */}
+            {genesisTime > 0 && state.revealWithheldAt && renderEventDot(
+              'reveal-withheld',
+              state.revealWithheldAt - slotStartTime,
+              {
+                title: 'Reveal Intentionally Withheld',
+                items: [
+                  { label: 'Time', value: `${state.revealWithheldAt - slotStartTime}ms` },
+                  { label: 'Action', value: 'withhold' },
+                  { label: 'Status', value: 'intentionally_withheld' },
+                  ...(state.revealWithheldBuilderIndex !== undefined ? [{
+                    label: 'Builder Index',
+                    value: String(state.revealWithheldBuilderIndex)
+                  }] : []),
+                  ...(state.revealWithheldBuilderPubkey ? [{
+                    label: 'Builder Pubkey',
+                    value: truncateHash(state.revealWithheldBuilderPubkey),
+                    copyValue: state.revealWithheldBuilderPubkey
+                  }] : [])
+                ]
+              },
+              'reveal-withheld'
+            )}
           </div>
         )}
 
@@ -651,8 +676,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 items: [
                   { label: 'Received', value: `${state.submitBlockReceivedAt - slotStartTime}ms` },
                   state.submitBlockDeliveredAt
-                    ? { label: 'Revealed', value: `${state.submitBlockDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'not revealed' },
+                    ? { label: 'Block Accepted', value: `${state.submitBlockDeliveredAt - slotStartTime}ms` }
+                    : { label: 'Status', value: 'block not accepted' },
                   ...(state.submitBlockBlockHash ? [{
                     label: 'Block Hash',
                     value: truncateHash(state.submitBlockBlockHash),

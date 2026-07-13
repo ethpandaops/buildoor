@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
+
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
@@ -65,6 +68,12 @@ type UpdateEPBSRequest struct {
 	BidInterval       *int64  `json:"bid_interval,omitempty"`
 	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
 	BidSubsidy        *uint64 `json:"bid_subsidy,omitempty"`
+
+	// SlotActions, when present, replaces the complete set of pending FUTURE
+	// per-slot actions (an empty object clears it); actions whose slot has
+	// started are immutable. Keys are decimal slot numbers strictly in the
+	// future; the only supported action is {"reveal": "withhold"}.
+	SlotActions map[string]map[string]string `json:"slot_actions,omitempty"`
 }
 
 // UpdateBuilderConfigRequest is the request for updating shared builder config.
@@ -213,9 +222,7 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 // @Router /api/config [get]
 func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
-	// Redact sensitive fields before returning
-	out := configToMap(cfg)
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, configWithSlotActions(cfg, h.slotActions))
 }
 
 // UpdateSchedule godoc
@@ -274,13 +281,15 @@ func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
 // @Id updateEPBS
 // @Summary Update EPBS configuration
 // @Tags Config
-// @Description Updates the EPBS (enshrined PBS) configuration including timing and bid
-// @Description parameters. Requires authentication.
+// @Description Updates the EPBS (enshrined PBS) configuration including timing, bid
+// @Description parameters, and per-slot reveal actions (slot_actions replaces the pending
+// @Description future set; only future slots and the "withhold" reveal action are
+// @Description accepted). Requires authentication.
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer token"
 // @Param request body UpdateEPBSRequest true "EPBS configuration"
-// @Success 200 {object} map[string]string "Success"
+// @Success 200 {object} map[string]interface{} "Success (includes the effective stored slot_actions)"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 500 {object} map[string]string "Server Error"
@@ -296,6 +305,36 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+
+	// Validate slot_actions fully before applying anything (scalar settings
+	// included) so a bad request never half-applies.
+	var (
+		slotActions map[phase0.Slot]*payload_bidder.SlotAction
+		currentSlot phase0.Slot
+	)
+
+	if req.SlotActions != nil {
+		if h.slotActions == nil {
+			writeError(w, http.StatusBadRequest,
+				"slot_actions: not supported: Gloas/ePBS is not scheduled on this network")
+			return
+		}
+
+		if h.chainSvc == nil {
+			writeError(w, http.StatusServiceUnavailable, "slot_actions: chain service unavailable")
+			return
+		}
+
+		currentSlot = h.chainSvc.GetCurrentSlot()
+
+		parsed, err := parseSlotActions(req.SlotActions, currentSlot)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		slotActions = parsed
 	}
 
 	updates := map[string]json.RawMessage{}
@@ -335,11 +374,44 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 		updates[config.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
 	}
 
+	// Re-sample at the commit point. A request can arrive just before a slot
+	// boundary and finish decoding/validating just after it; applying with the
+	// earlier slot would allow a now-current action to be added or changed.
+	if req.SlotActions != nil {
+		latestSlot := h.chainSvc.GetCurrentSlot()
+		if latestSlot != currentSlot {
+			parsed, err := parseSlotActions(req.SlotActions, latestSlot)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+
+			currentSlot = latestSlot
+			slotActions = parsed
+		}
+	}
+
 	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+	resp := map[string]any{"status": "updated"}
+
+	// Apply the validated slot actions (replace-the-future-set semantics) and
+	// echo the effective stored set so callers can archive what was accepted.
+	if req.SlotActions != nil {
+		effective := h.slotActions.ReplaceFuture(slotActions, currentSlot)
+		h.audit(r, token, "config.epbs.slot_actions", "", req.SlotActions, "ok")
+		resp["slot_actions"] = formatSlotActions(effective)
+
+		if h.eventStreamMgr != nil {
+			h.eventStreamMgr.BroadcastConfigUpdate()
+		}
+	} else if h.slotActions != nil {
+		resp["slot_actions"] = formatSlotActions(h.slotActions.Snapshot())
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // GetLifecycleStatus godoc
@@ -890,6 +962,74 @@ func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Reques
 	writeJSON(w, http.StatusOK, BuilderPreferencesResponse{Preferences: result})
 }
 
+// parseSlotActions validates a slot_actions request map: decimal slot keys
+// strictly in the future and only the {"reveal": "withhold"} action. Keys are
+// checked in sorted order so rejections are deterministic.
+func parseSlotActions(raw map[string]map[string]string,
+	currentSlot phase0.Slot) (map[phase0.Slot]*payload_bidder.SlotAction, error) {
+	parsed := make(map[phase0.Slot]*payload_bidder.SlotAction, len(raw))
+
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		slotNum, err := strconv.ParseUint(key, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("slot_actions: invalid slot key %q: must be a decimal slot number", key)
+		}
+
+		slot := phase0.Slot(slotNum)
+
+		action := raw[key]
+		if len(action) == 0 {
+			return nil, fmt.Errorf("slot_actions: no action specified for slot %d", slot)
+		}
+
+		actionKeys := make([]string, 0, len(action))
+		for actionKey := range action {
+			actionKeys = append(actionKeys, actionKey)
+		}
+
+		sort.Strings(actionKeys)
+
+		for _, actionKey := range actionKeys {
+			if actionKey != "reveal" {
+				return nil, fmt.Errorf("slot_actions: unknown action %q for slot %d (supported: \"reveal\")",
+					actionKey, slot)
+			}
+
+			if action[actionKey] != payload_bidder.RevealActionWithhold {
+				return nil, fmt.Errorf("slot_actions: unknown reveal action %q for slot %d (supported: %q)",
+					action[actionKey], slot, payload_bidder.RevealActionWithhold)
+			}
+		}
+
+		if slot <= currentSlot {
+			return nil, fmt.Errorf("slot_actions: slot %d is not in the future (current slot %d)",
+				slot, currentSlot)
+		}
+
+		parsed[slot] = &payload_bidder.SlotAction{Reveal: payload_bidder.RevealActionWithhold}
+	}
+
+	return parsed, nil
+}
+
+// formatSlotActions renders a stored slot-action snapshot with decimal string
+// keys (the JSON wire shape).
+func formatSlotActions(actions map[phase0.Slot]*payload_bidder.SlotAction) map[string]*payload_bidder.SlotAction {
+	out := make(map[string]*payload_bidder.SlotAction, len(actions))
+	for slot, action := range actions {
+		out[strconv.FormatUint(uint64(slot), 10)] = action
+	}
+
+	return out
+}
+
 // configToMap returns the config as a map with sensitive fields redacted.
 func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
@@ -912,6 +1052,23 @@ func configToMap(cfg *config.Config) map[string]any {
 	redact("wallet_privkey")
 	redact("el_jwt_secret")
 	return m
+}
+
+// configWithSlotActions returns the redacted runtime config plus the per-slot
+// actions kept outside config.Config. REST and SSE both use this shape so the
+// WebUI always reflects an API update, including after reconnecting.
+func configWithSlotActions(cfg *config.Config,
+	slotActions *payload_bidder.SlotActionsStore) map[string]any {
+	out := configToMap(cfg)
+	if slotActions == nil || out == nil {
+		return out
+	}
+
+	if epbsMap, ok := out["epbs"].(map[string]any); ok {
+		epbsMap["slot_actions"] = formatSlotActions(slotActions.Snapshot())
+	}
+
+	return out
 }
 
 // writeJSON writes a JSON response.

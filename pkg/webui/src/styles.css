@@ -266,6 +266,11 @@
   border: 2px solid #bd2130;
 }
 
+.reveal-withheld {
+  background: #ffc107;
+  border: 2px solid #d39e00;
+}
+
 .build-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
@@ -486,6 +491,7 @@
 .bg-bid-failed { background: #dc3545; }
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
+.bg-reveal-withheld { background: #ffc107; }
 .bg-head-votes { background: #00bcd4; }
 .bg-builder-api-delivered { background: #28a745; }
 .bg-builder-api-pending { background: #ffc107; }

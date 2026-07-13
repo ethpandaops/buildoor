@@ -85,6 +85,24 @@ buildoor run \
   --wallet-privkey <ECDSA_PRIVATE_KEY>
 ```
 
+### Exact-slot reveal withholding
+
+For deterministic Gloas/ePBS fault testing, future slots can be configured to
+build and bid normally while intentionally withholding the payload-envelope
+publication:
+
+```bash
+curl -X POST http://localhost:8082/api/config/epbs \
+  -H 'Content-Type: application/json' \
+  -d '{"slot_actions":{"384":{"reveal":"withhold"}}}'
+```
+
+Supplying `slot_actions` replaces all pending future actions; use an empty
+object to clear them. Current and past slots are rejected. A winning configured
+slot emits an `intentionally_withheld` event on `/api/events` containing the
+slot, builder index and public key, action, status, and timestamp. The built
+payload remains in Buildoor's payload cache for inspection.
+
 ### Builder API Example
 
 ```bash

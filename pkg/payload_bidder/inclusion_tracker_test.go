@@ -110,7 +110,7 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 
 			// Not started: RequestReveal just queues on the buffered channel.
 			revealSvc := NewRevealService(&config.Config{}, NewSigner(blsSigner), &mockEnvelopePublisher{},
-				chainSvc, builderSvc, payments, logger)
+				chainSvc, builderSvc, payments, nil, logger)
 
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, revealSvc, payments, logger)
 			includedSub := tracker.SubscribeIncluded(4)

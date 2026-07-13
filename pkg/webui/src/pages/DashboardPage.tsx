@@ -117,7 +117,7 @@ const DashboardPage: React.FC = () => {
           <BuilderConfigPanel config={config} />
 
           {/* ePBS Bidder */}
-          <ConfigPanel config={config} serviceStatus={serviceStatus} />
+          <ConfigPanel config={config} serviceStatus={serviceStatus} currentSlot={currentSlot} />
 
           {/* Builder API */}
           <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />

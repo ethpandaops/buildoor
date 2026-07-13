@@ -248,6 +248,17 @@ definitions:
         type: integer
       reveal_time:
         type: integer
+      slot_actions:
+        additionalProperties:
+          additionalProperties:
+            type: string
+          type: object
+        description: |-
+          SlotActions, when present, replaces the complete set of pending FUTURE
+          per-slot actions (an empty object clears it); actions whose slot has
+          started are immutable. Keys are decimal slot numbers strictly in the
+          future; the only supported action is {"reveal": "withhold"}.
+        type: object
     type: object
   api.UpdateScheduleRequest:
     properties:
@@ -523,8 +534,10 @@ paths:
       consumes:
       - application/json
       description: |-
-        Updates the EPBS (enshrined PBS) configuration including timing and bid
-        parameters. Requires authentication.
+        Updates the EPBS (enshrined PBS) configuration including timing, bid
+        parameters, and per-slot reveal actions (slot_actions replaces the pending
+        future set; only future slots and the "withhold" reveal action are
+        accepted). Requires authentication.
       operationId: updateEPBS
       parameters:
       - description: Bearer token
@@ -542,10 +555,9 @@ paths:
       - application/json
       responses:
         "200":
-          description: Success
+          description: Success (includes the effective stored slot_actions)
           schema:
-            additionalProperties:
-              type: string
+            additionalProperties: true
             type: object
         "400":
           description: Bad Request

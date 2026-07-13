@@ -1,19 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
-import type { Config, EPBSConfig, ServiceStatus } from '../types';
+import type { Config, EPBSConfig, ServiceStatus, SlotAction } from '../types';
 
 interface ConfigPanelProps {
   config: Config | null;
   serviceStatus: ServiceStatus | null;
+  currentSlot: number;
 }
 
 type EPBSFormState = EPBSConfig;
 
-export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus }) => {
+export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus, currentSlot }) => {
   const { isLoggedIn, getAuthHeader } = useAuthContext();
   const [collapsed, setCollapsed] = useState(true);
   const [editingTiming, setEditingTiming] = useState(false);
+  const [editingSlotActions, setEditingSlotActions] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const [savingSlotActions, setSavingSlotActions] = useState(false);
+  const [slotActionSlots, setSlotActionSlots] = useState<number[]>([]);
+  const [newSlot, setNewSlot] = useState('');
+  const [slotActionError, setSlotActionError] = useState('');
+  const [displayedSlotActions, setDisplayedSlotActions] = useState<Record<string, SlotAction>>({});
 
   const [timingForm, setTimingForm] = useState<EPBSFormState>({
     build_start_time: 0,
@@ -32,6 +39,22 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
       setTimingForm({ ...config.epbs });
     }
   }, [config, editingTiming]);
+
+  useEffect(() => {
+    setDisplayedSlotActions(config?.epbs?.slot_actions ?? {});
+  }, [config]);
+
+  // Only future entries are editable. If a configured slot starts while the
+  // form is open, the backend keeps it immutable and the next save omits it.
+  useEffect(() => {
+    if (!editingSlotActions) {
+      const futureSlots = Object.keys(displayedSlotActions)
+        .map(Number)
+        .filter((slot) => Number.isSafeInteger(slot) && slot > currentSlot)
+        .sort((a, b) => a - b);
+      setSlotActionSlots(futureSlots);
+    }
+  }, [displayedSlotActions, currentSlot, editingSlotActions]);
 
   const handleTimingSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,6 +90,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
 
   const canEdit = isLoggedIn;
   const epbs = config?.epbs;
+  const configuredSlots = Object.keys(displayedSlotActions)
+    .map(Number)
+    .filter(Number.isSafeInteger)
+    .sort((a, b) => a - b);
+  const lockedSlots = configuredSlots.filter((slot) => slot <= currentSlot);
   const isActive = serviceStatus?.epbs_enabled ?? false;
   const isAvailable = serviceStatus?.epbs_available ?? false;
   const registrationState = serviceStatus?.epbs_registration_state ?? 'unknown';
@@ -92,6 +120,67 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     } finally {
       setToggling(false);
     }
+  };
+
+  const addSlotAction = () => {
+    const slot = Number(newSlot);
+    if (!Number.isSafeInteger(slot) || slot < 0) {
+      setSlotActionError('Slot must be a non-negative whole number.');
+      return;
+    }
+    if (slot <= currentSlot) {
+      setSlotActionError(`Slot must be in the future (current slot ${currentSlot}).`);
+      return;
+    }
+
+    setSlotActionSlots((slots) => [...new Set([...slots, slot])].sort((a, b) => a - b));
+    setNewSlot('');
+    setSlotActionError('');
+  };
+
+  const postSlotActions = async (slots: number[]) => {
+    const headers: HeadersInit = { 'Content-Type': 'application/json' };
+    const authToken = getAuthHeader();
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    const slotActions = Object.fromEntries(
+      slots
+        .filter((slot) => slot > currentSlot)
+        .map((slot) => [String(slot), { reveal: 'withhold' as const }])
+    );
+
+    setSavingSlotActions(true);
+    setSlotActionError('');
+    try {
+      const response = await fetch('/api/config/epbs', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ slot_actions: slotActions }),
+      });
+      const result = await response.json();
+      if (!response.ok || result.error) {
+        throw new Error(result.error || `request failed with status ${response.status}`);
+      }
+
+      setDisplayedSlotActions(result.slot_actions ?? {});
+      setEditingSlotActions(false);
+      setNewSlot('');
+    } catch (err) {
+      setSlotActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingSlotActions(false);
+    }
+  };
+
+  const handleSlotActionsSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await postSlotActions(slotActionSlots);
+  };
+
+  const handleClearSlotActions = async () => {
+    await postSlotActions([]);
   };
 
   return (
@@ -281,6 +370,134 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>
                 <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditingTiming(false)}>
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+
+          <hr className="my-3" />
+
+          {/* Exact-slot reveal fault actions */}
+          <div className="d-flex justify-content-between align-items-center mb-2">
+            <div className="section-header">Exact-slot Reveal Actions</div>
+            {canEdit && isAvailable && !editingSlotActions && (
+              <button
+                className="btn btn-sm btn-outline-primary"
+                onClick={() => {
+                  setSlotActionError('');
+                  setEditingSlotActions(true);
+                }}
+                title="Configure exact slots that should withhold their payload reveal"
+              >
+                <i className="fas fa-pencil-alt"></i>
+              </button>
+            )}
+          </div>
+
+          {!editingSlotActions ? (
+            <div>
+              {configuredSlots.length === 0 ? (
+                <div className="text-muted small">No reveal withholding actions configured.</div>
+              ) : (
+                <div className="d-flex flex-column gap-2">
+                  {configuredSlots.map((slot) => (
+                    <div key={slot} className="config-item d-flex justify-content-between align-items-center">
+                      <div>
+                        <div className="config-item-label">Slot {slot}</div>
+                        <div className="config-item-value">Withhold payload reveal</div>
+                      </div>
+                      <span className={`badge ${slot <= currentSlot ? 'bg-secondary' : 'bg-warning text-dark'}`}>
+                        {slot <= currentSlot ? 'Locked' : 'Pending'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="form-text mt-2">
+                Buildoor still builds and bids normally. If it wins a configured slot, it retains the payload and does not publish the envelope.
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleSlotActionsSave}>
+              {lockedSlots.length > 0 && (
+                <div className="alert alert-secondary small py-1 px-2">
+                  Slot{lockedSlots.length > 1 ? 's' : ''} {lockedSlots.join(', ')} already started and will remain locked.
+                </div>
+              )}
+
+              <div className="input-group input-group-sm mb-2">
+                <span className="input-group-text">Slot</span>
+                <input
+                  type="number"
+                  className="form-control"
+                  value={newSlot}
+                  min={Math.max(0, currentSlot + 1)}
+                  max={Number.MAX_SAFE_INTEGER}
+                  step={1}
+                  placeholder={`>${currentSlot}`}
+                  onChange={(e) => setNewSlot(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addSlotAction();
+                    }
+                  }}
+                />
+                <button type="button" className="btn btn-outline-primary" onClick={addSlotAction} disabled={!newSlot}>
+                  <i className="fas fa-plus me-1"></i>Add
+                </button>
+              </div>
+
+              {slotActionSlots.length === 0 ? (
+                <div className="text-muted small mb-2">No pending future actions. Saving will clear the pending set.</div>
+              ) : (
+                <div className="list-group mb-2">
+                  {slotActionSlots.map((slot) => (
+                    <div key={slot} className="list-group-item py-1 px-2 d-flex justify-content-between align-items-center">
+                      <span><strong>Slot {slot}</strong> — withhold reveal</span>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-danger border-0"
+                        onClick={() => setSlotActionSlots((slots) => slots.filter((item) => item !== slot))}
+                        title={`Remove slot ${slot}`}
+                      >
+                        <i className="fas fa-times"></i>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {slotActionError && (
+                <div className="alert alert-danger small py-1 px-2 mb-2">{slotActionError}</div>
+              )}
+
+              <div className="form-text mb-2">
+                Saving replaces the complete pending future set. Actions become immutable when their slot starts.
+              </div>
+              <div className="d-flex flex-wrap gap-2">
+                <button type="submit" className="btn btn-sm btn-primary" disabled={savingSlotActions}>
+                  {savingSlotActions ? 'Saving…' : 'Save actions'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline-danger"
+                  onClick={handleClearSlotActions}
+                  disabled={savingSlotActions || slotActionSlots.length === 0}
+                >
+                  Clear pending
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => {
+                    setEditingSlotActions(false);
+                    setSlotActionError('');
+                    setNewSlot('');
+                  }}
+                  disabled={savingSlotActions}
+                >
                   Cancel
                 </button>
               </div>

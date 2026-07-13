@@ -18,7 +18,7 @@ import (
 
 func TestGetBuilderPreferences_NotEnabled(t *testing.T) {
 	// No builder API service wired → 404.
-	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
 	rec := httptest.NewRecorder()
@@ -37,7 +37,7 @@ func TestGetBuilderPreferences_ReturnsEntries(t *testing.T) {
 
 	// builderSvc (4th arg) nil so the event stream manager does not start;
 	// srv is passed as builderAPISvc (9th arg).
-	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, srv, nil, nil, nil, nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, srv, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
 	rec := httptest.NewRecorder()

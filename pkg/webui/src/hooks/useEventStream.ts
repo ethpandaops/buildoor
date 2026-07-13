@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, IntentionallyWithheldEvent } from '../types';
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -316,6 +316,22 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'intentionally_withheld': {
+          const data = event.data as IntentionallyWithheldEvent;
+          addEvent(
+            'reveal_withheld',
+            `Reveal intentionally withheld for slot ${data.slot} by builder ${data.builder_index}`,
+            data.timestamp || event.timestamp
+          );
+          updateSlotState(data.slot, {
+            revealed: false,
+            revealWithheldAt: data.timestamp || event.timestamp,
+            revealWithheldBuilderIndex: data.builder_index,
+            revealWithheldBuilderPubkey: data.builder_pubkey
+          });
+          break;
+        }
+
         case 'bid_event': {
           const data = event.data as { slot: number; builder_index: number; value: number; block_hash: string; is_ours: boolean; received_at: number };
           if (data.is_ours) {
@@ -435,7 +451,7 @@ export function useEventStream(): UseEventStreamResult {
 
         case 'builder_api_submit_block_delivered': {
           const data = event.data as { slot: number; block_hash: string; delivered_at: number };
-          addEvent('builder_api', `Envelope published for slot ${data.slot}`, event.timestamp);
+          addEvent('builder_api', `Signed beacon block accepted for slot ${data.slot}`, event.timestamp);
           updateSlotState(data.slot, { submitBlockDeliveredAt: data.delivered_at });
           break;
         }

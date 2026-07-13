@@ -42,6 +42,14 @@ type RevealResult struct {
 	Error       string // failure reason (when Success is false)
 	Attempt     int    // 1-based
 	MaxAttempts int
+
+	// Withheld reveals (configured per-slot fault injection); the builder
+	// identity fields are populated so the event doubles as the receipt that
+	// the configured fault was applied.
+	Withheld      bool   // reveal intentionally withheld by a slot action
+	Action        string // the configured action (RevealActionWithhold)
+	BuilderIndex  uint64
+	BuilderPubkey string
 }
 
 const (
@@ -64,6 +72,7 @@ type RevealService struct {
 	chainSvc     chain.Service
 	builderSvc   *payload_builder.Service // reveal success/failure stats
 	payments     *PaymentTracker          // optional; nil-guarded
+	slotActions  *SlotActionsStore        // optional; nil-guarded (per-slot fault injection)
 	builderIndex atomic.Uint64
 
 	requests chan *RevealRequest
@@ -84,7 +93,8 @@ type revealState struct {
 	done        bool
 }
 
-// NewRevealService creates a new reveal service.
+// NewRevealService creates a new reveal service. slotActions may be nil (no
+// per-slot fault injection).
 func NewRevealService(
 	cfg *config.Config,
 	signer *Signer,
@@ -92,18 +102,20 @@ func NewRevealService(
 	chainSvc chain.Service,
 	builderSvc *payload_builder.Service,
 	payments *PaymentTracker,
+	slotActions *SlotActionsStore,
 	log logrus.FieldLogger,
 ) *RevealService {
 	return &RevealService{
-		cfg:        cfg,
-		signer:     signer,
-		publisher:  publisher,
-		chainSvc:   chainSvc,
-		builderSvc: builderSvc,
-		payments:   payments,
-		requests:   make(chan *RevealRequest, 16),
-		pending:    make(map[phase0.Slot]*revealState, 8),
-		log:        log.WithField("component", "reveal-service"),
+		cfg:         cfg,
+		signer:      signer,
+		publisher:   publisher,
+		chainSvc:    chainSvc,
+		builderSvc:  builderSvc,
+		payments:    payments,
+		slotActions: slotActions,
+		requests:    make(chan *RevealRequest, 16),
+		pending:     make(map[phase0.Slot]*revealState, 8),
+		log:         log.WithField("component", "reveal-service"),
 	}
 }
 
@@ -191,6 +203,33 @@ func (s *RevealService) schedule(req *RevealRequest) {
 			"slot":      slot,
 			"transport": req.Transport,
 		}).Debug("Duplicate reveal request for slot, ignoring")
+
+		return
+	}
+
+	// Per-slot fault injection: a configured "withhold" action suppresses the
+	// envelope publication entirely. The done marker keeps the slot's dedup
+	// semantics (exactly one withheld event, no timer, no retries); the
+	// payload stays untouched in the payload cache for inspection, and the
+	// pending payment is left to expire like any other missed reveal.
+	if action, ok := s.slotActionFor(slot); ok && action.Reveal == RevealActionWithhold {
+		s.pending[slot] = &revealState{req: req, done: true}
+
+		s.results.Fire(&RevealResult{
+			Slot:          slot,
+			Transport:     req.Transport,
+			Withheld:      true,
+			Action:        RevealActionWithhold,
+			BuilderIndex:  s.builderIndex.Load(),
+			BuilderPubkey: s.signer.Pubkey().String(),
+		})
+
+		s.log.WithFields(logrus.Fields{
+			"slot":       slot,
+			"transport":  req.Transport,
+			"action":     RevealActionWithhold,
+			"block_hash": fmt.Sprintf("%x", req.Payload.BlockHash[:8]),
+		}).Warn("Intentionally withholding payload envelope reveal (configured slot action)")
 
 		return
 	}
@@ -361,6 +400,21 @@ func (s *RevealService) rearm(timer *time.Timer) {
 	}
 
 	timer.Reset(next)
+}
+
+// slotActionFor returns the configured action for a slot; nil-guards the
+// optional store.
+func (s *RevealService) slotActionFor(slot phase0.Slot) (*SlotAction, bool) {
+	if s.slotActions == nil {
+		return nil, false
+	}
+
+	action, ok := s.slotActions.Get(slot)
+	if !ok || action == nil {
+		return nil, false
+	}
+
+	return action, true
 }
 
 // publish builds and signs the payload's envelope and submits it (with blobs /

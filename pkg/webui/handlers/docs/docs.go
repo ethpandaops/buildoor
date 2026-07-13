@@ -297,7 +297,7 @@ const docTemplate = `{
         },
         "/api/config/epbs": {
             "post": {
-                "description": "Updates the EPBS (enshrined PBS) configuration including timing and bid\nparameters. Requires authentication.",
+                "description": "Updates the EPBS (enshrined PBS) configuration including timing, bid\nparameters, and per-slot reveal actions (slot_actions replaces the pending\nfuture set; only future slots and the \"withhold\" reveal action are\naccepted). Requires authentication.",
                 "consumes": [
                     "application/json"
                 ],
@@ -329,12 +329,10 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Success",
+                        "description": "Success (includes the effective stored slot_actions)",
                         "schema": {
                             "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
+                            "additionalProperties": true
                         }
                     },
                     "400": {
@@ -1159,6 +1157,16 @@ const docTemplate = `{
                 },
                 "reveal_time": {
                     "type": "integer"
+                },
+                "slot_actions": {
+                    "description": "SlotActions, when present, replaces the complete set of pending FUTURE\nper-slot actions (an empty object clears it); actions whose slot has\nstarted are immutable. Keys are decimal slot numbers strictly in the\nfuture; the only supported action is {\"reveal\": \"withhold\"}.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
+                    }
                 }
             }
         },

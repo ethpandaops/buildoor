@@ -168,6 +168,14 @@ func (t *InclusionTracker) processHead(event *beacon.HeadEvent) {
 		return
 	}
 
+	// The head event is the authoritative source for the canonical block root.
+	// In particular, go-eth2-client v0.1.6 hashes the nested Gloas bid's blob
+	// commitments as a progressive list, while Glamsterdam uses a bounded list;
+	// recomputing the block root through that schema makes an otherwise valid
+	// envelope reference an unknown block. Keep the decoded block for all other
+	// fields, but preserve the root supplied by the beacon node.
+	blockInfo.Root = event.Block
+
 	t.processBlockInfo(blockInfo)
 }
 

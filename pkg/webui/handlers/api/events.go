@@ -52,6 +52,7 @@ const (
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeLifecycle                   EventType = "lifecycle"
 	EventTypeBidIncluded                 EventType = "bid_included"
+	EventTypeIntentionallyWithheld       EventType = "intentionally_withheld"
 )
 
 // StreamEvent is a wrapper for all event types sent to clients.
@@ -125,6 +126,18 @@ type HeadReceivedEvent struct {
 	Slot       uint64 `json:"slot"`
 	BlockRoot  string `json:"block_root"`
 	ReceivedAt int64  `json:"received_at"`
+}
+
+// WithheldStreamEvent is sent when a reveal is intentionally withheld for a
+// slot with a configured "withhold" action — the receipt that the configured
+// fault was applied.
+type WithheldStreamEvent struct {
+	Slot          uint64 `json:"slot"`
+	BuilderIndex  uint64 `json:"builder_index"`
+	BuilderPubkey string `json:"builder_pubkey"`
+	Action        string `json:"action"`
+	Status        string `json:"status"`
+	Timestamp     int64  `json:"timestamp"`
 }
 
 // RevealStreamEvent is sent when we submit or skip a reveal (one per attempt).
@@ -294,6 +307,7 @@ type EventStreamManager struct {
 	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
 	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
 	payments         *payload_bidder.PaymentTracker   // Optional shared payment tracker (Gloas+)
+	slotActions      *payload_bidder.SlotActionsStore // Optional exact-slot reveal actions (Gloas+)
 
 	clients map[chan *StreamEvent]struct{}
 	mu      sync.RWMutex
@@ -328,6 +342,7 @@ func NewEventStreamManager(
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,
 	payments *payload_bidder.PaymentTracker,
+	slotActions *payload_bidder.SlotActionsStore,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -340,6 +355,7 @@ func NewEventStreamManager(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		slotActions:      slotActions,
 		clients:          make(map[chan *StreamEvent]struct{}, 8),
 		ctx:              ctx,
 		cancel:           cancel,
@@ -498,7 +514,11 @@ func (m *EventStreamManager) Start() {
 					continue
 				}
 
-				m.BroadcastReveal(event)
+				if event.Withheld {
+					m.BroadcastWithheld(event)
+				} else {
+					m.BroadcastReveal(event)
+				}
 
 			case event, ok := <-bidIncludedChan:
 				if !ok {
@@ -1076,7 +1096,7 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      m.builderSvc.GetConfig(),
+		Data:      configWithSlotActions(m.builderSvc.GetConfig(), m.slotActions),
 	}) {
 		return
 	}
@@ -1315,13 +1335,33 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 	m.broadcastSlotState(event.Slot)
 }
 
+// BroadcastWithheld broadcasts an intentionally_withheld event: the receipt
+// that a configured per-slot "withhold" reveal action was applied.
+func (m *EventStreamManager) BroadcastWithheld(event *payload_bidder.RevealResult) {
+	now := time.Now().UnixMilli()
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeIntentionallyWithheld,
+		Timestamp: now,
+		Data: WithheldStreamEvent{
+			Slot:          uint64(event.Slot),
+			BuilderIndex:  event.BuilderIndex,
+			BuilderPubkey: event.BuilderPubkey,
+			Action:        event.Action,
+			Status:        "intentionally_withheld",
+			Timestamp:     now,
+		},
+	})
+
+	m.broadcastSlotState(event.Slot)
+}
+
 // BroadcastConfigUpdate broadcasts a config update event.
 func (m *EventStreamManager) BroadcastConfigUpdate() {
-	cfg := m.builderSvc.GetConfig()
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configWithSlotActions(m.builderSvc.GetConfig(), m.slotActions),
 	})
 }
 

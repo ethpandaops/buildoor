@@ -54,12 +54,13 @@ func (p *mockEnvelopePublisher) callCount() int {
 
 // revealTestEnv bundles the wiring shared by the reveal service tests.
 type revealTestEnv struct {
-	cfg        *config.Config
-	chainSvc   *stubChainService
-	builderSvc *payload_builder.Service
-	payments   *PaymentTracker
-	publisher  *mockEnvelopePublisher
-	svc        *RevealService
+	cfg         *config.Config
+	chainSvc    *stubChainService
+	builderSvc  *payload_builder.Service
+	payments    *PaymentTracker
+	publisher   *mockEnvelopePublisher
+	slotActions *SlotActionsStore
+	svc         *RevealService
 }
 
 // newRevealTestEnv creates a reveal service whose slot 1 starts "now", with
@@ -84,16 +85,18 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 	builderSvc := newTestBuilderSvc(chainSvc)
 	payments := NewPaymentTracker(chainSvc, log)
 	publisher := &mockEnvelopePublisher{}
+	slotActions := NewSlotActionsStore()
 
-	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc, payments, log)
+	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc, payments, slotActions, log)
 
 	return &revealTestEnv{
-		cfg:        cfg,
-		chainSvc:   chainSvc,
-		builderSvc: builderSvc,
-		payments:   payments,
-		publisher:  publisher,
-		svc:        svc,
+		cfg:         cfg,
+		chainSvc:    chainSvc,
+		builderSvc:  builderSvc,
+		payments:    payments,
+		publisher:   publisher,
+		slotActions: slotActions,
+		svc:         svc,
 	}
 }
 
@@ -115,6 +118,11 @@ func TestRevealService_RevealsAtDueTime(t *testing.T) {
 	sub := env.svc.SubscribeResults(4)
 
 	defer sub.Unsubscribe()
+
+	// A withhold action for a DIFFERENT slot must not affect this reveal.
+	env.slotActions.ReplaceFuture(map[phase0.Slot]*SlotAction{
+		2: {Reveal: RevealActionWithhold},
+	}, 0)
 
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
@@ -247,6 +255,94 @@ func TestRevealService_RetriesThenGivesUp(t *testing.T) {
 	assert.Nil(t, payload.Reveal(), "payload must not be marked revealed")
 	assert.Equal(t, uint64(42), env.payments.GetTotalPendingPayments(), "payment must stay pending")
 	assert.Equal(t, uint64(1), env.builderSvc.GetStats().RevealsFailed)
+}
+
+func TestRevealService_WithholdsConfiguredSlot(t *testing.T) {
+	env := newRevealTestEnv(t, 4*time.Second, 10)
+	sub := env.svc.SubscribeResults(4)
+
+	defer sub.Unsubscribe()
+
+	// Slot 1 (starting now) is configured to withhold its reveal.
+	env.slotActions.ReplaceFuture(map[phase0.Slot]*SlotAction{
+		1: {Reveal: RevealActionWithhold},
+	}, 0)
+
+	require.NoError(t, env.svc.Start(context.Background()))
+	defer env.svc.Stop()
+
+	env.svc.SetBuilderIndex(42)
+
+	slot := phase0.Slot(1)
+	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(2_000_000_000_000)) // 2000 gwei
+
+	env.payments.RecordWonBid(slot, 2000)
+
+	env.svc.RequestReveal(&RevealRequest{
+		Payload:   payload,
+		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
+		Transport: payload_builder.BidTransportP2P,
+	})
+
+	res := waitForResult(t, sub.Channel(), 2*time.Second)
+	assert.True(t, res.Withheld)
+	assert.Equal(t, RevealActionWithhold, res.Action)
+	assert.False(t, res.Success)
+	assert.False(t, res.Skipped)
+	assert.Equal(t, slot, res.Slot)
+	assert.Equal(t, payload_builder.BidTransportP2P, res.Transport)
+	assert.Equal(t, uint64(42), res.BuilderIndex)
+	assert.NotEmpty(t, res.BuilderPubkey)
+
+	// Well past the reveal due time: nothing may publish.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, 0, env.publisher.callCount(), "withheld slot must never publish")
+	assert.Nil(t, payload.Reveal(), "payload must not be marked revealed")
+	assert.Equal(t, uint64(2000), env.payments.GetTotalPendingPayments(), "payment must stay pending")
+	assert.Equal(t, uint64(0), env.builderSvc.GetStats().RevealsSuccess)
+	assert.Equal(t, uint64(0), env.builderSvc.GetStats().RevealsFailed)
+}
+
+func TestRevealService_WithholdDedupsBySlot(t *testing.T) {
+	env := newRevealTestEnv(t, 4*time.Second, 10)
+	sub := env.svc.SubscribeResults(4)
+
+	defer sub.Unsubscribe()
+
+	env.slotActions.ReplaceFuture(map[phase0.Slot]*SlotAction{
+		1: {Reveal: RevealActionWithhold},
+	}, 0)
+
+	require.NoError(t, env.svc.Start(context.Background()))
+	defer env.svc.Stop()
+
+	slot := phase0.Slot(1)
+	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1))
+	blockInfo := &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}}
+
+	// Both flows request the reveal for the same slot; exactly one withheld
+	// event may fire and nothing may publish.
+	env.svc.RequestReveal(&RevealRequest{
+		Payload: payload, BlockInfo: blockInfo,
+		Transport: payload_builder.BidTransportBuilderAPI,
+	})
+	env.svc.RequestReveal(&RevealRequest{
+		Payload: payload, BlockInfo: blockInfo,
+		Transport: payload_builder.BidTransportP2P,
+	})
+
+	res := waitForResult(t, sub.Channel(), 2*time.Second)
+	assert.True(t, res.Withheld)
+	assert.Equal(t, payload_builder.BidTransportBuilderAPI, res.Transport, "first transport wins")
+
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, 0, env.publisher.callCount())
+
+	select {
+	case extra := <-sub.Channel():
+		t.Fatalf("unexpected second reveal result: %+v", extra)
+	default:
+	}
 }
 
 func TestRevealService_SkipsStaleSlot(t *testing.T) {

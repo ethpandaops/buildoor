@@ -202,7 +202,7 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, log)
+		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 

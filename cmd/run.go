@@ -168,8 +168,22 @@ and begins building blocks according to configuration.`,
 		// Configure the global dynssz instance with this network's spec so the
 		// go-eth2-client SSZ codecs (block.Root(), envelope HashTreeRoot, ...)
 		// compute correct hash-tree-roots on non-mainnet presets (e.g. minimal).
-		if err := clClient.InitGlobalSSZSpecs(ctx); err != nil {
-			return fmt.Errorf("failed to init global SSZ specs: %w", err)
+		for {
+			err = clClient.InitGlobalSSZSpecs(ctx)
+			if err == nil {
+				break
+			}
+
+			// A beacon node can serve /config/spec and /genesis just before it
+			// reports an active client to the follow-up SSZ initialization call.
+			// Treat that readiness window like the preceding startup probes.
+			logger.WithError(err).Warn("Beacon node SSZ specs not ready, retrying in 5s...")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to init global SSZ specs: %w", ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
 		}
 
 		// Apply slot-relative timing defaults now that we know the slot duration
@@ -279,12 +293,25 @@ and begins building blocks according to configuration.`,
 
 		var revealSvc *payload_bidder.RevealService
 
+		var slotActionsStore *payload_bidder.SlotActionsStore
+
 		epbsAvailable := chainSpec.IsForkScheduled(version.DataVersionGloas)
 
 		if epbsAvailable {
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
-			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, logger)
+			// Per-slot reveal actions (fault injection for Gloas/ePBS testing),
+			// configured via POST /api/config/epbs and consumed by the reveal
+			// service. Persisted via the kv_store; stale entries from a previous
+			// run are pruned on start.
+			slotActionsStore = payload_bidder.NewSlotActionsStore()
+			slotActionsStore.SetPersistence(ctx, stateDB, logger)
+			slotActionsStore.PruneBefore(chainSvc.GetCurrentSlot())
+			// Registered after stateDB's own close defer (LIFO) → the store's
+			// final flush runs while the state-db is still open.
+			defer slotActionsStore.Stop()
+
+			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, slotActionsStore, logger)
 			if err := revealSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start reveal service: %w", err)
 			}
@@ -414,7 +441,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, slotActionsStore)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
