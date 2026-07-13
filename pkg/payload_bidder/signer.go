@@ -184,7 +184,7 @@ func hashGloasEnvelope(envelope *eth2all.ExecutionPayloadEnvelope) (phase0.Root,
 	payload := envelope.Payload
 	requests := envelope.ExecutionRequests
 	if payload == nil || requests == nil {
-		return phase0.Root{}, fmt.Errorf("Gloas envelope payload and execution requests are required")
+		return phase0.Root{}, fmt.Errorf("gloas envelope payload and execution requests are required")
 	}
 
 	view := &gloasEnvelopeSigningView{
