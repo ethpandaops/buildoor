@@ -127,7 +127,7 @@ type gloasBidSigningView struct {
 	Slot                  phase0.Slot
 	Value                 phase0.Gwei
 	ExecutionPayment      phase0.Gwei
-	BlobKZGCommitments    []deneb.KZGCommitment `ssz-max:"4096" ssz-size:"?,48"`
+	BlobKZGCommitments    []deneb.KZGCommitment `dynssz-max:"MAX_BLOB_COMMITMENTS_PER_BLOCK" ssz-max:"4096" ssz-size:"?,48"`
 	ExecutionRequestsRoot phase0.Root           `ssz-size:"32"`
 }
 
@@ -166,14 +166,14 @@ type gloasPayloadSigningView struct {
 	GasLimit        uint64
 	GasUsed         uint64
 	Timestamp       uint64
-	ExtraData       []byte `ssz-max:"32"`
+	ExtraData       []byte `dynssz-max:"MAX_EXTRA_DATA_BYTES" ssz-max:"32"`
 	BaseFeePerGas   [32]byte
 	BlockHash       phase0.Hash32           `ssz-size:"32"`
-	Transactions    []bellatrix.Transaction `ssz-max:"1048576,1073741824" ssz-size:"?,?"`
-	Withdrawals     []*capella.Withdrawal   `ssz-max:"16"`
+	Transactions    []bellatrix.Transaction `dynssz-max:"MAX_TRANSACTIONS_PER_PAYLOAD,MAX_BYTES_PER_TRANSACTION" ssz-max:"1048576,1073741824" ssz-size:"?,?"`
+	Withdrawals     []*capella.Withdrawal   `dynssz-max:"MAX_WITHDRAWALS_PER_PAYLOAD" ssz-max:"16"`
 	BlobGasUsed     uint64
 	ExcessBlobGas   uint64
-	BlockAccessList gloas.BlockAccessList `ssz-max:"1073741824"`
+	BlockAccessList gloas.BlockAccessList `dynssz-max:"MAX_BYTES_PER_TRANSACTION" ssz-max:"1073741824"`
 	SlotNumber      uint64
 }
 

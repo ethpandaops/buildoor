@@ -306,9 +306,9 @@ and begins building blocks according to configuration.`,
 			// run are pruned on start.
 			slotActionsStore = payload_bidder.NewSlotActionsStore()
 			slotActionsStore.SetPersistence(ctx, stateDB, logger)
-			slotActionsStore.PruneBefore(chainSvc.GetCurrentSlot())
+			slotActionsStore.StartPruning(ctx, chainSvc)
 			// Registered after stateDB's own close defer (LIFO) → the store's
-			// final flush runs while the state-db is still open.
+			// pruner stops and its final flush runs while the state-db is open.
 			defer slotActionsStore.Stop()
 
 			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, slotActionsStore, logger)

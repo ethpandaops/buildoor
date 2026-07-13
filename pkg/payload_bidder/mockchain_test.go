@@ -27,6 +27,7 @@ type stubChainService struct {
 	slotDuration time.Duration
 	currentFork  version.DataVersion
 	genesis      beacon.Genesis
+	currentSlot  func() phase0.Slot
 
 	epochStatsDispatch utils.Dispatcher[*chain.EpochStats]
 }
@@ -50,7 +51,13 @@ func (m *stubChainService) TimeToSlot(t time.Time) phase0.Slot {
 }
 
 func (m *stubChainService) GetCurrentEpoch() phase0.Epoch { return 0 }
-func (m *stubChainService) GetCurrentSlot() phase0.Slot   { return 0 }
+func (m *stubChainService) GetCurrentSlot() phase0.Slot {
+	if m.currentSlot != nil {
+		return m.currentSlot()
+	}
+
+	return 0
+}
 
 func (m *stubChainService) GetCurrentFork() version.DataVersion { return m.currentFork }
 func (m *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {

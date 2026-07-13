@@ -559,6 +559,10 @@ func (m *EventStreamManager) Start() {
 
 // Stop stops the event stream manager.
 func (m *EventStreamManager) Stop() {
+	if m.slotActions != nil {
+		m.slotActions.SetChangeCallback(nil)
+	}
+
 	m.cancel()
 	m.wg.Wait()
 }

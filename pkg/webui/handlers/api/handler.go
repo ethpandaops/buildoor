@@ -81,6 +81,10 @@ func NewAPIHandler(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
 			builderAPISvc, revealSvc, inclusionTracker, payments, slotActions,
 		)
+		if slotActions != nil {
+			slotActions.SetChangeCallback(h.eventStreamMgr.BroadcastConfigUpdate)
+		}
+
 		h.eventStreamMgr.Start()
 	}
 

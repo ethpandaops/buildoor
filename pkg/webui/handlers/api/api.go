@@ -374,10 +374,18 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 		updates[config.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
 	}
 
-	// Re-sample at the commit point. A request can arrive just before a slot
-	// boundary and finish decoding/validating just after it; applying with the
-	// earlier slot would allow a now-current action to be added or changed.
+	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
+		return
+	}
+
+	resp := map[string]any{"status": "updated"}
+
+	// Apply the validated slot actions (replace-the-future-set semantics) and
+	// echo the effective stored set so callers can archive what was accepted.
 	if req.SlotActions != nil {
+		// Re-sample immediately before replacement, after scalar settings have
+		// been applied. SetMany can span a slot boundary, and using the earlier
+		// sample would allow a now-current action to be inserted or cleared.
 		latestSlot := h.chainSvc.GetCurrentSlot()
 		if latestSlot != currentSlot {
 			parsed, err := parseSlotActions(req.SlotActions, latestSlot)
@@ -389,17 +397,7 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 			currentSlot = latestSlot
 			slotActions = parsed
 		}
-	}
 
-	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
-		return
-	}
-
-	resp := map[string]any{"status": "updated"}
-
-	// Apply the validated slot actions (replace-the-future-set semantics) and
-	// echo the effective stored set so callers can archive what was accepted.
-	if req.SlotActions != nil {
 		effective := h.slotActions.ReplaceFuture(slotActions, currentSlot)
 		h.audit(r, token, "config.epbs.slot_actions", "", req.SlotActions, "ok")
 		resp["slot_actions"] = formatSlotActions(effective)

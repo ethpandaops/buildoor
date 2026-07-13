@@ -9,6 +9,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
+	dynssz "github.com/pk910/dynamic-ssz"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,4 +72,54 @@ func TestGloasEnvelopeUsesBoundedNestedListRoots(t *testing.T) {
 		"743eaf4d36852670927ebaa1cd7893ce86b0da831ad2da818bcb5dd740e1e546",
 		hex.EncodeToString(actual[:]),
 	)
+}
+
+func TestGloasSigningViewsUseConnectedPresetLimits(t *testing.T) {
+	dynssz.SetGlobalSpecs(nil)
+	t.Cleanup(func() { dynssz.SetGlobalSpecs(nil) })
+
+	t.Run("bid commitments", func(t *testing.T) {
+		bid := &eth2all.ExecutionPayloadBid{Version: version.DataVersionGloas}
+		mainnetRoot, err := hashGloasBid(bid)
+		require.NoError(t, err)
+
+		dynssz.SetGlobalSpecs(map[string]any{
+			"MAX_BLOB_COMMITMENTS_PER_BLOCK": uint64(32),
+		})
+		presetRoot, err := hashGloasBid(bid)
+		require.NoError(t, err)
+		require.NotEqual(t, mainnetRoot, presetRoot)
+	})
+
+	t.Run("execution requests", func(t *testing.T) {
+		dynssz.SetGlobalSpecs(nil)
+		requests := &eth2all.ExecutionRequests{Version: version.DataVersionGloas}
+		mainnetRoot, err := hashGloasExecutionRequests(requests)
+		require.NoError(t, err)
+
+		dynssz.SetGlobalSpecs(map[string]any{
+			"MAX_DEPOSIT_REQUESTS_PER_PAYLOAD": uint64(16),
+		})
+		presetRoot, err := hashGloasExecutionRequests(requests)
+		require.NoError(t, err)
+		require.NotEqual(t, mainnetRoot, presetRoot)
+	})
+
+	t.Run("envelope withdrawals", func(t *testing.T) {
+		dynssz.SetGlobalSpecs(nil)
+		envelope := &eth2all.ExecutionPayloadEnvelope{
+			Version:           version.DataVersionGloas,
+			Payload:           &eth2all.ExecutionPayload{Version: version.DataVersionGloas},
+			ExecutionRequests: &eth2all.ExecutionRequests{Version: version.DataVersionGloas},
+		}
+		mainnetRoot, err := hashGloasEnvelope(envelope)
+		require.NoError(t, err)
+
+		dynssz.SetGlobalSpecs(map[string]any{
+			"MAX_WITHDRAWALS_PER_PAYLOAD": uint64(4),
+		})
+		presetRoot, err := hashGloasEnvelope(envelope)
+		require.NoError(t, err)
+		require.NotEqual(t, mainnetRoot, presetRoot)
+	})
 }

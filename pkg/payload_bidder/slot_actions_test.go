@@ -1,8 +1,10 @@
 package payload_bidder
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/assert"
@@ -80,6 +82,48 @@ func TestSlotActionsStore_PruneBefore(t *testing.T) {
 	assert.Equal(t, map[phase0.Slot]*SlotAction{
 		10: withhold(), 15: withhold(),
 	}, store.Snapshot())
+}
+
+func TestSlotActionsStore_PrunesAsSlotsAdvance(t *testing.T) {
+	const slotDuration = 20 * time.Millisecond
+
+	genesisTime := time.Now().Add(-10 * slotDuration)
+	chainSvc := &stubChainService{
+		genesisTime:  genesisTime,
+		slotDuration: slotDuration,
+		currentSlot: func() phase0.Slot {
+			return phase0.Slot(time.Since(genesisTime) / slotDuration)
+		},
+	}
+	startSlot := chainSvc.GetCurrentSlot()
+
+	store := NewSlotActionsStore()
+	store.ReplaceFuture(map[phase0.Slot]*SlotAction{
+		startSlot:     withhold(),
+		startSlot + 1: withhold(),
+		startSlot + 2: withhold(),
+	}, startSlot-1)
+
+	changed := make(chan struct{}, 1)
+	store.SetChangeCallback(func() {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	})
+	store.StartPruning(context.Background(), chainSvc)
+	defer store.Stop()
+
+	require.Eventually(t, func() bool {
+		_, exists := store.Get(startSlot)
+		return !exists
+	}, time.Second, 5*time.Millisecond)
+
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for slot-action expiry notification")
+	}
 }
 
 func TestSlotActionCodec_RoundTrip(t *testing.T) {

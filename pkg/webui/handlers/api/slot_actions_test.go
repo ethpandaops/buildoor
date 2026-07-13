@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -59,6 +61,25 @@ func newSlotActionsTestHandler(t *testing.T, currentSlot phase0.Slot,
 
 	return NewAPIHandler(authHandler, nil, nil, nil, nil, nil, chainSvc,
 		nil, nil, nil, nil, nil, nil, nil, store)
+}
+
+func attachSlotActionsTestSettings(t *testing.T, h *APIHandler) *config.Service {
+	t.Helper()
+
+	log := logrus.New()
+	stateDB := db.NewDatabase(&db.Config{}, log)
+	require.NoError(t, stateDB.Init())
+	t.Cleanup(func() { require.NoError(t, stateDB.Close()) })
+
+	settingsSvc, err := config.NewService(
+		config.DefaultConfig(), config.DefaultConfig(), map[string]bool{}, stateDB, log,
+	)
+	require.NoError(t, err)
+
+	h.settingsSvc = settingsSvc
+	h.stateDB = stateDB
+
+	return settingsSvc
 }
 
 func postEPBS(t *testing.T, h *APIHandler, body string) (int, epbsUpdateResponse) {
@@ -130,6 +151,24 @@ func TestUpdateEPBS_SlotActionsRejectsBoundaryCrossing(t *testing.T) {
 	h.chainSvc.(*stubChainService).nextSlot = &started
 
 	code, resp := postEPBS(t, h, `{"slot_actions":{"15":{"reveal":"withhold"}}}`)
+	require.Equal(t, http.StatusBadRequest, code)
+	assert.Equal(t, "slot_actions: slot 15 is not in the future (current slot 15)", resp.Error)
+	assert.Empty(t, store.Snapshot())
+}
+
+func TestUpdateEPBS_SlotActionsRejectsBoundaryCrossingDuringSettingsApply(t *testing.T) {
+	store := payload_bidder.NewSlotActionsStore()
+	h := newSlotActionsTestHandler(t, 10, store)
+	settingsSvc := attachSlotActionsTestSettings(t, h)
+
+	// Advance the slot from a SetMany callback. This places the boundary after
+	// the handler's initial validation but before slot-action replacement.
+	settingsSvc.OnChange(func() {
+		h.chainSvc.(*stubChainService).currentSlot = 15
+	})
+
+	code, resp := postEPBS(t, h,
+		`{"reveal_time":1000,"slot_actions":{"15":{"reveal":"withhold"}}}`)
 	require.Equal(t, http.StatusBadRequest, code)
 	assert.Equal(t, "slot_actions: slot 15 is not in the future (current slot 15)", resp.Error)
 	assert.Empty(t, store.Snapshot())

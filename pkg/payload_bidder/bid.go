@@ -86,11 +86,11 @@ func BuildSignedBid(
 // go-eth2-client v0.1.6 fork-agnostic view uses progressive lists, which is a
 // different SSZ type and therefore commits a different root into the bid.
 type gloasExecutionRequestsSigningView struct {
-	Deposits        []*electra.DepositRequest       `ssz-max:"8192"`
-	Withdrawals     []*electra.WithdrawalRequest    `ssz-max:"16"`
-	Consolidations  []*electra.ConsolidationRequest `ssz-max:"2"`
-	BuilderDeposits []*gloas.BuilderDepositRequest  `ssz-max:"256"`
-	BuilderExits    []*gloas.BuilderExitRequest     `ssz-max:"16"`
+	Deposits        []*electra.DepositRequest       `dynssz-max:"MAX_DEPOSIT_REQUESTS_PER_PAYLOAD" ssz-max:"8192"`
+	Withdrawals     []*electra.WithdrawalRequest    `dynssz-max:"MAX_WITHDRAWAL_REQUESTS_PER_PAYLOAD" ssz-max:"16"`
+	Consolidations  []*electra.ConsolidationRequest `dynssz-max:"MAX_CONSOLIDATION_REQUESTS_PER_PAYLOAD" ssz-max:"2"`
+	BuilderDeposits []*gloas.BuilderDepositRequest  `dynssz-max:"MAX_BUILDER_DEPOSIT_REQUESTS_PER_PAYLOAD" ssz-max:"256"`
+	BuilderExits    []*gloas.BuilderExitRequest     `dynssz-max:"MAX_BUILDER_EXIT_REQUESTS_PER_PAYLOAD" ssz-max:"16"`
 }
 
 func hashGloasExecutionRequests(requests *eth2all.ExecutionRequests) (phase0.Root, error) {

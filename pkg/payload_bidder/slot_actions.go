@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 )
@@ -40,6 +42,13 @@ type SlotActionsStore struct {
 	// is intentionally a prune-plus-put transaction at this layer.
 	mu    sync.RWMutex
 	store *memstore.Store[phase0.Slot, *SlotAction]
+
+	prunerMu     sync.Mutex
+	prunerCancel context.CancelFunc
+	prunerWG     sync.WaitGroup
+
+	callbackMu sync.RWMutex
+	onChange   func()
 }
 
 // SlotActionCodec translates the slot-action store's entries to their
@@ -73,9 +82,52 @@ func (s *SlotActionsStore) SetPersistence(ctx context.Context, stateDB *db.Datab
 		log.WithField("component", "slot-actions-store"))
 }
 
-// Stop flushes pending changes and stops the persistence flush loop. No-op
-// when no persistence is attached.
+// StartPruning removes expired actions as the connected chain advances. The
+// timer is aligned to the next slot boundary rather than polling, and the
+// initial prune clears stale entries rehydrated from persistence.
+func (s *SlotActionsStore) StartPruning(ctx context.Context, chainSvc chain.Service) {
+	if chainSvc == nil {
+		return
+	}
+
+	s.prunerMu.Lock()
+	defer s.prunerMu.Unlock()
+
+	if s.prunerCancel != nil {
+		return
+	}
+
+	prunerCtx, cancel := context.WithCancel(ctx)
+	s.prunerCancel = cancel
+	s.prunerWG.Add(1)
+
+	go s.runPruner(prunerCtx, chainSvc)
+}
+
+// SetChangeCallback registers a callback for background expiry changes. The
+// Web UI uses it to broadcast a fresh config snapshot after pruning. Passing
+// nil clears the callback.
+func (s *SlotActionsStore) SetChangeCallback(callback func()) {
+	s.callbackMu.Lock()
+	defer s.callbackMu.Unlock()
+
+	s.onChange = callback
+}
+
+// Stop stops background pruning, flushes pending changes, and stops the
+// persistence flush loop. No-op when neither service was started.
 func (s *SlotActionsStore) Stop() {
+	s.prunerMu.Lock()
+	cancel := s.prunerCancel
+	s.prunerCancel = nil
+	s.prunerMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+
+	s.prunerWG.Wait()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -137,15 +189,67 @@ func (s *SlotActionsStore) snapshotLocked() map[phase0.Slot]*SlotAction {
 }
 
 // PruneBefore drops every action whose slot is older than currentSlot (the
-// current slot's action is kept while the slot is in flight). Used to clear
-// stale entries rehydrated from a previous run.
-func (s *SlotActionsStore) PruneBefore(currentSlot phase0.Slot) {
+// current slot's action is kept while the slot is in flight). It returns the
+// number removed and notifies the change callback after releasing store locks.
+func (s *SlotActionsStore) PruneBefore(currentSlot phase0.Slot) int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.store.Prune(func(slot phase0.Slot) bool {
+	pruned := s.store.Prune(func(slot phase0.Slot) bool {
 		return slot < currentSlot
 	})
+	s.mu.Unlock()
+
+	if pruned > 0 {
+		s.notifyChanged()
+	}
+
+	return pruned
+}
+
+func (s *SlotActionsStore) runPruner(ctx context.Context, chainSvc chain.Service) {
+	defer s.prunerWG.Done()
+
+	for {
+		currentSlot := chainSvc.GetCurrentSlot()
+		s.PruneBefore(currentSlot)
+
+		// A max-value slot cannot have a representable successor. Keep the
+		// pruner dormant until shutdown instead of wrapping to genesis.
+		if currentSlot == ^phase0.Slot(0) {
+			<-ctx.Done()
+			return
+		}
+
+		nextSlotStart := chainSvc.SlotToTime(currentSlot + 1)
+		wait := time.Until(nextSlotStart)
+		if wait <= 0 {
+			// Protect against a temporarily inconsistent clock/service view.
+			wait = time.Millisecond
+		}
+
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (s *SlotActionsStore) notifyChanged() {
+	s.callbackMu.RLock()
+	callback := s.onChange
+	s.callbackMu.RUnlock()
+
+	if callback != nil {
+		callback()
+	}
 }
 
 // EncodeKey encodes a slot as its decimal string form.
