@@ -30,10 +30,15 @@ func BuildSignedEnvelope(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (signed *eth2all.SignedExecutionPayloadEnvelope, blobs, proofs [][]byte, err error) {
+	execRequests := p.ExecutionRequests
+	if execRequests == nil {
+		execRequests = &eth2all.ExecutionRequests{Version: p.ExecutionPayload.Version}
+	}
+
 	envelope := &eth2all.ExecutionPayloadEnvelope{
 		Version:               p.ExecutionPayload.Version,
 		Payload:               p.ExecutionPayload,
-		ExecutionRequests:     p.ExecutionRequests,
+		ExecutionRequests:     execRequests,
 		BuilderIndex:          gloas.BuilderIndex(rc.BuilderIndex),
 		BeaconBlockRoot:       rc.BeaconBlockRoot,
 		ParentBeaconBlockRoot: rc.ParentBeaconBlockRoot,

@@ -168,8 +168,22 @@ and begins building blocks according to configuration.`,
 		// Configure the global dynssz instance with this network's spec so the
 		// go-eth2-client SSZ codecs (block.Root(), envelope HashTreeRoot, ...)
 		// compute correct hash-tree-roots on non-mainnet presets (e.g. minimal).
-		if err := clClient.InitGlobalSSZSpecs(ctx); err != nil {
-			return fmt.Errorf("failed to init global SSZ specs: %w", err)
+		for {
+			err = clClient.InitGlobalSSZSpecs(ctx)
+			if err == nil {
+				break
+			}
+
+			// A beacon node can serve /config/spec and /genesis just before it
+			// reports an active client to the follow-up SSZ initialization call.
+			// Treat that readiness window like the preceding startup probes.
+			logger.WithError(err).Warn("Beacon node SSZ specs not ready, retrying in 5s...")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to init global SSZ specs: %w", ctx.Err())
+			case <-time.After(5 * time.Second):
+			}
 		}
 
 		// Apply slot-relative timing defaults now that we know the slot duration

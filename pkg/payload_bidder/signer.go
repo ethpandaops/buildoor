@@ -15,7 +15,12 @@ import (
 	"fmt"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
+	"github.com/ethpandaops/go-eth2-client/spec/capella"
+	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	dynssz "github.com/pk910/dynamic-ssz"
 
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -42,6 +47,15 @@ func (s *Signer) SignBid(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
+	if bid.Version == version.DataVersionGloas {
+		root, err := hashGloasBid(bid)
+		if err != nil {
+			return phase0.BLSSignature{}, err
+		}
+
+		return s.signRoot(root, forkVersion, genesisValidatorsRoot)
+	}
+
 	return s.sign(bid, forkVersion, genesisValidatorsRoot)
 }
 
@@ -51,6 +65,15 @@ func (s *Signer) SignEnvelope(
 	forkVersion phase0.Version,
 	genesisValidatorsRoot phase0.Root,
 ) (phase0.BLSSignature, error) {
+	if envelope.Version == version.DataVersionGloas {
+		root, err := hashGloasEnvelope(envelope)
+		if err != nil {
+			return phase0.BLSSignature{}, err
+		}
+
+		return s.signRoot(root, forkVersion, genesisValidatorsRoot)
+	}
+
 	return s.sign(envelope, forkVersion, genesisValidatorsRoot)
 }
 
@@ -70,8 +93,138 @@ func (s *Signer) sign(
 	var root phase0.Root
 
 	copy(root[:], msgRoot[:])
+	return s.signRoot(root, forkVersion, genesisValidatorsRoot)
+}
+
+func (s *Signer) signRoot(
+	root phase0.Root,
+	forkVersion phase0.Version,
+	genesisValidatorsRoot phase0.Root,
+) (phase0.BLSSignature, error) {
 
 	domain := signer.ComputeDomain(DomainBeaconBuilder, forkVersion, genesisValidatorsRoot)
 
 	return s.blsSigner.SignWithDomain(root, domain)
+}
+
+// gloasBidSigningView pins the Gloas commitments field to the bounded-list
+// schema used by the Glamsterdam consensus specification. go-eth2-client
+// v0.1.6 models this field as a progressive list, which produces a different
+// signing root even though its JSON and wire fields are otherwise identical.
+type gloasBidSigningView struct {
+	ParentBlockHash       phase0.Hash32              `ssz-size:"32"`
+	ParentBlockRoot       phase0.Root                `ssz-size:"32"`
+	BlockHash             phase0.Hash32              `ssz-size:"32"`
+	PrevRandao            phase0.Root                `ssz-size:"32"`
+	FeeRecipient          bellatrix.ExecutionAddress `ssz-size:"20"`
+	GasLimit              uint64
+	BuilderIndex          gloas.BuilderIndex
+	Slot                  phase0.Slot
+	Value                 phase0.Gwei
+	ExecutionPayment      phase0.Gwei
+	BlobKZGCommitments    []deneb.KZGCommitment `ssz-max:"4096" ssz-size:"?,48"`
+	ExecutionRequestsRoot phase0.Root           `ssz-size:"32"`
+}
+
+func hashGloasBid(bid *eth2all.ExecutionPayloadBid) (phase0.Root, error) {
+	view := &gloasBidSigningView{
+		ParentBlockHash:       bid.ParentBlockHash,
+		ParentBlockRoot:       bid.ParentBlockRoot,
+		BlockHash:             bid.BlockHash,
+		PrevRandao:            bid.PrevRandao,
+		FeeRecipient:          bid.FeeRecipient,
+		GasLimit:              bid.GasLimit,
+		BuilderIndex:          bid.BuilderIndex,
+		Slot:                  bid.Slot,
+		Value:                 bid.Value,
+		ExecutionPayment:      bid.ExecutionPayment,
+		BlobKZGCommitments:    bid.BlobKZGCommitments,
+		ExecutionRequestsRoot: bid.ExecutionRequestsRoot,
+	}
+
+	root, err := dynssz.GetGlobalDynSsz().HashTreeRoot(view)
+	if err != nil {
+		return phase0.Root{}, fmt.Errorf("failed to compute Gloas bid hash tree root: %w", err)
+	}
+
+	return phase0.Root(root), nil
+}
+
+type gloasPayloadSigningView struct {
+	ParentHash      phase0.Hash32              `ssz-size:"32"`
+	FeeRecipient    bellatrix.ExecutionAddress `ssz-size:"20"`
+	StateRoot       phase0.Root                `ssz-size:"32"`
+	ReceiptsRoot    phase0.Root                `ssz-size:"32"`
+	LogsBloom       [256]byte                  `ssz-size:"256"`
+	PrevRandao      [32]byte                   `ssz-size:"32"`
+	BlockNumber     uint64
+	GasLimit        uint64
+	GasUsed         uint64
+	Timestamp       uint64
+	ExtraData       []byte `ssz-max:"32"`
+	BaseFeePerGas   [32]byte
+	BlockHash       phase0.Hash32           `ssz-size:"32"`
+	Transactions    []bellatrix.Transaction `ssz-max:"1048576,1073741824" ssz-size:"?,?"`
+	Withdrawals     []*capella.Withdrawal   `ssz-max:"16"`
+	BlobGasUsed     uint64
+	ExcessBlobGas   uint64
+	BlockAccessList gloas.BlockAccessList `ssz-max:"1073741824"`
+	SlotNumber      uint64
+}
+
+type gloasEnvelopeSigningView struct {
+	Payload               *gloasPayloadSigningView
+	ExecutionRequests     *gloasExecutionRequestsSigningView
+	BuilderIndex          gloas.BuilderIndex
+	BeaconBlockRoot       phase0.Root `ssz-size:"32"`
+	ParentBeaconBlockRoot phase0.Root `ssz-size:"32"`
+}
+
+func hashGloasEnvelope(envelope *eth2all.ExecutionPayloadEnvelope) (phase0.Root, error) {
+	payload := envelope.Payload
+	requests := envelope.ExecutionRequests
+	if payload == nil || requests == nil {
+		return phase0.Root{}, fmt.Errorf("Gloas envelope payload and execution requests are required")
+	}
+
+	view := &gloasEnvelopeSigningView{
+		Payload: &gloasPayloadSigningView{
+			ParentHash:      payload.ParentHash,
+			FeeRecipient:    payload.FeeRecipient,
+			StateRoot:       payload.StateRoot,
+			ReceiptsRoot:    payload.ReceiptsRoot,
+			LogsBloom:       payload.LogsBloom,
+			PrevRandao:      payload.PrevRandao,
+			BlockNumber:     payload.BlockNumber,
+			GasLimit:        payload.GasLimit,
+			GasUsed:         payload.GasUsed,
+			Timestamp:       payload.Timestamp,
+			ExtraData:       payload.ExtraData,
+			BaseFeePerGas:   payload.BaseFeePerGasLE,
+			BlockHash:       payload.BlockHash,
+			Transactions:    payload.Transactions,
+			Withdrawals:     payload.Withdrawals,
+			BlobGasUsed:     payload.BlobGasUsed,
+			ExcessBlobGas:   payload.ExcessBlobGas,
+			BlockAccessList: payload.BlockAccessList,
+			SlotNumber:      payload.SlotNumber,
+		},
+		ExecutionRequests: &gloasExecutionRequestsSigningView{
+			Deposits:        requests.Deposits,
+			Withdrawals:     requests.Withdrawals,
+			Consolidations:  requests.Consolidations,
+			BuilderDeposits: requests.BuilderDeposits,
+			BuilderExits:    requests.BuilderExits,
+		},
+		BuilderIndex:          envelope.BuilderIndex,
+		BeaconBlockRoot:       envelope.BeaconBlockRoot,
+		ParentBeaconBlockRoot: envelope.ParentBeaconBlockRoot,
+	}
+
+	root, err := dynssz.GetGlobalDynSsz().HashTreeRoot(view)
+	if err != nil {
+		return phase0.Root{}, fmt.Errorf("failed to compute Gloas envelope hash tree root: %w", err)
+	}
+
+	return phase0.Root(root), nil
 }

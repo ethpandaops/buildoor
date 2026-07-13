@@ -6,6 +6,7 @@ import (
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	dynssz "github.com/pk910/dynamic-ssz"
@@ -40,8 +41,7 @@ func BuildSignedBid(
 		execRequests = &eth2all.ExecutionRequests{Version: p.ExecutionPayload.Version}
 	}
 
-	// dynssz so preset-dependent list limits resolve from the global spec.
-	execRequestsRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(execRequests)
+	execRequestsRoot, err := hashGloasExecutionRequests(execRequests)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute execution requests root: %w", err)
 	}
@@ -78,4 +78,33 @@ func BuildSignedBid(
 		Message:   bid,
 		Signature: sig,
 	}, nil
+}
+
+// gloasExecutionRequestsSigningView pins the five request collections to the
+// bounded-list schema used by the Glamsterdam Gloas specification. The
+// go-eth2-client v0.1.6 fork-agnostic view uses progressive lists, which is a
+// different SSZ type and therefore commits a different root into the bid.
+type gloasExecutionRequestsSigningView struct {
+	Deposits        []*electra.DepositRequest       `ssz-max:"8192"`
+	Withdrawals     []*electra.WithdrawalRequest    `ssz-max:"16"`
+	Consolidations  []*electra.ConsolidationRequest `ssz-max:"2"`
+	BuilderDeposits []*gloas.BuilderDepositRequest  `ssz-max:"256"`
+	BuilderExits    []*gloas.BuilderExitRequest     `ssz-max:"16"`
+}
+
+func hashGloasExecutionRequests(requests *eth2all.ExecutionRequests) (phase0.Root, error) {
+	view := &gloasExecutionRequestsSigningView{
+		Deposits:        requests.Deposits,
+		Withdrawals:     requests.Withdrawals,
+		Consolidations:  requests.Consolidations,
+		BuilderDeposits: requests.BuilderDeposits,
+		BuilderExits:    requests.BuilderExits,
+	}
+
+	root, err := dynssz.GetGlobalDynSsz().HashTreeRoot(view)
+	if err != nil {
+		return phase0.Root{}, fmt.Errorf("failed to compute Gloas execution requests root: %w", err)
+	}
+
+	return phase0.Root(root), nil
 }
