@@ -74,6 +74,36 @@ func (t *BidTracker) GetHighestBid(slot phase0.Slot) *TrackedBid {
 	return slotBids.HighestBid
 }
 
+// GetHighestCompetitorBid returns the highest tracked bid value (gwei) for
+// the slot excluding our own builder index, and whether any competitor bid is
+// known. Unlike GetHighestBid it can never report our own bid back to us.
+func (t *BidTracker) GetHighestCompetitorBid(slot phase0.Slot, ourBuilderIndex uint64) (uint64, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	slotBids, ok := t.slotBids[slot]
+	if !ok {
+		return 0, false
+	}
+
+	var highest uint64
+
+	found := false
+
+	for builderIndex, tracked := range slotBids.Bids {
+		if builderIndex == ourBuilderIndex || tracked.IsOurs {
+			continue
+		}
+
+		if !found || tracked.Bid.Value > highest {
+			highest = tracked.Bid.Value
+			found = true
+		}
+	}
+
+	return highest, found
+}
+
 // GetOurBid returns our bid for a slot.
 func (t *BidTracker) GetOurBid(slot phase0.Slot) *TrackedBid {
 	t.mu.RLock()

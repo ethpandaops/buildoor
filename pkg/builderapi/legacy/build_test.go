@@ -22,7 +22,7 @@ func TestBuildSignedBuilderBid_NilEvent(t *testing.T) {
 	pk := blsSigner.PublicKey()
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(nil, version.DataVersionFulu, pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
+	bid, err := BuildSignedBuilderBid(nil, version.DataVersionFulu, pk, blsSigner, 0, nil, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	assert.Nil(t, bid)
 }
@@ -36,7 +36,7 @@ func TestBuildSignedBuilderBid_NoSubsidy(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(event, version.DataVersionFulu, pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
+	bid, err := BuildSignedBuilderBid(event, version.DataVersionFulu, pk, blsSigner, 0, nil, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -55,7 +55,7 @@ func TestBuildSignedBuilderBid_SubsidyAdded(t *testing.T) {
 	event := minimalPayload(t, blockValue)
 
 	var genesisForkVersion phase0.Version // zero version
-	bid, err := BuildSignedBuilderBid(event, version.DataVersionFulu, pk, blsSigner, subsidy, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
+	bid, err := BuildSignedBuilderBid(event, version.DataVersionFulu, pk, blsSigner, subsidy, nil, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 	require.NotNil(t, bid.Message)
@@ -72,7 +72,7 @@ func TestBuildSignedBuilderBid_SignsWithZeroGenesisValidatorsRoot(t *testing.T) 
 	pk := blsSigner.PublicKey()
 
 	genesisForkVersion := phase0.Version{1, 2, 3, 4}
-	bid, err := BuildSignedBuilderBid(minimalPayload(t, big.NewInt(1)), version.DataVersionFulu, pk, blsSigner, 0, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
+	bid, err := BuildSignedBuilderBid(minimalPayload(t, big.NewInt(1)), version.DataVersionFulu, pk, blsSigner, 0, nil, genesisForkVersion, defaultMaxWithdrawalsPerPayload)
 	require.NoError(t, err)
 	require.NotNil(t, bid)
 

@@ -266,6 +266,14 @@
   border: 2px solid #bd2130;
 }
 
+/* Skipped reveal (withheld by plan or missed deadline): no envelope was
+   published, so render it muted/hollow rather than as a "sent" dot. */
+.reveal-skipped {
+  background: #6c757d;
+  border: 2px dashed #495057;
+  opacity: 0.7;
+}
+
 .build-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
@@ -486,6 +494,7 @@
 .bg-bid-failed { background: #dc3545; }
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
+.bg-reveal-skipped { background: #6c757d; }
 .bg-head-votes { background: #00bcd4; }
 .bg-builder-api-delivered { background: #28a745; }
 .bg-builder-api-pending { background: #ffc107; }
@@ -888,4 +897,224 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   body:has(#panda-menu-root) header.header-bar > nav.navbar .brand-logo {
     display: none;
   }
+}
+
+/* Action Plan grid */
+.ap-grid-scroll {
+  overflow-x: auto;
+}
+
+.ap-grid {
+  border-collapse: separate;
+  border-spacing: 2px;
+}
+
+.ap-grid .ap-epoch-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bs-body-bg);
+  padding: 0 8px 0 2px;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ap-grid .ap-slot-head {
+  font-size: 10px;
+  font-weight: normal;
+  text-align: center;
+  padding: 0;
+}
+
+.ap-cell-td {
+  padding: 0;
+}
+
+/* Compact slot cell: plan chips on top, result status dot below */
+.ap-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 3px;
+  background: var(--bs-tertiary-bg);
+  cursor: pointer;
+}
+
+.ap-cell:hover {
+  border-color: var(--bs-primary);
+}
+
+.ap-cell.ap-current {
+  outline: 2px solid var(--bs-primary);
+  outline-offset: -1px;
+}
+
+.ap-cell.ap-selected {
+  background: rgba(13, 110, 253, 0.25);
+  border-color: var(--bs-primary);
+}
+
+/* Future epoch rows: subtle tint so upcoming slots read differently */
+.ap-row-future .ap-cell {
+  background: color-mix(in srgb, var(--bs-tertiary-bg) 60%, transparent);
+}
+
+.ap-row-future .ap-epoch-col {
+  font-style: italic;
+}
+
+/* Plan category chips (B / A / R) */
+.ap-chips {
+  display: flex;
+  gap: 1px;
+  min-height: 9px;
+}
+
+.ap-chip {
+  display: inline-block;
+  font-size: 7px;
+  line-height: 9px;
+  width: 8px;
+  border-radius: 2px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.ap-chip-custom {
+  background: var(--bs-primary);
+  color: #fff;
+}
+
+.ap-chip-disabled {
+  background: rgba(220, 53, 69, 0.25);
+  color: #dc3545;
+  text-decoration: line-through;
+}
+
+/* Build-modifier chip (parent-payload reorg): amber to read as "adverse". */
+.ap-chip-reorg {
+  background: #fd7e14;
+  color: #000;
+}
+
+/* jq transform chip (custom object modification). */
+.ap-chip-transform {
+  background: #6610f2;
+  color: #fff;
+}
+
+/* Transform editor */
+.ap-transform-field {
+  margin-bottom: 0.75rem;
+}
+
+.ap-transform-input {
+  resize: vertical;
+}
+
+.ap-transform-io-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--bs-secondary-color);
+  margin-bottom: 2px;
+}
+
+.ap-transform-io {
+  max-height: 220px;
+  overflow: auto;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  padding: 6px 8px;
+  margin: 0;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 4px;
+  white-space: pre;
+}
+
+.ap-transform-io-stale {
+  opacity: 0.5;
+}
+
+/* Result status dots: left = bid outcome; right = payload canonical verdict
+   (only rendered for won slots). */
+.ap-dots {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 8px;
+}
+
+.ap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.ap-dot-included { background: #28a745; }
+.ap-dot-bidding { background: #ffc107; }
+.ap-dot-failed { background: #dc3545; }
+.ap-dot-built { background: #6c757d; }
+
+/* Purple hollow: planned/active but nothing happened — visually distinct */
+.ap-dot-idle {
+  background: transparent;
+  border: 2px solid #6f42c1;
+}
+
+/* Hollow red: the winning block was reorged out */
+.ap-dot-orphaned {
+  background: transparent;
+  border: 2px solid #dc3545;
+}
+
+/* Payload canonical verdict (right dot, won slots only) */
+.ap-dot-payload-canonical { background: #28a745; }
+.ap-dot-payload-missed { background: #dc3545; }
+
+.ap-dot-payload-orphaned {
+  background: transparent;
+  border: 2px solid #dc3545;
+}
+
+.ap-dot-payload-pending {
+  background: transparent;
+  border: 2px solid #6c757d;
+}
+
+/* Range/jump inputs in the toolbar */
+.ap-range-input {
+  width: 110px;
+}
+
+/* Raw plan JSON dump in the result modal */
+.ap-raw-plan {
+  font-size: 11px;
+  max-height: 200px;
+  overflow: auto;
+  background: var(--bs-tertiary-bg);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+/* Long hashes/addresses in the result modal wrap instead of overflowing */
+.ap-break {
+  word-break: break-all;
+}
+
+/* Tiny artifact buttons (JSON / SSZ) */
+.ap-artifact-btn {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 16px;
 }

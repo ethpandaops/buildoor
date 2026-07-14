@@ -18,7 +18,7 @@ import (
 
 func TestGetBuilderPreferences_NotEnabled(t *testing.T) {
 	// No builder API service wired → 404.
-	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
 	rec := httptest.NewRecorder()
@@ -29,7 +29,7 @@ func TestGetBuilderPreferences_NotEnabled(t *testing.T) {
 
 func TestGetBuilderPreferences_ReturnsEntries(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
-	srv := builderapi.NewServer(cfg, logrus.New(), nil, nil, nil, nil)
+	srv := builderapi.NewServer(cfg, logrus.New(), nil, nil, nil, nil, nil)
 
 	var pk phase0.BLSPubKey
 	pk[0] = 0xab
@@ -37,7 +37,7 @@ func TestGetBuilderPreferences_ReturnsEntries(t *testing.T) {
 
 	// builderSvc (4th arg) nil so the event stream manager does not start;
 	// srv is passed as builderAPISvc (9th arg).
-	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, srv, nil, nil, nil, nil, nil)
+	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, srv, nil, nil, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
 	rec := httptest.NewRecorder()

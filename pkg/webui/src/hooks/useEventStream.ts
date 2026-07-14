@@ -1,5 +1,72 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
+
+// ---------------------------------------------------------------------------
+// Module-level SSE fan-out: lets other hooks/components subscribe to raw
+// stream events through the page's EXISTING EventSource connection instead of
+// opening a second one. Every event handled by useEventStream is also
+// dispatched to the callbacks registered for its type.
+// ---------------------------------------------------------------------------
+
+type StreamEventCallback = (data: unknown) => void;
+
+const streamEventListeners = new Map<string, Set<StreamEventCallback>>();
+
+/**
+ * Subscribe to raw SSE events of one type on the shared connection.
+ * Returns an unsubscribe function.
+ */
+export function onStreamEvent(type: string, cb: StreamEventCallback): () => void {
+  let set = streamEventListeners.get(type);
+  if (!set) {
+    set = new Set();
+    streamEventListeners.set(type, set);
+  }
+  set.add(cb);
+  return () => {
+    const listeners = streamEventListeners.get(type);
+    if (!listeners) return;
+    listeners.delete(cb);
+    if (listeners.size === 0) {
+      streamEventListeners.delete(type);
+    }
+  };
+}
+
+function dispatchStreamEvent(type: string, data: unknown) {
+  const listeners = streamEventListeners.get(type);
+  if (!listeners) return;
+  // Copy so callbacks may unsubscribe (or subscribe) during dispatch.
+  for (const cb of [...listeners]) {
+    try {
+      cb(data);
+    } catch (err) {
+      console.error(`Stream event callback failed for '${type}':`, err);
+    }
+  }
+}
+
+// Connection generation: incremented on every successful (re)connect of the
+// SSE stream, so views can refetch REST state after a reconnect (events that
+// occurred during the gap were never delivered).
+let connectionGeneration = 0;
+const generationListeners = new Set<() => void>();
+
+export function getConnectionGeneration(): number {
+  return connectionGeneration;
+}
+
+export function subscribeConnectionGeneration(listener: () => void): () => void {
+  generationListeners.add(listener);
+  return () => {
+    generationListeners.delete(listener);
+  };
+}
+
+function bumpConnectionGeneration() {
+  connectionGeneration++;
+  generationListeners.forEach((listener) => listener());
+}
 
 interface UseEventStreamResult {
   connected: boolean;
@@ -14,6 +81,7 @@ interface UseEventStreamResult {
   slotServiceStatuses: Record<number, ServiceStatus>;
   events: LogEvent[];
   clearEvents: () => void;
+  connectionGeneration: number;
 }
 
 export function useEventStream(): UseEventStreamResult {
@@ -29,6 +97,12 @@ export function useEventStream(): UseEventStreamResult {
   const [slotServiceStatuses, setSlotServiceStatuses] = useState<Record<number, ServiceStatus>>({});
   const [events, setEvents] = useState<LogEvent[]>([]);
   const eventIdRef = useRef(0);
+  // Highest server-side sequence number processed so far. On connect the
+  // server bursts a replay of the last slots' events (each carrying the seq
+  // it was originally broadcast with); after a reconnect, anything at or
+  // below this watermark is a duplicate we already processed, while replayed
+  // events above it fill the gap the connection loss created.
+  const lastSeqRef = useRef(0);
 
   // Use refs to access current values in event handlers without causing reconnection
   const configRef = useRef<Config | null>(null);
@@ -87,7 +161,14 @@ export function useEventStream(): UseEventStreamResult {
       }));
     };
 
-    const handleEvent = (event: { type: string; timestamp: number; data: unknown }) => {
+    const handleEvent = (event: { type: string; timestamp: number; seq?: number; data: unknown }) => {
+      // Drop already-processed events from a reconnect replay. Events
+      // without a seq (per-client initial-state snapshots) always pass.
+      if (event.seq) {
+        if (event.seq <= lastSeqRef.current) return;
+        lastSeqRef.current = event.seq;
+      }
+
       switch (event.type) {
         case 'config':
           setConfig(event.data as Config);
@@ -279,12 +360,12 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean; error?: string; attempt?: number; max_attempts?: number };
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string; attempt?: number; max_attempts?: number };
           const failed = !data.success && !data.skipped;
           const attempt = data.attempt || 0;
           const maxAttempts = data.max_attempts || 0;
           const revealMsg = data.skipped
-            ? 'Reveal skipped'
+            ? `Reveal skipped${data.skip_reason ? ` (${data.skip_reason})` : ''}`
             : data.success
               ? 'Reveal successful'
               : `Reveal failed${attempt ? ` (attempt ${attempt}/${maxAttempts})` : ''}${data.error ? `: ${data.error}` : ''}`;
@@ -296,6 +377,7 @@ export function useEventStream(): UseEventStreamResult {
               time: event.timestamp,
               success: data.success,
               skipped: data.skipped,
+              skipReason: data.skip_reason,
               error: data.error,
               attempt,
               maxAttempts
@@ -465,6 +547,9 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
       }
+
+      // Fan out every event to module-level subscribers (shared connection).
+      dispatchStreamEvent(event.type, event.data);
     };
 
     const connect = () => {
@@ -477,6 +562,7 @@ export function useEventStream(): UseEventStreamResult {
 
       eventSource.onopen = () => {
         setConnected(true);
+        bumpConnectionGeneration();
       };
 
       eventSource.onerror = () => {
@@ -508,6 +594,8 @@ export function useEventStream(): UseEventStreamResult {
     };
   }, []); // Empty dependency array - connection is stable
 
+  const generation = useSyncExternalStore(subscribeConnectionGeneration, getConnectionGeneration);
+
   return {
     connected,
     config,
@@ -520,6 +608,7 @@ export function useEventStream(): UseEventStreamResult {
     slotConfigs,
     slotServiceStatuses,
     events,
-    clearEvents
+    clearEvents,
+    connectionGeneration: generation
   };
 }

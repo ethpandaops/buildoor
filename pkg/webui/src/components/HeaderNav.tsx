@@ -7,6 +7,7 @@ import { closeMobileNav } from './BrandHeader';
 // Items always visible. `audit-log` is added only for authenticated users.
 const NAV_ITEMS: Array<{ view: ViewType; label: string; requiresAuth?: boolean }> = [
   { view: 'dashboard', label: 'Dashboard' },
+  { view: 'action-plan', label: 'Action Plan' },
   { view: 'bids-won', label: 'Bids Won' },
   { view: 'validators', label: 'Validators' },
   { view: 'proposer-preferences', label: 'Proposer Prefs' },

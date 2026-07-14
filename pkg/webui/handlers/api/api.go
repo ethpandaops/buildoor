@@ -788,8 +788,8 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 
 	// The shared inclusion tracker is the single owner of won-block records
 	// (both flows, all forks; persisted via the state-db kv_store when set).
-	if h.inclusionTracker != nil {
-		bidsWon, total = h.inclusionTracker.GetWonBlocks(offset, limit)
+	if h.resultTracker != nil {
+		bidsWon, total = h.resultTracker.GetWonBlocks(offset, limit)
 	}
 
 	writeJSON(w, http.StatusOK, BidsWonResponse{

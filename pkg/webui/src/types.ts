@@ -62,6 +62,7 @@ export interface ServiceStatus {
 export interface ChainInfo {
   genesis_time: number;
   seconds_per_slot: number;
+  slots_per_epoch: number;
 }
 
 export interface Stats {
@@ -153,6 +154,7 @@ export interface RevealAttempt {
   time: number;
   success: boolean;
   skipped: boolean;
+  skipReason?: string;
   error?: string;
   attempt: number;
   maxAttempts: number;
@@ -327,4 +329,260 @@ export interface BuilderPreference {
 
 export interface BuilderPreferencesResponse {
   preferences: BuilderPreference[];
+}
+
+// ---------------------------------------------------------------------------
+// Per-slot action plan types (wire shapes of pkg/action_plan; snake_case JSON)
+// ---------------------------------------------------------------------------
+
+// Per-category plan mode: "custom" force-activates the category for the slot
+// with optional overrides, "disabled" suppresses it. An absent category
+// inherits the global baseline.
+export type ActionMode = 'custom' | 'disabled';
+
+// Timing fields are SIGNED milliseconds relative to slot start.
+export interface BidPlan {
+  mode: ActionMode;
+  bid_start_time?: number;
+  bid_end_time?: number;
+  bid_min_amount?: number; // gwei
+  bid_increase?: number; // gwei
+  bid_interval?: number; // ms, >= 0, 0 = single bid
+  bid_subsidy?: number; // gwei
+  bid_value_gwei?: number; // absolute bid base value
+  ignore_missing_prefs?: boolean;
+}
+
+export interface BuilderAPIPlan {
+  mode: ActionMode;
+  value_subsidy_gwei?: number;
+  total_value_override_gwei?: number;
+  response_delay_ms?: number;
+}
+
+export interface RevealPlan {
+  mode: ActionMode;
+  reveal_time_ms?: number;
+}
+
+// The build category has no custom/disabled mode: it only tweaks how the
+// slot's payload is built when a build happens.
+export interface BuildPlan {
+  reorg_parent_payload?: boolean;
+}
+
+// The transforms category has no mode: each field is a jq expression applied
+// to the object's JSON (empty = no transform).
+export interface TransformPlan {
+  payload?: string;
+  bid?: string;
+  envelope?: string;
+}
+
+export interface SlotPlan {
+  slot: number;
+  bid?: BidPlan;
+  builder_api?: BuilderAPIPlan;
+  reveal?: RevealPlan;
+  build?: BuildPlan;
+  transforms?: TransformPlan;
+  updated_at: string;
+  updated_by: string;
+}
+
+// One mutation unit of the bulk plan update API. Category members are
+// three-state: absent = unchanged, null = clear (back to inherit), object =
+// replace. `set` applies fine-grained path updates (e.g. "bid.bid_min_amount")
+// after the category members; a null value clears a single override.
+export interface PlanUpdate {
+  slots?: number[];
+  from_slot?: number;
+  to_slot?: number;
+  delete?: boolean;
+  bid?: BidPlan | null;
+  builder_api?: BuilderAPIPlan | null;
+  reveal?: RevealPlan | null;
+  build?: BuildPlan | null;
+  transforms?: TransformPlan | null;
+  set?: Record<string, number | string | boolean | null>;
+}
+
+export interface ActionPlanResponse {
+  plans: SlotPlan[];
+  min_slot: number;
+  max_slot: number;
+}
+
+// Authoritative normalized result of a committed plan mutation; a null plan
+// means the slot's plan was deleted.
+export interface UpdateActionPlanResponse {
+  status: string;
+  slots: number[];
+  plans: (SlotPlan | null)[];
+}
+
+// Resolved (frozen) settings — pkg/action_plan/frozen.go wire shapes.
+export interface ResolvedBuildSettings {
+  build: boolean;
+  forced?: boolean;
+  skip_reason?: string; // "schedule" | "plan_disabled" | "no_consumer"
+  plan_involved?: boolean;
+  build_start_time_ms: number;
+  reorg_parent_payload?: boolean;
+}
+
+export interface ResolvedBidSettings {
+  start_ms: number;
+  end_ms: number;
+  interval_ms: number;
+  min_gwei: number;
+  increase_gwei: number;
+  subsidy_gwei: number;
+  value_gwei?: number;
+  ignore_missing_prefs?: boolean;
+  forced?: boolean;
+}
+
+export interface ResolvedBuilderAPISettings {
+  subsidy_gwei: number;
+  total_value_gwei?: number;
+  delay_ms?: number;
+  forced?: boolean;
+}
+
+export interface ResolvedRevealSettings {
+  suppressed?: boolean;
+  reveal_time_ms: number;
+  bypass_deadline?: boolean;
+}
+
+// FrozenPlan is the immutable per-slot execution snapshot; a nil bid /
+// builder_api category means the category is suppressed for the slot.
+export interface ResolvedTransforms {
+  payload?: string;
+  bid?: string;
+  envelope?: string;
+}
+
+export interface FrozenPlan {
+  slot: number;
+  plan?: SlotPlan;
+  fork: string;
+  frozen_at: string;
+  build: ResolvedBuildSettings;
+  bid?: ResolvedBidSettings;
+  builder_api?: ResolvedBuilderAPISettings;
+  reveal?: ResolvedRevealSettings;
+  transforms?: ResolvedTransforms;
+}
+
+// Per-slot result types (wire shapes of pkg/slot_results).
+export type BuildStatus =
+  | 'waiting_attributes'
+  | 'no_attributes'
+  | 'started'
+  | 'ready'
+  | 'failed'
+  | 'skipped';
+
+export type BidAttemptStatus =
+  | 'suppressed'
+  | 'constructed'
+  | 'submitted'
+  | 'served'
+  | 'failed'
+  | 'cancelled';
+
+export type BlockSubmissionStatus = 'received' | 'accepted' | 'failed';
+
+export type RevealAttemptStatus = 'suppressed' | 'published' | 'failed' | 'skipped';
+
+export interface BuildOutcome {
+  status: BuildStatus;
+  skip_reason?: string;
+  block_hash?: string;
+  block_value_wei?: string;
+  num_transactions?: number;
+  num_blobs?: number;
+  fee_recipient?: string;
+  error?: string;
+  at: string;
+}
+
+export interface SlotBidAttempt {
+  status: BidAttemptStatus;
+  transport: string;
+  total_value_gwei: number;
+  execution_payment_gwei?: number;
+  competitor_high_gwei?: number;
+  artifact_index?: number;
+  error?: string;
+  at: string;
+}
+
+export interface SlotBlockSubmission {
+  dialect: string; // "legacy" | "epbs"
+  status: BlockSubmissionStatus;
+  error?: string;
+  at: string;
+}
+
+export interface SlotRevealAttempt {
+  status: RevealAttemptStatus;
+  transport: string;
+  skip_reason?: string; // "plan_disabled" | "late"
+  error?: string;
+  attempt: number;
+  at: string;
+}
+
+export type PayloadCanonicalStatus = 'pending' | 'canonical' | 'missed' | 'orphaned';
+
+export interface SlotInclusionResult {
+  source: string; // "epbs" | "builder_api"
+  block_hash: string;
+  num_transactions: number;
+  num_blobs: number;
+  value_wei: string;
+  value_eth: string;
+  timestamp: string;
+  // Canonical verdict for the won payload, derived from the canonical chain's
+  // next block (revised on reorgs while inside the tracking window).
+  payload_status?: PayloadCanonicalStatus;
+  payload_check_slot?: number | string;
+}
+
+export interface SlotResult {
+  slot: number;
+  epoch: number;
+  fork: string;
+  applied_plan?: FrozenPlan;
+  build?: BuildOutcome;
+  bids?: SlotBidAttempt[];
+  block_submissions?: SlotBlockSubmission[];
+  reveal_attempts?: SlotRevealAttempt[];
+  inclusion?: SlotInclusionResult;
+  dropped_attempts?: Record<string, number>;
+  updated_at: string;
+}
+
+export interface SlotResultsResponse {
+  results: SlotResult[];
+  min_slot: number;
+  max_slot: number;
+}
+
+// Slot bid artifact listing (GET /api/buildoor/slot-results/{slot}/bids).
+export interface BidArtifactMetaEntry {
+  index: number;
+  fork: string;
+  transport?: string;
+  total_value_gwei?: number;
+  execution_payment_gwei?: number;
+  at?: number; // unix milliseconds
+}
+
+export interface SlotBidArtifactsResponse {
+  slot: number;
+  bids: BidArtifactMetaEntry[];
 }

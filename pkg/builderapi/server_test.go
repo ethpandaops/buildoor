@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -41,7 +42,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 	// Uses the official builder-specs example from validators/testdata/signed_validator_registrations.json
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(builderSpecsExampleJSON))
 	req.Header.Set("Content-Type", "application/json")
@@ -56,7 +57,7 @@ func TestRegisterValidators_BuilderSpecsExample(t *testing.T) {
 func TestRegisterValidators_EmptyArray(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	req.Header.Set("Content-Type", "application/json")
@@ -71,7 +72,7 @@ func TestRegisterValidators_EmptyArray(t *testing.T) {
 func TestRegisterValidators_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("not json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -123,7 +124,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -141,7 +142,7 @@ func TestRegisterValidators_ValidSignature(t *testing.T) {
 func TestRegisterValidators_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader([]byte("[]")))
 	// no Content-Type
@@ -158,7 +159,7 @@ func TestGetHeader_NoPayload(t *testing.T) {
 	log := logrus.New()
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
-	srv := NewServer(cfg, log, &mockChainService{}, nil, blsSigner, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, blsSigner, nil)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -174,7 +175,7 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
 	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	srv := NewServer(cfg, log, &mockChainService{}, payload_builder.NewPayloadCache(10), blsSigner, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), payload_builder.NewPayloadCache(10), blsSigner, nil)
 	srv.SetEnabled(true)
 
 	pk := blsSigner.PublicKey()
@@ -216,7 +217,11 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	regs, err := json.Marshal([]*apiv1.SignedValidatorRegistration{reg})
 	require.NoError(t, err)
 
-	cfg := &config.BuilderAPIConfig{BlockValueSubsidyGwei: 1_000_000}
+	// The subsidy is resolved from the plan service's config at freeze time,
+	// so the server and the plan service must share one config.
+	fullCfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
+	fullCfg.BuilderAPI.BlockValueSubsidyGwei = 1_000_000
+	cfg := &fullCfg.BuilderAPI
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
 	parentHash := phase0.Hash32(common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"))
@@ -235,7 +240,8 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		BlockValue:       new(big.Int).SetUint64(500_000_000_000_000), // 0.0005 ETH in wei
 	}
 	cache.Store(event)
-	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionDeneb}, cache, blsSigner, nil)
+	planSvc := action_plan.NewPlanService(fullCfg, &mockChainService{}, log)
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionDeneb}, planSvc, cache, blsSigner, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))
@@ -266,7 +272,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, payload_builder.NewPayloadCache(10), nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), payload_builder.NewPayloadCache(10), nil, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("not json")))
@@ -281,7 +287,7 @@ func TestSubmitBlindedBlockV2_InvalidJSON(t *testing.T) {
 func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v2/builder/blinded_blocks", bytes.NewReader([]byte("{}")))
@@ -305,7 +311,7 @@ func (m *mockProposalSubmitter) SubmitProposal(_ context.Context, opts *api.Subm
 func TestSubmitBlindedBlockV2_NoMatchingPayload(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, payload_builder.NewPayloadCache(10), nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), payload_builder.NewPayloadCache(10), nil, nil)
 	srv.SetEnabled(true)
 
 	// Minimal Fulu (Electra-shaped) blinded block body: message.body.execution_payload_header.block_hash that won't be in cache
@@ -334,7 +340,7 @@ func TestSubmitBlindedBlockV2_Success_UnblindAndPublish(t *testing.T) {
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
 	submitter := &mockProposalSubmitter{}
-	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, cache, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, newServingPlanService(), cache, nil, nil)
 	srv.legacy.SetCLClient(submitter)
 	srv.SetEnabled(true)
 
@@ -381,7 +387,7 @@ func TestSubmitBlindedBlockV1_Success_ReturnsPayload(t *testing.T) {
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
 	submitter := &mockProposalSubmitter{}
-	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, cache, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionFulu}, newServingPlanService(), cache, nil, nil)
 	srv.legacy.SetCLClient(submitter)
 	srv.SetEnabled(true)
 
@@ -472,7 +478,7 @@ func TestRegisterValidators_SSZ(t *testing.T) {
 
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/octet-stream")
@@ -503,7 +509,7 @@ func TestRegisterValidators_SSZ(t *testing.T) {
 func TestUnknownEthEndpoint_JSON404(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	srv := NewServer(cfg, log, &mockChainService{}, nil, nil, nil)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, nil, nil)
 
 	for _, tc := range []struct {
 		method string

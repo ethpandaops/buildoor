@@ -5,12 +5,18 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
+
+// topupCooldownEpochs suppresses further top-ups after one is submitted, giving
+// a builder deposit time to land before the low balance triggers another (a
+// builder deposit takes several epochs through the queue + fee-limit delay).
+const topupCooldownEpochs phase0.Epoch = 8
 
 // BalanceService handles balance monitoring and automatic top-ups.
 type BalanceService struct {
@@ -19,7 +25,10 @@ type BalanceService struct {
 	depositSvc *DepositService
 	payments   *payload_bidder.PaymentTracker
 	lastCheck  time.Time
-	log        logrus.FieldLogger
+	// lastTopupEpoch is the epoch of the most recent submitted top-up; 0 means
+	// none. Guards the cooldown so an in-flight deposit is not duplicated.
+	lastTopupEpoch phase0.Epoch
+	log            logrus.FieldLogger
 }
 
 // NewBalanceService creates a new balance service.
@@ -103,6 +112,15 @@ func (s *BalanceService) NeedsTopup(ctx context.Context) (bool, uint64, error) {
 		return false, 0, nil
 	}
 
+	// Hold off while a recent top-up is still expected to land, so the low
+	// balance does not trigger duplicate deposits before the queued one arrives.
+	if s.lastTopupEpoch != 0 {
+		currentEpoch := s.depositSvc.chainSvc.GetCurrentEpoch()
+		if currentEpoch < s.lastTopupEpoch+topupCooldownEpochs {
+			return false, 0, nil
+		}
+	}
+
 	topupAmount := s.cfg.TopupAmount
 	if topupAmount == 0 {
 		topupAmount = threshold
@@ -131,6 +149,7 @@ func (s *BalanceService) CheckAndTopup(ctx context.Context) error {
 	}
 
 	s.lastCheck = time.Now()
+	s.lastTopupEpoch = s.depositSvc.chainSvc.GetCurrentEpoch()
 
 	return nil
 }

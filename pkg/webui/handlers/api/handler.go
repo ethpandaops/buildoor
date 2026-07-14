@@ -4,6 +4,7 @@ import (
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
@@ -13,6 +14,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -35,6 +37,8 @@ type APIHandler struct {
 	revealSvc        *payload_bidder.RevealService    // May be nil (Gloas not scheduled)
 	inclusionTracker *payload_bidder.InclusionTracker // May be nil
 	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
+	planSvc          *action_plan.PlanService         // May be nil
+	resultTracker    *slot_results.Tracker            // May be nil
 }
 
 // NewAPIHandler creates a new API handler.
@@ -53,6 +57,8 @@ func NewAPIHandler(
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,
 	payments *payload_bidder.PaymentTracker,
+	planSvc *action_plan.PlanService,
+	resultTracker *slot_results.Tracker,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -70,6 +76,8 @@ func NewAPIHandler(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		planSvc:          planSvc,
+		resultTracker:    resultTracker,
 	}
 
 	// Create and start event stream manager
@@ -77,6 +85,7 @@ func NewAPIHandler(
 		h.eventStreamMgr = NewEventStreamManager(
 			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
 			builderAPISvc, revealSvc, inclusionTracker, payments,
+			planSvc, resultTracker,
 		)
 		h.eventStreamMgr.Start()
 	}

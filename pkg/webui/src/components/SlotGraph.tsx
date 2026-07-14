@@ -543,17 +543,22 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             {genesisTime > 0 && state.revealAttempts?.map((att, idx) => {
               const failed = !att.success && !att.skipped;
               const status = att.success ? 'Success' : (att.skipped ? 'Skipped' : 'Failed');
+              // A skipped attempt (reveal withheld by the action plan or missed
+              // deadline) never published an envelope — render it distinctly
+              // instead of as a "sent" dot, which reads as a successful reveal.
+              const dotClass = att.success ? 'reveal-sent' : att.skipped ? 'reveal-skipped' : 'reveal-failed';
               const title = att.attempt && att.maxAttempts
                 ? `Payload Reveal (attempt ${att.attempt}/${att.maxAttempts})`
-                : 'Payload Reveal';
+                : att.skipped ? 'Payload Reveal (withheld)' : 'Payload Reveal';
               return renderEventDot(
-                failed ? 'reveal-failed' : 'reveal-sent',
+                dotClass,
                 att.time - slotStartTime,
                 {
                   title,
                   items: [
                     { label: 'Time', value: `${att.time - slotStartTime}ms` },
                     { label: 'Status', value: status },
+                    ...(att.skipped && att.skipReason ? [{ label: 'Reason', value: att.skipReason }] : []),
                     ...(att.error ? [{ label: 'Error', value: att.error }] : [])
                   ]
                 },

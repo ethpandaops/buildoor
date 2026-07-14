@@ -6,11 +6,23 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
+	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
+
+// newServingPlanService builds a real plan service whose global baseline
+// serves builder-api bids (API port set, builder API enabled, no per-slot
+// plans stored).
+func newServingPlanService() *action_plan.PlanService {
+	return action_plan.NewPlanService(
+		&config.Config{APIPort: 8080, BuilderAPIEnabled: true},
+		&mockChainService{}, logrus.New())
+}
 
 // mockChainService is a minimal chain.Service for tests. It returns the
 // configured genesis, fork version, and current fork; all other accessors

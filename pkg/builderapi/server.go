@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	epbsapi "github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -48,6 +49,25 @@ type EventBroadcaster interface {
 	BroadcastBuilderAPIGetBidDelivered(slot uint64, blockHash, blockValue string)
 	BroadcastBuilderAPISubmitBlockReceived(slot uint64, blockHash string)
 	BroadcastBuilderAPISubmitBlockDelivered(slot uint64, blockHash string)
+}
+
+// SlotResultRecorder records builder-api activity into the per-slot result
+// history. It is the combined surface of both dialects' narrow recorder
+// interfaces (which it satisfies structurally); builderapi never imports the
+// implementing package.
+//
+// Bid statuses: "served" (response write succeeded; signedBid is the exact
+// signed object served), "suppressed" (the slot plan or global enable flag
+// suppressed serving; signedBid nil, values 0), "failed" (a gate, bid
+// construction, or the response encode/write failed; errMsg set), and
+// "cancelled" (the request context ended during a planned response delay).
+// Submission statuses: "received" (block decoded), "accepted" (published /
+// broadcast + reveal handoff done), "failed" (errMsg set). Dialect is
+// "legacy" or "epbs".
+type SlotResultRecorder interface {
+	RecordBuilderAPIBid(slot phase0.Slot, forkName string, signedBid any,
+		totalValueGwei, executionPaymentGwei uint64, status string, errMsg string)
+	RecordBlockSubmission(slot phase0.Slot, dialect string, status string, errMsg string)
 }
 
 // RequestStats holds counters for Builder API requests, aggregated across both
@@ -75,12 +95,16 @@ type Server struct {
 }
 
 // NewServer creates a new server and constructs both dialect handlers.
-// payloadCache may be nil; endpoints needing it degrade gracefully. blsSigner
-// may be nil; if set, getHeader signs builder bids. validatorStore is optional
-// (an in-memory store is created when nil); when provided it is the shared
-// instance also read by the legacy registration settings resolver.
+// planSvc is the mandatory per-slot scheduling/settings authority: the bid
+// handlers freeze the slot's plan at request time and serve per the frozen
+// effective settings. payloadCache may be nil; endpoints needing it degrade
+// gracefully. blsSigner may be nil; if set, getHeader signs builder bids.
+// validatorStore is optional (an in-memory store is created when nil); when
+// provided it is the shared instance also read by the legacy registration
+// settings resolver.
 func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service,
-	payloadCache *payload_builder.PayloadCache, blsSigner *signer.BLSSigner,
+	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
+	blsSigner *signer.BLSSigner,
 	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]) *Server {
 	store := validatorStore
 	if store == nil {
@@ -93,8 +117,8 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		chainSvc:        chainSvc,
 		payloadCache:    payloadCache,
 		validatorsStore: store,
-		legacy:          legacy.NewHandler(cfg, log, chainSvc, payloadCache, store, blsSigner),
-		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, payloadCache, blsSigner),
+		legacy:          legacy.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, store, blsSigner),
+		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, blsSigner),
 	}
 }
 
@@ -138,6 +162,13 @@ func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
 func (s *Server) SetProposerPreferencesStore(
 	store *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]) {
 	s.epbs.SetProposerPreferencesStore(store)
+}
+
+// SetResultRecorder wires the optional per-slot result recorder into both
+// dialect handlers. All uses are nil-guarded.
+func (s *Server) SetResultRecorder(rec SlotResultRecorder) {
+	s.legacy.SetResultRecorder(rec)
+	s.epbs.SetResultRecorder(rec)
 }
 
 // SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
