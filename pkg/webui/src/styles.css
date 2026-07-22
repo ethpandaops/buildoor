@@ -408,6 +408,109 @@
   overflow: hidden;
 }
 
+.event-popover-wide {
+  min-width: 440px;
+  max-width: 460px;
+}
+
+/* Head-vote arrival heatmap (inside the participation popover):
+   rows = client names, columns = time buckets, trailing column = attesters
+   on chain but never seen as raw singles. */
+.hv-heatmap {
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--bs-border-color);
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.hv-heatmap-note {
+  color: var(--bs-secondary-color);
+}
+
+.hv-heatmap-title {
+  font-weight: 600;
+  color: var(--bs-emphasis-color);
+  margin-bottom: 6px;
+}
+
+.hv-heatmap-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.hv-heatmap-name {
+  flex: 0 0 120px;
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hv-heatmap-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hv-heatmap-count {
+  color: var(--bs-secondary-color);
+  flex-shrink: 0;
+}
+
+.hv-heatmap-cells {
+  flex: 1;
+  display: flex;
+  gap: 1px;
+  height: 14px;
+}
+
+.hv-heatmap-cell {
+  flex: 1;
+  min-width: 0;
+  background: var(--bs-tertiary-bg);
+  border-radius: 1px;
+}
+
+.hv-heatmap-cell-deadline {
+  box-shadow: inset 2px 0 0 rgba(255, 193, 7, 0.7);
+}
+
+.hv-heatmap-cell-slot-end {
+  box-shadow: inset 2px 0 0 var(--bs-secondary-color);
+}
+
+.hv-heatmap-missed {
+  flex: 0 0 20px;
+  text-align: center;
+  color: var(--bs-secondary-color);
+}
+
+.hv-heatmap-missed-some {
+  color: #ffc107;
+  font-weight: 600;
+}
+
+.hv-heatmap-axis-row {
+  margin-top: 4px;
+}
+
+.hv-heatmap-axis {
+  flex: 1;
+  position: relative;
+  height: 14px;
+  color: var(--bs-secondary-color);
+  font-size: 10px;
+}
+
+.hv-heatmap-axis span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-2px);
+  white-space: nowrap;
+}
+
 .popover-title {
   padding: 8px 12px;
   font-weight: 600;

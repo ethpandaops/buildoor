@@ -169,6 +169,27 @@ export interface VoteCoverage {
   low: boolean;
 }
 
+// Per-name head-vote arrival heatmap of one slot (REST:
+// GET /api/buildoor/head-votes/{slot}); counts are vote arrivals per
+// fixed-width time bucket from the slot start.
+export interface HeadVoteDetail {
+  slot: number;
+  root: string;
+  slot_start_ms: number;
+  bucket_ms: number;
+  bucket_count: number;
+  total_members: number;
+  rows: HeadVoteDetailRow[];
+}
+
+export interface HeadVoteDetailRow {
+  name: string;
+  members: number;
+  seen: number;
+  in_block_unseen: number;
+  counts: number[];
+}
+
 export interface HeadVoteDataPoint {
   time: number;
   pct: number;

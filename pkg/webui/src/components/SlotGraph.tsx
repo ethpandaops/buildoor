@@ -2,6 +2,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
 import { Popover, PopoverData } from './Popover';
+import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
 
@@ -24,6 +25,8 @@ interface PopoverState {
   data: PopoverData;
   x: number;
   y: number;
+  // Set for the head-votes popover: embeds the per-name arrival heatmap.
+  headVoteSlot?: number;
 }
 
 // Extension in viewBox units (~50px at typical container widths).
@@ -418,8 +421,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                         title: 'Head Vote Participation',
                         items: popoverItems
                       },
-                      x: Math.min(e.clientX, window.innerWidth - 330),
-                      y: e.clientY + 10
+                      x: Math.min(e.clientX, window.innerWidth - 470),
+                      y: e.clientY + 10,
+                      headVoteSlot: slot
                     });
                   }}
                 />
@@ -784,7 +788,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
       </div>
 
       {popover && (
-        <Popover data={popover.data} x={popover.x} y={popover.y} onClose={closePopover} />
+        <Popover data={popover.data} x={popover.x} y={popover.y} onClose={closePopover}>
+          {popover.headVoteSlot !== undefined && (
+            <HeadVoteHeatmap slot={popover.headVoteSlot} slotDurationMs={slotDuration} />
+          )}
+        </Popover>
       )}
     </div>
   );

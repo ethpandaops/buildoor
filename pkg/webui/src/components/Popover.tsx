@@ -16,9 +16,11 @@ interface PopoverProps {
   x: number;
   y: number;
   onClose: () => void;
+  // Optional custom content rendered below the items table (widens the popover).
+  children?: React.ReactNode;
 }
 
-export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose }) => {
+export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children }) => {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
@@ -52,7 +54,7 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose }) => {
   return (
     <div
       ref={popoverRef}
-      className="event-popover"
+      className={`event-popover ${children ? 'event-popover-wide' : ''}`}
       style={{ left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -82,6 +84,7 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose }) => {
           ))}
         </tbody>
       </table>
+      {children}
     </div>
   );
 };

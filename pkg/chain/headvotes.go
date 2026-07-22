@@ -29,8 +29,9 @@ const (
 	// dropped.
 	maxTrackedRootsPerSlot = 4
 	// voteSlotRetention is how many slots of vote state are kept before
-	// pruning (relative to the latest head slot).
-	voteSlotRetention = 4
+	// pruning (relative to the latest head slot). Covers the slot timeline's
+	// visible window so every rendered slot can serve its vote-detail heatmap.
+	voteSlotRetention = 8
 
 	// Subnet coverage detection: every imported block's attestations are the
 	// ground truth of which votes existed; comparing them against the raw
@@ -81,6 +82,7 @@ type slotCommitteeLayout struct {
 	committeeSizes   []int
 	totalMembers     int
 	positions        map[phase0.ValidatorIndex]int32 // validator index -> global bit position
+	validators       []phase0.ValidatorIndex         // bit position -> validator index
 	weights          []uint32                        // effective balance in full ETH per bit position
 	totalSlotETH     uint64
 }
@@ -89,7 +91,9 @@ type slotCommitteeLayout struct {
 // Bits map 1:1 to the slot layout's member positions; participation is
 // accumulated incrementally as bits are set.
 type rootVoteState struct {
-	voteBits         []byte // one bit per committee member seen via single_attestation
+	voteBits         []byte   // one bit per committee member seen via single_attestation
+	voteTimes        []uint16 // per bit position: ms offset from slot start + 1; 0 = not seen
+	blockBits        []byte   // attesters that landed on chain (next-block ground truth); nil until measured
 	participatingETH uint64
 	voteCount        int
 	lastVoteAt       time.Time // receive time of the last merged vote; stamps updates
@@ -241,6 +245,66 @@ func (t *HeadVoteTracker) buildCoverage() SubnetCoverage {
 	}
 
 	return cov
+}
+
+// VoteDetail is a per-attester snapshot of one (slot, root) vote state,
+// consumed by the WebUI's vote-arrival heatmap.
+type VoteDetail struct {
+	Slot         phase0.Slot
+	BlockRoot    phase0.Root
+	TotalMembers int
+	Attesters    []VoteAttester
+}
+
+// VoteAttester is one committee member's vote observation.
+type VoteAttester struct {
+	Index    phase0.ValidatorIndex
+	SeenAtMs int32 // ms offset from slot start; -1 = never seen as a raw single
+	InBlock  bool  // attested on chain per the next-block ground truth
+}
+
+// GetVoteDetail returns the per-attester vote detail for a slot. A zero root
+// resolves the slot's primary root. ok is false when the (slot, root) pair is
+// not tracked.
+func (t *HeadVoteTracker) GetVoteDetail(slot phase0.Slot, root phase0.Root) (VoteDetail, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	state, ok := t.slotStates[slot]
+	if !ok {
+		return VoteDetail{}, false
+	}
+
+	rs := state.roots[root]
+	if root == (phase0.Root{}) {
+		root, rs = state.primary()
+	}
+
+	if rs == nil {
+		return VoteDetail{}, false
+	}
+
+	detail := VoteDetail{
+		Slot:         slot,
+		BlockRoot:    root,
+		TotalMembers: state.layout.totalMembers,
+		Attesters:    make([]VoteAttester, state.layout.totalMembers),
+	}
+
+	for pos := range state.layout.totalMembers {
+		seenAt := int32(-1)
+		if rs.voteTimes[pos] != 0 {
+			seenAt = int32(rs.voteTimes[pos]) - 1
+		}
+
+		detail.Attesters[pos] = VoteAttester{
+			Index:    state.layout.validators[pos],
+			SeenAtMs: seenAt,
+			InBlock:  isBitSet(rs.blockBits, pos),
+		}
+	}
+
+	return detail, true
 }
 
 // GetParticipation returns the current participation snapshot for a tracked
@@ -403,9 +467,20 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 			continue
 		}
 
+		// Keep the ground-truth bitmap on the root state (created if needed,
+		// respecting the root cap) so the per-name vote detail can report
+		// attesters that landed on chain but were never seen as singles.
 		seen := 0
-		if rs, ok := t.slotStates[key.slot].roots[key.root]; ok {
+		if rs := t.getOrCreateRootState(t.slotStates[key.slot], key.root); rs != nil {
 			seen = popCountAnd(bitmap, rs.voteBits)
+
+			if rs.blockBits == nil {
+				rs.blockBits = bitmap
+			} else {
+				for i := range bitmap {
+					rs.blockBits[i] |= bitmap[i]
+				}
+			}
 		}
 
 		t.coverageSamples = append(t.coverageSamples, coverageSample{seen: seen, total: total})
@@ -479,6 +554,7 @@ func (t *HeadVoteTracker) handleSingleAttestation(event *beacon.SingleAttestatio
 	}
 
 	setBit(rs.voteBits, int(pos))
+	rs.voteTimes[pos] = t.voteTimeOffset(event.Slot, event.ReceivedAt)
 
 	rs.participatingETH += uint64(layout.weights[pos])
 	rs.voteCount++
@@ -486,6 +562,19 @@ func (t *HeadVoteTracker) handleSingleAttestation(event *beacon.SingleAttestatio
 	rs.dirty = true
 
 	t.maybeFireThreshold(event.Slot, state, event.BeaconBlockRoot, rs)
+}
+
+// voteTimeOffset encodes a vote's receive time as ms offset from the slot
+// start + 1 (0 is reserved for "not seen"), clamped to the uint16 range.
+func (t *HeadVoteTracker) voteTimeOffset(slot phase0.Slot, receivedAt time.Time) uint16 {
+	offset := receivedAt.Sub(t.chainSvc.SlotToTime(slot)).Milliseconds() + 1
+	if offset < 1 {
+		offset = 1
+	} else if offset > 65535 {
+		offset = 65535
+	}
+
+	return uint16(offset)
 }
 
 // getOrCreateSlotState returns the slot's vote state, lazily building the
@@ -556,7 +645,8 @@ func (t *HeadVoteTracker) getOrCreateRootState(state *slotVoteState, root phase0
 	}
 
 	rs := &rootVoteState{
-		voteBits: make([]byte, (state.layout.totalMembers+7)/8),
+		voteBits:  make([]byte, (state.layout.totalMembers+7)/8),
+		voteTimes: make([]uint16, state.layout.totalMembers),
 	}
 	state.roots[root] = rs
 
@@ -601,11 +691,14 @@ func (t *HeadVoteTracker) buildCommitteeLayout(slot phase0.Slot) *slotCommitteeL
 		weights:          make([]uint32, totalMembers),
 	}
 
+	layout.validators = make([]phase0.ValidatorIndex, totalMembers)
+
 	pos := 0
 
 	for _, committee := range committees {
 		for _, aidx := range committee {
 			layout.positions[stats.ActiveIndices[aidx]] = int32(pos)
+			layout.validators[pos] = stats.ActiveIndices[aidx]
 			layout.weights[pos] = stats.EffectiveBalances[aidx]
 			layout.totalSlotETH += uint64(stats.EffectiveBalances[aidx])
 			pos++

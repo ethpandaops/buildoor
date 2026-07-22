@@ -252,7 +252,11 @@ npm run clean
      `threshold_met`. Feeds the WebUI `head_votes` SSE event (participation
      curve + threshold-met marker in the slot graph);
      `GetParticipation(slot, root)` exposes snapshots for future consumers
-     (e.g. reveal gating). **Subnet coverage detection**: every imported
+     (e.g. reveal gating). Per-vote arrival times are recorded (`voteTimes`,
+     uint16 ms-offset per member) and served via `GetVoteDetail(slot, root)`
+     (zero root = primary) together with the block ground-truth bitmap — the
+     WebUI heatmap endpoint groups them by validator-ranges client name
+     (retention 8 slots, in-memory only). **Subnet coverage detection**: every imported
      block's attestations (fetched per head event, aggregate-format walk) are
      the ground truth compared against the singles bitmap; a rolling 16-block
      window seeing <80% of on-chain attesters (min 8 blocks / 16 attesters,
@@ -605,6 +609,13 @@ To make frontend changes:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
   JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
   is JSON-only metadata
+- `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
+  arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
+  client name into fixed-width time buckets from the slot start (default
+  slot_ms/24), plus per-name seen/members and the count of attesters that
+  landed on chain without being seen as singles. Zero/absent root resolves the
+  slot's primary root; only tracker-retained slots (8) are served (404
+  otherwise). Fetched by the Head Vote Participation popover's heatmap
 - `POST /api/config/settings` - Generic path-based global settings update keyed by
   canonical registry keys (`{"epbs.bid_subsidy": 1000, "schedule.mode": "all"}`);
   atomic, unknown keys rejected (auth + audit)

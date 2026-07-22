@@ -448,14 +448,13 @@ func TestHeadVoteTrackerRootCap(t *testing.T) {
 func TestHeadVoteTrackerPrunesOldSlots(t *testing.T) {
 	rootA := phase0.Root{0xaa}
 	tracker, chainSvc := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
-		5:  {{0, 1}},
-		13: {{0, 1}},
+		5: {{0, 1}},
 	}, 8)
 
 	tracker.handleSingleAttestation(singleVote(5, 0, 0, rootA))
 
-	chainSvc.currentSlot = 13
-	tracker.handleHeadEvent(&beacon.HeadEvent{Slot: 13, Block: rootA})
+	chainSvc.currentSlot = 5 + voteSlotRetention + 1
+	tracker.handleHeadEvent(&beacon.HeadEvent{Slot: 5 + voteSlotRetention + 1, Block: rootA})
 
 	_, ok := tracker.GetParticipation(5, rootA)
 	assert.False(t, ok, "slots beyond the retention window must be pruned")
@@ -577,4 +576,60 @@ func TestHeadVoteTrackerSubnetCoverageDetection(t *testing.T) {
 	cov = tracker.GetSubnetCoverage()
 	assert.False(t, cov.Low)
 	assert.InDelta(t, 100.0, cov.SeenPct, 0.001)
+}
+
+// TestHeadVoteTrackerVoteDetail exposes per-attester arrival offsets and the
+// block ground truth, resolving the primary root for a zero root.
+func TestHeadVoteTrackerVoteDetail(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, chainSvc := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: {{0, 1, 2}, {3, 4}},
+	}, 8)
+
+	slotStart := chainSvc.SlotToTime(5)
+
+	vote := func(committee phase0.CommitteeIndex, attester phase0.ValidatorIndex, offsetMs int64) {
+		v := singleVote(5, committee, attester, rootA)
+		v.ReceivedAt = slotStart.Add(time.Duration(offsetMs) * time.Millisecond)
+		tracker.handleSingleAttestation(v)
+	}
+
+	vote(0, 1, 150)
+	vote(1, 3, 2100)
+	// A vote clocked before the slot start clamps to offset 0.
+	vote(1, 4, -50)
+
+	// Block ground truth: members 0,1 of committee 0 and member 3 of
+	// committee 1 landed on chain.
+	tracker.recordBlockAttestations([]*beacon.AttestationEvent{{
+		Slot:            5,
+		BeaconBlockRoot: rootA,
+		CommitteeBits:   []byte{0b11},
+		AggregationBits: []byte{0b01011},
+	}})
+
+	detail, ok := tracker.GetVoteDetail(5, phase0.Root{})
+	require.True(t, ok, "zero root must resolve the primary root")
+	assert.Equal(t, rootA, detail.BlockRoot)
+	assert.Equal(t, 5, detail.TotalMembers)
+	require.Len(t, detail.Attesters, 5)
+
+	byIndex := make(map[phase0.ValidatorIndex]VoteAttester, len(detail.Attesters))
+	for _, a := range detail.Attesters {
+		byIndex[a.Index] = a
+	}
+
+	assert.Equal(t, int32(150), byIndex[1].SeenAtMs)
+	assert.True(t, byIndex[1].InBlock)
+	assert.Equal(t, int32(2100), byIndex[3].SeenAtMs)
+	assert.True(t, byIndex[3].InBlock)
+	assert.Equal(t, int32(0), byIndex[4].SeenAtMs, "pre-slot arrivals clamp to 0")
+	assert.False(t, byIndex[4].InBlock)
+	assert.Equal(t, int32(-1), byIndex[0].SeenAtMs, "unseen member")
+	assert.True(t, byIndex[0].InBlock, "on chain but never seen as single")
+	assert.Equal(t, int32(-1), byIndex[2].SeenAtMs)
+	assert.False(t, byIndex[2].InBlock)
+
+	_, ok = tracker.GetVoteDetail(6, phase0.Root{})
+	assert.False(t, ok, "untracked slot has no detail")
 }
