@@ -1649,15 +1649,34 @@ const docTemplate = `{
         "action_plan.ResolvedRevealSettings": {
             "type": "object",
             "properties": {
+                "broadcast_validation": {
+                    "description": "BroadcastValidation is the envelope submission's broadcast_validation\nlevel: gossip | consensus | consensus_and_equivocation.",
+                    "type": "string"
+                },
                 "bypass_deadline": {
                     "description": "BypassDeadline disables the \"past the in-slot deadline → skip\" check so\ndeliberately late reveals are attempted.",
                     "type": "boolean"
+                },
+                "gate_mode": {
+                    "description": "GateMode decides the reveal moment: time | vote | vote_or_time |\nvote_and_time.",
+                    "type": "string"
+                },
+                "max_attempts": {
+                    "description": "MaxAttempts / RetryIntervalMs are the publish retry policy\n(global-only, no per-slot override).",
+                    "type": "integer"
+                },
+                "retry_interval_ms": {
+                    "type": "integer"
                 },
                 "reveal_time_ms": {
                     "type": "integer"
                 },
                 "suppressed": {
                     "type": "boolean"
+                },
+                "vote_threshold_pct": {
+                    "description": "VoteThresholdPct is the participation threshold (percent) opening the\nvote gate.",
+                    "type": "integer"
                 }
             }
         },
@@ -1678,11 +1697,23 @@ const docTemplate = `{
         "action_plan.RevealPlan": {
             "type": "object",
             "properties": {
+                "broadcast_validation": {
+                    "description": "BroadcastValidation overrides the envelope submission's broadcast\nvalidation level: gossip | consensus | consensus_and_equivocation.",
+                    "type": "string"
+                },
+                "gate_mode": {
+                    "description": "GateMode overrides the reveal gate: time | vote | vote_or_time |\nvote_and_time.",
+                    "type": "string"
+                },
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 },
                 "reveal_time_ms": {
-                    "description": "RevealTimeMs is signed milliseconds relative to slot start.",
+                    "description": "RevealTimeMs is signed milliseconds relative to slot start (time gate).",
+                    "type": "integer"
+                },
+                "vote_threshold_pct": {
+                    "description": "VoteThresholdPct overrides the vote gate's participation threshold.",
                     "type": "integer"
                 }
             }

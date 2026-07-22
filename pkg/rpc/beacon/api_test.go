@@ -31,24 +31,24 @@ func TestSubmitExecutionPayloadEnvelopeBlobValidation(t *testing.T) {
 	envelope := &eth2all.SignedExecutionPayloadEnvelope{Version: version.DataVersionGloas}
 
 	t.Run("invalid blob length", func(t *testing.T) {
-		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope, [][]byte{make([]byte, 100)}, nil)
+		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope, [][]byte{make([]byte, 100)}, nil, "")
 		require.ErrorContains(t, err, "invalid blob 0")
 	})
 
 	t.Run("invalid kzg proof length", func(t *testing.T) {
 		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope,
-			[][]byte{make([]byte, 131072)}, [][]byte{make([]byte, 47)})
+			[][]byte{make([]byte, 131072)}, [][]byte{make([]byte, 47)}, "")
 		require.ErrorContains(t, err, "invalid kzg proof 0")
 	})
 
 	t.Run("valid submission", func(t *testing.T) {
 		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope,
-			[][]byte{make([]byte, 131072)}, [][]byte{make([]byte, 48)})
+			[][]byte{make([]byte, 131072)}, [][]byte{make([]byte, 48)}, "gossip")
 		require.NoError(t, err)
 	})
 
 	t.Run("no blobs", func(t *testing.T) {
-		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope, nil, nil)
+		err := client.SubmitExecutionPayloadEnvelope(ctx, envelope, nil, nil, "consensus_and_equivocation")
 		require.NoError(t, err)
 	})
 }

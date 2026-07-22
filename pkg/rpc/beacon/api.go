@@ -6,6 +6,7 @@ import (
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
+	apiv2 "github.com/ethpandaops/go-eth2-client/api/v2"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -42,10 +43,27 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 	envelope *eth2all.SignedExecutionPayloadEnvelope,
 	blobs [][]byte,
 	kzgProofs [][]byte,
+	broadcastValidation string,
 ) error {
 	submitter, ok := c.client.(eth2client.ExecutionPayloadEnvelopeSubmitter)
 	if !ok {
 		return fmt.Errorf("client does not support execution payload envelope submission")
+	}
+
+	// Map the broadcast_validation level to the query parameter; gossip is
+	// the beacon-API default and is sent as "no parameter".
+	var validation *apiv2.BroadcastValidation
+
+	switch broadcastValidation {
+	case "", "gossip":
+	case "consensus":
+		v := apiv2.BroadcastValidationConsensus
+		validation = &v
+	case "consensus_and_equivocation":
+		v := apiv2.BroadcastValidationConsensusAndEquivocation
+		validation = &v
+	default:
+		return fmt.Errorf("invalid broadcast validation level %q", broadcastValidation)
 	}
 
 	typedBlobs := make([]deneb.Blob, len(blobs))
@@ -72,6 +90,7 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 		SignedExecutionPayloadEnvelope: envelope,
 		KZGProofs:                      typedProofs,
 		Blobs:                          typedBlobs,
+		BroadcastValidation:            validation,
 	}); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}

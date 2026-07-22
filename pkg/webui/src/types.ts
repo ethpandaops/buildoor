@@ -23,11 +23,24 @@ export interface StreamEvent {
 export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
+  reveal?: RevealConfig;
   deposit_amount: number;
   topup_threshold: number;
   topup_amount: number;
   payload_build_time?: number;
   extra_data?: string;
+}
+
+// Payload reveal config (own section, shared by the p2p bidder and Builder
+// API flows).
+export interface RevealConfig {
+  enabled: boolean;
+  gate_mode: string; // time | vote | vote_or_time | vote_and_time
+  time_ms: number;
+  vote_threshold_pct: number;
+  broadcast_validation: string; // gossip | consensus | consensus_and_equivocation
+  max_attempts: number;
+  retry_interval_ms: number;
 }
 
 export interface ScheduleConfig {
@@ -41,7 +54,6 @@ export interface EPBSConfig {
   build_start_time: number;
   bid_start_time: number;
   bid_end_time: number;
-  reveal_time: number;
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
@@ -397,6 +409,9 @@ export interface BuilderAPIPlan {
 export interface RevealPlan {
   mode: ActionMode;
   reveal_time_ms?: number;
+  gate_mode?: string; // time | vote | vote_or_time | vote_and_time
+  vote_threshold_pct?: number;
+  broadcast_validation?: string; // gossip | consensus | consensus_and_equivocation
 }
 
 // The build category has no custom/disabled mode: it only tweaks how the
@@ -487,6 +502,11 @@ export interface ResolvedBuilderAPISettings {
 export interface ResolvedRevealSettings {
   suppressed?: boolean;
   reveal_time_ms: number;
+  gate_mode: string;
+  vote_threshold_pct: number;
+  broadcast_validation: string;
+  max_attempts: number;
+  retry_interval_ms: number;
   bypass_deadline?: boolean;
 }
 

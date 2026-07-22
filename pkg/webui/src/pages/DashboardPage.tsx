@@ -7,6 +7,7 @@ import { EventLog } from '../components/EventLog';
 import { ConfigPanel } from '../components/ConfigPanel';
 import { BuilderInfo } from '../components/BuilderInfo';
 import { BuilderConfigPanel } from '../components/BuilderConfigPanel';
+import { RevealConfigPanel } from '../components/RevealConfigPanel';
 import { BuilderAPIConfigPanel } from '../components/BuilderAPIConfigPanel';
 import { StatsPanel } from '../components/StatsPanel';
 
@@ -144,6 +145,9 @@ const DashboardPage: React.FC = () => {
 
           {/* Builder API */}
           <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
+
+          {/* Payload Reveal (shared by both flows) */}
+          <RevealConfigPanel config={config} />
         </div>
       </div>
     </div>

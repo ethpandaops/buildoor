@@ -34,6 +34,19 @@ func DefaultConfig() *Config {
 			BidSubsidy:           100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
 			HeadVoteThresholdPct: 60,        // Gloas builder payment quorum (6/10)
 		},
+		Reveal: RevealConfig{
+			Enabled: true,
+			// Reveal as soon as the payment quorum is reached, falling back
+			// to the time gate: the earliest safe reveal moment.
+			GateMode:         RevealGateVoteOrTime,
+			VoteThresholdPct: 60, // Gloas builder payment quorum (6/10)
+			// Equivocation-checked broadcast protects against unbundling via
+			// equivocating blocks.
+			BroadcastValidation: BroadcastValidationConsensusAndEquivocation,
+			MaxAttempts:         3,
+			RetryIntervalMs:     500,
+			// TimeMs: 0 = auto-compute from slot time (see ApplySlotDefaults).
+		},
 	}
 }
 
@@ -52,9 +65,9 @@ const referenceSlotTimeMs = 12000
 //	PayloadBuildTime: 2100ms @12s  (e.g.  1050ms @6s)
 //	BidStartTime:     -400ms @12s  (e.g.  -200ms @6s)
 //	BidEndTime:       -100ms @12s  (e.g.   -50ms @6s)
-//	RevealTime:       5000ms @12s  (e.g.  2500ms @6s)
+//	Reveal.TimeMs:    5000ms @12s  (e.g.  2500ms @6s)
 //
-// RevealTime (41.7% of the slot) is anchored to the Gloas/EIP-7732 deadlines:
+// Reveal.TimeMs (41.7% of the slot) is anchored to the Gloas/EIP-7732 deadlines:
 // it sits after the attestation deadline (ATTESTATION_DUE_BPS_GLOAS, 25%) — so
 // the builder has seen attestation weight on the block before committing to
 // reveal — and comfortably before the hard payload deadline (PAYLOAD_DUE_BPS,
@@ -78,7 +91,7 @@ func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 		c.EPBS.BidEndTime = -100 * slotTimeMs / referenceSlotTimeMs
 	}
 
-	if c.EPBS.RevealTime == 0 {
-		c.EPBS.RevealTime = 5000 * slotTimeMs / referenceSlotTimeMs
+	if c.Reveal.TimeMs == 0 {
+		c.Reveal.TimeMs = 5000 * slotTimeMs / referenceSlotTimeMs
 	}
 }

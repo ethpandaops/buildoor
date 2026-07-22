@@ -83,13 +83,21 @@ func init() {
 	// ePBS time-based flags (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Int64("epbs-bid-start", 0, "First bid time in ms relative to slot start (0 = auto: -400ms @12s, scaled to slot time)")
 	rootCmd.PersistentFlags().Int64("epbs-bid-end", 0, "Last bid time in ms relative to slot start (0 = auto: -100ms @12s, scaled to slot time)")
-	rootCmd.PersistentFlags().Int64("epbs-reveal-time", 0, "Reveal time in ms relative to slot start (0 = auto: 5000ms @12s, scaled to slot time)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
+
+	// Payload reveal (shared by the p2p bidder and Builder API flows)
+	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
+	rootCmd.PersistentFlags().String("reveal-gate-mode", defaults.Reveal.GateMode, "Reveal gate: time, vote, vote_or_time or vote_and_time")
+	rootCmd.PersistentFlags().Int64("reveal-time", 0, "Reveal time gate in ms relative to slot start (0 = auto: 5000ms @12s, scaled to slot time)")
+	rootCmd.PersistentFlags().Uint64("reveal-vote-threshold", defaults.Reveal.VoteThresholdPct, "Head-vote participation in percent that opens the reveal vote gate")
+	rootCmd.PersistentFlags().String("reveal-broadcast-validation", defaults.Reveal.BroadcastValidation, "Envelope broadcast validation: gossip, consensus or consensus_and_equivocation")
+	rootCmd.PersistentFlags().Uint64("reveal-max-attempts", defaults.Reveal.MaxAttempts, "Total publish attempts per reveal")
+	rootCmd.PersistentFlags().Int64("reveal-retry-interval", defaults.Reveal.RetryIntervalMs, "Wait between failed reveal attempts in ms")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
@@ -190,13 +198,21 @@ func initConfig() error {
 			BuildStartTime:       v.GetInt64("build-start-time"),
 			BidStartTime:         v.GetInt64("epbs-bid-start"),
 			BidEndTime:           v.GetInt64("epbs-bid-end"),
-			RevealTime:           v.GetInt64("epbs-reveal-time"),
 			BidMinAmount:         v.GetUint64("epbs-bid-min"),
 			BidIncrease:          v.GetUint64("epbs-bid-increase"),
 			BidInterval:          v.GetInt64("epbs-bid-interval"),
 			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
+		},
+		Reveal: config.RevealConfig{
+			Enabled:             v.GetBool("reveal-enabled"),
+			GateMode:            v.GetString("reveal-gate-mode"),
+			TimeMs:              v.GetInt64("reveal-time"),
+			VoteThresholdPct:    v.GetUint64("reveal-vote-threshold"),
+			BroadcastValidation: v.GetString("reveal-broadcast-validation"),
+			MaxAttempts:         v.GetUint64("reveal-max-attempts"),
+			RetryIntervalMs:     v.GetInt64("reveal-retry-interval"),
 		},
 		PayloadBuildTime:            v.GetUint64("payload-build-time"),
 		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),
@@ -211,6 +227,16 @@ func initConfig() error {
 
 	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
+	}
+
+	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {
+		return fmt.Errorf("invalid --reveal-gate-mode %q: must be time, vote, vote_or_time or vote_and_time",
+			cfg.Reveal.GateMode)
+	}
+
+	if cfg.Reveal.BroadcastValidation != cfg.Reveal.NormalizedBroadcastValidation() {
+		return fmt.Errorf("invalid --reveal-broadcast-validation %q: must be gossip, consensus or consensus_and_equivocation",
+			cfg.Reveal.BroadcastValidation)
 	}
 
 	return nil

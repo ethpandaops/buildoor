@@ -207,7 +207,13 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   // Bid window and reveal marker
   const bidStartX = epbsConfig ? calculatePosition(epbsConfig.bid_start_time, rangeStart, totalRange) : 0;
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
-  const revealX = epbsConfig ? calculatePosition(epbsConfig.reveal_time, rangeStart, totalRange) : 0;
+  // The reveal marker shows the time gate; a pure vote-gated reveal has no
+  // fixed time to mark.
+  const revealConfig = config?.reveal;
+  const revealTimeGated = (revealConfig?.gate_mode ?? 'time') !== 'vote';
+  const revealX = revealConfig && revealTimeGated
+    ? calculatePosition(revealConfig.time_ms, rangeStart, totalRange)
+    : -1;
 
   // Build delay line: from build start to payloadCreatedAt (or live "now" while building).
   // Prefer the actual build-started time (accurate even when building immediately);
@@ -306,8 +312,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             </div>
           )}
 
-          {/* Reveal marker - spans ePBS row only */}
-          {epbsActive && epbsRowBottom >= 0 && epbsConfig && revealX >= 0 && revealX <= 100 && (
+          {/* Reveal marker (time gate) - spans ePBS row only */}
+          {epbsActive && epbsRowBottom >= 0 && revealConfig && revealX >= 0 && revealX <= 100 && (
             <div
               className={`reveal-marker ${!state.bidWon ? 'reveal-marker-disabled' : ''}`}
               style={{
@@ -316,7 +322,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 left: `${revealX}%`
               }}
             >
-              <span className="duty-label reveal-label">Reveal: {epbsConfig.reveal_time}ms</span>
+              <span className="duty-label reveal-label">
+                Reveal: {revealConfig.time_ms}ms
+                {revealConfig.gate_mode === 'vote_or_time' ? ' (or vote)' : ''}
+                {revealConfig.gate_mode === 'vote_and_time' ? ' (and vote)' : ''}
+              </span>
             </div>
           )}
         </div>
