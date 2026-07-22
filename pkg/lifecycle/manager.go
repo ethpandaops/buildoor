@@ -4,6 +4,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -60,7 +61,10 @@ type Manager struct {
 	depositPendingCallback func()
 	registrationDone       atomic.Bool
 	enabled                atomic.Bool
-	eventCallback          func(*LifecycleEvent)
+	// exitNoticed dedupes the exited-builder warning event; re-armed when the
+	// pubkey shows up unexited again (fresh registration after registry reuse).
+	exitNoticed   atomic.Bool
+	eventCallback func(*LifecycleEvent)
 }
 
 // NewManager creates a new lifecycle manager.
@@ -199,6 +203,10 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 		m.fireEvent("state_change", fmt.Sprintf("Builder already registered (index: %d, balance: %d gwei)", state.Index, state.Balance), "info")
 		m.onRegistered(state.Index)
 
+		if state.WithdrawableEpoch != chain.FarFutureEpoch {
+			m.noticeExitOnce(state.WithdrawableEpoch)
+		}
+
 		return nil
 	}
 
@@ -246,6 +254,21 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 	// whether an exit can be submitted.
 	if !isRegistered {
 		return fmt.Errorf("builder not registered")
+	}
+
+	// Check the live chain entry, not the cached state: an already-exited builder
+	// fails is_active_builder on the beacon side, so a second request only wastes
+	// the queue fee.
+	info := m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey())
+	if chain.HasBuilderExited(info) {
+		return fmt.Errorf("builder exit already initiated (withdrawable epoch %d)", info.WithdrawableEpoch)
+	}
+
+	// The beacon chain silently ignores exit requests while the builder has pending
+	// payments (get_pending_balance_to_withdraw_for_builder != 0) — the transaction
+	// would confirm but the exit never happen.
+	if info != nil && info.PendingPayments > 0 {
+		return fmt.Errorf("builder has %d gwei in pending payments; the exit request would be ignored on chain — retry after they settle", info.PendingPayments)
 	}
 
 	m.fireEvent("exit", fmt.Sprintf("Submitting builder exit for builder index %d", builderIndex), "info")
@@ -648,7 +671,13 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 
 			needsTopup, amount, err := m.balanceSvc.NeedsTopup(ctx)
 			if err != nil {
-				m.log.WithError(err).Warn("Balance check failed")
+				if errors.Is(err, ErrBuilderExited) {
+					// Expected steady state after an exit; the one-time warning
+					// event already fired from refreshBuilderState.
+					m.log.Debug("Builder has exited, skipping top-up check")
+				} else {
+					m.log.WithError(err).Warn("Balance check failed")
+				}
 
 				continue
 			}
@@ -679,6 +708,23 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 	}
 }
 
+// noticeExitOnce logs and fires the exited-builder warning the first time an
+// initiated exit is seen on chain: the key can never be reactivated, so top-ups
+// stay disabled until the pubkey leaves the builder registry.
+func (m *Manager) noticeExitOnce(withdrawableEpoch uint64) {
+	if !m.exitNoticed.CompareAndSwap(false, true) {
+		return
+	}
+
+	m.log.WithField("withdrawable_epoch", withdrawableEpoch).
+		Warn("Builder exit initiated; top-ups disabled (an exited builder cannot be reactivated)")
+	m.fireEvent("state_change",
+		fmt.Sprintf(
+			"Builder exit initiated (withdrawable epoch %d). The key cannot be reactivated — deposits would be withdrawn back to the wallet, so top-ups are disabled until the pubkey leaves the builder set.",
+			withdrawableEpoch),
+		"warning")
+}
+
 // refreshBuilderState updates the cached builder state from the chain service.
 func (m *Manager) refreshBuilderState() {
 	pubkey := m.signer.PublicKey()
@@ -686,6 +732,14 @@ func (m *Manager) refreshBuilderState() {
 
 	if info == nil {
 		return
+	}
+
+	if chain.HasBuilderExited(info) {
+		m.noticeExitOnce(info.WithdrawableEpoch)
+	} else {
+		// The pubkey shows up unexited again (fresh registration after the old
+		// entry left the registry) — re-arm the warning for a future exit.
+		m.exitNoticed.Store(false)
 	}
 
 	m.stateMu.Lock()

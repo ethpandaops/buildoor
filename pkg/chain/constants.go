@@ -13,3 +13,14 @@ func IsBuilderActive(info *BuilderInfo, finalizedEpoch uint64) bool {
 	}
 	return info.DepositEpoch < finalizedEpoch && info.WithdrawableEpoch == FarFutureEpoch
 }
+
+// HasBuilderExited returns true when the builder's exit has been initiated
+// (withdrawable epoch set). Per the Gloas spec an exited builder can never be
+// reactivated: a deposit for its pubkey only tops up the exited entry and is
+// withdrawn back to the execution address by the sweep (pushing the withdrawable
+// epoch out by MIN_BUILDER_WITHDRAWABILITY_DELAY if the entry was already swept).
+// The pubkey only becomes depositable again once the entry's index is reused by a
+// different builder's deposit and the pubkey leaves the registry (info == nil).
+func HasBuilderExited(info *BuilderInfo) bool {
+	return info != nil && info.WithdrawableEpoch != FarFutureEpoch
+}
