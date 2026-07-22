@@ -17,10 +17,14 @@ import (
 
 const maxExtraDataSize = 32
 
-// ModifyPayloadExtraData rewrites the extraData field of a built execution
-// payload in place, prepending the given prefix (truncating the original to
-// stay within the 32-byte limit), recomputes the block hash, updates the
-// payload's BlockHash field, and returns the new hash.
+// ModifyPayload rewrites header-only fields of a built execution payload in
+// place and recomputes the block hash: the extraData field gets the given
+// prefix prepended (truncating the original to stay within the 32-byte
+// limit), and a non-zero gasLimitOverride replaces the gas limit the EL built
+// with (used when the EL ignores the requested target gas limit; the caller
+// must ensure the override stays >= gasUsed and within the EIP-1559 bounds of
+// the parent). The payload's BlockHash field is updated and the new hash
+// returned.
 //
 // The parentBeaconBlockRoot is required because it is part of the block header
 // (and therefore affects the block hash) but is not carried in the execution
@@ -33,10 +37,11 @@ const maxExtraDataSize = 32
 // The function first verifies it can reconstruct the original block hash from
 // the payload fields. If verification fails (e.g. an unhandled fork added new
 // header fields) it returns an error rather than producing an incorrect hash.
-func ModifyPayloadExtraData(
+func ModifyPayload(
 	p *engineall.ExecutionPayload,
 	executionRequests []prague.ExecutionRequest,
 	extraDataPrefix []byte,
+	gasLimitOverride uint64,
 	parentBeaconBlockRoot common.Hash,
 ) (common.Hash, error) {
 	header, err := buildHeaderFromPayload(p, parentBeaconBlockRoot, executionRequests)
@@ -68,6 +73,11 @@ func ModifyPayloadExtraData(
 				computedHash.Hex(), originalHash.Hex(),
 			)
 		}
+	}
+
+	if gasLimitOverride > 0 {
+		header.GasLimit = gasLimitOverride
+		p.GasLimit = gasLimitOverride
 	}
 
 	// Build new extra data: prefix + "/" separator + original (truncated to

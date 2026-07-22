@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -162,6 +163,7 @@ type HeadVoteTracker struct {
 
 	updateDispatcher   *utils.Dispatcher[*HeadVoteUpdate]
 	coverageDispatcher *utils.Dispatcher[*SubnetCoverage]
+	blockDispatcher    *utils.Dispatcher[*eth2all.SignedBeaconBlock]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -184,6 +186,7 @@ func NewHeadVoteTracker(
 		coverageSamples:    make([]coverageSample, 0, coverageWindowSlots),
 		updateDispatcher:   &utils.Dispatcher[*HeadVoteUpdate]{},
 		coverageDispatcher: &utils.Dispatcher[*SubnetCoverage]{},
+		blockDispatcher:    &utils.Dispatcher[*eth2all.SignedBeaconBlock]{},
 	}
 }
 
@@ -216,6 +219,14 @@ func (t *HeadVoteTracker) SubscribeUpdates() *utils.Subscription[*HeadVoteUpdate
 // (at most one per imported block).
 func (t *HeadVoteTracker) SubscribeCoverage() *utils.Subscription[*SubnetCoverage] {
 	return t.coverageDispatcher.Subscribe(16, false)
+}
+
+// SubscribeBlocks returns a subscription for imported blocks (the full
+// fork-agnostic signed block — a byproduct of the coverage measurement's
+// block fetch; at most one per imported block, none while a fetch is still
+// in flight). Consumers reduce it to whatever shape they need.
+func (t *HeadVoteTracker) SubscribeBlocks() *utils.Subscription[*eth2all.SignedBeaconBlock] {
+	return t.blockDispatcher.Subscribe(16, false)
 }
 
 // GetSubnetCoverage returns the current subnet coverage summary.
@@ -416,13 +427,17 @@ func (t *HeadVoteTracker) measureBlockCoverage(root phase0.Root) {
 	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
 	defer cancel()
 
-	atts, err := t.clClient.GetBlockAttestations(ctx, fmt.Sprintf("%#x", root))
+	block, err := t.clClient.GetSignedBlock(ctx, fmt.Sprintf("%#x", root))
 	if err != nil {
-		t.log.WithError(err).Debug("Failed to fetch block attestations for coverage measurement")
+		t.log.WithError(err).Debug("Failed to fetch block for coverage measurement")
 		return
 	}
 
-	t.recordBlockAttestations(atts)
+	t.recordBlockAttestations(beacon.BlockAttestationEvents(block))
+
+	// The same fetch yields the full block — forward it (e.g. to the WebUI's
+	// Block Received callout) instead of fetching twice.
+	t.blockDispatcher.Fire(block)
 }
 
 // recordBlockAttestations compares a block's attesters against the singles
@@ -506,7 +521,8 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 			"seen_pct":  fmt.Sprintf("%.1f%%", cov.SeenPct),
 			"attesters": cov.Attesters,
 		}).Warn("Raw attestation subnet coverage is low — beacon node likely runs " +
-			"without subscribe-all-subnets; head vote tracking is unreliable")
+			"without subscribe-all-subnets; head vote tracking undercounts and " +
+			"vote-threshold-gated reveals are unreliable (gates open late or never)")
 	} else if t.coverageLow && cov.SeenPct >= coverageRecoverThreshold {
 		t.coverageLow = false
 

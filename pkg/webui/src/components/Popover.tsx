@@ -9,6 +9,27 @@ export interface PopoverItem {
 export interface PopoverData {
   title: string;
   items: PopoverItem[];
+  // Use the wide popover variant (long values like extra data / content
+  // summaries would otherwise line-break).
+  wide?: boolean;
+  // Recorded artifact behind this event: renders JSON/SSZ download buttons.
+  artifact?: { url: string; filename: string };
+}
+
+// downloadSSZ fetches an artifact with SSZ content negotiation and triggers a
+// browser download.
+export async function downloadSSZ(url: string, filename: string): Promise<void> {
+  const res = await fetch(url, { headers: { Accept: 'application/octet-stream' } });
+  if (!res.ok) {
+    throw new Error(`artifact download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 interface PopoverProps {
@@ -54,7 +75,7 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
   return (
     <div
       ref={popoverRef}
-      className={`event-popover ${children ? 'event-popover-wide' : ''}`}
+      className={`event-popover ${data.wide ? 'event-popover-wide' : ''}`}
       style={{ left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -84,6 +105,28 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
           ))}
         </tbody>
       </table>
+      {data.artifact && (
+        <div className="popover-artifacts d-flex gap-1">
+          <a
+            href={data.artifact.url}
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn-outline-secondary ap-artifact-btn"
+          >
+            JSON
+          </a>
+          <button
+            type="button"
+            className="btn btn-outline-secondary ap-artifact-btn"
+            onClick={() => {
+              downloadSSZ(data.artifact!.url, data.artifact!.filename)
+                .catch((err) => console.error('artifact download failed:', err));
+            }}
+          >
+            SSZ
+          </button>
+        </div>
+      )}
       {children}
     </div>
   );

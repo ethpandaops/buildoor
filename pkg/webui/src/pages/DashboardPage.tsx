@@ -28,7 +28,10 @@ const DashboardPage: React.FC = () => {
     clearEvents
   } = useEventStream();
 
-  const { status: builderAPIStatus, loading: builderAPIStatusLoading } = useBuilderAPIStatus();
+  // Refetch the Builder API status card when the SSE-delivered enable flag
+  // flips — the background poll itself runs on the slow shared interval.
+  const { status: builderAPIStatus, loading: builderAPIStatusLoading } =
+    useBuilderAPIStatus(serviceStatus?.builder_api_enabled);
 
   // The events panel must scroll internally rather than expand the page. A pure
   // CSS flex chain can't express "fill remaining viewport height, OR match the
@@ -93,8 +96,12 @@ const DashboardPage: React.FC = () => {
                       Only {voteCoverage.seen_pct.toFixed(0)}% of the attesters that landed
                       on chain were seen as raw single attestations (last{' '}
                       {voteCoverage.slots} blocks). The beacon node is likely running
-                      without subscribe-all-subnets, so the head-vote graph is unreliable
-                      and has been hidden.
+                      without subscribe-all-subnets, so live vote tracking undercounts
+                      participation: the head-vote graph has been hidden, and{' '}
+                      <strong>vote-threshold-gated payload reveals are unreliable</strong>{' '}
+                      — the reveal vote gate opens late or never (payloads may be
+                      withheld at slot end). Use a time-based reveal gate or fix the
+                      subnet subscription.
                       <br />
                       Enable it via <code>--subscribe-all-subnets</code>{' '}
                       (Lighthouse/Prysm/Nimbus/Grandine),{' '}
