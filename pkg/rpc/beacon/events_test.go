@@ -82,3 +82,58 @@ func TestParsePayloadAttributesEvent_Deneb(t *testing.T) {
 	_, err = parsePayloadAttributesEvent(raw)
 	require.ErrorContains(t, err, "invalid parent_beacon_block_root")
 }
+
+// TestParseSingleAttestationEvent parses the beacon-APIs single_attestation
+// event payload, ignoring the unused signature/source/target fields.
+func TestParseSingleAttestationEvent(t *testing.T) {
+	rawJSON := `{"committee_index":"3","attester_index":"12345",` +
+		`"data":{"slot":"42","index":"1","beacon_block_root":"0x` + zeroHex32 + `",` +
+		`"source":{"epoch":"0","root":"0x` + zeroHex32 + `"},` +
+		`"target":{"epoch":"1","root":"0x` + zeroHex32 + `"}},` +
+		`"signature":"0xabcdef"}`
+
+	var raw singleAttestationEventJSON
+	require.NoError(t, json.Unmarshal([]byte(rawJSON), &raw))
+
+	event, err := parseSingleAttestationEvent(&raw)
+	require.NoError(t, err)
+	assert.Equal(t, phase0.Slot(42), event.Slot)
+	assert.Equal(t, phase0.CommitteeIndex(3), event.CommitteeIndex)
+	assert.Equal(t, phase0.ValidatorIndex(12345), event.AttesterIndex)
+	assert.Equal(t, phase0.Root{}, event.BeaconBlockRoot)
+}
+
+// TestParseSingleAttestationEvent_Invalid rejects malformed fields.
+func TestParseSingleAttestationEvent_Invalid(t *testing.T) {
+	valid := func() *singleAttestationEventJSON {
+		raw := &singleAttestationEventJSON{
+			CommitteeIndex: "3",
+			AttesterIndex:  "12345",
+		}
+		raw.Data.Slot = "42"
+		raw.Data.BeaconBlockRoot = "0x" + zeroHex32
+
+		return raw
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*singleAttestationEventJSON)
+		wantErr string
+	}{
+		{"bad committee_index", func(r *singleAttestationEventJSON) { r.CommitteeIndex = "x" }, "invalid committee_index"},
+		{"bad attester_index", func(r *singleAttestationEventJSON) { r.AttesterIndex = "" }, "invalid attester_index"},
+		{"bad slot", func(r *singleAttestationEventJSON) { r.Data.Slot = "-1" }, "invalid slot"},
+		{"bad root", func(r *singleAttestationEventJSON) { r.Data.BeaconBlockRoot = "0x1234" }, "invalid beacon_block_root"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := valid()
+			tc.mutate(raw)
+
+			_, err := parseSingleAttestationEvent(raw)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}

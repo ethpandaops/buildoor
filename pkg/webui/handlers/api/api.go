@@ -311,8 +311,11 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 		updates[config.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
 	}
 
+	// reveal_time maps to the standalone reveal section's time gate (the
+	// reveal is no longer an ePBS-only concern); kept on this endpoint for
+	// wire compatibility.
 	if req.RevealTime != nil {
-		updates[config.KeyEPBSRevealTime] = mustJSON(*req.RevealTime)
+		updates[config.KeyRevealTimeMs] = mustJSON(*req.RevealTime)
 	}
 
 	if req.BidMinAmount != nil {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,14 +66,20 @@ func (r *Resolver) Start(ctx context.Context) {
 }
 
 // GetClientName returns the client name for the given validator index, or "" if not found.
+// Ranges are kept sorted by start index (see applyRanges), so the lookup is a
+// binary search — bulk callers (e.g. the head-vote heatmap grouping thousands
+// of attesters) stay cheap.
 func (r *Resolver) GetClientName(index phase0.ValidatorIndex) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for i := range r.ranges {
-		if uint64(index) >= r.ranges[i].start && uint64(index) <= r.ranges[i].end {
-			return r.ranges[i].name
-		}
+
+	i := sort.Search(len(r.ranges), func(i int) bool {
+		return r.ranges[i].start > uint64(index)
+	})
+	if i > 0 && uint64(index) <= r.ranges[i-1].end {
+		return r.ranges[i-1].name
 	}
+
 	return ""
 }
 
@@ -128,6 +135,7 @@ func (r *Resolver) applyRanges(raw map[string]string) error {
 		}
 		entries = append(entries, e)
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].start < entries[j].start })
 	r.mu.Lock()
 	r.ranges = entries
 	r.mu.Unlock()

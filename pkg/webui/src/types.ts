@@ -23,11 +23,24 @@ export interface StreamEvent {
 export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
+  reveal?: RevealConfig;
   deposit_amount: number;
   topup_threshold: number;
   topup_amount: number;
   payload_build_time?: number;
   extra_data?: string;
+}
+
+// Payload reveal config (own section, shared by the p2p bidder and Builder
+// API flows).
+export interface RevealConfig {
+  enabled: boolean;
+  gate_mode: string; // time | vote | vote_or_time | vote_and_time
+  time_ms: number;
+  vote_threshold_pct: number;
+  broadcast_validation: string; // gossip | consensus | consensus_and_equivocation
+  max_attempts: number;
+  retry_interval_ms: number;
 }
 
 export interface ScheduleConfig {
@@ -41,7 +54,6 @@ export interface EPBSConfig {
   build_start_time: number;
   bid_start_time: number;
   bid_end_time: number;
-  reveal_time: number;
   bid_min_amount: number;
   bid_increase: number;
   bid_interval: number;
@@ -160,10 +172,42 @@ export interface RevealAttempt {
   maxAttempts: number;
 }
 
+// Raw single-attestation subnet coverage vs. next-block attesters. `low` marks
+// the vote graph unreliable (beacon node likely without subscribe-all-subnets).
+export interface VoteCoverage {
+  slots: number;
+  attesters: number;
+  seen_pct: number;
+  low: boolean;
+}
+
+// Per-name head-vote arrival heatmap of one slot (REST:
+// GET /api/buildoor/head-votes/{slot}); counts are vote arrivals per
+// fixed-width time bucket from the slot start.
+export interface HeadVoteDetail {
+  slot: number;
+  root: string;
+  slot_start_ms: number;
+  bucket_ms: number;
+  bucket_count: number;
+  total_members: number;
+  rows: HeadVoteDetailRow[];
+}
+
+export interface HeadVoteDetailRow {
+  name: string;
+  members: number;
+  seen: number;
+  in_block_unseen: number;
+  counts: number[];
+}
+
 export interface HeadVoteDataPoint {
   time: number;
   pct: number;
   eth: number;
+  voteCount?: number;
+  thresholdMet?: boolean;
 }
 
 // UI State types
@@ -194,6 +238,8 @@ export interface SlotState {
   revealSentAt?: number;
   revealAttempts?: RevealAttempt[];
   headVotes?: HeadVoteDataPoint[];
+  headVoteThresholdPct?: number;
+  headVoteThresholdMetAt?: number;
   getHeaderReceivedAt?: number;
   getHeaderDeliveredAt?: number;
   getHeaderBlockHash?: string;
@@ -363,6 +409,9 @@ export interface BuilderAPIPlan {
 export interface RevealPlan {
   mode: ActionMode;
   reveal_time_ms?: number;
+  gate_mode?: string; // time | vote | vote_or_time | vote_and_time
+  vote_threshold_pct?: number;
+  broadcast_validation?: string; // gossip | consensus | consensus_and_equivocation
 }
 
 // The build category has no custom/disabled mode: it only tweaks how the
@@ -453,6 +502,11 @@ export interface ResolvedBuilderAPISettings {
 export interface ResolvedRevealSettings {
   suppressed?: boolean;
   reveal_time_ms: number;
+  gate_mode: string;
+  vote_threshold_pct: number;
+  broadcast_validation: string;
+  max_attempts: number;
+  retry_interval_ms: number;
   bypass_deadline?: boolean;
 }
 

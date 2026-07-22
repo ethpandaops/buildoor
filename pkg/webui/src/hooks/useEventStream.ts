@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -75,6 +75,7 @@ interface UseEventStreamResult {
   stats: Stats | null;
   builderInfo: BuilderInfo | null;
   serviceStatus: ServiceStatus | null;
+  voteCoverage: VoteCoverage | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -91,6 +92,7 @@ export function useEventStream(): UseEventStreamResult {
   const [stats, setStats] = useState<Stats | null>(null);
   const [builderInfo, setBuilderInfo] = useState<BuilderInfo | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+  const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -197,6 +199,10 @@ export function useEventStream(): UseEventStreamResult {
 
         case 'service_status':
           setServiceStatus(event.data as ServiceStatus);
+          break;
+
+        case 'vote_coverage':
+          setVoteCoverage(event.data as VoteCoverage);
           break;
 
         case 'slot_start': {
@@ -432,22 +438,34 @@ export function useEventStream(): UseEventStreamResult {
         case 'head_votes': {
           const data = event.data as {
             slot: number;
+            block_root?: string;
             participation_pct: number;
             participation_eth: number;
             total_slot_eth: number;
+            vote_count?: number;
+            threshold_pct?: number;
+            threshold_met?: boolean;
             timestamp: number;
           };
           const point: HeadVoteDataPoint = {
             time: data.timestamp,
             pct: data.participation_pct,
-            eth: data.participation_eth
+            eth: data.participation_eth,
+            voteCount: data.vote_count,
+            thresholdMet: data.threshold_met
           };
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };
             const headVotes: HeadVoteDataPoint[] = state.headVotes
               ? [...state.headVotes, point]
               : [{ time: data.timestamp, pct: 0, eth: 0 }, point];
-            return { ...prev, [data.slot]: { ...state, headVotes } };
+            const headVoteThresholdPct = data.threshold_pct ?? state.headVoteThresholdPct;
+            const headVoteThresholdMetAt = state.headVoteThresholdMetAt
+              ?? (data.threshold_met ? data.timestamp : undefined);
+            return {
+              ...prev,
+              [data.slot]: { ...state, headVotes, headVoteThresholdPct, headVoteThresholdMetAt }
+            };
           });
           break;
         }
@@ -603,6 +621,7 @@ export function useEventStream(): UseEventStreamResult {
     stats,
     builderInfo,
     serviceStatus,
+    voteCoverage,
     currentSlot,
     slotStates,
     slotConfigs,

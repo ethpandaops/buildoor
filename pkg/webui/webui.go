@@ -96,6 +96,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids", apiHandler.GetSlotBidArtifacts).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids/{index}", apiHandler.GetSlotBidArtifact).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/envelope", apiHandler.GetSlotEnvelopeArtifact).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/head-votes/{slot}", apiHandler.GetHeadVoteDetail).Methods(http.MethodGet)
 
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)

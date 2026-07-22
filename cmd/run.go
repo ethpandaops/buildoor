@@ -211,7 +211,7 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 7. Start chain service (epoch-level state management)
-		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}
@@ -300,7 +300,8 @@ and begins building blocks according to configuration.`,
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
 			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner),
-				clClient, chainSvc, builderSvc, paymentTracker, planSvc, logger)
+				clClient, chainSvc, builderSvc, paymentTracker, planSvc,
+				chainSvc.GetHeadVoteTracker(), logger)
 			if err := revealSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start reveal service: %w", err)
 			}

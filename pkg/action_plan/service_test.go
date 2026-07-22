@@ -9,6 +9,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -591,4 +592,102 @@ func TestSubscribeChangesDeliversCommittedEvents(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected a plan change event")
 	}
+}
+
+// TestResolveRevealSettings covers the reveal category's resolution: global
+// baseline, global disable, plan disable, plan-custom force + overrides, and
+// override validation.
+func TestResolveRevealSettings(t *testing.T) {
+	chainSvc := newStubChain()
+
+	t.Run("global baseline", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Reveal.TimeMs = 4200
+		cfg.Reveal.GateMode = config.RevealGateVoteOrTime
+		cfg.Reveal.VoteThresholdPct = 42
+		cfg.Reveal.BroadcastValidation = config.BroadcastValidationConsensus
+		cfg.Reveal.MaxAttempts = 5
+		cfg.Reveal.RetryIntervalMs = 100
+
+		frozen := newTestService(chainSvc, cfg).Freeze(2001)
+		rs := frozen.Reveal
+		assert.False(t, rs.Suppressed)
+		assert.Equal(t, int64(4200), rs.RevealTimeMs)
+		assert.Equal(t, config.RevealGateVoteOrTime, rs.GateMode)
+		assert.Equal(t, uint64(42), rs.VoteThresholdPct)
+		assert.Equal(t, config.BroadcastValidationConsensus, rs.BroadcastValidation)
+		assert.Equal(t, uint64(5), rs.MaxAttempts)
+		assert.Equal(t, int64(100), rs.RetryIntervalMs)
+		assert.False(t, rs.BypassDeadline)
+	})
+
+	t.Run("invalid enum values fall back to defaults", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Reveal.GateMode = "junk"
+		cfg.Reveal.BroadcastValidation = "junk"
+		cfg.Reveal.MaxAttempts = 0 // clamped to at least one attempt
+
+		rs := newTestService(chainSvc, cfg).Freeze(2002).Reveal
+		assert.Equal(t, config.RevealGateTime, rs.GateMode)
+		assert.Equal(t, config.BroadcastValidationGossip, rs.BroadcastValidation)
+		assert.Equal(t, uint64(1), rs.MaxAttempts)
+	})
+
+	t.Run("global disable suppresses", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Reveal.Enabled = false
+
+		rs := newTestService(chainSvc, cfg).Freeze(2003).Reveal
+		assert.True(t, rs.Suppressed)
+	})
+
+	t.Run("plan custom forces and overrides", func(t *testing.T) {
+		cfg := config.DefaultConfig()
+		cfg.Reveal.Enabled = false
+
+		svc := newTestService(chainSvc, cfg)
+		_, err := svc.ApplyUpdates([]*PlanUpdate{{
+			Slots: []uint64{2004},
+			Reveal: json.RawMessage(`{"mode":"custom","reveal_time_ms":7000,` +
+				`"gate_mode":"vote_and_time","vote_threshold_pct":80,` +
+				`"broadcast_validation":"consensus_and_equivocation"}`),
+		}}, "test")
+		require.NoError(t, err)
+
+		rs := svc.Freeze(2004).Reveal
+		assert.False(t, rs.Suppressed, "custom mode force-activates despite global disable")
+		assert.True(t, rs.BypassDeadline)
+		assert.Equal(t, int64(7000), rs.RevealTimeMs)
+		assert.Equal(t, config.RevealGateVoteAndTime, rs.GateMode)
+		assert.Equal(t, uint64(80), rs.VoteThresholdPct)
+		assert.Equal(t, config.BroadcastValidationConsensusAndEquivocation, rs.BroadcastValidation)
+	})
+
+	t.Run("plan disabled suppresses", func(t *testing.T) {
+		svc := newTestService(chainSvc, nil)
+		_, err := svc.ApplyUpdates([]*PlanUpdate{{
+			Slots:  []uint64{2005},
+			Reveal: json.RawMessage(`{"mode":"disabled"}`),
+		}}, "test")
+		require.NoError(t, err)
+
+		assert.True(t, svc.Freeze(2005).Reveal.Suppressed)
+	})
+
+	t.Run("invalid overrides rejected", func(t *testing.T) {
+		svc := newTestService(chainSvc, nil)
+
+		for _, revealJSON := range []string{
+			`{"mode":"custom","gate_mode":"bogus"}`,
+			`{"mode":"custom","vote_threshold_pct":150}`,
+			`{"mode":"custom","broadcast_validation":"bogus"}`,
+			`{"mode":"disabled","gate_mode":"vote"}`,
+		} {
+			_, err := svc.ApplyUpdates([]*PlanUpdate{{
+				Slots:  []uint64{2006},
+				Reveal: json.RawMessage(revealJSON),
+			}}, "test")
+			require.Error(t, err, "expected rejection for %s", revealJSON)
+		}
+	})
 }
