@@ -15,11 +15,11 @@ func TestBuildHeadVoteRows(t *testing.T) {
 		Slot:         5,
 		TotalMembers: 6,
 		Attesters: []chain.VoteAttester{
-			{Index: 0, SeenAtMs: 100, InBlock: true},   // node-a, bucket 0
-			{Index: 1, SeenAtMs: 260, InBlock: true},   // node-a, bucket 1
-			{Index: 2, SeenAtMs: -1, InBlock: true},    // node-a, on chain but unseen
-			{Index: 10, SeenAtMs: 2100, InBlock: true}, // node-b, bucket 8
-			{Index: 11, SeenAtMs: -1, InBlock: false},  // node-b, never voted
+			{Index: 0, SeenAtMs: 100, InBlock: true},     // node-a, bucket 0
+			{Index: 1, SeenAtMs: 260, InBlock: true},     // node-a, bucket 1
+			{Index: 2, SeenAtMs: -1, InBlock: true},      // node-a, on chain but unseen
+			{Index: 10, SeenAtMs: 2100, InBlock: true},   // node-b, bucket 8
+			{Index: 11, SeenAtMs: -1, InBlock: false},    // node-b, never voted
 			{Index: 99, SeenAtMs: 99999, InBlock: false}, // unknown, clamps into last bucket
 		},
 	}
