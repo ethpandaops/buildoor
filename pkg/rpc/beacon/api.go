@@ -98,19 +98,14 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 	return nil
 }
 
-// PayloadEnvelopeInfo contains key fields from a fetched execution payload envelope.
-type PayloadEnvelopeInfo struct {
-	BlockRoot    phase0.Root
-	BlockHash    phase0.Hash32
-	BuilderIndex uint64
-}
-
-// GetExecutionPayloadEnvelope fetches the signed execution payload envelope for a block.
-// The blockID can be a block root (hex), slot number, or "head"/"finalized"/"genesis".
+// GetExecutionPayloadEnvelope fetches the signed execution payload envelope
+// for a block as the full fork-agnostic object (consumers reduce it to
+// whatever shape they need). The blockID can be a block root (hex), slot
+// number, or "head"/"finalized"/"genesis".
 func (c *Client) GetExecutionPayloadEnvelope(
 	ctx context.Context,
 	blockID string,
-) (*PayloadEnvelopeInfo, error) {
+) (*eth2all.SignedExecutionPayloadEnvelope, error) {
 	provider, ok := c.client.(eth2client.ExecutionPayloadProvider)
 	if !ok {
 		return nil, fmt.Errorf("client does not support execution payload envelope provider")
@@ -127,13 +122,7 @@ func (c *Client) GetExecutionPayloadEnvelope(
 		return nil, fmt.Errorf("payload envelope response is nil")
 	}
 
-	msg := resp.Data.Message
-
-	return &PayloadEnvelopeInfo{
-		BlockRoot:    msg.BeaconBlockRoot,
-		BlockHash:    msg.Payload.BlockHash,
-		BuilderIndex: uint64(msg.BuilderIndex),
-	}, nil
+	return resp.Data, nil
 }
 
 // SubmitVoluntaryExit submits a signed voluntary exit to the beacon node.
@@ -152,11 +141,8 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 	return nil
 }
 
-// GetBlockAttestations fetches a beacon block and returns its attestations
-// reduced to the AttestationEvent shape consumed by the head vote tracker.
-// Handles both the Electra+ format (committee_bits + concatenated
-// aggregation_bits) and the pre-Electra format (data.index = committee).
-func (c *Client) GetBlockAttestations(ctx context.Context, blockID string) ([]*AttestationEvent, error) {
+// GetSignedBlock fetches a beacon block as the fork-agnostic signed block.
+func (c *Client) GetSignedBlock(ctx context.Context, blockID string) (*eth2all.SignedBeaconBlock, error) {
 	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
 	if !ok {
 		return nil, fmt.Errorf("client does not support signed beacon block provider")
@@ -173,7 +159,19 @@ func (c *Client) GetBlockAttestations(ctx context.Context, blockID string) ([]*A
 		return nil, fmt.Errorf("beacon block response is nil")
 	}
 
-	atts := resp.Data.Message.Body.Attestations
+	return resp.Data, nil
+}
+
+// BlockAttestationEvents reduces a block's attestations to the
+// AttestationEvent shape consumed by the head vote tracker. Handles both the
+// Electra+ format (committee_bits + concatenated aggregation_bits) and the
+// pre-Electra format (data.index = committee).
+func BlockAttestationEvents(block *eth2all.SignedBeaconBlock) []*AttestationEvent {
+	if block == nil || block.Message == nil || block.Message.Body == nil {
+		return nil
+	}
+
+	atts := block.Message.Body.Attestations
 	events := make([]*AttestationEvent, 0, len(atts))
 
 	for _, att := range atts {
@@ -198,5 +196,5 @@ func (c *Client) GetBlockAttestations(ctx context.Context, blockID string) ([]*A
 		events = append(events, event)
 	}
 
-	return events, nil
+	return events
 }

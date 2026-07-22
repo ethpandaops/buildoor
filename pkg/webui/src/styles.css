@@ -381,6 +381,12 @@
   border: 2px solid #cc9a06;
 }
 
+/* Artifact download buttons at the bottom of event popovers */
+.popover-artifacts {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--bs-border-color);
+}
+
 /* Low vote coverage warning badge + hover callout (slot timeline header) */
 .coverage-warning {
   position: relative;

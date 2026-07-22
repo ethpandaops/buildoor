@@ -246,9 +246,12 @@ export function useEventStream(): UseEventStreamResult {
             parent_block_root: string;
             parent_block_number: number;
             timestamp: number;
+            prev_randao?: string;
             fee_recipient: string;
+            parent_beacon_block_root?: string;
             target_gas_limit: number;
             withdrawals_count: number;
+            inclusion_list_count?: number;
             received_at: number;
           };
           addEvent('payload_attributes', `Payload attributes received for slot ${data.proposal_slot}`, event.timestamp);
@@ -265,9 +268,12 @@ export function useEventStream(): UseEventStreamResult {
               parentBlockRoot: data.parent_block_root,
               parentBlockNumber: data.parent_block_number,
               timestamp: data.timestamp,
+              prevRandao: data.prev_randao,
               feeRecipient: data.fee_recipient,
+              parentBeaconBlockRoot: data.parent_beacon_block_root,
               targetGasLimit: data.target_gas_limit,
               withdrawalsCount: data.withdrawals_count,
+              inclusionListCount: data.inclusion_list_count,
               receivedAt: data.received_at
             };
             setSlotStates(prev => {
@@ -302,19 +308,43 @@ export function useEventStream(): UseEventStreamResult {
         case 'payload_ready': {
           // block_value is the EL's MEV value as a wei decimal string; convert to
           // gwei so it matches the gwei-based formatGwei display used elsewhere.
-          const data = event.data as { slot: number; block_hash: string; block_value: string; ready_at: number };
+          const data = event.data as {
+            slot: number; block_hash: string; block_value: string; ready_at: number;
+            block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
+            base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
+            num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
+          };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           updateSlotState(data.slot, {
             payloadReady: true,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
-            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0
+            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
+            payloadDetail: {
+              blockNumber: data.block_number,
+              feeRecipient: data.fee_recipient,
+              gasLimit: data.gas_limit,
+              gasUsed: data.gas_used,
+              baseFeePerGas: data.base_fee_per_gas,
+              extraData: data.extra_data,
+              blobGasUsed: data.blob_gas_used,
+              excessBlobGas: data.excess_blob_gas,
+              numTransactions: data.num_transactions,
+              numWithdrawals: data.num_withdrawals,
+              numBlobs: data.num_blobs,
+              numExecRequests: data.num_exec_requests
+            }
           });
           break;
         }
 
         case 'bid_submitted': {
-          const data = event.data as { slot: number; block_hash: string; value: number; bid_count: number; success: boolean; error?: string; warning?: string };
+          const data = event.data as {
+            slot: number; block_hash: string; value: number; bid_count: number; success: boolean;
+            error?: string; warning?: string; execution_payment?: number; fee_recipient?: string;
+            gas_limit?: number; builder_index?: number; parent_block_hash?: string;
+            parent_block_root?: string; num_blob_commitments?: number;
+          };
           const bidSuccess = data.success !== false;
           // A warning without an error on an unsuccessful event is a skip
           // (e.g. no proposer preferences cached for the slot), not a failed
@@ -346,7 +376,14 @@ export function useEventStream(): UseEventStreamResult {
               blockHash: data.block_hash,
               count: data.bid_count,
               success: bidSuccess,
-              error: data.error
+              error: data.error,
+              executionPayment: data.execution_payment,
+              feeRecipient: data.fee_recipient,
+              gasLimit: data.gas_limit,
+              builderIndex: data.builder_index,
+              parentBlockHash: data.parent_block_hash,
+              parentBlockRoot: data.parent_block_root,
+              numBlobCommitments: data.num_blob_commitments
             });
             return {
               ...prev,
@@ -365,6 +402,12 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'block_detail': {
+          const data = event.data as import('../types').BlockDetail;
+          updateSlotState(data.slot, { blockDetail: data });
+          break;
+        }
+
         case 'reveal_started': {
           const data = event.data as { slot: number; attempt: number; started_at: number };
           updateSlotState(data.slot, {
@@ -374,7 +417,11 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string; attempt?: number; max_attempts?: number; started_at?: number; timestamp?: number };
+          const data = event.data as {
+            slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string;
+            attempt?: number; max_attempts?: number; started_at?: number; timestamp?: number;
+            transport?: string; envelope?: import('../types').EnvelopeDetail;
+          };
           const failed = !data.success && !data.skipped;
           const attempt = data.attempt || 0;
           const maxAttempts = data.max_attempts || 0;
@@ -390,6 +437,8 @@ export function useEventStream(): UseEventStreamResult {
             revealAttempts.push({
               time: data.timestamp ?? event.timestamp,
               startedAt: data.started_at || undefined,
+              transport: data.transport,
+              envelope: data.envelope,
               success: data.success,
               skipped: data.skipped,
               skipReason: data.skip_reason,
@@ -415,7 +464,11 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'bid_event': {
-          const data = event.data as { slot: number; builder_index: number; value: number; block_hash: string; is_ours: boolean; received_at: number };
+          const data = event.data as {
+            slot: number; builder_index: number; value: number; block_hash: string; is_ours: boolean;
+            received_at: number; execution_payment?: number; fee_recipient?: string; gas_limit?: number;
+            parent_block_hash?: string; parent_block_root?: string; num_blob_commitments?: number;
+          };
           if (data.is_ours) {
             addEvent('bid_event', `Our bid seen on network for slot ${data.slot}`, event.timestamp);
           } else {
@@ -426,7 +479,13 @@ export function useEventStream(): UseEventStreamResult {
                 time: data.received_at,
                 value: data.value,
                 builder: data.builder_index,
-                blockHash: data.block_hash
+                blockHash: data.block_hash,
+                executionPayment: data.execution_payment,
+                feeRecipient: data.fee_recipient,
+                gasLimit: data.gas_limit,
+                parentBlockHash: data.parent_block_hash,
+                parentBlockRoot: data.parent_block_root,
+                numBlobCommitments: data.num_blob_commitments
               });
               return { ...prev, [data.slot]: { ...state, externalBids } };
             });
@@ -435,9 +494,12 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_available': {
-          const data = event.data as { slot: number; block_hash: string; builder_index: number; received_at: number };
+          const data = event.data as {
+            slot: number; block_hash: string; builder_index: number; received_at: number;
+          } & import('../types').EnvelopeDetail;
           addEvent('payload_available', `Payload available for slot ${data.slot}`, event.timestamp);
           updateSlotState(data.slot, {
+            payloadAvailableDetail: data,
             payloadAvailableAt: data.received_at,
             payloadAvailableBlockHash: data.block_hash,
             payloadAvailableBuilder: data.builder_index

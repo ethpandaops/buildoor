@@ -100,8 +100,44 @@ type BuildOutcome struct {
 	NumBlobs        int    `json:"num_blobs,omitempty"`
 	FeeRecipient    string `json:"fee_recipient,omitempty"`
 
+	// Full built-payload properties; the list fields (transactions, blobs,
+	// withdrawals, execution requests) are aggregated to counts above/below.
+	BlockNumber          uint64 `json:"block_number,omitempty"`
+	ParentHash           string `json:"parent_hash,omitempty"`
+	StateRoot            string `json:"state_root,omitempty"`
+	ReceiptsRoot         string `json:"receipts_root,omitempty"`
+	PrevRandao           string `json:"prev_randao,omitempty"`
+	Timestamp            uint64 `json:"timestamp,omitempty"`
+	GasLimit             uint64 `json:"gas_limit,omitempty"`
+	GasUsed              uint64 `json:"gas_used,omitempty"`
+	BaseFeePerGas        string `json:"base_fee_per_gas,omitempty"` // wei
+	ExtraData            string `json:"extra_data,omitempty"`       // 0x-hex
+	BlobGasUsed          uint64 `json:"blob_gas_used,omitempty"`
+	ExcessBlobGas        uint64 `json:"excess_blob_gas,omitempty"`
+	NumWithdrawals       int    `json:"num_withdrawals,omitempty"`
+	NumExecutionRequests int    `json:"num_execution_requests,omitempty"`
+
+	// Attributes is the payload_attributes snapshot the build ran on.
+	Attributes *AttributesSnapshot `json:"attributes,omitempty"`
+
 	Error string    `json:"error,omitempty"`
 	At    time.Time `json:"at"`
+}
+
+// AttributesSnapshot captures the payload_attributes a build ran on (list
+// fields aggregated to counts).
+type AttributesSnapshot struct {
+	ProposerIndex         uint64 `json:"proposer_index"`
+	ParentBlockRoot       string `json:"parent_block_root"`
+	ParentBlockHash       string `json:"parent_block_hash"`
+	ParentBlockNumber     uint64 `json:"parent_block_number"`
+	Timestamp             uint64 `json:"timestamp"`
+	PrevRandao            string `json:"prev_randao"`
+	SuggestedFeeRecipient string `json:"suggested_fee_recipient"`
+	ParentBeaconBlockRoot string `json:"parent_beacon_block_root,omitempty"`
+	TargetGasLimit        uint64 `json:"target_gas_limit,omitempty"`
+	NumWithdrawals        int    `json:"num_withdrawals"`
+	NumInclusionListTxs   int    `json:"num_inclusion_list_txs,omitempty"`
 }
 
 // BidAttempt is one bid we constructed, served, submitted — or failed to.
@@ -115,6 +151,18 @@ type BidAttempt struct {
 	// CompetitorHighGwei is the highest known competitor bid at submission
 	// time (p2p only, our own builder index excluded).
 	CompetitorHighGwei *uint64 `json:"competitor_high_gwei,omitempty"`
+
+	// Full bid message properties (Gloas+ bids; blob commitments aggregated
+	// to a count). Empty for legacy Builder API bids and pre-construction
+	// failures.
+	BlockHash          string `json:"block_hash,omitempty"`
+	ParentBlockHash    string `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot    string `json:"parent_block_root,omitempty"`
+	PrevRandao         string `json:"prev_randao,omitempty"`
+	FeeRecipient       string `json:"fee_recipient,omitempty"`
+	GasLimit           uint64 `json:"gas_limit,omitempty"`
+	BuilderIndex       uint64 `json:"builder_index,omitempty"`
+	NumBlobCommitments int    `json:"num_blob_commitments,omitempty"`
 
 	// ArtifactIndex references the slot's stored 'bid' SSZ artifact; nil when
 	// no artifact exists (suppressed, pre-construction failure, or capture

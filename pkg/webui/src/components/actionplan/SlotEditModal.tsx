@@ -627,10 +627,57 @@ const ResultView: React.FC<{
                 </div>
               )}
               <KV label="Value">{weiToEth(build.block_value_wei)}</KV>
-              <KV label="Txs / Blobs">
-                {build.num_transactions ?? 0} / {build.num_blobs ?? 0}
+              <KV label="Contents">
+                {build.num_transactions ?? 0} txs, {build.num_blobs ?? 0} blobs,{' '}
+                {build.num_withdrawals ?? 0} wdrls, {build.num_execution_requests ?? 0} reqs
               </KV>
+              {build.block_number !== undefined && <KV label="Block #">{build.block_number}</KV>}
+              {build.gas_used !== undefined && (
+                <KV label="Gas">
+                  {build.gas_used.toLocaleString()} / {(build.gas_limit ?? 0).toLocaleString()}
+                </KV>
+              )}
+              {build.base_fee_per_gas && <KV label="Base Fee">{build.base_fee_per_gas} wei</KV>}
+              {build.blob_gas_used !== undefined && build.blob_gas_used > 0 && (
+                <KV label="Blob Gas">
+                  {build.blob_gas_used.toLocaleString()} (excess {(build.excess_blob_gas ?? 0).toLocaleString()})
+                </KV>
+              )}
+              {build.timestamp !== undefined && <KV label="Timestamp">{build.timestamp}</KV>}
+              {build.extra_data && <KV label="Extra Data">{build.extra_data}</KV>}
               <KV label="At">{formatDateTime(build.at)}</KV>
+              {build.parent_hash && (
+                <div className="col-12">
+                  <div className="config-item">
+                    <div className="config-item-label">Parent Hash</div>
+                    <div className="config-item-value font-monospace ap-break">{build.parent_hash}</div>
+                  </div>
+                </div>
+              )}
+              {build.state_root && (
+                <div className="col-12">
+                  <div className="config-item">
+                    <div className="config-item-label">State Root</div>
+                    <div className="config-item-value font-monospace ap-break">{build.state_root}</div>
+                  </div>
+                </div>
+              )}
+              {build.receipts_root && (
+                <div className="col-12">
+                  <div className="config-item">
+                    <div className="config-item-label">Receipts Root</div>
+                    <div className="config-item-value font-monospace ap-break">{build.receipts_root}</div>
+                  </div>
+                </div>
+              )}
+              {build.prev_randao && (
+                <div className="col-12">
+                  <div className="config-item">
+                    <div className="config-item-label">Prev Randao</div>
+                    <div className="config-item-value font-monospace ap-break">{build.prev_randao}</div>
+                  </div>
+                </div>
+              )}
               {build.fee_recipient && (
                 <div className="col-12">
                   <div className="config-item">
@@ -640,6 +687,55 @@ const ResultView: React.FC<{
                 </div>
               )}
             </div>
+            {build.attributes && (
+              <>
+                <div className="section-header mt-3 mb-1">Payload Attributes</div>
+                <div className="row g-2">
+                  <KV label="Proposer">{build.attributes.proposer_index}</KV>
+                  <KV label="Parent Block #">{build.attributes.parent_block_number}</KV>
+                  <KV label="Timestamp">{build.attributes.timestamp}</KV>
+                  {build.attributes.target_gas_limit !== undefined && build.attributes.target_gas_limit > 0 && (
+                    <KV label="Target Gas Limit">{build.attributes.target_gas_limit.toLocaleString()}</KV>
+                  )}
+                  <KV label="Contents">
+                    {build.attributes.num_withdrawals} wdrls
+                    {build.attributes.num_inclusion_list_txs ? `, ${build.attributes.num_inclusion_list_txs} IL txs` : ''}
+                  </KV>
+                  <div className="col-12">
+                    <div className="config-item">
+                      <div className="config-item-label">Parent Hash</div>
+                      <div className="config-item-value font-monospace ap-break">{build.attributes.parent_block_hash}</div>
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <div className="config-item">
+                      <div className="config-item-label">Parent Root</div>
+                      <div className="config-item-value font-monospace ap-break">{build.attributes.parent_block_root}</div>
+                    </div>
+                  </div>
+                  {build.attributes.parent_beacon_block_root && (
+                    <div className="col-12">
+                      <div className="config-item">
+                        <div className="config-item-label">Beacon Parent Root</div>
+                        <div className="config-item-value font-monospace ap-break">{build.attributes.parent_beacon_block_root}</div>
+                      </div>
+                    </div>
+                  )}
+                  <div className="col-12">
+                    <div className="config-item">
+                      <div className="config-item-label">Prev Randao</div>
+                      <div className="config-item-value font-monospace ap-break">{build.attributes.prev_randao}</div>
+                    </div>
+                  </div>
+                  <div className="col-12">
+                    <div className="config-item">
+                      <div className="config-item-label">Suggested Fee Recipient</div>
+                      <div className="config-item-value font-monospace ap-break">{build.attributes.suggested_fee_recipient}</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -664,13 +760,25 @@ const ResultView: React.FC<{
                   <th className="text-end">Value</th>
                   <th className="text-end">Exec Payment</th>
                   <th className="text-end">Competitor High</th>
+                  <th>Block Hash</th>
+                  <th className="text-end">Gas Limit</th>
+                  <th className="text-end">Blobs</th>
                   <th>Artifact</th>
                   <th className="text-end">At</th>
                 </tr>
               </thead>
               <tbody>
                 {result.bids!.map((bid, i) => (
-                  <tr key={i}>
+                  <tr
+                    key={i}
+                    title={[
+                      bid.parent_block_hash ? `parent hash: ${bid.parent_block_hash}` : '',
+                      bid.parent_block_root ? `parent root: ${bid.parent_block_root}` : '',
+                      bid.prev_randao ? `prev randao: ${bid.prev_randao}` : '',
+                      bid.fee_recipient ? `fee recipient: ${bid.fee_recipient}` : '',
+                      bid.builder_index !== undefined ? `builder index: ${bid.builder_index}` : ''
+                    ].filter(Boolean).join('\n')}
+                  >
                     <td>{i + 1}</td>
                     <td>
                       <StatusBadge map={BID_BADGES} status={bid.status} />
@@ -689,6 +797,15 @@ const ResultView: React.FC<{
                       {bid.competitor_high_gwei !== undefined
                         ? bid.competitor_high_gwei.toLocaleString()
                         : '—'}
+                    </td>
+                    <td className="font-monospace">
+                      {bid.block_hash ? `${bid.block_hash.slice(0, 10)}…` : '—'}
+                    </td>
+                    <td className="text-end font-monospace">
+                      {bid.gas_limit !== undefined && bid.gas_limit > 0 ? bid.gas_limit.toLocaleString() : '—'}
+                    </td>
+                    <td className="text-end font-monospace">
+                      {bid.num_blob_commitments ?? 0}
                     </td>
                     <td>
                       {bid.artifact_index !== undefined ? (
@@ -764,6 +881,7 @@ const ResultView: React.FC<{
                   <th>Status</th>
                   <th>Transport</th>
                   <th>Detail</th>
+                  <th className="text-end">Started</th>
                   <th className="text-end">At</th>
                 </tr>
               </thead>
@@ -778,6 +896,9 @@ const ResultView: React.FC<{
                     <td className="small">
                       {attempt.skip_reason && <span className="text-muted">{attempt.skip_reason}</span>}
                       {attempt.error && <span className="text-danger"> {attempt.error}</span>}
+                    </td>
+                    <td className="text-end text-muted">
+                      {attempt.started_at ? formatDateTime(attempt.started_at) : '—'}
                     </td>
                     <td className="text-end text-muted">{formatDateTime(attempt.at)}</td>
                   </tr>

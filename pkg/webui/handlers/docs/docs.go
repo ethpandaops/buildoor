@@ -2438,6 +2438,44 @@ const docTemplate = `{
                 }
             }
         },
+        "slot_results.AttributesSnapshot": {
+            "type": "object",
+            "properties": {
+                "num_inclusion_list_txs": {
+                    "type": "integer"
+                },
+                "num_withdrawals": {
+                    "type": "integer"
+                },
+                "parent_beacon_block_root": {
+                    "type": "string"
+                },
+                "parent_block_hash": {
+                    "type": "string"
+                },
+                "parent_block_number": {
+                    "type": "integer"
+                },
+                "parent_block_root": {
+                    "type": "string"
+                },
+                "prev_randao": {
+                    "type": "string"
+                },
+                "proposer_index": {
+                    "type": "integer"
+                },
+                "suggested_fee_recipient": {
+                    "type": "string"
+                },
+                "target_gas_limit": {
+                    "type": "integer"
+                },
+                "timestamp": {
+                    "type": "integer"
+                }
+            }
+        },
         "slot_results.BidAttempt": {
             "type": "object",
             "properties": {
@@ -2448,6 +2486,13 @@ const docTemplate = `{
                 "at": {
                     "type": "string"
                 },
+                "block_hash": {
+                    "description": "Full bid message properties (Gloas+ bids; blob commitments aggregated\nto a count). Empty for legacy Builder API bids and pre-construction\nfailures.",
+                    "type": "string"
+                },
+                "builder_index": {
+                    "type": "integer"
+                },
                 "competitor_high_gwei": {
                     "description": "CompetitorHighGwei is the highest known competitor bid at submission\ntime (p2p only, our own builder index excluded).",
                     "type": "integer"
@@ -2457,6 +2502,24 @@ const docTemplate = `{
                 },
                 "execution_payment_gwei": {
                     "type": "integer"
+                },
+                "fee_recipient": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "num_blob_commitments": {
+                    "type": "integer"
+                },
+                "parent_block_hash": {
+                    "type": "string"
+                },
+                "parent_block_root": {
+                    "type": "string"
+                },
+                "prev_randao": {
+                    "type": "string"
                 },
                 "status": {
                     "$ref": "#/definitions/slot_results.BidStatus"
@@ -2513,8 +2576,27 @@ const docTemplate = `{
                 "at": {
                     "type": "string"
                 },
+                "attributes": {
+                    "description": "Attributes is the payload_attributes snapshot the build ran on.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.AttributesSnapshot"
+                        }
+                    ]
+                },
+                "base_fee_per_gas": {
+                    "description": "wei",
+                    "type": "string"
+                },
+                "blob_gas_used": {
+                    "type": "integer"
+                },
                 "block_hash": {
                     "type": "string"
+                },
+                "block_number": {
+                    "description": "Full built-payload properties; the list fields (transactions, blobs,\nwithdrawals, execution requests) are aggregated to counts above/below.",
+                    "type": "integer"
                 },
                 "block_value_wei": {
                     "type": "string"
@@ -2522,21 +2604,55 @@ const docTemplate = `{
                 "error": {
                     "type": "string"
                 },
+                "excess_blob_gas": {
+                    "type": "integer"
+                },
+                "extra_data": {
+                    "description": "0x-hex",
+                    "type": "string"
+                },
                 "fee_recipient": {
                     "type": "string"
                 },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
                 "num_blobs": {
+                    "type": "integer"
+                },
+                "num_execution_requests": {
                     "type": "integer"
                 },
                 "num_transactions": {
                     "type": "integer"
                 },
+                "num_withdrawals": {
+                    "type": "integer"
+                },
+                "parent_hash": {
+                    "type": "string"
+                },
+                "prev_randao": {
+                    "type": "string"
+                },
+                "receipts_root": {
+                    "type": "string"
+                },
                 "skip_reason": {
                     "description": "action_plan.BuildSkipReason* when skipped",
                     "type": "string"
                 },
+                "state_root": {
+                    "type": "string"
+                },
                 "status": {
                     "$ref": "#/definitions/slot_results.BuildStatus"
+                },
+                "timestamp": {
+                    "type": "integer"
                 }
             }
         },

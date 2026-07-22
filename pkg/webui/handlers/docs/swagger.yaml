@@ -771,6 +771,31 @@ definitions:
       value_wei:
         type: string
     type: object
+  slot_results.AttributesSnapshot:
+    properties:
+      num_inclusion_list_txs:
+        type: integer
+      num_withdrawals:
+        type: integer
+      parent_beacon_block_root:
+        type: string
+      parent_block_hash:
+        type: string
+      parent_block_number:
+        type: integer
+      parent_block_root:
+        type: string
+      prev_randao:
+        type: string
+      proposer_index:
+        type: integer
+      suggested_fee_recipient:
+        type: string
+      target_gas_limit:
+        type: integer
+      timestamp:
+        type: integer
+    type: object
   slot_results.BidAttempt:
     properties:
       artifact_index:
@@ -781,6 +806,14 @@ definitions:
         type: integer
       at:
         type: string
+      block_hash:
+        description: |-
+          Full bid message properties (Gloas+ bids; blob commitments aggregated
+          to a count). Empty for legacy Builder API bids and pre-construction
+          failures.
+        type: string
+      builder_index:
+        type: integer
       competitor_high_gwei:
         description: |-
           CompetitorHighGwei is the highest known competitor bid at submission
@@ -790,6 +823,18 @@ definitions:
         type: string
       execution_payment_gwei:
         type: integer
+      fee_recipient:
+        type: string
+      gas_limit:
+        type: integer
+      num_blob_commitments:
+        type: integer
+      parent_block_hash:
+        type: string
+      parent_block_root:
+        type: string
+      prev_randao:
+        type: string
       status:
         $ref: '#/definitions/slot_results.BidStatus'
       total_value_gwei:
@@ -830,23 +875,60 @@ definitions:
     properties:
       at:
         type: string
+      attributes:
+        allOf:
+        - $ref: '#/definitions/slot_results.AttributesSnapshot'
+        description: Attributes is the payload_attributes snapshot the build ran on.
+      base_fee_per_gas:
+        description: wei
+        type: string
+      blob_gas_used:
+        type: integer
       block_hash:
         type: string
+      block_number:
+        description: |-
+          Full built-payload properties; the list fields (transactions, blobs,
+          withdrawals, execution requests) are aggregated to counts above/below.
+        type: integer
       block_value_wei:
         type: string
       error:
         type: string
+      excess_blob_gas:
+        type: integer
+      extra_data:
+        description: 0x-hex
+        type: string
       fee_recipient:
         type: string
+      gas_limit:
+        type: integer
+      gas_used:
+        type: integer
       num_blobs:
+        type: integer
+      num_execution_requests:
         type: integer
       num_transactions:
         type: integer
+      num_withdrawals:
+        type: integer
+      parent_hash:
+        type: string
+      prev_randao:
+        type: string
+      receipts_root:
+        type: string
       skip_reason:
         description: action_plan.BuildSkipReason* when skipped
         type: string
+      state_root:
+        type: string
       status:
         $ref: '#/definitions/slot_results.BuildStatus'
+      timestamp:
+        type: integer
     type: object
   slot_results.BuildStatus:
     enum:

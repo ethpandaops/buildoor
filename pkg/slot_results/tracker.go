@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -19,6 +20,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -369,16 +371,43 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 		blockValue = payload.BlockValue.String()
 	}
 
-	t.upsert(slot, func(result *SlotResult) {
-		result.Build = &BuildOutcome{
-			Status:          BuildStatusReady,
-			BlockHash:       fmt.Sprintf("%#x", payload.BlockHash),
-			BlockValueWei:   blockValue,
-			NumTransactions: numTxs,
-			NumBlobs:        numBlobs,
-			FeeRecipient:    payload.FeeRecipient.Hex(),
-			At:              payload.ReadyAt,
+	outcome := &BuildOutcome{
+		Status:          BuildStatusReady,
+		BlockHash:       fmt.Sprintf("%#x", payload.BlockHash),
+		BlockValueWei:   blockValue,
+		NumTransactions: numTxs,
+		NumBlobs:        numBlobs,
+		FeeRecipient:    payload.FeeRecipient.Hex(),
+		At:              payload.ReadyAt,
+		Attributes:      attributesSnapshot(payload.Attributes),
+	}
+
+	if ep := payload.ExecutionPayload; ep != nil {
+		outcome.BlockNumber = ep.BlockNumber
+		outcome.ParentHash = fmt.Sprintf("%#x", ep.ParentHash)
+		outcome.StateRoot = fmt.Sprintf("%#x", ep.StateRoot)
+		outcome.ReceiptsRoot = fmt.Sprintf("%#x", ep.ReceiptsRoot)
+		outcome.PrevRandao = fmt.Sprintf("%#x", ep.PrevRandao)
+		outcome.Timestamp = ep.Timestamp
+		outcome.GasLimit = ep.GasLimit
+		outcome.GasUsed = ep.GasUsed
+		outcome.ExtraData = fmt.Sprintf("%#x", ep.ExtraData)
+		outcome.BlobGasUsed = ep.BlobGasUsed
+		outcome.ExcessBlobGas = ep.ExcessBlobGas
+		outcome.NumWithdrawals = len(ep.Withdrawals)
+
+		if ep.BaseFeePerGas != nil {
+			outcome.BaseFeePerGas = ep.BaseFeePerGas.Dec()
 		}
+	}
+
+	if reqs := payload.ExecutionRequests; reqs != nil {
+		outcome.NumExecutionRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
+			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
+	}
+
+	t.upsert(slot, func(result *SlotResult) {
+		result.Build = outcome
 	})
 
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
@@ -386,6 +415,46 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 			t.log.WithError(err).WithField("slot", slot).Warn("Failed to store payload artifact")
 		}
 	}
+}
+
+// attributesSnapshot reduces a payload_attributes event to the stored
+// snapshot (list fields aggregated to counts).
+func attributesSnapshot(attrs *beacon.PayloadAttributesEvent) *AttributesSnapshot {
+	if attrs == nil {
+		return nil
+	}
+
+	return &AttributesSnapshot{
+		ProposerIndex:         uint64(attrs.ProposerIndex),
+		ParentBlockRoot:       fmt.Sprintf("%#x", attrs.ParentBlockRoot),
+		ParentBlockHash:       fmt.Sprintf("%#x", attrs.ParentBlockHash),
+		ParentBlockNumber:     attrs.ParentBlockNumber,
+		Timestamp:             attrs.Timestamp,
+		PrevRandao:            fmt.Sprintf("%#x", attrs.PrevRandao),
+		SuggestedFeeRecipient: attrs.SuggestedFeeRecipient.Hex(),
+		ParentBeaconBlockRoot: fmt.Sprintf("%#x", attrs.ParentBeaconBlockRoot),
+		TargetGasLimit:        attrs.TargetGasLimit,
+		NumWithdrawals:        len(attrs.Withdrawals),
+		NumInclusionListTxs:   len(attrs.InclusionListTransactions),
+	}
+}
+
+// fillBidDetail copies the bid message properties onto the attempt (blob
+// commitments aggregated to a count).
+func fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedExecutionPayloadBid) {
+	if signedBid == nil || signedBid.Message == nil {
+		return
+	}
+
+	bid := signedBid.Message
+	attempt.BlockHash = fmt.Sprintf("%#x", bid.BlockHash)
+	attempt.ParentBlockHash = fmt.Sprintf("%#x", bid.ParentBlockHash)
+	attempt.ParentBlockRoot = fmt.Sprintf("%#x", bid.ParentBlockRoot)
+	attempt.PrevRandao = fmt.Sprintf("%#x", bid.PrevRandao)
+	attempt.FeeRecipient = fmt.Sprintf("%#x", bid.FeeRecipient)
+	attempt.GasLimit = bid.GasLimit
+	attempt.BuilderIndex = uint64(bid.BuilderIndex)
+	attempt.NumBlobCommitments = len(bid.BlobKZGCommitments)
 }
 
 func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
@@ -432,6 +501,8 @@ func (t *Tracker) handleBidSubmission(event *p2p_bidder.BidSubmissionEvent) {
 		Error:              event.Error,
 		At:                 time.Now(),
 	}
+
+	fillBidDetail(&attempt, event.SignedBid)
 
 	switch event.Status {
 	case p2p_bidder.BidStatusSubmitted:
@@ -570,6 +641,12 @@ func (t *Tracker) RecordBuilderAPIBid(slot phase0.Slot, forkName string, signedB
 		ExecutionPaymentGwei: executionPaymentGwei,
 		Error:                errMsg,
 		At:                   time.Now(),
+	}
+
+	// The epbs dialect serves Gloas+ bids with the full message; the legacy
+	// dialect's versioned header bids stay aggregate-only.
+	if signed, ok := signedBid.(*eth2all.SignedExecutionPayloadBid); ok {
+		fillBidDetail(&attempt, signed)
 	}
 
 	marshaler, isMarshaler := signedBid.(sszMarshaler)
