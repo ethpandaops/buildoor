@@ -38,7 +38,7 @@ func TestPaymentTracker_RecordAndReveal(t *testing.T) {
 	assert.Equal(t, uint64(700), tracker.GetTotalPendingPayments())
 }
 
-func TestPaymentTracker_DepositsAndReset(t *testing.T) {
+func TestPaymentTracker_DepositsAndDeductions(t *testing.T) {
 	tracker := newTestPaymentTracker()
 
 	tracker.AddDeposit(3000)
@@ -47,8 +47,44 @@ func TestPaymentTracker_DepositsAndReset(t *testing.T) {
 	tracker.RecordWonBid(10, 1000)
 	tracker.MarkRevealed(10)
 	assert.Equal(t, int64(2000), tracker.GetBalanceAdjustment())
+}
 
-	tracker.ResetBalanceAdjustment()
+func TestPaymentTracker_ReconcileToEpoch(t *testing.T) {
+	chainSvc := &stubChainService{currentEpoch: 5}
+
+	log := logrus.New()
+	log.SetLevel(logrus.PanicLevel)
+
+	tracker := NewPaymentTracker(chainSvc, log)
+
+	// A top-up credit is anchored to the current epoch (5).
+	tracker.AddDeposit(50_000_000_000)
+	assert.Equal(t, int64(50_000_000_000), tracker.GetBalanceAdjustment())
+
+	// Reconciling to the same epoch keeps it (the snapshot does not yet
+	// reflect the in-epoch top-up).
+	tracker.ReconcileToEpoch(5)
+	assert.Equal(t, int64(50_000_000_000), tracker.GetBalanceAdjustment(),
+		"same-epoch reconcile must retain the in-epoch delta")
+
+	// Once the authoritative snapshot advances, the credit is dropped — it is
+	// now reflected in (or superseded by) the snapshot balance. This is what
+	// prevents an unlanded top-up from inflating the balance forever.
+	tracker.ReconcileToEpoch(6)
+	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment(),
+		"advancing the snapshot epoch must drop the stale credit")
+
+	// A reveal deduction in the new epoch anchors to that epoch and survives
+	// same-epoch reconciles.
+	chainSvc.currentEpoch = 6
+	tracker.RecordWonBid(6*32, 1000)
+	tracker.MarkRevealed(6 * 32)
+	assert.Equal(t, int64(-1000), tracker.GetBalanceAdjustment())
+
+	tracker.ReconcileToEpoch(6)
+	assert.Equal(t, int64(-1000), tracker.GetBalanceAdjustment())
+
+	tracker.ReconcileToEpoch(7)
 	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment())
 }
 

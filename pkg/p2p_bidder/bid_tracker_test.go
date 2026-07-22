@@ -116,6 +116,68 @@ func TestBidTracker_TrackBidAndGetHighestBid(t *testing.T) {
 	}
 }
 
+func TestBidTracker_GetHighestCompetitorBid(t *testing.T) {
+	tests := []struct {
+		name          string
+		ourBuilderIdx uint64
+		bids          []*ExecutionPayloadBid
+		slot          phase0.Slot
+		wantValue     uint64
+		wantOK        bool
+	}{
+		{
+			name:          "unknown slot",
+			ourBuilderIdx: 1,
+			slot:          100,
+			wantOK:        false,
+		},
+		{
+			name:          "only our bid",
+			ourBuilderIdx: 1,
+			bids:          []*ExecutionPayloadBid{newTestBid(100, 1, 700)},
+			slot:          100,
+			wantOK:        false,
+		},
+		{
+			name:          "our bid is highest but excluded",
+			ourBuilderIdx: 1,
+			bids: []*ExecutionPayloadBid{
+				newTestBid(100, 1, 1000),
+				newTestBid(100, 2, 500),
+			},
+			slot:      100,
+			wantValue: 500,
+			wantOK:    true,
+		},
+		{
+			name:          "highest competitor of several",
+			ourBuilderIdx: 1,
+			bids: []*ExecutionPayloadBid{
+				newTestBid(100, 2, 500),
+				newTestBid(100, 3, 900),
+				newTestBid(100, 1, 100),
+			},
+			slot:      100,
+			wantValue: 900,
+			wantOK:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tracker := newTestBidTracker(tt.ourBuilderIdx)
+
+			for _, bid := range tt.bids {
+				tracker.TrackBid(bid, bid.BuilderIndex == tt.ourBuilderIdx)
+			}
+
+			value, ok := tracker.GetHighestCompetitorBid(tt.slot, tt.ourBuilderIdx)
+			assert.Equal(t, tt.wantOK, ok, "competitor bid known")
+			assert.Equal(t, tt.wantValue, value, "highest competitor value")
+		})
+	}
+}
+
 func TestBidTracker_GetHighestBidUnknownSlot(t *testing.T) {
 	tracker := newTestBidTracker(1)
 

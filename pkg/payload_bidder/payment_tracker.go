@@ -22,10 +22,14 @@ type PendingPayment struct {
 // lifecycle manager (top-ups) and the WebUI. Passive and thread-safe: it runs
 // no goroutine of its own.
 type PaymentTracker struct {
-	// Balance adjustments since last chain state refresh.
-	// Positive = deposits/topups, negative = revealed bid payments.
-	// Reset to 0 when the chain state refreshes (epoch boundary).
+	// balanceAdjustment bridges the gap between an operation and the epoch
+	// snapshot reflecting it: positive = deposits/topups, negative = revealed
+	// bid payments. It holds only deltas from the current snapshot epoch;
+	// ReconcileToEpoch drops it once the snapshot advances (the snapshot then
+	// accounts for those deltas). adjustmentEpoch is the latest epoch a delta
+	// was anchored to.
 	balanceAdjustment int64
+	adjustmentEpoch   phase0.Epoch
 	adjustmentMu      sync.Mutex
 
 	// Pending payments: unrevealed won bids, pending for 2 epochs.
@@ -83,9 +87,11 @@ func (t *PaymentTracker) MarkRevealed(slot phase0.Slot) {
 	delete(t.pendingPayments, slot)
 	t.pendingMu.Unlock()
 
-	// Deduct from live balance
+	// Deduct from live balance, anchored to this slot's epoch so the
+	// reconciler keeps the delta until the snapshot advances past it.
 	t.adjustmentMu.Lock()
 	t.balanceAdjustment -= int64(value)
+	t.anchorEpochLocked(t.chainSvc.GetEpochOfSlot(slot))
 	t.adjustmentMu.Unlock()
 
 	t.log.WithFields(logrus.Fields{
@@ -94,14 +100,24 @@ func (t *PaymentTracker) MarkRevealed(slot phase0.Slot) {
 	}).Info("Revealed bid: deducted from live balance")
 }
 
-// AddDeposit adds a deposit/topup amount to the balance adjustment.
-// Topups take effect immediately (no finalization delay).
+// AddDeposit credits a deposit/topup to the live balance adjustment, anchored
+// to the current epoch. The credit is reconciled away by ReconcileToEpoch once
+// the authoritative snapshot advances past that epoch.
 func (t *PaymentTracker) AddDeposit(amount uint64) {
 	t.adjustmentMu.Lock()
 	t.balanceAdjustment += int64(amount)
+	t.anchorEpochLocked(t.chainSvc.GetCurrentEpoch())
 	t.adjustmentMu.Unlock()
 
 	t.log.WithField("amount", amount).Info("Deposit added to live balance")
+}
+
+// anchorEpochLocked advances the adjustment's anchor epoch so the reconciler
+// keeps the current delta through opEpoch. Callers must hold adjustmentMu.
+func (t *PaymentTracker) anchorEpochLocked(opEpoch phase0.Epoch) {
+	if opEpoch > t.adjustmentEpoch {
+		t.adjustmentEpoch = opEpoch
+	}
 }
 
 // GetBalanceAdjustment returns the cumulative balance adjustment since last state refresh.
@@ -112,12 +128,21 @@ func (t *PaymentTracker) GetBalanceAdjustment() int64 {
 	return t.balanceAdjustment
 }
 
-// ResetBalanceAdjustment resets the adjustment to 0.
-// Called when the chain state refreshes and the balance is up to date.
-func (t *PaymentTracker) ResetBalanceAdjustment() {
+// ReconcileToEpoch drops the local adjustment once the authoritative builder
+// snapshot advances past the epoch the adjustment is anchored to: the newer
+// snapshot already accounts for every reveal/top-up from earlier epochs.
+// Deltas anchored to the snapshot's own epoch are retained (not yet reflected).
+// Safe to call every refresh; a no-op until the epoch advances.
+func (t *PaymentTracker) ReconcileToEpoch(snapshotEpoch phase0.Epoch) {
 	t.adjustmentMu.Lock()
+	defer t.adjustmentMu.Unlock()
+
+	if snapshotEpoch <= t.adjustmentEpoch {
+		return
+	}
+
 	t.balanceAdjustment = 0
-	t.adjustmentMu.Unlock()
+	t.adjustmentEpoch = snapshotEpoch
 }
 
 // GetTotalPendingPayments returns the sum of unrevealed won bid obligations.

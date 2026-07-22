@@ -3,7 +3,9 @@ package p2p_bidder
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
+	"math/bits"
 	"sync"
 	"time"
 
@@ -12,8 +14,8 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -27,12 +29,15 @@ type SlotState struct {
 	BidCount         int
 	BidsClosed       bool // Block received, no more bids possible
 	NoPrefsWarnedFor bool // Missing-preferences skip already reported for this slot
+
+	// Frozen is the slot's immutable action-plan snapshot, resolved on the
+	// first scheduler evaluation of the slot (nil until then).
+	Frozen *action_plan.FrozenPlan
 }
 
 // Scheduler handles time-based bid scheduling.
 // It uses a simple loop that checks current time and triggers actions.
 type Scheduler struct {
-	cfg            *config.EPBSConfig
 	chainSvc       chain.Service
 	bidCreator     *BidCreator
 	bidTracker     *BidTracker
@@ -40,6 +45,7 @@ type Scheduler struct {
 	service        *Service // Reference to parent service for firing events
 	blsSigner      *signer.BLSSigner
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
+	planSvc        *action_plan.PlanService // per-slot scheduling/settings authority
 	log            logrus.FieldLogger
 
 	// Simple state tracking per slot
@@ -47,9 +53,10 @@ type Scheduler struct {
 	mu         sync.Mutex
 }
 
-// NewScheduler creates a new scheduler.
+// NewScheduler creates a new scheduler. planSvc is the mandatory per-slot
+// action plan service: every bid setting the scheduler acts on comes from its
+// frozen slot snapshots, never from the live config.
 func NewScheduler(
-	cfg *config.EPBSConfig,
 	chainSvc chain.Service,
 	bidCreator *BidCreator,
 	bidTracker *BidTracker,
@@ -57,10 +64,10 @@ func NewScheduler(
 	service *Service,
 	blsSigner *signer.BLSSigner,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
+	planSvc *action_plan.PlanService,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:            cfg,
 		chainSvc:       chainSvc,
 		bidCreator:     bidCreator,
 		bidTracker:     bidTracker,
@@ -68,6 +75,7 @@ func NewScheduler(
 		service:        service,
 		blsSigner:      blsSigner,
 		propPrefsStore: propPrefsStore,
+		planSvc:        planSvc,
 		slotStates:     make(map[phase0.Slot]*SlotState),
 		log:            log.WithField("component", "scheduler"),
 	}
@@ -127,11 +135,42 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSvc.GetChainSpec().SecondsPerSlot.Milliseconds()))
 }
 
+// effectiveBidSettings returns the effective bid parameters for the slot, or
+// nil when bidding is suppressed for it. The frozen per-slot snapshot
+// (resolved on the first evaluation of the slot and cached on its state) is
+// the sole enable/parameter authority — it already encodes the global
+// epbs_enabled flag at freeze time or a per-slot plan override, so the
+// service enable flag is NOT consulted here.
+func (s *Scheduler) effectiveBidSettings(slot phase0.Slot) *action_plan.ResolvedBidSettings {
+	s.mu.Lock()
+	frozen := s.getSlotState(slot).Frozen
+	s.mu.Unlock()
+
+	if frozen == nil {
+		// First evaluation of the slot: freeze the plan (idempotent) and cache
+		// the snapshot for every later tick of this slot.
+		frozen = s.planSvc.Freeze(slot)
+
+		s.mu.Lock()
+		s.getSlotState(slot).Frozen = frozen
+		s.mu.Unlock()
+	}
+
+	return frozen.Bid
+}
+
 // checkSlotForBidding checks if we should bid for this slot.
 func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, now time.Time, msRelativeToSlot int64) {
+	bidSettings := s.effectiveBidSettings(slot)
+	if bidSettings == nil {
+		// Bidding is suppressed for this slot (by plan, global disable, or a
+		// pre-Gloas target fork).
+		return
+	}
+
 	// Are we in bid period for this slot?
 	// msRelativeToSlot is negative if we're before the slot starts
-	if msRelativeToSlot < s.cfg.BidStartTime || msRelativeToSlot >= s.cfg.BidEndTime {
+	if msRelativeToSlot < bidSettings.StartMs || msRelativeToSlot >= bidSettings.EndMs {
 		return
 	}
 
@@ -145,8 +184,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	// don't know the fee recipient to commit to. The cache is empty right
 	// after a restart and refills from gossip within roughly an epoch, so this
 	// is expected transiently — but it must be visible, not silent. Report
-	// once per slot (this runs on a 10ms tick).
-	if s.propPrefsStore == nil || !s.propPrefsStore.Has(slot) {
+	// once per slot (this runs on a 10ms tick). A plan may bypass the gate
+	// (ignore_missing_prefs): the bid then commits to the payload's own fee
+	// recipient, which BidCreator uses anyway.
+	prefsMissing := s.propPrefsStore == nil || !s.propPrefsStore.Has(slot)
+	prefsBypassed := prefsMissing && bidSettings.IgnoreMissingPrefs
+
+	if prefsMissing && !prefsBypassed {
 		s.mu.Lock()
 		state := s.getSlotState(slot)
 		alreadyWarned := state.NoPrefsWarnedFor
@@ -186,8 +230,8 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	// Check bid interval
-	if s.cfg.BidInterval > 0 {
-		if time.Since(state.LastBidTime) < time.Duration(s.cfg.BidInterval)*time.Millisecond {
+	if bidSettings.IntervalMs > 0 {
+		if time.Since(state.LastBidTime) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
 			s.mu.Unlock()
 			return
 		}
@@ -199,23 +243,26 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		}
 	}
 
-	// Calculate bid value.
-	// Start from block value with BidMinAmount as a floor.
-	// BlockValue is in wei; BidMinAmount/BidIncrease/BidSubsidy are in gwei.
-	bidBase := new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
-	if s.cfg.BidMinAmount > bidBase {
-		bidBase = s.cfg.BidMinAmount
+	// Calculate bid value (all gwei, overflow-clamped).
+	// ValueGwei, when set, is an absolute base (per-slot custom value or the
+	// global bid value override, resolved at freeze time) replacing the
+	// max(blockValue, BidMinAmount) + BidSubsidy formula. The subsidy pads the
+	// formula bid so it clears the proposer BN's local-build threshold.
+	var bidBase uint64
+
+	if bidSettings.ValueGwei != nil {
+		bidBase = *bidSettings.ValueGwei
+	} else {
+		bidBase = max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei)
+		bidBase = s.addGweiClamped(slot, bidBase, bidSettings.SubsidyGwei)
 	}
 
+	// Re-bid increase applies in interval mode regardless of the base source.
 	bidValue := bidBase
-	if s.cfg.BidInterval > 0 && state.BidCount > 0 {
-		bidValue = bidBase + uint64(state.BidCount)*s.cfg.BidIncrease
+	if bidSettings.IntervalMs > 0 && state.BidCount > 0 {
+		increase := s.mulGweiClamped(slot, uint64(state.BidCount), bidSettings.IncreaseGwei) //nolint:gosec // BidCount >= 0
+		bidValue = s.addGweiClamped(slot, bidValue, increase)
 	}
-
-	// Bid subsidy: the proposer's BN rejects our bid and self-builds when its local EL
-	// build is worth more than ours. The subsidy pads the bid to clear that threshold.
-	// Configurable via --epbs-bid-subsidy (gwei).
-	bidValue += s.cfg.BidSubsidy
 
 	s.mu.Unlock()
 
@@ -227,8 +274,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
-	// Submit bid
-	err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue)
+	// Submit bid, applying the slot's frozen bid transform if any.
+	var bidTransform string
+	if state.Frozen != nil && state.Frozen.Transforms != nil {
+		bidTransform = state.Frozen.Transforms.Bid
+	}
+
+	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue, bidTransform)
 
 	// Update state regardless of success - we don't want to spam on failure
 	s.mu.Lock()
@@ -238,19 +290,38 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	bidCount := state.BidCount
 	s.mu.Unlock()
 
+	event := &BidSubmissionEvent{
+		Slot:      slot,
+		BlockHash: payload.BlockHash,
+		Value:     bidValue,
+		BidCount:  bidCount,
+		SignedBid: signedBid,
+	}
+
+	if prefsBypassed {
+		event.Warning = "no proposer preferences for slot — bid sent anyway (ignore_missing_prefs)"
+	}
+
+	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, s.bidCreator.GetBuilderIndex()); ok {
+		event.CompetitorHighGwei = &high
+	}
+
 	if err != nil {
 		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
-		// Fire bid failure event
-		if s.service != nil {
-			s.service.FireBidSubmission(&BidSubmissionEvent{
-				Slot:      slot,
-				BlockHash: payload.BlockHash,
-				Value:     bidValue,
-				BidCount:  bidCount,
-				Success:   false,
-				Error:     err.Error(),
-			})
+
+		// Constructed-but-not-submitted bids carry the signed bid object so
+		// consumers can record exactly what was built.
+		event.Error = err.Error()
+		event.Status = BidStatusFailed
+
+		if signedBid != nil {
+			event.Status = BidStatusConstructed
 		}
+
+		if s.service != nil {
+			s.service.FireBidSubmission(event)
+		}
+
 		return
 	}
 
@@ -263,14 +334,11 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}, true)
 
 	// Fire bid success event
+	event.Success = true
+	event.Status = BidStatusSubmitted
+
 	if s.service != nil {
-		s.service.FireBidSubmission(&BidSubmissionEvent{
-			Slot:      slot,
-			BlockHash: payload.BlockHash,
-			Value:     bidValue,
-			BidCount:  bidCount,
-			Success:   true,
-		})
+		s.service.FireBidSubmission(event)
 	}
 
 	// Increment stats (count each bid submission)
@@ -286,6 +354,55 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}).Info("Bid submitted")
 }
 
+// weiToGweiClamped converts a wei amount to gwei, clamping to MaxUint64 when
+// the result does not fit (and to 0 for a nil value).
+func weiToGweiClamped(wei *big.Int) uint64 {
+	if wei == nil {
+		return 0
+	}
+
+	gwei := new(big.Int).Div(wei, big.NewInt(1_000_000_000))
+	if !gwei.IsUint64() {
+		return math.MaxUint64
+	}
+
+	return gwei.Uint64()
+}
+
+// addGweiClamped adds two gwei amounts, clamping to MaxUint64 on overflow
+// instead of wrapping silently.
+func (s *Scheduler) addGweiClamped(slot phase0.Slot, a, b uint64) uint64 {
+	sum, carry := bits.Add64(a, b, 0)
+	if carry != 0 {
+		s.log.WithFields(logrus.Fields{
+			"slot": slot,
+			"a":    a,
+			"b":    b,
+		}).Warn("Bid value addition overflowed, clamping to MaxUint64")
+
+		return math.MaxUint64
+	}
+
+	return sum
+}
+
+// mulGweiClamped multiplies two gwei amounts, clamping to MaxUint64 on
+// overflow instead of wrapping silently.
+func (s *Scheduler) mulGweiClamped(slot phase0.Slot, a, b uint64) uint64 {
+	hi, lo := bits.Mul64(a, b)
+	if hi != 0 {
+		s.log.WithFields(logrus.Fields{
+			"slot": slot,
+			"a":    a,
+			"b":    b,
+		}).Warn("Bid value multiplication overflowed, clamping to MaxUint64")
+
+		return math.MaxUint64
+	}
+
+	return lo
+}
+
 // Cleanup removes old state.
 func (s *Scheduler) Cleanup(olderThan phase0.Slot) {
 	s.mu.Lock()
@@ -296,14 +413,6 @@ func (s *Scheduler) Cleanup(olderThan phase0.Slot) {
 			delete(s.slotStates, slot)
 		}
 	}
-}
-
-// UpdateConfig updates the scheduler configuration.
-func (s *Scheduler) UpdateConfig(cfg *config.EPBSConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.cfg = cfg
 }
 
 // GetBidTracker returns the bid tracker.

@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth-engine-client/spec/identification"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -20,6 +24,9 @@ import (
 // buildCallTimeout is the margin added on top of the configured PayloadBuildTime
 // for the engine getPayload and finality lookups that run after the build wait.
 const buildCallTimeout = 10 * time.Second
+
+// transformTimeout bounds how long an operator jq payload transform may run.
+const transformTimeout = 2 * time.Second
 
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
@@ -34,6 +41,7 @@ type Service struct {
 	cfg                    *config.Config
 	clClient               *beacon.Client
 	chainSvc               chain.Service
+	planSvc                *action_plan.PlanService // per-slot scheduling authority
 	engineClient           EngineClient
 	feeRecipient           common.Address
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
@@ -42,7 +50,7 @@ type Service struct {
 	payloadReadyDispatcher *utils.Dispatcher[*Payload]
 	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
 	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
-	slotManager            *SlotManager
+	buildSkippedDispatcher *utils.Dispatcher[*BuildSkippedEvent]
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
@@ -60,10 +68,15 @@ type Service struct {
 	// Build tracking
 	scheduledBuildMu  sync.Mutex
 	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
+	skipFiredSlots    map[phase0.Slot]bool // Slots a BuildSkippedEvent was fired for (dedup per slot)
+	attrFallbackArmed map[phase0.Slot]bool // Slots a missing-attributes fallback check is armed for
 
 	// Payload inclusion tracking (deduplication between detection methods)
 	wonPayloadsMu sync.Mutex
 	wonPayloads   map[phase0.Hash32]phase0.Slot
+
+	// lastBuiltSlot tracks the most recently built slot (WebUI status).
+	lastBuiltSlot atomic.Uint64
 
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
@@ -82,10 +95,13 @@ type ELClientVersion struct {
 // NewService creates a new builder service.
 // Proposer settings (fee recipient, target gas limit) are resolved through the
 // resolvers registered via AddProposerSettingsResolver before Start.
+// planSvc is the per-slot scheduling authority: every build decision polls it
+// for the slot's frozen plan (schedule, force/suppress, build timing).
 func NewService(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
+	planSvc *action_plan.PlanService,
 	engineClient EngineClient,
 	feeRecipient common.Address,
 	log logrus.FieldLogger,
@@ -96,15 +112,19 @@ func NewService(
 		cfg:                    cfg,
 		clClient:               clClient,
 		chainSvc:               chainSvc,
+		planSvc:                planSvc,
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
 		payloadReadyDispatcher: &utils.Dispatcher[*Payload]{},
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
 		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
+		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		buildStartedSlots:      make(map[phase0.Slot]bool),
+		skipFiredSlots:         make(map[phase0.Slot]bool, 16),
+		attrFallbackArmed:      make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
 	}
 
@@ -114,9 +134,6 @@ func NewService(
 // Start initializes and starts the builder service.
 func (s *Service) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
-
-	// Initialize managers
-	s.slotManager = NewSlotManager(s.cfg)
 
 	// Create payload builder
 	s.payloadBuilder = NewPayloadBuilder(
@@ -245,19 +262,19 @@ func (s *Service) GetConfig() *config.Config {
 	return s.cfg
 }
 
-// UpdateConfig updates the service configuration at runtime.
+// UpdateConfig updates the service configuration at runtime. Schedule
+// changes are handled by the plan service (the scheduling authority).
 func (s *Service) UpdateConfig(cfg *config.Config) error {
 	s.cfg = cfg
-	s.slotManager.UpdateConfig(cfg)
 
 	s.log.Info("Configuration updated")
 
 	return nil
 }
 
-// GetCurrentSlot returns the current slot.
+// GetCurrentSlot returns the most recently built slot.
 func (s *Service) GetCurrentSlot() phase0.Slot {
-	return s.slotManager.GetCurrentSlot()
+	return phase0.Slot(s.lastBuiltSlot.Load())
 }
 
 // GetChainSpec returns the chain specification.
@@ -277,24 +294,34 @@ func (s *Service) GetCLClient() *beacon.Client {
 
 // SubscribePayloadReady subscribes to payload ready events.
 // Consumers (like the ePBS service) use this to receive built payloads.
-func (s *Service) SubscribePayloadReady(capacity int) *utils.Subscription[*Payload] {
-	return s.payloadReadyDispatcher.Subscribe(capacity, false)
+func (s *Service) SubscribePayloadReady(capacity int, blocking bool) *utils.Subscription[*Payload] {
+	return s.payloadReadyDispatcher.Subscribe(capacity, blocking)
 }
 
 // SubscribePayloadBuildStarted subscribes to payload build started events.
 // Consumers (like the WebUI) use this to render builds as in-progress.
 func (s *Service) SubscribePayloadBuildStarted(
-	capacity int,
+	capacity int, blocking bool,
 ) *utils.Subscription[*PayloadBuildStartedEvent] {
-	return s.buildStartedDispatcher.Subscribe(capacity, false)
+	return s.buildStartedDispatcher.Subscribe(capacity, blocking)
 }
 
 // SubscribePayloadBuildFailed subscribes to payload build failed events.
 // Consumers (like the WebUI) use this to mark in-progress builds as failed.
 func (s *Service) SubscribePayloadBuildFailed(
-	capacity int,
+	capacity int, blocking bool,
 ) *utils.Subscription[*PayloadBuildFailedEvent] {
-	return s.buildFailedDispatcher.Subscribe(capacity, false)
+	return s.buildFailedDispatcher.Subscribe(capacity, blocking)
+}
+
+// SubscribeBuildSkipped subscribes to build skipped events. Authoritative
+// consumers (the slot results tracker) should pass blocking=true so no skip
+// is lost; informational consumers should pass blocking=false.
+func (s *Service) SubscribeBuildSkipped(
+	capacity int,
+	blocking bool,
+) *utils.Subscription[*BuildSkippedEvent] {
+	return s.buildSkippedDispatcher.Subscribe(capacity, blocking)
 }
 
 // GetPayloadCache returns the payload cache for direct access.
@@ -383,9 +410,24 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
-	// Check if we should build for this slot
-	if !s.slotManager.ShouldBuildForSlot(event.ProposalSlot) {
-		s.log.WithField("slot", event.ProposalSlot).Debug("Skipping slot per schedule")
+	// Arm the missing-block fallback for the NEXT proposal slot: if its
+	// block goes missing entirely, some clients never emit fresh attributes
+	// and this slot's attributes get re-used instead.
+	s.scheduleAttributesFallback(event.ProposalSlot + 1)
+
+	// Resolve the slot's immutable action plan snapshot once. The plan
+	// service is the scheduling authority: the frozen snapshot carries the
+	// complete build decision (schedule + plan force/suppress + timing).
+	frozen := s.planSvc.Freeze(event.ProposalSlot)
+
+	if !frozen.Build.Build {
+		s.log.WithFields(logrus.Fields{
+			"slot":   event.ProposalSlot,
+			"reason": frozen.Build.SkipReason,
+		}).Debug("Skipping build for slot")
+
+		s.fireBuildSkipped(event.ProposalSlot, frozen.Build)
+
 		return
 	}
 
@@ -398,16 +440,149 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 	s.buildStartedSlots[event.ProposalSlot] = true
 	s.scheduledBuildMu.Unlock()
 
-	s.scheduleBuildForSlot(event.ProposalSlot)
+	s.scheduleBuildForSlot(event.ProposalSlot, frozen.Build.BuildStartTimeMs)
+}
+
+// fireBuildSkipped emits a BuildSkippedEvent (once per slot) when the skip is
+// worth recording: a plan exists for the slot or a consumer is effectively
+// active (build.PlanInvolved), so a results tracker can explain why no
+// payload was produced. Other skips stay silent.
+func (s *Service) fireBuildSkipped(slot phase0.Slot, build *action_plan.ResolvedBuildSettings) {
+	if !build.PlanInvolved {
+		return
+	}
+
+	reason := build.SkipReason
+
+	s.scheduledBuildMu.Lock()
+	if s.skipFiredSlots[slot] {
+		s.scheduledBuildMu.Unlock()
+
+		return
+	}
+
+	s.skipFiredSlots[slot] = true
+
+	// Prune inline: the emitPayloadReady cleanup only runs on successful
+	// builds, which never happen when every slot is skipped.
+	if slot > 64 {
+		cutoff := slot - 64
+		for oldSlot := range s.skipFiredSlots {
+			if oldSlot < cutoff {
+				delete(s.skipFiredSlots, oldSlot)
+			}
+		}
+	}
+	s.scheduledBuildMu.Unlock()
+
+	s.buildSkippedDispatcher.Fire(&BuildSkippedEvent{
+		Slot:   slot,
+		Reason: reason,
+	})
+}
+
+// scheduleAttributesFallback arms a one-shot check for the given proposal
+// slot: some clients do not re-emit payload_attributes when a slot's block is
+// missing entirely, leaving the builder without a build trigger. If no
+// attributes for targetSlot arrived by its build start time, the parent
+// slot's attributes are re-used with the proposal slot advanced (see
+// applyAttributesFallback). Armed once per slot.
+func (s *Service) scheduleAttributesFallback(targetSlot phase0.Slot) {
+	s.scheduledBuildMu.Lock()
+
+	if s.attrFallbackArmed[targetSlot] {
+		s.scheduledBuildMu.Unlock()
+		return
+	}
+
+	s.attrFallbackArmed[targetSlot] = true
+
+	if targetSlot > 64 {
+		cutoff := targetSlot - 64
+		for oldSlot := range s.attrFallbackArmed {
+			if oldSlot < cutoff {
+				delete(s.attrFallbackArmed, oldSlot)
+			}
+		}
+	}
+	s.scheduledBuildMu.Unlock()
+
+	// Fire at the slot's (globally configured) build start time: real
+	// attributes would have arrived long before it, and synthesizing then
+	// leaves the normal scheduling path an immediate build.
+	fireAt := s.chainSvc.SlotToTime(targetSlot).
+		Add(time.Duration(s.cfg.EPBS.BuildStartTime) * time.Millisecond)
+
+	time.AfterFunc(max(time.Until(fireAt), 0), func() {
+		s.applyAttributesFallback(targetSlot)
+	})
+}
+
+// attrFallbackLookback bounds how many slots the missing-block fallback
+// searches backwards for the last received payload attributes (covers runs
+// of consecutive missing blocks).
+const attrFallbackLookback = 8
+
+// applyAttributesFallback re-uses the last available payload attributes for
+// targetSlot when the beacon node never emitted any (missing block): the
+// proposal slot advances and the timestamp moves forward by the number of
+// skipped slots — every other property stays identical, since no new block
+// was built on top. Runs of multiple missing blocks are covered by searching
+// back up to attrFallbackLookback slots. The synthesized event is injected
+// into the event stream (cache + dispatch), so it flows through the exact
+// same build path as a node-received one.
+func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
+	if s.clClient == nil || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+
+	events := s.clClient.Events()
+
+	if events.GetLatestPayloadAttributes(targetSlot) != nil {
+		return // real attributes arrived; nothing to do
+	}
+
+	// Find the last slot we actually received (or previously synthesized)
+	// attributes for.
+	var parent *beacon.PayloadAttributesEvent
+
+	for lookback := phase0.Slot(1); lookback <= attrFallbackLookback && lookback <= targetSlot; lookback++ {
+		if parent = events.GetLatestPayloadAttributes(targetSlot - lookback); parent != nil {
+			break
+		}
+	}
+
+	if parent == nil {
+		return
+	}
+
+	skippedSlots := uint64(targetSlot - parent.ProposalSlot)
+
+	synthesized := *parent
+	synthesized.ProposalSlot = targetSlot
+	synthesized.Timestamp = parent.Timestamp +
+		skippedSlots*uint64(s.chainSvc.GetChainSpec().SecondsPerSlot.Seconds())
+
+	if !events.InjectPayloadAttributes(&synthesized) {
+		return // lost the race against a real event
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":          targetSlot,
+		"attrs_from":    parent.ProposalSlot,
+		"missing_slots": skippedSlots,
+		"parent_hash":   fmt.Sprintf("%x", synthesized.ParentBlockHash[:8]),
+	}).Info("No payload attributes received for slot (block missing?), " +
+		"re-using the last available attributes")
 }
 
 // scheduleBuildForSlot schedules payload building for the given slot.
-// BuildStartTime is milliseconds relative to the proposal slot start:
+// buildStartMs is the slot's frozen build start time, milliseconds relative
+// to the proposal slot start:
 //   - Negative values (e.g. -3000) mean before the slot starts.
 //   - Positive values mean after the slot starts.
 //   - Zero means build immediately when the event is received.
-func (s *Service) scheduleBuildForSlot(slot phase0.Slot) {
-	buildStartMs := s.cfg.EPBS.BuildStartTime
+func (s *Service) scheduleBuildForSlot(slot phase0.Slot, buildStartMs int64) {
 	slotStart := s.chainSvc.SlotToTime(slot)
 	buildTime := slotStart.Add(time.Duration(buildStartMs) * time.Millisecond)
 	delay := time.Until(buildTime)
@@ -450,6 +625,13 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 	}).Info("Starting payload build")
 
+	// The frozen plan (idempotent Freeze) decides whether to build this slot's
+	// payload on the grandparent execution payload (a parent-reorg test). When
+	// so, we build from an effective attributes copy whose parent fields point
+	// at the grandparent, so the build, the stored payload and the bid all
+	// agree on the parent.
+	event = s.effectiveBuildAttributes(slot, event)
+
 	// Notify subscribers that building has started so the build can be rendered
 	// as in-progress before the payload is ready.
 	s.buildStartedDispatcher.Fire(&PayloadBuildStartedEvent{
@@ -481,7 +663,123 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		return
 	}
 
+	// Apply the slot's frozen payload transform (if any) before the payload
+	// feeds the bid commitment and the envelope reveal.
+	if err := s.applyPayloadTransform(ctx, slot, payloadEvent); err != nil {
+		s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed")
+
+		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
+			Slot:     slot,
+			Error:    err.Error(),
+			FailedAt: time.Now(),
+		})
+
+		return
+	}
+
 	s.emitPayloadReady(slot, payloadEvent)
+}
+
+// applyPayloadTransform rewrites the built execution payload with the slot's
+// frozen jq payload transform (idempotent Freeze), in place. Because the bid
+// commits to the payload's block hash, Payload.BlockHash is re-synced to the
+// (possibly modified) payload block hash so the bid and the revealed payload
+// stay consistent. A no-op when no transform is set.
+func (s *Service) applyPayloadTransform(ctx context.Context, slot phase0.Slot, p *Payload) error {
+	transforms := s.planSvc.Freeze(slot).Transforms
+	if transforms == nil || transforms.Payload == "" {
+		return nil
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, transformTimeout)
+	defer cancel()
+
+	transformed := &eth2all.ExecutionPayload{Version: p.ExecutionPayload.Version}
+	if err := jqtransform.ApplyTyped(tctx, transforms.Payload, p.ExecutionPayload, transformed); err != nil {
+		return err
+	}
+
+	p.ExecutionPayload = transformed
+	p.BlockHash = transformed.BlockHash
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       slot,
+		"block_hash": fmt.Sprintf("%x", p.BlockHash[:8]),
+	}).Warn("Applied payload jq transform")
+
+	return nil
+}
+
+// effectiveBuildAttributes returns the payload attributes to build the slot
+// from. Normally that is the current attributes unchanged; when the slot's
+// frozen plan requests a parent-payload reorg it returns a copy whose parent
+// fields (parent block hash, parent block number and withdrawals) are sourced
+// from the PARENT slot's cached attributes (whose parent is the grandparent
+// payload), while every other property — including the beacon parent root —
+// stays from the current slot. The payload thus builds on the grandparent
+// execution payload while keeping the current beacon-chain position, a
+// deliberate parent-payload reorg. Building the copy here (rather than only
+// overriding the engine call) means the built Payload carries the reorged
+// parent, so the bid advertises the parent it actually built on.
+//
+// When the parent slot's attributes are unavailable — or already share our
+// parent (nothing to reorg) — the reorg cannot be constructed and the current
+// attributes are returned unchanged (logged), rather than silently pretending
+// the flag were unset.
+func (s *Service) effectiveBuildAttributes(
+	slot phase0.Slot, current *beacon.PayloadAttributesEvent,
+) *beacon.PayloadAttributesEvent {
+	frozen := s.planSvc.Freeze(slot)
+	if !frozen.Build.ReorgParentPayload {
+		return current
+	}
+
+	if slot == 0 {
+		s.log.WithField("slot", slot).Warn(
+			"Parent-reorg build requested for slot 0, building normally",
+		)
+
+		return current
+	}
+
+	parentAttrs := s.clClient.Events().GetLatestPayloadAttributes(slot - 1)
+	if parentAttrs == nil {
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"parent_slot": slot - 1,
+		}).Warn("Parent-reorg build requested but parent slot attributes are unavailable, building normally")
+
+		return current
+	}
+
+	if parentAttrs.ParentBlockHash == current.ParentBlockHash {
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"parent_slot": slot - 1,
+			"parent_hash": fmt.Sprintf("%x", current.ParentBlockHash[:8]),
+		}).Warn("Parent-reorg build requested but parent slot shares our parent payload, building normally")
+
+		return current
+	}
+
+	// Shallow copy the current event, then redirect only the parent fields to
+	// the grandparent payload. The cached events must never be mutated, so we
+	// copy the struct and swap the withdrawals slice reference (not its
+	// contents).
+	effective := *current
+	effective.ParentBlockHash = parentAttrs.ParentBlockHash
+	effective.ParentBlockNumber = parentAttrs.ParentBlockNumber
+	effective.Withdrawals = parentAttrs.Withdrawals
+
+	s.log.WithFields(logrus.Fields{
+		"slot":                slot,
+		"reorg_parent_hash":   fmt.Sprintf("%x", effective.ParentBlockHash[:8]),
+		"reorg_parent_number": effective.ParentBlockNumber,
+		"original_parent":     fmt.Sprintf("%x", current.ParentBlockHash[:8]),
+		"withdrawals":         len(effective.Withdrawals),
+	}).Warn("Building on grandparent payload (parent-reorg test)")
+
+	return &effective
 }
 
 // handlePayloadAvailableEvent processes an execution_payload_available event (Gloas only).
@@ -518,8 +816,9 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
-	// Mark slot as built
-	s.slotManager.OnSlotBuilt(slot)
+	// Mark slot as built (next_n schedule accounting + WebUI status).
+	s.planSvc.OnSlotBuilt(slot)
+	s.lastBuiltSlot.Store(uint64(slot))
 
 	s.incrementStat(func(stats *BuilderStats) {
 		stats.SlotsBuilt++

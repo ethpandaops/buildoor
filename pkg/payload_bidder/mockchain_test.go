@@ -26,6 +26,7 @@ type stubChainService struct {
 	genesisTime  time.Time
 	slotDuration time.Duration
 	currentFork  version.DataVersion
+	currentEpoch phase0.Epoch
 	genesis      beacon.Genesis
 
 	epochStatsDispatch utils.Dispatcher[*chain.EpochStats]
@@ -37,7 +38,13 @@ func (m *stubChainService) Start(context.Context) error { return nil }
 func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
-	return &chain.ChainSpec{SecondsPerSlot: m.slotDuration, SlotsPerEpoch: 32}
+	return &chain.ChainSpec{
+		SecondsPerSlot: m.slotDuration,
+		SlotsPerEpoch:  32,
+		ForkSchedule: []chain.ForkSchedule{
+			{Fork: m.currentFork, Version: phase0.Version{0x01, 0x00, 0x00, 0x00}, Epoch: 0},
+		},
+	}
 }
 func (m *stubChainService) GetGenesis() *beacon.Genesis { return &m.genesis }
 
@@ -49,7 +56,7 @@ func (m *stubChainService) TimeToSlot(t time.Time) phase0.Slot {
 	return phase0.Slot(t.Sub(m.genesisTime) / m.slotDuration) //nolint:gosec // test helper
 }
 
-func (m *stubChainService) GetCurrentEpoch() phase0.Epoch { return 0 }
+func (m *stubChainService) GetCurrentEpoch() phase0.Epoch { return m.currentEpoch }
 func (m *stubChainService) GetCurrentSlot() phase0.Slot   { return 0 }
 
 func (m *stubChainService) GetCurrentFork() version.DataVersion { return m.currentFork }
@@ -88,7 +95,7 @@ func newTestBuilderSvc(chainSvc chain.Service) *payload_builder.Service {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	svc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, common.Address{}, log)
+	svc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, nil, common.Address{}, log)
 	if err != nil {
 		panic(err)
 	}

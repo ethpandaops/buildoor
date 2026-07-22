@@ -16,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -29,6 +30,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/signer"
+	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
@@ -209,11 +211,24 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 7. Start chain service (epoch-level state management)
-		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
+
+		// 7b. Initialize the per-slot action plan service. Decision points
+		// (build/bid/serve/reveal) freeze the slot's plan on first use; plans
+		// persist in the state-db's kv_store when --state-db is set.
+		planSvc := action_plan.NewPlanService(cfg, chainSvc, logger)
+		planSvc.SetPersistence(ctx, stateDB)
+
+		if err := planSvc.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start action plan service: %w", err)
+		}
+		// Registered after stateDB's own close defer (LIFO) → the plan store's
+		// final flush (inside Stop) runs while the state-db is still open.
+		defer planSvc.Stop()
 
 		// 8. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
@@ -255,7 +270,7 @@ and begins building blocks according to configuration.`,
 			defer validatorStore.Stop()
 		}
 
-		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, engineClient, feeRecipient, logger)
+		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, planSvc, engineClient, feeRecipient, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
@@ -270,11 +285,11 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 9b. Start shared payment tracker, reveal service, and inclusion tracker.
-		// The inclusion tracker runs on ALL networks (it is the single owner of
-		// won-block records, covering legacy Builder API deliveries too; persisted
-		// into the state-db's kv_store); the reveal service and payment tracker only
-		// exist when Gloas is scheduled. These are independent of both bid flows and
-		// of the epbs_enabled flag.
+		// The inclusion tracker runs on ALL networks (it detects inclusion of our
+		// payloads and fires events carrying the won-block summary; won-block
+		// storage is owned by the slot results tracker); the reveal service and
+		// payment tracker only exist when Gloas is scheduled. These are
+		// independent of both bid flows and of the epbs_enabled flag.
 		var paymentTracker *payload_bidder.PaymentTracker
 
 		var revealSvc *payload_bidder.RevealService
@@ -284,7 +299,9 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
-			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner), clClient, chainSvc, builderSvc, paymentTracker, logger)
+			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner),
+				clClient, chainSvc, builderSvc, paymentTracker, planSvc,
+				chainSvc.GetHeadVoteTracker(), logger)
 			if err := revealSvc.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start reveal service: %w", err)
 			}
@@ -292,13 +309,10 @@ and begins building blocks according to configuration.`,
 		}
 
 		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, revealSvc, paymentTracker, logger)
-		inclusionTracker.SetStateDB(stateDB)
 
 		if err := inclusionTracker.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start inclusion tracker: %w", err)
 		}
-		// Registered after stateDB's own close defer (LIFO) → the won-block
-		// store's final flush (inside Stop) runs while the state-db is still open.
 		defer inclusionTracker.Stop()
 
 		// 10. Initialize the proposer preferences service (started later in step
@@ -326,7 +340,7 @@ and begins building blocks according to configuration.`,
 			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
 			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing p2p bidder service...")
 
-			epbsSvc, err = p2p_bidder.NewService(&cfg.EPBS, clClient, chainSvc, blsSigner, propPrefSvc.GetStore(), logger)
+			epbsSvc, err = p2p_bidder.NewService(clClient, chainSvc, blsSigner, propPrefSvc.GetStore(), planSvc, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize p2p bidder: %w", err)
 			}
@@ -354,7 +368,7 @@ and begins building blocks according to configuration.`,
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, builderSvc.GetPayloadCache(), blsSigner, validatorStore)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), blsSigner, validatorStore)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 
@@ -372,6 +386,26 @@ and begins building blocks according to configuration.`,
 			}
 		}
 
+		// 12b. Start the slot results tracker: the single owner of per-slot
+		// outcome history (build/bid/submission/reveal/inclusion) and raw SSZ
+		// artifacts. Started before the producer services so its blocking
+		// subscriptions never miss an event; SetPersistence migrates any
+		// legacy won_blocks namespace into slot results.
+		resultTracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc,
+			builderSvc, epbsSvc, revealSvc, inclusionTracker, logger)
+		resultTracker.SetPersistence(ctx, stateDB)
+
+		if err := resultTracker.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start slot results tracker: %w", err)
+		}
+		// Registered after stateDB's close defer (LIFO) → the artifact writer
+		// and the result store flush while the state-db is still open.
+		defer resultTracker.Stop()
+
+		if builderAPISrv != nil {
+			builderAPISrv.SetResultRecorder(resultTracker)
+		}
+
 		// 13. Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
@@ -381,12 +415,15 @@ and begins building blocks according to configuration.`,
 		// callbacks trigger module-side resets (schedule counters, scheduler) and
 		// sync the enable flags.
 		settingsSvc.OnChange(func() {
+			// The plan service is the scheduling authority: schedule-mode
+			// changes reset its next_n accounting.
+			planSvc.UpdateConfig()
+
 			if err := builderSvc.UpdateConfig(cfg); err != nil {
 				logger.WithError(err).Warn("failed to apply builder config update")
 			}
 
 			if epbsSvc != nil {
-				epbsSvc.UpdateConfig(&cfg.EPBS)
 				epbsSvc.SetEnabled(cfg.EPBSEnabled)
 			}
 
@@ -414,7 +451,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

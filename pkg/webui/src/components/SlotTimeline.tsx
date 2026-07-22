@@ -9,6 +9,7 @@ interface SlotTimelineProps {
   slotServiceStatuses: Record<number, ServiceStatus>;
   currentConfig: Config | null;
   serviceStatus: ServiceStatus | null;
+  hideHeadVotes?: boolean;
 }
 
 const MAX_SLOTS_TO_SHOW = 5;
@@ -24,7 +25,8 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
   slotConfigs,
   slotServiceStatuses,
   currentConfig,
-  serviceStatus
+  serviceStatus,
+  hideHeadVotes
 }) => {
   const [slotDisplay, setSlotDisplay] = useState<SlotDisplayState>({ displaySlot: 0, showNextSlot: false });
   const firstValidSlotRef = useRef<number>(-1);
@@ -88,9 +90,19 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
 
   const { displaySlot, showNextSlot } = slotDisplay;
 
-  // Track first valid slot
+  // Track first valid slot. The SSE connect-time replay bursts the last few
+  // slots' events before chain_info arrives, so slotStates already contains
+  // that history here — extend the window back to the earliest replayed slot
+  // instead of starting at the current slot with an empty timeline.
   if (firstValidSlotRef.current < 0 && displaySlot > 0) {
-    firstValidSlotRef.current = displaySlot;
+    let firstValid = displaySlot;
+    for (const key in slotStates) {
+      const slot = Number(key);
+      if (slot < firstValid && displaySlot - slot < MAX_SLOTS_TO_SHOW) {
+        firstValid = slot;
+      }
+    }
+    firstValidSlotRef.current = firstValid;
   }
 
   // Calculate how many slots to show
@@ -124,6 +136,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
           chainInfo={chainInfo}
           currentDisplaySlot={displaySlot}
           serviceStatus={serviceStatus}
+          hideHeadVotes={hideHeadVotes}
         />
       ))}
     </div>

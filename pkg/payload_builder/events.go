@@ -22,3 +22,12 @@ type PayloadBuildFailedEvent struct {
 	Error    string    // Failure reason
 	FailedAt time.Time // When the build failed
 }
+
+// BuildSkippedEvent is emitted when the builder deliberately does not build
+// for a slot that has a per-slot action plan or an effectively active
+// consumer. Subscribers (e.g. the slot results tracker) use it to record
+// explainable skips.
+type BuildSkippedEvent struct {
+	Slot   phase0.Slot
+	Reason string // one of the BuildSkipReason* constants
+}

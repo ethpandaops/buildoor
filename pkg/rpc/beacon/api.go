@@ -6,6 +6,7 @@ import (
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
+	apiv2 "github.com/ethpandaops/go-eth2-client/api/v2"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -42,10 +43,27 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 	envelope *eth2all.SignedExecutionPayloadEnvelope,
 	blobs [][]byte,
 	kzgProofs [][]byte,
+	broadcastValidation string,
 ) error {
 	submitter, ok := c.client.(eth2client.ExecutionPayloadEnvelopeSubmitter)
 	if !ok {
 		return fmt.Errorf("client does not support execution payload envelope submission")
+	}
+
+	// Map the broadcast_validation level to the query parameter; gossip is
+	// the beacon-API default and is sent as "no parameter".
+	var validation *apiv2.BroadcastValidation
+
+	switch broadcastValidation {
+	case "", "gossip":
+	case "consensus":
+		v := apiv2.BroadcastValidationConsensus
+		validation = &v
+	case "consensus_and_equivocation":
+		v := apiv2.BroadcastValidationConsensusAndEquivocation
+		validation = &v
+	default:
+		return fmt.Errorf("invalid broadcast validation level %q", broadcastValidation)
 	}
 
 	typedBlobs := make([]deneb.Blob, len(blobs))
@@ -72,6 +90,7 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 		SignedExecutionPayloadEnvelope: envelope,
 		KZGProofs:                      typedProofs,
 		Blobs:                          typedBlobs,
+		BroadcastValidation:            validation,
 	}); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}
@@ -79,19 +98,14 @@ func (c *Client) SubmitExecutionPayloadEnvelope(
 	return nil
 }
 
-// PayloadEnvelopeInfo contains key fields from a fetched execution payload envelope.
-type PayloadEnvelopeInfo struct {
-	BlockRoot    phase0.Root
-	BlockHash    phase0.Hash32
-	BuilderIndex uint64
-}
-
-// GetExecutionPayloadEnvelope fetches the signed execution payload envelope for a block.
-// The blockID can be a block root (hex), slot number, or "head"/"finalized"/"genesis".
+// GetExecutionPayloadEnvelope fetches the signed execution payload envelope
+// for a block as the full fork-agnostic object (consumers reduce it to
+// whatever shape they need). The blockID can be a block root (hex), slot
+// number, or "head"/"finalized"/"genesis".
 func (c *Client) GetExecutionPayloadEnvelope(
 	ctx context.Context,
 	blockID string,
-) (*PayloadEnvelopeInfo, error) {
+) (*eth2all.SignedExecutionPayloadEnvelope, error) {
 	provider, ok := c.client.(eth2client.ExecutionPayloadProvider)
 	if !ok {
 		return nil, fmt.Errorf("client does not support execution payload envelope provider")
@@ -108,13 +122,7 @@ func (c *Client) GetExecutionPayloadEnvelope(
 		return nil, fmt.Errorf("payload envelope response is nil")
 	}
 
-	msg := resp.Data.Message
-
-	return &PayloadEnvelopeInfo{
-		BlockRoot:    msg.BeaconBlockRoot,
-		BlockHash:    msg.Payload.BlockHash,
-		BuilderIndex: uint64(msg.BuilderIndex),
-	}, nil
+	return resp.Data, nil
 }
 
 // SubmitVoluntaryExit submits a signed voluntary exit to the beacon node.
@@ -131,4 +139,62 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 	c.log.Info("Submitted exit!")
 
 	return nil
+}
+
+// GetSignedBlock fetches a beacon block as the fork-agnostic signed block.
+func (c *Client) GetSignedBlock(ctx context.Context, blockID string) (*eth2all.SignedBeaconBlock, error) {
+	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support signed beacon block provider")
+	}
+
+	resp, err := provider.AgnosticSignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
+		Block: blockID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get beacon block: %w", err)
+	}
+
+	if resp.Data == nil || resp.Data.Message == nil || resp.Data.Message.Body == nil {
+		return nil, fmt.Errorf("beacon block response is nil")
+	}
+
+	return resp.Data, nil
+}
+
+// BlockAttestationEvents reduces a block's attestations to the
+// AttestationEvent shape consumed by the head vote tracker. Handles both the
+// Electra+ format (committee_bits + concatenated aggregation_bits) and the
+// pre-Electra format (data.index = committee).
+func BlockAttestationEvents(block *eth2all.SignedBeaconBlock) []*AttestationEvent {
+	if block == nil || block.Message == nil || block.Message.Body == nil {
+		return nil
+	}
+
+	atts := block.Message.Body.Attestations
+	events := make([]*AttestationEvent, 0, len(atts))
+
+	for _, att := range atts {
+		if att == nil || att.Data == nil {
+			continue
+		}
+
+		event := &AttestationEvent{
+			AggregationBits: att.AggregationBits,
+			Slot:            att.Data.Slot,
+			Index:           uint64(att.Data.Index),
+			BeaconBlockRoot: att.Data.BeaconBlockRoot,
+		}
+
+		// Electra+ attestations carry the committee selection separately;
+		// data.index no longer identifies a committee there (Gloas repurposes
+		// it as the payload-availability signal).
+		if len(att.CommitteeBits) > 0 {
+			event.CommitteeBits = att.CommitteeBits
+		}
+
+		events = append(events, event)
+	}
+
+	return events
 }

@@ -7,6 +7,7 @@ import { EventLog } from '../components/EventLog';
 import { ConfigPanel } from '../components/ConfigPanel';
 import { BuilderInfo } from '../components/BuilderInfo';
 import { BuilderConfigPanel } from '../components/BuilderConfigPanel';
+import { RevealConfigPanel } from '../components/RevealConfigPanel';
 import { BuilderAPIConfigPanel } from '../components/BuilderAPIConfigPanel';
 import { StatsPanel } from '../components/StatsPanel';
 
@@ -18,6 +19,7 @@ const DashboardPage: React.FC = () => {
     stats,
     builderInfo,
     serviceStatus,
+    voteCoverage,
     currentSlot,
     slotStates,
     slotConfigs,
@@ -26,7 +28,10 @@ const DashboardPage: React.FC = () => {
     clearEvents
   } = useEventStream();
 
-  const { status: builderAPIStatus, loading: builderAPIStatusLoading } = useBuilderAPIStatus();
+  // Refetch the Builder API status card when the SSE-delivered enable flag
+  // flips — the background poll itself runs on the slow shared interval.
+  const { status: builderAPIStatus, loading: builderAPIStatusLoading } =
+    useBuilderAPIStatus(serviceStatus?.builder_api_enabled);
 
   // The events panel must scroll internally rather than expand the page. A pure
   // CSS flex chain can't express "fill remaining viewport height, OR match the
@@ -80,6 +85,31 @@ const DashboardPage: React.FC = () => {
             <div className="card-header d-flex justify-content-between align-items-center">
               <h5 className="mb-0">Slot Timeline</h5>
               <div className="d-flex gap-2">
+                {voteCoverage?.low && (
+                  <span className="badge bg-warning text-dark coverage-warning">
+                    <i className="fas fa-triangle-exclamation me-1"></i>
+                    Low vote coverage
+                    <span className="coverage-callout">
+                      <span className="coverage-callout-title">
+                        Attestation subnet coverage low
+                      </span>
+                      Only {voteCoverage.seen_pct.toFixed(0)}% of the attesters that landed
+                      on chain were seen as raw single attestations (last{' '}
+                      {voteCoverage.slots} blocks). The beacon node is likely running
+                      without subscribe-all-subnets, so live vote tracking undercounts
+                      participation: the head-vote graph has been hidden, and{' '}
+                      <strong>vote-threshold-gated payload reveals are unreliable</strong>{' '}
+                      — the reveal vote gate opens late or never (payloads may be
+                      withheld at slot end). Use a time-based reveal gate or fix the
+                      subnet subscription.
+                      <br />
+                      Enable it via <code>--subscribe-all-subnets</code>{' '}
+                      (Lighthouse/Prysm/Nimbus/Grandine),{' '}
+                      <code>--p2p-subscribe-all-subnets-enabled</code> (Teku) or{' '}
+                      <code>--subscribeAllSubnets</code> (Lodestar).
+                    </span>
+                  </span>
+                )}
                 <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
                   {connected ? 'Connected' : 'Disconnected'}
                 </span>
@@ -94,6 +124,7 @@ const DashboardPage: React.FC = () => {
                 slotServiceStatuses={slotServiceStatuses}
                 currentConfig={config}
                 serviceStatus={serviceStatus}
+                hideHeadVotes={voteCoverage?.low ?? false}
               />
               <Legend />
             </div>
@@ -121,6 +152,9 @@ const DashboardPage: React.FC = () => {
 
           {/* Builder API */}
           <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
+
+          {/* Payload Reveal (shared by both flows) */}
+          <RevealConfigPanel config={config} />
         </div>
       </div>
     </div>

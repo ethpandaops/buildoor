@@ -21,7 +21,10 @@ module.exports = {
     rules: [
       {
         test: /\.tsx?$/,
-        use: 'ts-loader',
+        loader: 'esbuild-loader',
+        options: {
+          target: 'es2020',
+        },
         exclude: /node_modules/,
       },
       {

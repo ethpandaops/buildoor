@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BuilderAPIStatus } from '../types';
 import { useAuth } from './useAuth';
+import { REFRESH_INTERVAL_SLOW_MS } from './refreshIntervals';
 
-export function useBuilderAPIStatus() {
+// refreshKey: optional dependency that triggers an immediate refetch when it
+// changes (e.g. the SSE-delivered builder_api_enabled flag) — live changes
+// come through SSE, so the background poll can stay slow.
+export function useBuilderAPIStatus(refreshKey?: unknown) {
   const [status, setStatus] = useState<BuilderAPIStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +43,11 @@ export function useBuilderAPIStatus() {
     };
 
     fetchStatus();
-    // Refresh every 10 seconds
-    const interval = setInterval(fetchStatus, 10000);
+    // Slow background refresh only — live changes arrive via SSE and the
+    // refreshKey dependency.
+    const interval = setInterval(fetchStatus, REFRESH_INTERVAL_SLOW_MS);
     return () => clearInterval(interval);
-  }, [getAuthHeader]);
+  }, [getAuthHeader, refreshKey]);
 
   return { status, loading, error };
 }

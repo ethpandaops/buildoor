@@ -307,5 +307,12 @@ func validateValue(key string, v any) error {
 		}
 	}
 
+	if key == KeySlotResultRetentionEpochs || key == KeySlotArtifactRetentionEpochs {
+		epochs, _ := v.(uint64)
+		if epochs == 0 {
+			return fmt.Errorf("%s must be greater than 0", key)
+		}
+	}
+
 	return nil
 }

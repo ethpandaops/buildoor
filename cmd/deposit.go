@@ -85,7 +85,7 @@ var depositCmd = &cobra.Command{
 		}
 
 		// Initialize chain service
-		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}

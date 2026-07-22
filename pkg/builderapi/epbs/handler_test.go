@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
@@ -47,6 +48,7 @@ type stubChainService struct {
 	genesisTime    time.Time
 	slotDuration   time.Duration
 	currentFork    version.DataVersion
+	currentSlot    phase0.Slot
 	genesis        beacon.Genesis
 	forkSchedule   []chain.ForkSchedule
 	finalizedEpoch phase0.Epoch
@@ -76,7 +78,7 @@ func (m *stubChainService) TimeToSlot(t time.Time) phase0.Slot {
 }
 
 func (m *stubChainService) GetCurrentEpoch() phase0.Epoch { return 0 }
-func (m *stubChainService) GetCurrentSlot() phase0.Slot   { return 0 }
+func (m *stubChainService) GetCurrentSlot() phase0.Slot   { return m.currentSlot }
 
 func (m *stubChainService) GetCurrentFork() version.DataVersion { return m.currentFork }
 func (m *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {
@@ -150,7 +152,7 @@ type stubEnvelopePublisher struct {
 }
 
 func (p *stubEnvelopePublisher) SubmitExecutionPayloadEnvelope(
-	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte,
+	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte, _ string,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -188,25 +190,32 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
 
-	cfg := &config.Config{}
-	cfg.EPBS.RevealTime = revealTimeMs
+	cfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
+	cfg.Reveal = config.DefaultConfig().Reveal
+	cfg.Reveal.TimeMs = revealTimeMs
 
 	chainSvc := &stubChainService{
 		genesisTime:  time.Now().Add(-slotDuration), // slot 1 starts now
 		slotDuration: slotDuration,
 		currentFork:  version.DataVersionGloas,
+		forkSchedule: []chain.ForkSchedule{
+			{Fork: version.DataVersionGloas, Version: phase0.Version{0x06, 0x00, 0x00, 0x00}},
+		},
 	}
 
-	builderSvc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, common.Address{}, log)
+	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+
+	builderSvc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, log)
+		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 
-	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, payload_builder.NewPayloadCache(10), blsSigner)
+	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
+		payload_builder.NewPayloadCache(10), blsSigner)
 	h.SetBlockBroadcaster(broadcaster)
 	h.SetRevealService(revealSvc)
 	h.SetEnabled(true)

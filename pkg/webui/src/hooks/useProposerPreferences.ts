@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { REFRESH_INTERVAL_LIVE_MS } from './refreshIntervals';
 import type { ProposerPreference, ProposerPreferencesResponse } from '../types';
 
 export function useProposerPreferences() {
@@ -37,8 +38,8 @@ export function useProposerPreferences() {
 
   useEffect(() => {
     fetchPreferences();
-    // Poll every 12 seconds (one slot) — preferences change slot-by-slot
-    const interval = setInterval(fetchPreferences, 12000);
+    // Preferences change slot-by-slot; live tier, only while the page is open.
+    const interval = setInterval(fetchPreferences, REFRESH_INTERVAL_LIVE_MS);
     return () => clearInterval(interval);
   }, []);
 

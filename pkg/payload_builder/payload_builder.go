@@ -69,6 +69,11 @@ func NewPayloadBuilder(
 // BuildPayloadFromAttributes builds a payload using data from a payload_attributes event.
 // This is the primary build path, triggered when the beacon node emits payload_attributes.
 // The event contains all necessary information: timestamp, randao, withdrawals, etc.
+//
+// The attributes may be an effective copy with the parent fields redirected to
+// the grandparent payload (parent-reorg test); this method treats whatever
+// parent it is given as authoritative and stores it on the returned Payload,
+// so the bid built from that payload advertises the same parent it built on.
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
@@ -225,6 +230,24 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
+	// Resolve the gas limit the slot's bid must commit to while the EL
+	// accumulates transactions. Bid gossip validation compares against the
+	// parent block's committed gas limit moved toward the proposer's target
+	// at the maximum per-block step; an EL that ignores the targetGasLimit
+	// payload attribute builds toward its own configured target instead, so
+	// the built payload's gas limit is corrected to the expected value below.
+	var expectedGasLimit uint64
+
+	if beaconFork >= version.DataVersionGloas && targetGasLimit > 0 {
+		parentInfo, err := b.clClient.GetBlockInfo(buildCtx, fmt.Sprintf("%#x", attrs.ParentBlockRoot[:]))
+		if err != nil {
+			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+				Warn("Failed to fetch parent block gas limit, keeping EL gas limit")
+		} else {
+			expectedGasLimit = expectedBidGasLimit(parentInfo.GasLimit, targetGasLimit)
+		}
+	}
+
 	// Read the build time live from config so UI overrides take effect immediately.
 	payloadBuildTime := b.cfg.PayloadBuildTime
 
@@ -253,15 +276,41 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("getPayload returned no execution payload")
 	}
 
-	// Inject our extra-data marker and recompute the block hash on the typed payload.
-	newHash, err := ModifyPayloadExtraData(
+	// Correct the payload gas limit when the EL built with a different one
+	// than the bid must commit to. Raising it is always safe; lowering it is
+	// impossible once the EL packed more gas than the expected limit allows.
+	var gasLimitOverride uint64
+
+	if expectedGasLimit > 0 && enginePayload.GasLimit != expectedGasLimit {
+		if enginePayload.GasUsed > expectedGasLimit {
+			b.log.WithFields(logrus.Fields{
+				"slot":               attrs.ProposalSlot,
+				"el_gas_limit":       enginePayload.GasLimit,
+				"expected_gas_limit": expectedGasLimit,
+				"gas_used":           enginePayload.GasUsed,
+			}).Warn("Cannot adjust payload gas limit below gas used, bid will fail gossip validation")
+		} else {
+			gasLimitOverride = expectedGasLimit
+
+			b.log.WithFields(logrus.Fields{
+				"slot":               attrs.ProposalSlot,
+				"el_gas_limit":       enginePayload.GasLimit,
+				"expected_gas_limit": expectedGasLimit,
+			}).Info("Adjusting payload gas limit to expected bid gas limit")
+		}
+	}
+
+	// Inject our extra-data marker (and the gas limit correction) and
+	// recompute the block hash on the typed payload.
+	newHash, err := ModifyPayload(
 		enginePayload,
 		resp.ExecutionRequests,
 		[]byte(b.cfg.ExtraData),
+		gasLimitOverride,
 		common.Hash(attrs.ParentBeaconBlockRoot),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
+		return nil, fmt.Errorf("failed to modify payload: %w", err)
 	}
 
 	// Single fork-independent conversions to the beacon types: the execution

@@ -311,8 +311,11 @@ func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
 		updates[config.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
 	}
 
+	// reveal_time maps to the standalone reveal section's time gate (the
+	// reveal is no longer an ePBS-only concern); kept on this endpoint for
+	// wire compatibility.
 	if req.RevealTime != nil {
-		updates[config.KeyEPBSRevealTime] = mustJSON(*req.RevealTime)
+		updates[config.KeyRevealTimeMs] = mustJSON(*req.RevealTime)
 	}
 
 	if req.BidMinAmount != nil {
@@ -788,8 +791,8 @@ func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 
 	// The shared inclusion tracker is the single owner of won-block records
 	// (both flows, all forks; persisted via the state-db kv_store when set).
-	if h.inclusionTracker != nil {
-		bidsWon, total = h.inclusionTracker.GetWonBlocks(offset, limit)
+	if h.resultTracker != nil {
+		bidsWon, total = h.resultTracker.GetWonBlocks(offset, limit)
 	}
 
 	writeJSON(w, http.StatusOK, BidsWonResponse{

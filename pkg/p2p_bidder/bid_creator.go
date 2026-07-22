@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
@@ -12,15 +13,20 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
+
+// bidSubmitter gossips a signed execution payload bid to the beacon node
+// (implemented by *beacon.Client; interface for testability).
+type bidSubmitter interface {
+	SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.SignedExecutionPayloadBid) error
+}
 
 // BidCreator builds ePBS bids via the shared payload_bidder and gossips them
 // over p2p. It owns the p2p transport and the (caller-computed) bid economics;
 // the bid construction and signing live in payload_bidder.
 type BidCreator struct {
 	signer       *payload_bidder.Signer
-	clClient     *beacon.Client
+	clClient     bidSubmitter
 	chainSvc     chain.Service
 	builderIndex uint64
 	log          logrus.FieldLogger
@@ -29,7 +35,7 @@ type BidCreator struct {
 // NewBidCreator creates a new bid creator.
 func NewBidCreator(
 	signer *payload_bidder.Signer,
-	clClient *beacon.Client,
+	clClient bidSubmitter,
 	chainSvc chain.Service,
 	builderIndex uint64,
 	log logrus.FieldLogger,
@@ -45,29 +51,39 @@ func NewBidCreator(
 
 // CreateAndSubmitBid builds, signs, and gossips a bid for the given payload at
 // the supplied value. The competitive bid value is decided by the scheduler;
-// the ePBS p2p path takes no execution payment.
+// the ePBS p2p path takes no execution payment. The constructed signed bid is
+// returned even when the network submission fails so callers can record the
+// exact object that was built; it is nil only when construction itself failed.
 func (c *BidCreator) CreateAndSubmitBid(
 	ctx context.Context,
 	payload *payload_builder.Payload,
 	bidValue uint64,
-) error {
+	bidTransform string,
+) (*eth2all.SignedExecutionPayloadBid, error) {
 	var feeRecipient bellatrix.ExecutionAddress
 
 	copy(feeRecipient[:], payload.FeeRecipient[:])
 
-	forkVersion, err := c.chainSvc.GetForkVersion()
+	// Sign for the bid's target slot, not the current fork: a bid built during
+	// the last pre-Gloas slot for the first Gloas slot must use the Gloas fork
+	// version.
+	targetSlot := payload.Attributes.ProposalSlot
+	targetFork := c.chainSvc.ActiveForkAtEpoch(c.chainSvc.GetEpochOfSlot(targetSlot))
+
+	forkVersion, err := c.chainSvc.GetChainSpec().GetForkVersion(targetFork)
 	if err != nil {
-		return fmt.Errorf("failed to get Gloas fork version: %w", err)
+		return nil, fmt.Errorf("failed to get fork version for slot %d: %w", targetSlot, err)
 	}
 
-	signedBid, err := payload_bidder.BuildSignedBid(payload, payload_bidder.BidParams{
+	signedBid, err := payload_bidder.BuildSignedBid(ctx, payload, payload_bidder.BidParams{
 		BuilderIndex:     c.builderIndex,
 		FeeRecipient:     feeRecipient,
 		Value:            phase0.Gwei(bidValue),
 		ExecutionPayment: 0,
+		Transform:        bidTransform,
 	}, c.signer, forkVersion, c.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
-		return fmt.Errorf("failed to build signed bid: %w", err)
+		return nil, fmt.Errorf("failed to build signed bid: %w", err)
 	}
 
 	logger := c.log.WithFields(logrus.Fields{
@@ -82,7 +98,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 	})
 
 	if err := c.clClient.SubmitExecutionPayloadBid(ctx, signedBid); err != nil {
-		return fmt.Errorf("failed to submit bid: %w", err)
+		return signedBid, fmt.Errorf("failed to submit bid: %w", err)
 	}
 
 	payload.AddBid(payload_builder.BidRecord{
@@ -93,7 +109,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 
 	logger.Info("Bid submitted")
 
-	return nil
+	return signedBid, nil
 }
 
 // SetBuilderIndex updates the builder index.

@@ -19,7 +19,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     build_start_time: 0,
     bid_start_time: 0,
     bid_end_time: 0,
-    reveal_time: 0,
     bid_min_amount: 0,
     bid_increase: 0,
     bid_interval: 0,
@@ -47,7 +46,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
         body: JSON.stringify({
           bid_start_time: timingForm.bid_start_time,
           bid_end_time: timingForm.bid_end_time,
-          reveal_time: timingForm.reveal_time,
           bid_min_amount: timingForm.bid_min_amount,
           bid_increase: timingForm.bid_increase,
           bid_interval: timingForm.bid_interval,
@@ -173,12 +171,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Reveal Time</div>
-                  <div className="config-item-value">{epbs?.reveal_time || 0} ms</div>
-                </div>
-              </div>
-              <div className="col-6">
-                <div className="config-item">
                   <div className="config-item-label">Bid Min</div>
                   <div className="config-item-value">{epbs?.bid_min_amount || 0} gwei</div>
                 </div>
@@ -221,16 +213,6 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                   className="form-control form-control-sm"
                   value={timingForm.bid_end_time}
                   onChange={(e) => setTimingForm({ ...timingForm, bid_end_time: parseInt(e.target.value) || 0 })}
-                  required
-                />
-              </div>
-              <div className="mb-2">
-                <label className="form-label">Reveal Time (ms)</label>
-                <input
-                  type="number"
-                  className="form-control form-control-sm"
-                  value={timingForm.reveal_time}
-                  onChange={(e) => setTimingForm({ ...timingForm, reveal_time: parseInt(e.target.value) || 0 })}
                   required
                 />
               </div>

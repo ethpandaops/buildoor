@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	mathbits "math/bits"
 	"net/http"
 	"sync"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -17,6 +20,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -40,6 +44,9 @@ const (
 	EventTypePayloadAvailable            EventType = "payload_available"
 	EventTypeBuilderInfo                 EventType = "builder_info"
 	EventTypeHeadVotes                   EventType = "head_votes"
+	EventTypeVoteCoverage                EventType = "vote_coverage"
+	EventTypeRevealStarted               EventType = "reveal_started"
+	EventTypeBlockDetail                 EventType = "block_detail"
 	EventTypeBidWon                      EventType = "bid_won"
 	EventTypeBuilderAPIGetHeaderRcvd     EventType = "builder_api_get_header_received"
 	EventTypeBuilderAPIGetHeaderDlvd     EventType = "builder_api_get_header_delivered"
@@ -50,6 +57,8 @@ const (
 	EventTypeBuilderAPISubmitBlockRcvd   EventType = "builder_api_submit_block_received"
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
+	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
+	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
 	EventTypeLifecycle                   EventType = "lifecycle"
 	EventTypeBidIncluded                 EventType = "bid_included"
 )
@@ -58,7 +67,24 @@ const (
 type StreamEvent struct {
 	Type      EventType `json:"type"`
 	Timestamp int64     `json:"timestamp"`
+	Seq       uint64    `json:"seq,omitempty"`
 	Data      any       `json:"data"`
+}
+
+const (
+	// eventCacheSlots is how many recent slots of slot-scoped events are
+	// kept for replay to newly connecting clients (current slot included).
+	eventCacheSlots = 5
+
+	// maxCachedEvents bounds the replay cache regardless of slot pruning.
+	maxCachedEvents = 2000
+)
+
+// cachedStreamEvent tags a broadcast event with the slot it belongs to so
+// the replay cache can be pruned per slot.
+type cachedStreamEvent struct {
+	slot  phase0.Slot
+	event *StreamEvent
 }
 
 // SlotStartEvent is sent when a new slot starts.
@@ -78,17 +104,19 @@ type PayloadBuildStartedStreamEvent struct {
 // received from the beacon node. It arrives before the slot it targets
 // (ProposalSlot), so the WebUI renders it on the parent slot's graph.
 type PayloadAttributesStreamEvent struct {
-	ProposalSlot       uint64 `json:"proposal_slot"`
-	ProposerIndex      uint64 `json:"proposer_index"`
-	ParentBlockHash    string `json:"parent_block_hash"`
-	ParentBlockRoot    string `json:"parent_block_root"`
-	ParentBlockNumber  uint64 `json:"parent_block_number"`
-	Timestamp          uint64 `json:"timestamp"`
-	FeeRecipient       string `json:"fee_recipient"`
-	TargetGasLimit     uint64 `json:"target_gas_limit"`
-	WithdrawalsCount   int    `json:"withdrawals_count"`
-	ReceivedAt         int64  `json:"received_at"`
-	InclusionListCount int    `json:"inclusion_list_count"`
+	ProposalSlot          uint64 `json:"proposal_slot"`
+	ProposerIndex         uint64 `json:"proposer_index"`
+	ParentBlockHash       string `json:"parent_block_hash"`
+	ParentBlockRoot       string `json:"parent_block_root"`
+	ParentBlockNumber     uint64 `json:"parent_block_number"`
+	Timestamp             uint64 `json:"timestamp"`
+	PrevRandao            string `json:"prev_randao"`
+	FeeRecipient          string `json:"fee_recipient"`
+	ParentBeaconBlockRoot string `json:"parent_beacon_block_root"`
+	TargetGasLimit        uint64 `json:"target_gas_limit"`
+	WithdrawalsCount      int    `json:"withdrawals_count"`
+	ReceivedAt            int64  `json:"received_at"`
+	InclusionListCount    int    `json:"inclusion_list_count"`
 }
 
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
@@ -106,6 +134,20 @@ type PayloadReadyStreamEvent struct {
 	ParentBlockHash string `json:"parent_block_hash"`
 	BlockValue      string `json:"block_value"`
 	ReadyAt         int64  `json:"ready_at"`
+
+	// Full built-payload properties (list fields aggregated to counts).
+	BlockNumber     uint64 `json:"block_number,omitempty"`
+	FeeRecipient    string `json:"fee_recipient,omitempty"`
+	GasLimit        uint64 `json:"gas_limit,omitempty"`
+	GasUsed         uint64 `json:"gas_used,omitempty"`
+	BaseFeePerGas   string `json:"base_fee_per_gas,omitempty"` // wei
+	ExtraData       string `json:"extra_data,omitempty"`       // 0x-hex
+	BlobGasUsed     uint64 `json:"blob_gas_used,omitempty"`
+	ExcessBlobGas   uint64 `json:"excess_blob_gas,omitempty"`
+	NumTransactions int    `json:"num_transactions"`
+	NumWithdrawals  int    `json:"num_withdrawals"`
+	NumBlobs        int    `json:"num_blobs"`
+	NumExecRequests int    `json:"num_exec_requests"`
 }
 
 // BidSubmittedEvent is sent when we submit a bid (success or failure).
@@ -118,6 +160,15 @@ type BidSubmittedEvent struct {
 	Success   bool   `json:"success"`
 	Error     string `json:"error,omitempty"`
 	Warning   string `json:"warning,omitempty"`
+
+	// Full bid message properties (blob commitments aggregated to a count).
+	ExecutionPayment   uint64 `json:"execution_payment,omitempty"`
+	FeeRecipient       string `json:"fee_recipient,omitempty"`
+	GasLimit           uint64 `json:"gas_limit,omitempty"`
+	BuilderIndex       uint64 `json:"builder_index,omitempty"`
+	ParentBlockHash    string `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot    string `json:"parent_block_root,omitempty"`
+	NumBlobCommitments int    `json:"num_blob_commitments,omitempty"`
 }
 
 // HeadReceivedEvent is sent when a head event is received.
@@ -127,15 +178,34 @@ type HeadReceivedEvent struct {
 	ReceivedAt int64  `json:"received_at"`
 }
 
+// RevealStartedStreamEvent is sent when a reveal attempt begins (envelope
+// construction + submit call) so the UI can render the in-flight call live;
+// the matching reveal event follows on completion.
+type RevealStartedStreamEvent struct {
+	Slot      uint64 `json:"slot"`
+	Attempt   int    `json:"attempt"`
+	StartedAt int64  `json:"started_at"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // RevealStreamEvent is sent when we submit or skip a reveal (one per attempt).
+// StartedAt/Timestamp bracket the attempt (construction + submit call) so the
+// UI can render the call's duration; StartedAt is 0 on skips.
 type RevealStreamEvent struct {
 	Slot        uint64 `json:"slot"`
+	Transport   string `json:"transport,omitempty"`
 	Success     bool   `json:"success"`
 	Skipped     bool   `json:"skipped"`
+	SkipReason  string `json:"skip_reason,omitempty"` // plan_disabled | disabled | late | vote_gate_timeout (skips only)
 	Error       string `json:"error,omitempty"`
 	Attempt     int    `json:"attempt,omitempty"`
 	MaxAttempts int    `json:"max_attempts,omitempty"`
+	StartedAt   int64  `json:"started_at,omitempty"`
 	Timestamp   int64  `json:"timestamp"`
+
+	// Envelope is the summary of the built (possibly unpublished) envelope;
+	// absent on skips and pre-construction failures.
+	Envelope *EnvelopeDetail `json:"envelope,omitempty"`
 }
 
 // BidStreamEvent represents a bid from any payload_builder.
@@ -146,6 +216,14 @@ type BidStreamEvent struct {
 	BlockHash    string `json:"block_hash"`
 	IsOurs       bool   `json:"is_ours"`
 	ReceivedAt   int64  `json:"received_at"`
+
+	// Full bid message properties (blob commitments aggregated to a count).
+	ExecutionPayment   uint64 `json:"execution_payment,omitempty"`
+	FeeRecipient       string `json:"fee_recipient,omitempty"`
+	GasLimit           uint64 `json:"gas_limit,omitempty"`
+	ParentBlockHash    string `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot    string `json:"parent_block_root,omitempty"`
+	NumBlobCommitments int    `json:"num_blob_commitments,omitempty"`
 }
 
 // SlotStateEvent represents the current state of a slot.
@@ -163,11 +241,59 @@ type SlotStateEvent struct {
 
 // PayloadAvailableStreamEvent is sent when a payload becomes available.
 type PayloadAvailableStreamEvent struct {
-	Slot         uint64 `json:"slot"`
-	BlockRoot    string `json:"block_root"`
-	BlockHash    string `json:"block_hash"`
-	BuilderIndex uint64 `json:"builder_index"`
-	ReceivedAt   int64  `json:"received_at"`
+	Slot       uint64 `json:"slot"`
+	BlockRoot  string `json:"block_root"`
+	ReceivedAt int64  `json:"received_at"`
+
+	EnvelopeDetail
+}
+
+// EnvelopeDetail is the display summary of an execution payload envelope
+// (list fields aggregated to counts). Embedded in the payload_available and
+// reveal stream events.
+type EnvelopeDetail struct {
+	BlockHash       string `json:"block_hash,omitempty"`
+	BuilderIndex    uint64 `json:"builder_index,omitempty"`
+	BlockNumber     uint64 `json:"block_number,omitempty"`
+	GasLimit        uint64 `json:"gas_limit,omitempty"`
+	GasUsed         uint64 `json:"gas_used,omitempty"`
+	BaseFeePerGas   string `json:"base_fee_per_gas,omitempty"` // wei
+	ExtraData       string `json:"extra_data,omitempty"`       // 0x-hex
+	BlobGasUsed     uint64 `json:"blob_gas_used,omitempty"`
+	NumTransactions int    `json:"num_transactions,omitempty"`
+	NumWithdrawals  int    `json:"num_withdrawals,omitempty"`
+	NumExecRequests int    `json:"num_exec_requests,omitempty"`
+}
+
+// fillEnvelopeDetail reduces a signed execution payload envelope to the
+// display summary.
+func fillEnvelopeDetail(detail *EnvelopeDetail, envelope *eth2all.SignedExecutionPayloadEnvelope) {
+	if envelope == nil || envelope.Message == nil {
+		return
+	}
+
+	msg := envelope.Message
+	detail.BuilderIndex = uint64(msg.BuilderIndex)
+
+	if ep := msg.Payload; ep != nil {
+		detail.BlockHash = fmt.Sprintf("%#x", ep.BlockHash)
+		detail.BlockNumber = ep.BlockNumber
+		detail.GasLimit = ep.GasLimit
+		detail.GasUsed = ep.GasUsed
+		detail.ExtraData = fmt.Sprintf("%#x", ep.ExtraData)
+		detail.BlobGasUsed = ep.BlobGasUsed
+		detail.NumTransactions = len(ep.Transactions)
+		detail.NumWithdrawals = len(ep.Withdrawals)
+
+		if ep.BaseFeePerGas != nil {
+			detail.BaseFeePerGas = ep.BaseFeePerGas.Dec()
+		}
+	}
+
+	if reqs := msg.ExecutionRequests; reqs != nil {
+		detail.NumExecRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
+			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
+	}
 }
 
 // BuilderInfoEvent contains builder identity and balance information.
@@ -188,10 +314,72 @@ type BuilderInfoEvent struct {
 // HeadVotesStreamEvent is sent when head vote participation changes.
 type HeadVotesStreamEvent struct {
 	Slot             uint64  `json:"slot"`
+	BlockRoot        string  `json:"block_root"`
 	ParticipationPct float64 `json:"participation_pct"`
 	ParticipationETH uint64  `json:"participation_eth"`
 	TotalSlotETH     uint64  `json:"total_slot_eth"`
+	VoteCount        int     `json:"vote_count"`
+	ThresholdPct     float64 `json:"threshold_pct"`
+	ThresholdMet     bool    `json:"threshold_met"`
 	Timestamp        int64   `json:"timestamp"`
+}
+
+// BlockDetailStreamEvent is the display summary of an imported beacon block
+// (extracted from the head vote tracker's coverage block fetch; list fields
+// aggregated to counts).
+type BlockDetailStreamEvent struct {
+	Slot          uint64 `json:"slot"`
+	ProposerIndex uint64 `json:"proposer_index"`
+	ParentRoot    string `json:"parent_root"`
+	StateRoot     string `json:"state_root"`
+	Graffiti      string `json:"graffiti"` // 0x-hex
+
+	NumAttestations        int `json:"num_attestations"`
+	NumProposerSlashings   int `json:"num_proposer_slashings,omitempty"`
+	NumAttesterSlashings   int `json:"num_attester_slashings,omitempty"`
+	NumDeposits            int `json:"num_deposits,omitempty"`
+	NumVoluntaryExits      int `json:"num_voluntary_exits,omitempty"`
+	NumBLSChanges          int `json:"num_bls_changes,omitempty"`
+	SyncParticipation      int `json:"sync_participation"`
+	NumBlobCommitments     int `json:"num_blob_commitments,omitempty"`
+	NumPayloadAttestations int `json:"num_payload_attestations,omitempty"`
+
+	// Gloas+: the winning builder bid embedded in the block.
+	Bid *BlockDetailBid `json:"bid,omitempty"`
+	// Pre-Gloas: in-block execution payload summary.
+	Payload *BlockDetailPayload `json:"payload,omitempty"`
+
+	Timestamp int64 `json:"timestamp"`
+}
+
+type BlockDetailBid struct {
+	BuilderIndex     uint64 `json:"builder_index"`
+	ValueGwei        uint64 `json:"value_gwei"`
+	ExecutionPayment uint64 `json:"execution_payment_gwei"`
+	BlockHash        string `json:"block_hash"`
+	ParentBlockHash  string `json:"parent_block_hash"`
+	GasLimit         uint64 `json:"gas_limit"`
+	FeeRecipient     string `json:"fee_recipient"`
+	NumBlobKZGs      int    `json:"num_blob_kzgs,omitempty"`
+}
+
+type BlockDetailPayload struct {
+	BlockNumber     uint64 `json:"block_number"`
+	BlockHash       string `json:"block_hash"`
+	GasLimit        uint64 `json:"gas_limit"`
+	GasUsed         uint64 `json:"gas_used"`
+	NumTransactions int    `json:"num_transactions"`
+	NumWithdrawals  int    `json:"num_withdrawals"`
+}
+
+// VoteCoverageStreamEvent reports how many next-block attesters were seen as
+// raw single attestations beforehand. `low` marks the vote graph unreliable
+// (beacon node likely running without subscribe-all-subnets).
+type VoteCoverageStreamEvent struct {
+	Slots     int     `json:"slots"`
+	Attesters int     `json:"attesters"`
+	SeenPct   float64 `json:"seen_pct"`
+	Low       bool    `json:"low"`
 }
 
 // BidWonStreamEvent is sent when a bid is won (block successfully delivered).
@@ -294,12 +482,20 @@ type EventStreamManager struct {
 	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
 	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
 	payments         *payload_bidder.PaymentTracker   // Optional shared payment tracker (Gloas+)
+	planSvc          *action_plan.PlanService         // Optional action plan service
+	resultTracker    *slot_results.Tracker            // Optional slot results tracker
 
 	clients map[chan *StreamEvent]struct{}
-	mu      sync.RWMutex
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	// mu guards clients, eventCache and seq. Broadcasts, cache appends and
+	// client registration all serialize on it, so a new client's replay
+	// prefill plus subsequent live events form one ordered, gapless,
+	// duplicate-free sequence.
+	mu         sync.Mutex
+	eventCache []cachedStreamEvent
+	seq        uint64
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 
 	// Track slot states for UI
 	slotStates   map[phase0.Slot]*SlotStateEvent
@@ -328,6 +524,8 @@ func NewEventStreamManager(
 	revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker,
 	payments *payload_bidder.PaymentTracker,
+	planSvc *action_plan.PlanService,
+	resultTracker *slot_results.Tracker,
 ) *EventStreamManager {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -340,23 +538,31 @@ func NewEventStreamManager(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		planSvc:          planSvc,
+		resultTracker:    resultTracker,
 		clients:          make(map[chan *StreamEvent]struct{}, 8),
-		ctx:              ctx,
-		cancel:           cancel,
-		slotStates:       make(map[phase0.Slot]*SlotStateEvent, 16),
+		eventCache:       make([]cachedStreamEvent, 0, 256),
+		// Seed the sequence from wall-clock micros so it stays monotonic
+		// across restarts: clients keep their highest processed seq to
+		// dedupe replays and would otherwise drop every event after a
+		// restart.
+		seq:        uint64(time.Now().UnixMicro()),
+		ctx:        ctx,
+		cancel:     cancel,
+		slotStates: make(map[phase0.Slot]*SlotStateEvent, 16),
 	}
 }
 
 // Start begins the event stream manager.
 func (m *EventStreamManager) Start() {
 	// Subscribe to payload ready events
-	payloadSub := m.builderSvc.SubscribePayloadReady(16)
+	payloadSub := m.builderSvc.SubscribePayloadReady(16, false)
 
 	// Subscribe to payload build started events (in-progress rendering)
-	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16)
+	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16, false)
 
 	// Subscribe to payload build failed events (mark builds as failed)
-	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16)
+	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16, false)
 
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
@@ -372,7 +578,7 @@ func (m *EventStreamManager) Start() {
 	var bidSubmitChan <-chan *p2p_bidder.BidSubmissionEvent
 
 	if m.epbsSvc != nil {
-		bidSubmitSub = m.epbsSvc.SubscribeBidSubmissions(16)
+		bidSubmitSub = m.epbsSvc.SubscribeBidSubmissions(16, false)
 		bidSubmitChan = bidSubmitSub.Channel()
 	}
 
@@ -381,9 +587,15 @@ func (m *EventStreamManager) Start() {
 
 	var revealChan <-chan *payload_bidder.RevealResult
 
+	var revealStartSub *utils.Subscription[*payload_bidder.RevealStarted]
+
+	var revealStartChan <-chan *payload_bidder.RevealStarted
+
 	if m.revealSvc != nil {
-		revealSub = m.revealSvc.SubscribeResults(16)
+		revealSub = m.revealSvc.SubscribeResults(16, false)
 		revealChan = revealSub.Channel()
+		revealStartSub = m.revealSvc.SubscribeStarts(16, false)
+		revealStartChan = revealStartSub.Channel()
 	}
 
 	// Subscribe to payload inclusion events from the shared inclusion tracker (if available)
@@ -392,7 +604,7 @@ func (m *EventStreamManager) Start() {
 	var bidIncludedChan <-chan *payload_bidder.PayloadIncludedEvent
 
 	if m.inclusionTracker != nil {
-		bidIncludedSub = m.inclusionTracker.SubscribeIncluded(16)
+		bidIncludedSub = m.inclusionTracker.SubscribeIncluded(16, false)
 		bidIncludedChan = bidIncludedSub.Channel()
 	}
 
@@ -403,13 +615,47 @@ func (m *EventStreamManager) Start() {
 		})
 	}
 
-	// Subscribe to head vote updates (if chain service available)
+	// Subscribe to action plan changes (if plan service available)
+	var planChangeSub *utils.Subscription[*action_plan.PlanChangeEvent]
+
+	var planChangeChan <-chan *action_plan.PlanChangeEvent
+
+	if m.planSvc != nil {
+		planChangeSub = m.planSvc.SubscribeChanges(16)
+		planChangeChan = planChangeSub.Channel()
+	}
+
+	// Subscribe to slot result updates (if results tracker available). SSE is
+	// an invalidation/fast-update channel; the REST range endpoints are the
+	// source of truth, so lossy non-blocking delivery is fine.
+	var resultUpdateSub *utils.Subscription[*slot_results.SlotResult]
+
+	var resultUpdateChan <-chan *slot_results.SlotResult
+
+	if m.resultTracker != nil {
+		resultUpdateSub = m.resultTracker.SubscribeUpdates(64)
+		resultUpdateChan = resultUpdateSub.Channel()
+	}
+
+	// Subscribe to head vote + subnet coverage updates (if chain service available)
 	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
 
 	var headVoteChan <-chan *chain.HeadVoteUpdate
 
+	var covSub *utils.Subscription[*chain.SubnetCoverage]
+
+	var coverageChan <-chan *chain.SubnetCoverage
+
+	var blockDetailSub *utils.Subscription[*eth2all.SignedBeaconBlock]
+
+	var blockDetailChan <-chan *eth2all.SignedBeaconBlock
+
 	if m.chainSvc != nil {
 		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
+			covSub = tracker.SubscribeCoverage()
+			coverageChan = covSub.Channel()
+			blockDetailSub = tracker.SubscribeBlocks()
+			blockDetailChan = blockDetailSub.Channel()
 			hvSub = tracker.SubscribeUpdates()
 			headVoteChan = hvSub.Channel()
 		}
@@ -435,12 +681,32 @@ func (m *EventStreamManager) Start() {
 			defer revealSub.Unsubscribe()
 		}
 
+		if revealStartSub != nil {
+			defer revealStartSub.Unsubscribe()
+		}
+
 		if bidIncludedSub != nil {
 			defer bidIncludedSub.Unsubscribe()
 		}
 
 		if hvSub != nil {
 			defer hvSub.Unsubscribe()
+		}
+
+		if covSub != nil {
+			defer covSub.Unsubscribe()
+		}
+
+		if blockDetailSub != nil {
+			defer blockDetailSub.Unsubscribe()
+		}
+
+		if planChangeSub != nil {
+			defer planChangeSub.Unsubscribe()
+		}
+
+		if resultUpdateSub != nil {
+			defer resultUpdateSub.Unsubscribe()
 		}
 
 		// Slot tracking ticker
@@ -492,6 +758,50 @@ func (m *EventStreamManager) Start() {
 
 				m.handleHeadVoteUpdate(event)
 
+			case event, ok := <-coverageChan:
+				if !ok {
+					coverageChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeVoteCoverage,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      voteCoverageEvent(event),
+				})
+
+			case event, ok := <-blockDetailChan:
+				if !ok {
+					blockDetailChan = nil
+					continue
+				}
+
+				m.handleBlockDetail(event)
+
+			case event, ok := <-planChangeChan:
+				if !ok {
+					planChangeChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeActionPlanUpdated,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      event,
+				})
+
+			case event, ok := <-resultUpdateChan:
+				if !ok {
+					resultUpdateChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeSlotResultUpdated,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      event,
+				})
+
 			case event, ok := <-revealChan:
 				if !ok {
 					revealChan = nil
@@ -500,13 +810,30 @@ func (m *EventStreamManager) Start() {
 
 				m.BroadcastReveal(event)
 
+			case event, ok := <-revealStartChan:
+				if !ok {
+					revealStartChan = nil
+					continue
+				}
+
+				m.broadcastForSlot(event.Slot, &StreamEvent{
+					Type:      EventTypeRevealStarted,
+					Timestamp: time.Now().UnixMilli(),
+					Data: RevealStartedStreamEvent{
+						Slot:      uint64(event.Slot),
+						Attempt:   event.Attempt,
+						StartedAt: event.StartedAt.UnixMilli(),
+						Timestamp: event.StartedAt.UnixMilli(),
+					},
+				})
+
 			case event, ok := <-bidIncludedChan:
 				if !ok {
 					bidIncludedChan = nil
 					continue
 				}
 
-				m.Broadcast(&StreamEvent{
+				m.broadcastForSlot(event.Payload.Attributes.ProposalSlot, &StreamEvent{
 					Type:      EventTypeBidIncluded,
 					Timestamp: time.Now().UnixMilli(),
 					Data: map[string]any{
@@ -543,12 +870,23 @@ func (m *EventStreamManager) Stop() {
 	m.wg.Wait()
 }
 
-// AddClient adds a new SSE client.
-func (m *EventStreamManager) AddClient(ch chan *StreamEvent) {
+// RegisterClient registers a new SSE client and returns its event channel.
+// The channel is prefilled with the replay cache (the slot-scoped events of
+// the last eventCacheSlots slots) so the client can restore the slot graph
+// and event log. Because registration and broadcasting serialize on m.mu,
+// the replay and subsequent live events form one ordered, gapless stream.
+func (m *EventStreamManager) RegisterClient() chan *StreamEvent {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	ch := make(chan *StreamEvent, len(m.eventCache)+64)
+	for _, cached := range m.eventCache {
+		ch <- cached.event
+	}
+
 	m.clients[ch] = struct{}{}
+
+	return ch
 }
 
 // RemoveClient removes an SSE client.
@@ -560,10 +898,37 @@ func (m *EventStreamManager) RemoveClient(ch chan *StreamEvent) {
 	close(ch)
 }
 
-// Broadcast sends an event to all connected clients.
+// Broadcast sends an event to all connected clients. Events sent through
+// this method are NOT recorded in the replay cache; slot-scoped events go
+// through broadcastForSlot instead.
 func (m *EventStreamManager) Broadcast(event *StreamEvent) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deliverLocked(event)
+}
+
+// broadcastForSlot broadcasts a slot-scoped event and records it in the
+// replay cache so newly connecting clients receive the last eventCacheSlots
+// slots of history.
+func (m *EventStreamManager) broadcastForSlot(slot phase0.Slot, event *StreamEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deliverLocked(event)
+
+	m.eventCache = append(m.eventCache, cachedStreamEvent{slot: slot, event: event})
+	if len(m.eventCache) > maxCachedEvents {
+		overflow := len(m.eventCache) - maxCachedEvents
+		m.eventCache = append(m.eventCache[:0:0], m.eventCache[overflow:]...)
+	}
+}
+
+// deliverLocked stamps the event's sequence number and fans it out to all
+// connected clients. Callers must hold m.mu.
+func (m *EventStreamManager) deliverLocked(event *StreamEvent) {
+	m.seq++
+	event.Seq = m.seq
 
 	for ch := range m.clients {
 		select {
@@ -572,6 +937,29 @@ func (m *EventStreamManager) Broadcast(event *StreamEvent) {
 			// Client is slow, skip
 		}
 	}
+}
+
+// pruneEventCache drops replay-cache entries older than the retention
+// window (the eventCacheSlots most recent slots, current slot included).
+func (m *EventStreamManager) pruneEventCache(currentSlot phase0.Slot) {
+	if currentSlot < eventCacheSlots {
+		return
+	}
+
+	minSlot := currentSlot - eventCacheSlots + 1
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	kept := make([]cachedStreamEvent, 0, len(m.eventCache))
+
+	for _, cached := range m.eventCache {
+		if cached.slot >= minSlot {
+			kept = append(kept, cached)
+		}
+	}
+
+	m.eventCache = kept
 }
 
 func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
@@ -583,7 +971,7 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	chainSpec := m.builderSvc.GetChainSpec()
 	slotStartTime := genesis.GenesisTime.Add(time.Duration(slot) * chainSpec.SecondsPerSlot)
 
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(slot, &StreamEvent{
 		Type:      EventTypeSlotStart,
 		Timestamp: time.Now().UnixMilli(),
 		Data: SlotStartEvent{
@@ -601,12 +989,13 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	}
 	m.slotStatesMu.Unlock()
 
-	// Cleanup old states
+	// Cleanup old states and replay-cache entries
 	m.cleanupOldSlots(slot)
+	m.pruneEventCache(slot)
 }
 
 func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypePayloadBuildStarted,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildStartedStreamEvent{
@@ -617,27 +1006,29 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 }
 
 func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.ProposalSlot, &StreamEvent{
 		Type:      EventTypePayloadAttributes,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadAttributesStreamEvent{
-			ProposalSlot:       uint64(event.ProposalSlot),
-			ProposerIndex:      uint64(event.ProposerIndex),
-			ParentBlockHash:    fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
-			ParentBlockRoot:    fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
-			ParentBlockNumber:  event.ParentBlockNumber,
-			Timestamp:          event.Timestamp,
-			FeeRecipient:       event.SuggestedFeeRecipient.Hex(),
-			TargetGasLimit:     event.TargetGasLimit,
-			InclusionListCount: len(event.InclusionListTransactions),
-			WithdrawalsCount:   len(event.Withdrawals),
-			ReceivedAt:         time.Now().UnixMilli(),
+			ProposalSlot:          uint64(event.ProposalSlot),
+			ProposerIndex:         uint64(event.ProposerIndex),
+			ParentBlockHash:       fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockRoot:       fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
+			ParentBlockNumber:     event.ParentBlockNumber,
+			Timestamp:             event.Timestamp,
+			PrevRandao:            fmt.Sprintf("0x%x", event.PrevRandao[:]),
+			FeeRecipient:          event.SuggestedFeeRecipient.Hex(),
+			ParentBeaconBlockRoot: fmt.Sprintf("0x%x", event.ParentBeaconBlockRoot[:]),
+			TargetGasLimit:        event.TargetGasLimit,
+			InclusionListCount:    len(event.InclusionListTransactions),
+			WithdrawalsCount:      len(event.Withdrawals),
+			ReceivedAt:            time.Now().UnixMilli(),
 		},
 	})
 }
 
 func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.PayloadBuildFailedEvent) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypePayloadBuildFailed,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildFailedStreamEvent{
@@ -648,19 +1039,52 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.Pay
 	})
 }
 
+// payloadReadyStreamEvent assembles the full payload_ready wire event from a
+// built payload (list fields aggregated to counts).
+func payloadReadyStreamEvent(slot phase0.Slot, event *payload_builder.Payload) PayloadReadyStreamEvent {
+	data := PayloadReadyStreamEvent{
+		Slot:            uint64(slot),
+		BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
+		ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
+		BlockValue:      event.BlockValue.String(),
+		ReadyAt:         event.ReadyAt.UnixMilli(),
+		FeeRecipient:    event.FeeRecipient.Hex(),
+	}
+
+	if ep := event.ExecutionPayload; ep != nil {
+		data.BlockNumber = ep.BlockNumber
+		data.GasLimit = ep.GasLimit
+		data.GasUsed = ep.GasUsed
+		data.ExtraData = fmt.Sprintf("0x%x", ep.ExtraData)
+		data.BlobGasUsed = ep.BlobGasUsed
+		data.ExcessBlobGas = ep.ExcessBlobGas
+		data.NumTransactions = len(ep.Transactions)
+		data.NumWithdrawals = len(ep.Withdrawals)
+
+		if ep.BaseFeePerGas != nil {
+			data.BaseFeePerGas = ep.BaseFeePerGas.Dec()
+		}
+	}
+
+	if event.BlobsBundle != nil {
+		data.NumBlobs = len(event.BlobsBundle.Commitments)
+	}
+
+	if reqs := event.ExecutionRequests; reqs != nil {
+		data.NumExecRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
+			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
+	}
+
+	return data
+}
+
 func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) {
 	slot := event.Attributes.ProposalSlot
 
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(slot, &StreamEvent{
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
-		Data: PayloadReadyStreamEvent{
-			Slot:            uint64(slot),
-			BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-			ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
-			BlockValue:      event.BlockValue.String(),
-			ReadyAt:         event.ReadyAt.UnixMilli(),
-		},
+		Data:      payloadReadyStreamEvent(slot, event),
 	})
 
 	// Update slot state
@@ -679,19 +1103,32 @@ func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) 
 }
 
 func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmissionEvent) {
-	m.Broadcast(&StreamEvent{
+	data := BidSubmittedEvent{
+		Slot:      uint64(event.Slot),
+		BlockHash: fmt.Sprintf("0x%x", event.BlockHash[:]),
+		Value:     event.Value,
+		BidCount:  event.BidCount,
+		Timestamp: time.Now().UnixMilli(),
+		Success:   event.Success,
+		Error:     event.Error,
+		Warning:   event.Warning,
+	}
+
+	if event.SignedBid != nil && event.SignedBid.Message != nil {
+		bid := event.SignedBid.Message
+		data.ExecutionPayment = uint64(bid.ExecutionPayment)
+		data.FeeRecipient = fmt.Sprintf("0x%x", bid.FeeRecipient)
+		data.GasLimit = bid.GasLimit
+		data.BuilderIndex = uint64(bid.BuilderIndex)
+		data.ParentBlockHash = fmt.Sprintf("0x%x", bid.ParentBlockHash[:])
+		data.ParentBlockRoot = fmt.Sprintf("0x%x", bid.ParentBlockRoot[:])
+		data.NumBlobCommitments = len(bid.BlobKZGCommitments)
+	}
+
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeBidSubmitted,
 		Timestamp: time.Now().UnixMilli(),
-		Data: BidSubmittedEvent{
-			Slot:      uint64(event.Slot),
-			BlockHash: fmt.Sprintf("0x%x", event.BlockHash[:]),
-			Value:     event.Value,
-			BidCount:  event.BidCount,
-			Timestamp: time.Now().UnixMilli(),
-			Success:   event.Success,
-			Error:     event.Error,
-			Warning:   event.Warning,
-		},
+		Data:      data,
 	})
 
 	// Update slot state only on success
@@ -709,7 +1146,7 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmi
 }
 
 func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeHeadReceived,
 		Timestamp: time.Now().UnixMilli(),
 		Data: HeadReceivedEvent{
@@ -740,16 +1177,22 @@ func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
 	// bid. Match on builder index, the same way the ePBS service classifies bids.
 	isOurs := m.epbsSvc != nil && event.BuilderIndex == m.epbsSvc.GetBuilderIndex()
 
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeBidEvent,
 		Timestamp: time.Now().UnixMilli(),
 		Data: BidStreamEvent{
-			Slot:         uint64(event.Slot),
-			BuilderIndex: event.BuilderIndex,
-			Value:        event.Value,
-			BlockHash:    fmt.Sprintf("0x%x", event.BlockHash[:]),
-			IsOurs:       isOurs,
-			ReceivedAt:   event.ReceivedAt.UnixMilli(),
+			Slot:               uint64(event.Slot),
+			BuilderIndex:       event.BuilderIndex,
+			Value:              event.Value,
+			BlockHash:          fmt.Sprintf("0x%x", event.BlockHash[:]),
+			IsOurs:             isOurs,
+			ReceivedAt:         event.ReceivedAt.UnixMilli(),
+			ExecutionPayment:   event.ExecutionPayment,
+			FeeRecipient:       fmt.Sprintf("0x%x", event.FeeRecipient[:]),
+			GasLimit:           event.GasLimit,
+			ParentBlockHash:    fmt.Sprintf("0x%x", event.ParentBlockHash[:]),
+			ParentBlockRoot:    fmt.Sprintf("0x%x", event.ParentBlockRoot[:]),
+			NumBlobCommitments: len(event.BlobKZGCommitments),
 		},
 	})
 
@@ -793,26 +1236,105 @@ func (m *EventStreamManager) handlePayloadAvailableEvent(event *beacon.PayloadAv
 
 	envelope, err := m.builderSvc.GetCLClient().GetExecutionPayloadEnvelope(ctx, blockRootHex)
 	if err == nil {
-		streamEvent.BlockHash = fmt.Sprintf("0x%x", envelope.BlockHash[:])
-		streamEvent.BuilderIndex = envelope.BuilderIndex
+		fillEnvelopeDetail(&streamEvent.EnvelopeDetail, envelope)
 	}
 
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypePayloadAvailable,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      streamEvent,
 	})
 }
 
+// handleBlockDetail reduces an imported block (full fork-agnostic signed
+// block from the head vote tracker's fetch) to the display summary and
+// broadcasts it (list fields aggregated to counts).
+func (m *EventStreamManager) handleBlockDetail(block *eth2all.SignedBeaconBlock) {
+	if block == nil || block.Message == nil || block.Message.Body == nil {
+		return
+	}
+
+	msg := block.Message
+	body := msg.Body
+
+	data := BlockDetailStreamEvent{
+		Slot:                   uint64(msg.Slot),
+		ProposerIndex:          uint64(msg.ProposerIndex),
+		ParentRoot:             fmt.Sprintf("%#x", msg.ParentRoot),
+		StateRoot:              fmt.Sprintf("%#x", msg.StateRoot),
+		Graffiti:               fmt.Sprintf("%#x", body.Graffiti),
+		NumAttestations:        len(body.Attestations),
+		NumProposerSlashings:   len(body.ProposerSlashings),
+		NumAttesterSlashings:   len(body.AttesterSlashings),
+		NumDeposits:            len(body.Deposits),
+		NumVoluntaryExits:      len(body.VoluntaryExits),
+		NumBLSChanges:          len(body.BLSToExecutionChanges),
+		NumBlobCommitments:     len(body.BlobKZGCommitments),
+		NumPayloadAttestations: len(body.PayloadAttestations),
+		Timestamp:              time.Now().UnixMilli(),
+	}
+
+	if body.SyncAggregate != nil {
+		for _, b := range body.SyncAggregate.SyncCommitteeBits {
+			data.SyncParticipation += mathbits.OnesCount8(b)
+		}
+	}
+
+	if signedBid := body.SignedExecutionPayloadBid; signedBid != nil && signedBid.Message != nil {
+		bid := signedBid.Message
+		data.Bid = &BlockDetailBid{
+			BuilderIndex:     uint64(bid.BuilderIndex),
+			ValueGwei:        uint64(bid.Value),
+			ExecutionPayment: uint64(bid.ExecutionPayment),
+			BlockHash:        fmt.Sprintf("%#x", bid.BlockHash),
+			ParentBlockHash:  fmt.Sprintf("%#x", bid.ParentBlockHash),
+			GasLimit:         bid.GasLimit,
+			FeeRecipient:     fmt.Sprintf("%#x", bid.FeeRecipient),
+			NumBlobKZGs:      len(bid.BlobKZGCommitments),
+		}
+	}
+
+	if ep := body.ExecutionPayload; ep != nil {
+		data.Payload = &BlockDetailPayload{
+			BlockNumber:     ep.BlockNumber,
+			BlockHash:       fmt.Sprintf("%#x", ep.BlockHash),
+			GasLimit:        ep.GasLimit,
+			GasUsed:         ep.GasUsed,
+			NumTransactions: len(ep.Transactions),
+			NumWithdrawals:  len(ep.Withdrawals),
+		}
+	}
+
+	m.broadcastForSlot(msg.Slot, &StreamEvent{
+		Type:      EventTypeBlockDetail,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      data,
+	})
+}
+
+// voteCoverageEvent converts a tracker coverage summary to the wire shape.
+func voteCoverageEvent(cov *chain.SubnetCoverage) VoteCoverageStreamEvent {
+	return VoteCoverageStreamEvent{
+		Slots:     cov.Slots,
+		Attesters: cov.Attesters,
+		SeenPct:   cov.SeenPct,
+		Low:       cov.Low,
+	}
+}
+
 func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeHeadVotes,
 		Timestamp: time.Now().UnixMilli(),
 		Data: HeadVotesStreamEvent{
 			Slot:             uint64(event.Slot),
+			BlockRoot:        fmt.Sprintf("%#x", event.BlockRoot),
 			ParticipationPct: event.ParticipationPct,
 			ParticipationETH: event.ParticipationETH,
 			TotalSlotETH:     event.TotalSlotETH,
+			VoteCount:        event.VoteCount,
+			ThresholdPct:     event.ThresholdPct,
+			ThresholdMet:     event.ThresholdMet,
 			Timestamp:        event.Timestamp,
 		},
 	})
@@ -1102,6 +1624,20 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		return
 	}
 
+	// Send current attestation subnet coverage
+	if m.chainSvc != nil {
+		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
+			cov := tracker.GetSubnetCoverage()
+			if !send(&StreamEvent{
+				Type:      EventTypeVoteCoverage,
+				Timestamp: time.Now().UnixMilli(),
+				Data:      voteCoverageEvent(&cov),
+			}) {
+				return
+			}
+		}
+	}
+
 	// Send current stats
 	if !send(&StreamEvent{
 		Type:      EventTypeStats,
@@ -1131,6 +1667,7 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 			Data: map[string]any{
 				"genesis_time":     genesis.GenesisTime.UnixMilli(),
 				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
+				"slots_per_epoch":  chainSpec.SlotsPerEpoch,
 			},
 		}) {
 			return
@@ -1189,11 +1726,10 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
 
-	// Create channel for this client
-	clientCh := make(chan *StreamEvent, 32)
-
-	// Add client
-	h.eventStreamMgr.AddClient(clientCh)
+	// Register the client. The returned channel comes prefilled with the
+	// replay cache (slot-scoped events of the last few slots) so the UI can
+	// restore the slot graph and event log instead of starting empty.
+	clientCh := h.eventStreamMgr.RegisterClient()
 	// RemoveClient closes the channel, so it must run *after* SendInitialState
 	// has stopped writing to it. Defers run LIFO, and we install the
 	// initial-state wait below — that wait will execute first.
@@ -1244,7 +1780,7 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 
 // BroadcastBidSubmitted broadcasts a bid submitted event (success).
 func (m *EventStreamManager) BroadcastBidSubmitted(slot uint64, blockHash string, value uint64, bidCount int) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBidSubmitted,
 		Timestamp: time.Now().UnixMilli(),
 		Data: BidSubmittedEvent{
@@ -1271,7 +1807,7 @@ func (m *EventStreamManager) BroadcastBidSubmitted(slot uint64, blockHash string
 
 // BroadcastBidFailed broadcasts a bid submission failure event.
 func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, value uint64, bidCount int, errMsg string) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBidSubmitted,
 		Timestamp: time.Now().UnixMilli(),
 		Data: BidSubmittedEvent{
@@ -1290,18 +1826,38 @@ func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, v
 func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult) {
 	slot := uint64(event.Slot)
 
-	m.Broadcast(&StreamEvent{
+	completedAt := time.Now().UnixMilli()
+	if !event.CompletedAt.IsZero() {
+		completedAt = event.CompletedAt.UnixMilli()
+	}
+
+	var startedAt int64
+	if !event.StartedAt.IsZero() {
+		startedAt = event.StartedAt.UnixMilli()
+	}
+
+	data := RevealStreamEvent{
+		Slot:        slot,
+		Transport:   string(event.Transport),
+		Success:     event.Success,
+		Skipped:     event.Skipped,
+		SkipReason:  event.SkipReason,
+		Error:       event.Error,
+		Attempt:     event.Attempt,
+		MaxAttempts: event.MaxAttempts,
+		StartedAt:   startedAt,
+		Timestamp:   completedAt,
+	}
+
+	if event.Envelope != nil {
+		data.Envelope = &EnvelopeDetail{}
+		fillEnvelopeDetail(data.Envelope, event.Envelope)
+	}
+
+	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeReveal,
 		Timestamp: time.Now().UnixMilli(),
-		Data: RevealStreamEvent{
-			Slot:        slot,
-			Success:     event.Success,
-			Skipped:     event.Skipped,
-			Error:       event.Error,
-			Attempt:     event.Attempt,
-			MaxAttempts: event.MaxAttempts,
-			Timestamp:   time.Now().UnixMilli(),
-		},
+		Data:      data,
 	})
 
 	// Update slot state
@@ -1328,7 +1884,7 @@ func (m *EventStreamManager) BroadcastConfigUpdate() {
 // BroadcastBuilderAPIGetHeaderReceived broadcasts when a getHeader request is received.
 func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderReceived(slot uint64, parentHash, pubkey string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPIGetHeaderRcvd,
 		Timestamp: now,
 		Data: BuilderAPIGetHeaderReceivedEvent{
@@ -1343,7 +1899,7 @@ func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderReceived(slot uint64, p
 // BroadcastBuilderAPIGetHeaderDelivered broadcasts when a header is successfully delivered.
 func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderDelivered(slot uint64, blockHash, blockValue string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPIGetHeaderDlvd,
 		Timestamp: now,
 		Data: BuilderAPIGetHeaderDeliveredEvent{
@@ -1358,7 +1914,7 @@ func (m *EventStreamManager) BroadcastBuilderAPIGetHeaderDelivered(slot uint64, 
 // BroadcastBuilderAPISubmitBlindedReceived broadcasts when a submitBlindedBlock request is received.
 func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedReceived(slot uint64, blockHash string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPISubmitBlindedRcvd,
 		Timestamp: now,
 		Data: BuilderAPISubmitBlindedReceivedEvent{
@@ -1372,7 +1928,7 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedReceived(slot uint6
 // BroadcastBuilderAPISubmitBlindedDelivered broadcasts when a blinded block is successfully published.
 func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedDelivered(slot uint64, blockHash string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPISubmitBlindedDlvd,
 		Timestamp: now,
 		Data: BuilderAPISubmitBlindedDeliveredEvent{
@@ -1386,7 +1942,7 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlindedDelivered(slot uint
 // BroadcastBuilderAPIGetBidReceived broadcasts when a Gloas getExecutionPayloadBid request is received.
 func (m *EventStreamManager) BroadcastBuilderAPIGetBidReceived(slot uint64, parentHash, pubkey string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPIGetBidRcvd,
 		Timestamp: now,
 		Data: BuilderAPIGetBidReceivedEvent{
@@ -1401,7 +1957,7 @@ func (m *EventStreamManager) BroadcastBuilderAPIGetBidReceived(slot uint64, pare
 // BroadcastBuilderAPIGetBidDelivered broadcasts when a Gloas execution payload bid is delivered.
 func (m *EventStreamManager) BroadcastBuilderAPIGetBidDelivered(slot uint64, blockHash, blockValue string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPIGetBidDlvd,
 		Timestamp: now,
 		Data: BuilderAPIGetBidDeliveredEvent{
@@ -1416,7 +1972,7 @@ func (m *EventStreamManager) BroadcastBuilderAPIGetBidDelivered(slot uint64, blo
 // BroadcastBuilderAPISubmitBlockReceived broadcasts when a Gloas submitSignedBeaconBlock request is received.
 func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockReceived(slot uint64, blockHash string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPISubmitBlockRcvd,
 		Timestamp: now,
 		Data: BuilderAPISubmitBlockReceivedEvent{
@@ -1430,7 +1986,7 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockReceived(slot uint64,
 // BroadcastBuilderAPISubmitBlockDelivered broadcasts when a Gloas envelope is successfully published.
 func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockDelivered(slot uint64, blockHash string) {
 	now := time.Now().UnixMilli()
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(slot), &StreamEvent{
 		Type:      EventTypeBuilderAPISubmitBlockDlvd,
 		Timestamp: now,
 		Data: BuilderAPISubmitBlockDeliveredEvent{
@@ -1444,7 +2000,7 @@ func (m *EventStreamManager) BroadcastBuilderAPISubmitBlockDelivered(slot uint64
 // BroadcastBidWon broadcasts a bid won event when one of our blocks is seen
 // included at the head (fed by the inclusion tracker's won-block record).
 func (m *EventStreamManager) BroadcastBidWon(wonBlock *payload_bidder.WonBlock) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(phase0.Slot(wonBlock.Slot), &StreamEvent{
 		Type:      EventTypeBidWon,
 		Timestamp: time.Now().UnixMilli(),
 		Data: BidWonStreamEvent{
@@ -1460,8 +2016,11 @@ func (m *EventStreamManager) BroadcastBidWon(wonBlock *payload_bidder.WonBlock) 
 }
 
 // BroadcastLifecycle broadcasts a lifecycle event (deposit, exit, state change, etc.).
+// Lifecycle events have no slot of their own; they are tagged with the
+// current slot so they participate in the connect-time replay of the event
+// log alongside the slot-scoped events.
 func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) {
-	m.Broadcast(&StreamEvent{
+	m.broadcastForSlot(m.builderSvc.GetCurrentSlot(), &StreamEvent{
 		Type:      EventTypeLifecycle,
 		Timestamp: time.Now().UnixMilli(),
 		Data: LifecycleStreamEvent{

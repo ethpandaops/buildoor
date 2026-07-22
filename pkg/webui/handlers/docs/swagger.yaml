@@ -1,4 +1,334 @@
 definitions:
+  action_plan.BidPlan:
+    properties:
+      bid_end_time:
+        type: integer
+      bid_increase:
+        description: gwei
+        type: integer
+      bid_interval:
+        description: ms, >= 0, 0 = single bid
+        type: integer
+      bid_min_amount:
+        description: gwei
+        type: integer
+      bid_start_time:
+        type: integer
+      bid_subsidy:
+        description: gwei
+        type: integer
+      bid_value_gwei:
+        description: |-
+          BidValueGwei is an absolute bid base value replacing
+          max(blockValue, min) + subsidy; BidIncrease still applies per re-bid.
+          Allows underbidding the block value for testing.
+        type: integer
+      ignore_missing_prefs:
+        description: |-
+          IgnoreMissingPrefs bids with the payload's fee recipient when no gossip
+          proposer preferences arrived for the slot, bypassing the skip gate.
+        type: boolean
+      mode:
+        $ref: '#/definitions/action_plan.Mode'
+    type: object
+  action_plan.BuildPlan:
+    properties:
+      reorg_parent_payload:
+        description: |-
+          ReorgParentPayload builds on the grandparent (n-2) execution payload
+          instead of the immediate parent: the FCU head block hash and the payload
+          attributes' withdrawals are taken from the PARENT slot's payload
+          attributes (whose parent is n-2), while every other property comes from
+          the current slot. This is a deliberate parent-payload reorg attempt —
+          rejected by mainnet forkchoice, but useful for exercising the reveal /
+          inclusion path against a withheld parent.
+        type: boolean
+    type: object
+  action_plan.BuilderAPIPlan:
+    properties:
+      mode:
+        $ref: '#/definitions/action_plan.Mode'
+      response_delay_ms:
+        description: |-
+          ResponseDelayMs delays the bid response by this many milliseconds
+          (context-cancellable, capped at one slot).
+        type: integer
+      total_value_override_gwei:
+        description: |-
+          TotalValueOverrideGwei is the absolute total proposer-visible bid value
+          (before the Gloas execution-payment split), replacing block value +
+          subsidy. May exceed the block value to test payment edge cases.
+        type: integer
+      value_subsidy_gwei:
+        description: ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for
+          this slot.
+        type: integer
+    type: object
+  action_plan.FrozenPlan:
+    properties:
+      bid:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedBidSettings'
+        description: |-
+          Resolved effective settings; a nil category = suppressed for this slot
+          (by plan or by the global enable flags / protocol applicability).
+      build:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedBuildSettings'
+        description: |-
+          Build is the complete resolved build decision for the slot (schedule +
+          plan force/suppress). Always non-nil.
+      builder_api:
+        $ref: '#/definitions/action_plan.ResolvedBuilderAPISettings'
+      fork:
+        description: fork name at the target slot
+        type: string
+      frozen_at:
+        type: string
+      plan:
+        allOf:
+        - $ref: '#/definitions/action_plan.SlotPlan'
+        description: raw sparse plan; nil = none existed
+      reveal:
+        $ref: '#/definitions/action_plan.ResolvedRevealSettings'
+      slot:
+        type: integer
+      transforms:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedTransforms'
+        description: |-
+          Transforms carries the effective jq transform expressions (empty when no
+          transform plan applies). Nil only when no plan expression is set.
+    type: object
+  action_plan.Mode:
+    enum:
+    - disabled
+    - custom
+    type: string
+    x-enum-varnames:
+    - ModeDisabled
+    - ModeCustom
+  action_plan.PlanUpdate:
+    properties:
+      bid:
+        items:
+          type: integer
+        type: array
+      build:
+        items:
+          type: integer
+        type: array
+      builder_api:
+        items:
+          type: integer
+        type: array
+      delete:
+        type: boolean
+      from_slot:
+        type: integer
+      reveal:
+        items:
+          type: integer
+        type: array
+      set:
+        additionalProperties:
+          items:
+            type: integer
+          type: array
+        type: object
+      slots:
+        items:
+          type: integer
+        type: array
+      to_slot:
+        type: integer
+      transforms:
+        items:
+          type: integer
+        type: array
+    type: object
+  action_plan.ResolvedBidSettings:
+    properties:
+      end_ms:
+        type: integer
+      forced:
+        description: |-
+          Forced marks that the plan activated bidding although the module is
+          globally disabled.
+        type: boolean
+      ignore_missing_prefs:
+        description: IgnoreMissingPrefs bids without gossip proposer preferences.
+        type: boolean
+      increase_gwei:
+        type: integer
+      interval_ms:
+        type: integer
+      min_gwei:
+        type: integer
+      start_ms:
+        type: integer
+      subsidy_gwei:
+        type: integer
+      value_gwei:
+        description: |-
+          ValueGwei, when set, is the absolute bid base value replacing the
+          max(blockValue, min) + subsidy formula (IncreaseGwei still applies).
+        type: integer
+    type: object
+  action_plan.ResolvedBuildSettings:
+    properties:
+      build:
+        description: 'Build is the final decision: build a payload for this slot or
+          not.'
+        type: boolean
+      build_start_time_ms:
+        description: |-
+          BuildStartTimeMs is the effective build start time, milliseconds
+          relative to slot start (signed).
+        type: integer
+      forced:
+        description: |-
+          Forced marks builds the plan pushed past the schedule (they never
+          consume the next_n budget).
+        type: boolean
+      plan_involved:
+        description: |-
+          PlanInvolved marks decisions where a per-slot plan existed or any
+          consumer was effectively active — i.e. skips worth surfacing.
+        type: boolean
+      reorg_parent_payload:
+        description: |-
+          ReorgParentPayload builds the slot's payload on the grandparent (n-2)
+          execution payload instead of the immediate parent — a deliberate
+          parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
+        type: boolean
+      skip_reason:
+        description: |-
+          SkipReason is one of the BuildSkipReason* constants when Build is
+          false, empty otherwise.
+        type: string
+    type: object
+  action_plan.ResolvedBuilderAPISettings:
+    properties:
+      delay_ms:
+        type: integer
+      forced:
+        description: |-
+          Forced marks that the plan activated serving although the module is
+          globally disabled.
+        type: boolean
+      subsidy_gwei:
+        type: integer
+      total_value_gwei:
+        description: |-
+          TotalValueGwei, when set, is the absolute total proposer-visible bid
+          value (before the Gloas execution-payment split).
+        type: integer
+    type: object
+  action_plan.ResolvedRevealSettings:
+    properties:
+      broadcast_validation:
+        description: |-
+          BroadcastValidation is the envelope submission's broadcast_validation
+          level: gossip | consensus | consensus_and_equivocation.
+        type: string
+      bypass_deadline:
+        description: |-
+          BypassDeadline disables the "past the in-slot deadline → skip" check so
+          deliberately late reveals are attempted.
+        type: boolean
+      gate_mode:
+        description: |-
+          GateMode decides the reveal moment: time | vote | vote_or_time |
+          vote_and_time.
+        type: string
+      max_attempts:
+        description: |-
+          MaxAttempts / RetryIntervalMs are the publish retry policy
+          (global-only, no per-slot override).
+        type: integer
+      retry_interval_ms:
+        type: integer
+      reveal_time_ms:
+        type: integer
+      suppressed:
+        type: boolean
+      vote_threshold_pct:
+        description: |-
+          VoteThresholdPct is the participation threshold (percent) opening the
+          vote gate.
+        type: integer
+    type: object
+  action_plan.ResolvedTransforms:
+    properties:
+      bid:
+        type: string
+      envelope:
+        type: string
+      payload:
+        type: string
+    type: object
+  action_plan.RevealPlan:
+    properties:
+      broadcast_validation:
+        description: |-
+          BroadcastValidation overrides the envelope submission's broadcast
+          validation level: gossip | consensus | consensus_and_equivocation.
+        type: string
+      gate_mode:
+        description: |-
+          GateMode overrides the reveal gate: time | vote | vote_or_time |
+          vote_and_time.
+        type: string
+      mode:
+        $ref: '#/definitions/action_plan.Mode'
+      reveal_time_ms:
+        description: RevealTimeMs is signed milliseconds relative to slot start (time
+          gate).
+        type: integer
+      vote_threshold_pct:
+        description: VoteThresholdPct overrides the vote gate's participation threshold.
+        type: integer
+    type: object
+  action_plan.SlotPlan:
+    properties:
+      bid:
+        $ref: '#/definitions/action_plan.BidPlan'
+      build:
+        $ref: '#/definitions/action_plan.BuildPlan'
+      builder_api:
+        $ref: '#/definitions/action_plan.BuilderAPIPlan'
+      reveal:
+        $ref: '#/definitions/action_plan.RevealPlan'
+      slot:
+        type: integer
+      transforms:
+        $ref: '#/definitions/action_plan.TransformPlan'
+      updated_at:
+        type: string
+      updated_by:
+        type: string
+    type: object
+  action_plan.TransformPlan:
+    properties:
+      bid:
+        type: string
+      envelope:
+        type: string
+      payload:
+        type: string
+    type: object
+  api.ActionPlanResponse:
+    properties:
+      max_slot:
+        type: integer
+      min_slot:
+        type: integer
+      plans:
+        items:
+          $ref: '#/definitions/action_plan.SlotPlan'
+        type: array
+    type: object
   api.AuditLogResponse:
     properties:
       entries:
@@ -11,6 +341,22 @@ definitions:
         type: integer
       total:
         type: integer
+    type: object
+  api.BidArtifactMetaEntry:
+    properties:
+      at:
+        description: unix milliseconds
+        type: integer
+      execution_payment_gwei:
+        type: integer
+      fork:
+        type: string
+      index:
+        type: integer
+      total_value_gwei:
+        type: integer
+      transport:
+        type: string
     type: object
   api.BidsWonResponse:
     properties:
@@ -54,6 +400,40 @@ definitions:
         items:
           $ref: '#/definitions/api.ValidatorRegistrationResponse'
         type: array
+    type: object
+  api.HeadVoteDetailResponse:
+    properties:
+      bucket_count:
+        type: integer
+      bucket_ms:
+        type: integer
+      root:
+        type: string
+      rows:
+        items:
+          $ref: '#/definitions/api.HeadVoteDetailRow'
+        type: array
+      slot:
+        type: integer
+      slot_start_ms:
+        type: integer
+      total_members:
+        type: integer
+    type: object
+  api.HeadVoteDetailRow:
+    properties:
+      counts:
+        items:
+          type: integer
+        type: array
+      in_block_unseen:
+        type: integer
+      members:
+        type: integer
+      name:
+        type: string
+      seen:
+        type: integer
     type: object
   api.LifecycleStatusResponse:
     properties:
@@ -173,6 +553,26 @@ definitions:
           $ref: '#/definitions/api.ProposerPreferencesEntry'
         type: array
     type: object
+  api.SlotBidArtifactsResponse:
+    properties:
+      bids:
+        items:
+          $ref: '#/definitions/api.BidArtifactMetaEntry'
+        type: array
+      slot:
+        type: integer
+    type: object
+  api.SlotResultsResponse:
+    properties:
+      max_slot:
+        type: integer
+      min_slot:
+        type: integer
+      results:
+        items:
+          $ref: '#/definitions/slot_results.SlotResult'
+        type: array
+    type: object
   api.StatsResponse:
     properties:
       bids_submitted:
@@ -227,6 +627,61 @@ definitions:
         type: string
       withdrawable_epoch:
         type: integer
+    type: object
+  api.TestTransformRequest:
+    properties:
+      expression:
+        description: Expression is the jq program to evaluate.
+        type: string
+      sample_slot:
+        description: |-
+          SampleSlot, when > 0, sources the input from that slot's captured
+          artifact (falling back to a template when it is unavailable).
+        type: integer
+      target:
+        description: Target is one of payload | bid | envelope.
+        type: string
+    type: object
+  api.TestTransformResponse:
+    properties:
+      error:
+        description: Error is the parse/eval error message (present when the expression
+          fails).
+        type: string
+      input:
+        description: |-
+          Input is the JSON the expression ran against (message JSON for bid /
+          envelope; the payload for payload), pretty-printed as a string.
+        type: string
+      input_source:
+        description: InputSource is "artifact:slot-N" or "template".
+        type: string
+      output:
+        description: Output is the transform result, pretty-printed (present when
+          Error is empty).
+        type: string
+      target:
+        type: string
+    type: object
+  api.UpdateActionPlanRequest:
+    properties:
+      updates:
+        items:
+          $ref: '#/definitions/action_plan.PlanUpdate'
+        type: array
+    type: object
+  api.UpdateActionPlanResponse:
+    properties:
+      plans:
+        items:
+          $ref: '#/definitions/action_plan.SlotPlan'
+        type: array
+      slots:
+        items:
+          type: integer
+        type: array
+      status:
+        type: string
     type: object
   api.UpdateEPBSRequest:
     properties:
@@ -316,9 +771,437 @@ definitions:
       value_wei:
         type: string
     type: object
+  slot_results.AttributesSnapshot:
+    properties:
+      num_inclusion_list_txs:
+        type: integer
+      num_withdrawals:
+        type: integer
+      parent_beacon_block_root:
+        type: string
+      parent_block_hash:
+        type: string
+      parent_block_number:
+        type: integer
+      parent_block_root:
+        type: string
+      prev_randao:
+        type: string
+      proposer_index:
+        type: integer
+      suggested_fee_recipient:
+        type: string
+      target_gas_limit:
+        type: integer
+      timestamp:
+        type: integer
+    type: object
+  slot_results.BidAttempt:
+    properties:
+      artifact_index:
+        description: |-
+          ArtifactIndex references the slot's stored 'bid' SSZ artifact; nil when
+          no artifact exists (suppressed, pre-construction failure, or capture
+          disabled/failed).
+        type: integer
+      at:
+        type: string
+      block_hash:
+        description: |-
+          Full bid message properties (Gloas+ bids; blob commitments aggregated
+          to a count). Empty for legacy Builder API bids and pre-construction
+          failures.
+        type: string
+      builder_index:
+        type: integer
+      competitor_high_gwei:
+        description: |-
+          CompetitorHighGwei is the highest known competitor bid at submission
+          time (p2p only, our own builder index excluded).
+        type: integer
+      error:
+        type: string
+      execution_payment_gwei:
+        type: integer
+      fee_recipient:
+        type: string
+      gas_limit:
+        type: integer
+      num_blob_commitments:
+        type: integer
+      parent_block_hash:
+        type: string
+      parent_block_root:
+        type: string
+      prev_randao:
+        type: string
+      status:
+        $ref: '#/definitions/slot_results.BidStatus'
+      total_value_gwei:
+        type: integer
+      transport:
+        description: payload_builder.BidTransport values
+        type: string
+    type: object
+  slot_results.BidStatus:
+    enum:
+    - suppressed
+    - constructed
+    - submitted
+    - served
+    - failed
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - BidStatusSuppressed
+    - BidStatusConstructed
+    - BidStatusSubmitted
+    - BidStatusServed
+    - BidStatusFailed
+    - BidStatusCancelled
+  slot_results.BlockSubmission:
+    properties:
+      at:
+        type: string
+      dialect:
+        description: '"legacy" | "epbs"'
+        type: string
+      error:
+        type: string
+      status:
+        $ref: '#/definitions/slot_results.SubmissionStatus'
+    type: object
+  slot_results.BuildOutcome:
+    properties:
+      at:
+        type: string
+      attributes:
+        allOf:
+        - $ref: '#/definitions/slot_results.AttributesSnapshot'
+        description: Attributes is the payload_attributes snapshot the build ran on.
+      base_fee_per_gas:
+        description: wei
+        type: string
+      blob_gas_used:
+        type: integer
+      block_hash:
+        type: string
+      block_number:
+        description: |-
+          Full built-payload properties; the list fields (transactions, blobs,
+          withdrawals, execution requests) are aggregated to counts above/below.
+        type: integer
+      block_value_wei:
+        type: string
+      error:
+        type: string
+      excess_blob_gas:
+        type: integer
+      extra_data:
+        description: 0x-hex
+        type: string
+      fee_recipient:
+        type: string
+      gas_limit:
+        type: integer
+      gas_used:
+        type: integer
+      num_blobs:
+        type: integer
+      num_execution_requests:
+        type: integer
+      num_transactions:
+        type: integer
+      num_withdrawals:
+        type: integer
+      parent_hash:
+        type: string
+      prev_randao:
+        type: string
+      receipts_root:
+        type: string
+      skip_reason:
+        description: action_plan.BuildSkipReason* when skipped
+        type: string
+      state_root:
+        type: string
+      status:
+        $ref: '#/definitions/slot_results.BuildStatus'
+      timestamp:
+        type: integer
+    type: object
+  slot_results.BuildStatus:
+    enum:
+    - waiting_attributes
+    - no_attributes
+    - started
+    - ready
+    - failed
+    - skipped
+    type: string
+    x-enum-varnames:
+    - BuildStatusWaitingAttributes
+    - BuildStatusNoAttributes
+    - BuildStatusStarted
+    - BuildStatusReady
+    - BuildStatusFailed
+    - BuildStatusSkipped
+  slot_results.InclusionResult:
+    properties:
+      block_hash:
+        type: string
+      num_blobs:
+        type: integer
+      num_transactions:
+        type: integer
+      payload_check_slot:
+        description: PayloadCheckSlot is the follow-up block's slot the verdict came
+          from.
+        type: integer
+      payload_status:
+        allOf:
+        - $ref: '#/definitions/slot_results.PayloadStatus'
+        description: |-
+          PayloadStatus is the canonical verdict for the won payload: pending
+          until the first follow-up block is seen, then canonical or missed based
+          on that block's committed parent execution hash. Pre-Gloas wins are
+          canonical immediately (the payload is embedded in the block).
+      source:
+        description: '"epbs" | "builder_api"'
+        type: string
+      timestamp:
+        type: string
+      value_eth:
+        type: string
+      value_wei:
+        type: string
+    type: object
+  slot_results.PayloadStatus:
+    enum:
+    - pending
+    - canonical
+    - missed
+    - orphaned
+    type: string
+    x-enum-varnames:
+    - PayloadStatusPending
+    - PayloadStatusCanonical
+    - PayloadStatusMissed
+    - PayloadStatusOrphaned
+  slot_results.RevealAttempt:
+    properties:
+      at:
+        type: string
+      attempt:
+        type: integer
+      error:
+        type: string
+      skip_reason:
+        description: plan_disabled | disabled | late | vote_gate_timeout
+        type: string
+      started_at:
+        description: |-
+          StartedAt is when the attempt began (envelope construction + submit
+          call); nil on skips where nothing was attempted.
+        type: string
+      status:
+        $ref: '#/definitions/slot_results.RevealStatus'
+      transport:
+        type: string
+    type: object
+  slot_results.RevealStatus:
+    enum:
+    - suppressed
+    - published
+    - failed
+    - skipped
+    type: string
+    x-enum-varnames:
+    - RevealStatusSuppressed
+    - RevealStatusPublished
+    - RevealStatusFailed
+    - RevealStatusSkipped
+  slot_results.SlotResult:
+    properties:
+      applied_plan:
+        allOf:
+        - $ref: '#/definitions/action_plan.FrozenPlan'
+        description: AppliedPlan is the frozen plan snapshot the slot executed under.
+      bids:
+        items:
+          $ref: '#/definitions/slot_results.BidAttempt'
+        type: array
+      block_submissions:
+        items:
+          $ref: '#/definitions/slot_results.BlockSubmission'
+        type: array
+      build:
+        $ref: '#/definitions/slot_results.BuildOutcome'
+      dropped_attempts:
+        additionalProperties:
+          type: integer
+        description: |-
+          DroppedAttempts counts attempts beyond the per-kind retention cap,
+          keyed by kind ("bids", "block_submissions", "reveal_attempts").
+        type: object
+      epoch:
+        type: integer
+      fork:
+        type: string
+      inclusion:
+        $ref: '#/definitions/slot_results.InclusionResult'
+      reveal_attempts:
+        items:
+          $ref: '#/definitions/slot_results.RevealAttempt'
+        type: array
+      slot:
+        type: integer
+      updated_at:
+        type: string
+    type: object
+  slot_results.SubmissionStatus:
+    enum:
+    - received
+    - accepted
+    - failed
+    type: string
+    x-enum-varnames:
+    - SubmissionStatusReceived
+    - SubmissionStatusAccepted
+    - SubmissionStatusFailed
 info:
   contact: {}
 paths:
+  /api/buildoor/action-plan:
+    get:
+      description: Returns all per-slot action plans within the inclusive slot range.
+      operationId: getActionPlan
+      parameters:
+      - description: Range start slot (inclusive)
+        in: query
+        name: min_slot
+        required: true
+        type: integer
+      - description: Range end slot (inclusive)
+        in: query
+        name: max_slot
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ActionPlanResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Plan service unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get per-slot action plans
+      tags:
+      - ActionPlan
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Applies a bulk per-slot action plan mutation atomically (all
+        targeted slots update or none). Category members are
+        three-state (absent = unchanged, null = clear, object =
+        replace); the "set" member supports fine-grained path updates
+        like {"bid.bid_min_amount": 5000} for partial edits. Updates
+        targeting past or already-frozen slots fail with 409.
+        Requires authentication.
+      operationId: updateActionPlan
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Plan updates
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateActionPlanRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Authoritative normalized result
+          schema:
+            $ref: '#/definitions/api.UpdateActionPlanResponse'
+        "400":
+          description: Validation error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Slot in the past or frozen
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Plan service unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update per-slot action plans
+      tags:
+      - ActionPlan
+  /api/buildoor/action-plan/test-transform:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Runs an operator jq expression against a sample payload / bid /
+        envelope (a captured artifact when sample_slot is given and
+        available, otherwise a zero-value template of the object) and
+        returns the transformed JSON, so expressions can be built and
+        tested live before being saved to a slot plan. Bid and envelope
+        transforms operate on the MESSAGE, matching production.
+      operationId: testActionPlanTransform
+      parameters:
+      - description: Target, expression and optional sample slot
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.TestTransformRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TestTransformResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Evaluate a jq transform against a sample builder object
+      tags:
+      - ActionPlan
   /api/buildoor/audit-log:
     get:
       description: Returns a paginated list of authenticated mutating actions. Empty
@@ -437,6 +1320,57 @@ paths:
       summary: Get cached builder preferences
       tags:
       - Buildoor
+  /api/buildoor/head-votes/{slot}:
+    get:
+      description: |-
+        Returns the slot's raw single-attestation arrivals grouped by
+        validator-ranges client name into fixed-width time buckets
+        from the slot start, plus per-name totals and the count of
+        attesters that landed on chain without being seen as singles.
+        Only slots still retained by the head vote tracker are served.
+      operationId: getHeadVoteDetail
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      - description: 'Beacon block root (default: the slot''s primary root)'
+        in: query
+        name: root
+        type: string
+      - description: Bucket width in ms (default slot_ms/24, clamped to [50, slot_ms])
+        in: query
+        name: bucket_ms
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HeadVoteDetailResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No vote detail retained for this slot
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Head vote tracker unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Per-name head-vote arrival heatmap for a slot
+      tags:
+      - Stats
   /api/buildoor/overview:
     get:
       description: |-
@@ -475,6 +1409,218 @@ paths:
       summary: Get cached proposer preferences
       tags:
       - Buildoor
+  /api/buildoor/slot-results:
+    get:
+      description: |-
+        Returns the recorded outcome history (build, bids, block
+        submissions, reveals, inclusion, applied plan) for every
+        active slot within the inclusive slot range.
+      operationId: getSlotResults
+      parameters:
+      - description: Range start slot (inclusive)
+        in: query
+        name: min_slot
+        required: true
+        type: integer
+      - description: Range end slot (inclusive)
+        in: query
+        name: max_slot
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlotResultsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Results tracker unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get per-slot results
+      tags:
+      - ActionPlan
+  /api/buildoor/slot-results/{slot}/bids:
+    get:
+      description: |-
+        Lists the metadata of every signed bid stored for the slot
+        (JSON only; fetch individual bids by index for SSZ). Returns
+        an empty list for slots without bid artifacts.
+      operationId: getSlotBidArtifacts
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.SlotBidArtifactsResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Results tracker unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List a slot's signed bid artifacts
+      tags:
+      - ActionPlan
+  /api/buildoor/slot-results/{slot}/bids/{index}:
+    get:
+      description: |-
+        Returns one signed bid created for the slot, addressed by its
+        artifact index (see the bid listing endpoint). Pre-Gloas bids
+        are SignedBuilderBid, Gloas+ bids SignedExecutionPayloadBid.
+        Content negotiation as with the payload artifact endpoint.
+      operationId: getSlotBidArtifact
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      - description: Bid artifact index
+        in: path
+        name: index
+        required: true
+        type: integer
+      produces:
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Versioned signed bid (or raw SSZ)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No artifact for this slot/index
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "406":
+          description: No acceptable content type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get one signed bid of a slot
+      tags:
+      - ActionPlan
+  /api/buildoor/slot-results/{slot}/envelope:
+    get:
+      description: |-
+        Returns the signed execution payload envelope constructed for
+        the slot's reveal (stored at construction time, so failed
+        publishes remain inspectable). Content negotiation as with the
+        payload artifact endpoint.
+      operationId: getSlotEnvelopeArtifact
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      produces:
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Versioned envelope (or raw SSZ)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No artifact for this slot
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "406":
+          description: No acceptable content type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the signed payload envelope of a slot
+      tags:
+      - ActionPlan
+  /api/buildoor/slot-results/{slot}/payload:
+    get:
+      description: |-
+        Returns the exact execution payload built for the slot. With
+        "Accept: application/octet-stream" the raw SSZ bytes are
+        served; otherwise a {"version", "data"} JSON envelope. The
+        Eth-Consensus-Version response header carries the fork name.
+      operationId: getSlotPayloadArtifact
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      produces:
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Versioned payload (or raw SSZ)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No artifact for this slot
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "406":
+          description: No acceptable content type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the built execution payload of a slot
+      tags:
+      - ActionPlan
   /api/buildoor/validators:
     get:
       description: Returns the list of validators registered via the Builder API (fee
@@ -616,6 +1762,52 @@ paths:
               type: string
             type: object
       summary: Update schedule configuration
+      tags:
+      - Config
+  /api/config/settings:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Applies partial global settings updates keyed by canonical
+        settings paths (e.g. {"epbs.bid_subsidy": 1000,
+        "schedule.mode": "all"}) without requiring full config
+        objects. Unknown keys are rejected. Requires authentication.
+      operationId: updateSettings
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Map of settings key paths to values
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Unknown key or invalid value
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update global settings by key path
       tags:
       - Config
   /api/lifecycle/deposit:

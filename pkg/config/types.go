@@ -42,7 +42,8 @@ type Config struct {
 	TopupAmount       uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
 	DepositMaxFeeGwei uint64           `yaml:"deposit_max_fee" json:"deposit_max_fee"`
 	Schedule          ScheduleConfig   `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"` // Time-scheduled ePBS config
+	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal            RevealConfig     `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
 	Debug             bool             `yaml:"debug" json:"debug"`
 	Pprof             bool             `yaml:"pprof" json:"pprof"`
 	PayloadBuildTime  uint64           `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
@@ -51,6 +52,18 @@ type Config struct {
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
+	// SlotResultRetentionEpochs is how many epochs of per-slot result history
+	// (plans + outcome summaries) are kept before pruning, in memory and in the
+	// state-db. Must be > 0.
+	SlotResultRetentionEpochs uint64 `yaml:"slot_result_retention_epochs" json:"slot_result_retention_epochs"`
+	// SlotArtifactRetentionEpochs is how many epochs of raw SSZ artifacts
+	// (payloads, signed bids, envelopes) are kept in the slot_artifacts table.
+	// Raw payloads dominate disk usage — lower this on disk-sensitive
+	// deployments. Must be > 0.
+	SlotArtifactRetentionEpochs uint64 `yaml:"slot_artifact_retention_epochs" json:"slot_artifact_retention_epochs"`
+	// SlotArtifactCaptureEnabled toggles raw SSZ artifact capture. Result
+	// summaries are recorded regardless.
+	SlotArtifactCaptureEnabled bool `yaml:"slot_artifact_capture_enabled" json:"slot_artifact_capture_enabled"`
 	// StateDBPath, when set, enables the optional SQLite state-db at this path.
 	// It persists UI setting overrides, won blocks, validator registrations,
 	// proposer preferences and an audit log across restarts. Startup-only and
@@ -95,6 +108,11 @@ type BuilderAPIConfig struct {
 	// to the getHeader bid value in the Fulu Builder API, and to the block value that
 	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
 	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+
+	// ValueOverrideGwei, when non-zero, replaces the served bid's total value
+	// (block value + subsidy) with this absolute amount in gwei — an alternative
+	// to the subsidy for testing. Per-slot action plans override this per slot.
+	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
@@ -113,9 +131,6 @@ type EPBSConfig struct {
 	// BidEndTime is milliseconds relative to slot start for last bid.
 	BidEndTime int64 `yaml:"bid_end_time" json:"bid_end_time"`
 
-	// RevealTime is milliseconds relative to slot start for reveal.
-	RevealTime int64 `yaml:"reveal_time" json:"reveal_time"`
-
 	// BidMinAmount is the minimum bid amount in gwei.
 	// Bids use max(blockValue, BidMinAmount) as the starting bid value.
 	BidMinAmount uint64 `yaml:"bid_min_amount" json:"bid_min_amount"`
@@ -129,6 +144,102 @@ type EPBSConfig struct {
 	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
 	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
 	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
+
+	// BidValueOverride, when non-zero, replaces the bid base value
+	// (max(blockValue, BidMinAmount) + BidSubsidy) with this absolute amount in
+	// gwei — an alternative to the subsidy for testing; allows underbidding the
+	// block value. BidIncrease still applies per subsequent bid. Per-slot action
+	// plans override this per slot.
+	BidValueOverride uint64 `yaml:"bid_value_override" json:"bid_value_override"`
+
+	// HeadVoteThresholdPct is the head-vote participation threshold in percent
+	// (0-100) the vote tracker reports against: crossing it fires an immediate
+	// update with threshold_met set. 0 disables threshold checking. The default
+	// (60) mirrors the Gloas builder payment quorum
+	// (BUILDER_PAYMENT_THRESHOLD_NUMERATOR/DENOMINATOR = 6/10) — the
+	// participation level at which the builder's payment actually settles.
+	HeadVoteThresholdPct uint64 `yaml:"head_vote_threshold_pct" json:"head_vote_threshold_pct"`
+}
+
+// Reveal gate modes: how the reveal moment of a won slot is decided.
+const (
+	// RevealGateTime reveals at TimeMs into the slot.
+	RevealGateTime = "time"
+	// RevealGateVote reveals as soon as head-vote participation on the
+	// committing block reaches VoteThresholdPct.
+	RevealGateVote = "vote"
+	// RevealGateVoteOrTime reveals at whichever gate opens first.
+	RevealGateVoteOrTime = "vote_or_time"
+	// RevealGateVoteAndTime reveals at TimeMs, but only once the vote
+	// threshold is also reached (whichever happens last).
+	RevealGateVoteAndTime = "vote_and_time"
+)
+
+// Broadcast validation levels for the envelope submission API
+// (beacon-API broadcast_validation query parameter).
+const (
+	BroadcastValidationGossip                   = "gossip"
+	BroadcastValidationConsensus                = "consensus"
+	BroadcastValidationConsensusAndEquivocation = "consensus_and_equivocation"
+)
+
+// RevealConfig defines the payload reveal behaviour shared by both flows
+// (p2p ePBS bidding and the Builder API): the reveal service publishes every
+// won slot's envelope according to these settings, per-slot overridable via
+// the action plan's reveal category.
+type RevealConfig struct {
+	// Enabled globally enables payload reveals. A plan-custom slot still
+	// force-activates its reveal (mirroring the bid/builder_api categories).
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// GateMode decides the reveal moment: time | vote | vote_or_time |
+	// vote_and_time (see the RevealGate* constants). Unknown values fall
+	// back to time.
+	GateMode string `yaml:"gate_mode" json:"gate_mode"`
+
+	// TimeMs is milliseconds relative to slot start for the time gate.
+	// 0 = auto-compute from slot time (see ApplySlotDefaults).
+	TimeMs int64 `yaml:"time_ms" json:"time_ms"`
+
+	// VoteThresholdPct is the head-vote participation (percent of the slot's
+	// attesting balance on the committing block) that opens the vote gate.
+	VoteThresholdPct uint64 `yaml:"vote_threshold_pct" json:"vote_threshold_pct"`
+
+	// BroadcastValidation is the validation level the beacon node must apply
+	// before broadcasting the envelope: gossip (default) | consensus |
+	// consensus_and_equivocation (recommended for builders against
+	// unbundling via equivocating blocks). Unknown values fall back to
+	// gossip.
+	BroadcastValidation string `yaml:"broadcast_validation" json:"broadcast_validation"`
+
+	// MaxAttempts is the total number of publish attempts per reveal.
+	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
+
+	// RetryIntervalMs is the wait between failed publish attempts.
+	RetryIntervalMs int64 `yaml:"retry_interval_ms" json:"retry_interval_ms"`
+}
+
+// NormalizedGateMode returns the gate mode, falling back to RevealGateTime
+// for unknown values (UI overrides are free-form strings).
+func (c *RevealConfig) NormalizedGateMode() string {
+	switch c.GateMode {
+	case RevealGateTime, RevealGateVote, RevealGateVoteOrTime, RevealGateVoteAndTime:
+		return c.GateMode
+	default:
+		return RevealGateTime
+	}
+}
+
+// NormalizedBroadcastValidation returns the broadcast validation level,
+// falling back to gossip for unknown values.
+func (c *RevealConfig) NormalizedBroadcastValidation() string {
+	switch c.BroadcastValidation {
+	case BroadcastValidationGossip, BroadcastValidationConsensus,
+		BroadcastValidationConsensusAndEquivocation:
+		return c.BroadcastValidation
+	default:
+		return BroadcastValidationGossip
+	}
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.
