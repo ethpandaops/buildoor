@@ -237,6 +237,21 @@ npm run clean
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
    - Provides slot↔timestamp conversions
+   - `HeadVoteTracker`: per-slot attestation participation from locally
+     aggregated raw `single_attestation` SSE events (streaming from the Gloas
+     attester deadline at 25% of the slot — the aggregated `attestation` topic
+     only arrives at 50%, which is also the `PAYLOAD_DUE_BPS` reveal deadline).
+     Per-(slot, beacon_block_root) bitmaps over locally computed attester
+     duties, O(1) merge with incremental balance accounting; aggregates merge
+     into the same bitmaps as a late-slot complement (the BN only emits singles
+     for subscribed subnets — run it with subscribe-all-subnets for full early
+     coverage; undercounting is the only failure mode). Updates are throttled
+     (≥1 pp step per 100 ms flush per slot); crossing the configurable
+     `epbs.head_vote_threshold_pct` (default 60 = the Gloas builder payment
+     quorum, 0 = disabled) fires immediately with `threshold_met`. Feeds the
+     WebUI `head_votes` SSE event (participation curve + threshold line/marker
+     in the slot graph); `GetParticipation(slot, root)` exposes snapshots for
+     future consumers (e.g. reveal gating)
 
 4. **Lifecycle Manager** (`pkg/lifecycle/`)
    - Builder registration on beacon chain
@@ -357,6 +372,8 @@ Key config sections:
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`, `--epbs-reveal-time`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
   `--epbs-bid-value-override` (absolute p2p bid base, 0 = off),
+  `--epbs-vote-threshold` (head-vote participation threshold in percent,
+  default 60, 0 = off),
   `--builder-api-value-override` (absolute served total value, 0 = off)
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),

@@ -211,7 +211,7 @@ and begins building blocks according to configuration.`,
 		}
 
 		// 7. Start chain service (epoch-level state management)
-		chainSvc := chain.NewService(clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}

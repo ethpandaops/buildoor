@@ -210,9 +210,13 @@ type BuilderInfoEvent struct {
 // HeadVotesStreamEvent is sent when head vote participation changes.
 type HeadVotesStreamEvent struct {
 	Slot             uint64  `json:"slot"`
+	BlockRoot        string  `json:"block_root"`
 	ParticipationPct float64 `json:"participation_pct"`
 	ParticipationETH uint64  `json:"participation_eth"`
 	TotalSlotETH     uint64  `json:"total_slot_eth"`
+	VoteCount        int     `json:"vote_count"`
+	ThresholdPct     float64 `json:"threshold_pct"`
+	ThresholdMet     bool    `json:"threshold_met"`
 	Timestamp        int64   `json:"timestamp"`
 }
 
@@ -966,9 +970,13 @@ func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 		Timestamp: time.Now().UnixMilli(),
 		Data: HeadVotesStreamEvent{
 			Slot:             uint64(event.Slot),
+			BlockRoot:        fmt.Sprintf("%#x", event.BlockRoot),
 			ParticipationPct: event.ParticipationPct,
 			ParticipationETH: event.ParticipationETH,
 			TotalSlotETH:     event.TotalSlotETH,
+			VoteCount:        event.VoteCount,
+			ThresholdPct:     event.ThresholdPct,
+			ThresholdMet:     event.ThresholdMet,
 			Timestamp:        event.Timestamp,
 		},
 	})

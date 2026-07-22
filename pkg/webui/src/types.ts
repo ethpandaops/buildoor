@@ -164,6 +164,8 @@ export interface HeadVoteDataPoint {
   time: number;
   pct: number;
   eth: number;
+  voteCount?: number;
+  thresholdMet?: boolean;
 }
 
 // UI State types
@@ -194,6 +196,8 @@ export interface SlotState {
   revealSentAt?: number;
   revealAttempts?: RevealAttempt[];
   headVotes?: HeadVoteDataPoint[];
+  headVoteThresholdPct?: number;
+  headVoteThresholdMetAt?: number;
   getHeaderReceivedAt?: number;
   getHeaderDeliveredAt?: number;
   getHeaderBlockHash?: string;

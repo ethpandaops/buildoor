@@ -432,22 +432,34 @@ export function useEventStream(): UseEventStreamResult {
         case 'head_votes': {
           const data = event.data as {
             slot: number;
+            block_root?: string;
             participation_pct: number;
             participation_eth: number;
             total_slot_eth: number;
+            vote_count?: number;
+            threshold_pct?: number;
+            threshold_met?: boolean;
             timestamp: number;
           };
           const point: HeadVoteDataPoint = {
             time: data.timestamp,
             pct: data.participation_pct,
-            eth: data.participation_eth
+            eth: data.participation_eth,
+            voteCount: data.vote_count,
+            thresholdMet: data.threshold_met
           };
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };
             const headVotes: HeadVoteDataPoint[] = state.headVotes
               ? [...state.headVotes, point]
               : [{ time: data.timestamp, pct: 0, eth: 0 }, point];
-            return { ...prev, [data.slot]: { ...state, headVotes } };
+            const headVoteThresholdPct = data.threshold_pct ?? state.headVoteThresholdPct;
+            const headVoteThresholdMetAt = state.headVoteThresholdMetAt
+              ?? (data.threshold_met ? data.timestamp : undefined);
+            return {
+              ...prev,
+              [data.slot]: { ...state, headVotes, headVoteThresholdPct, headVoteThresholdMetAt }
+            };
           });
           break;
         }

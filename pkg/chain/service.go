@@ -10,6 +10,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -61,6 +62,7 @@ var _ Service = (*service)(nil)
 
 // service is the implementation of Service.
 type service struct {
+	cfg       *config.Config
 	clClient  *beacon.Client
 	chainSpec *ChainSpec
 	genesis   *beacon.Genesis
@@ -86,12 +88,14 @@ type service struct {
 
 // NewService creates a new chain service.
 func NewService(
+	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSpec *ChainSpec,
 	genesis *beacon.Genesis,
 	log logrus.FieldLogger,
 ) Service {
 	return &service{
+		cfg:                  cfg,
 		clClient:             clClient,
 		chainSpec:            chainSpec,
 		genesis:              genesis,
@@ -111,7 +115,7 @@ func (s *service) Start(ctx context.Context) error {
 	}
 
 	// Start head vote tracker
-	s.headVoteTracker = NewHeadVoteTracker(s, s.clClient, s.log)
+	s.headVoteTracker = NewHeadVoteTracker(s.cfg, s, s.clClient, s.log)
 	s.headVoteTracker.Start(s.ctx)
 
 	// Subscribe to head events to detect epoch transitions

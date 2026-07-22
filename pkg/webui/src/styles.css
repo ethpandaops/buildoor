@@ -189,6 +189,31 @@
   z-index: 10;
 }
 
+/* Vote threshold reference line label (right edge, at threshold height) */
+.head-votes-threshold-label {
+  position: absolute;
+  right: 2px;
+  transform: translateY(50%);
+  font-size: 9px;
+  line-height: 1;
+  color: rgba(255, 193, 7, 0.9);
+  z-index: 11;
+  pointer-events: none;
+}
+
+/* Marker dot on the participation curve where the threshold was crossed */
+.head-votes-met-marker {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #28a745;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  transform: translate(-50%, 50%);
+  z-index: 11;
+  pointer-events: none;
+}
+
 /* Event rows - positioned dynamically via inline styles */
 .event-row {
   position: absolute;
@@ -496,6 +521,8 @@
 .bg-reveal-failed { background: #dc3545; }
 .bg-reveal-skipped { background: #6c757d; }
 .bg-head-votes { background: #00bcd4; }
+.bg-vote-threshold { background: #ffc107; }
+.bg-vote-threshold-met { background: #28a745; }
 .bg-builder-api-delivered { background: #28a745; }
 .bg-builder-api-pending { background: #ffc107; }
 

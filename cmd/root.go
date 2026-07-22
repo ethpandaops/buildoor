@@ -89,6 +89,7 @@ func init() {
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
+	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
@@ -186,15 +187,16 @@ func initConfig() error {
 			StartSlot: v.GetUint64("schedule-start-slot"),
 		},
 		EPBS: config.EPBSConfig{
-			BuildStartTime:   v.GetInt64("build-start-time"),
-			BidStartTime:     v.GetInt64("epbs-bid-start"),
-			BidEndTime:       v.GetInt64("epbs-bid-end"),
-			RevealTime:       v.GetInt64("epbs-reveal-time"),
-			BidMinAmount:     v.GetUint64("epbs-bid-min"),
-			BidIncrease:      v.GetUint64("epbs-bid-increase"),
-			BidInterval:      v.GetInt64("epbs-bid-interval"),
-			BidSubsidy:       v.GetUint64("epbs-bid-subsidy"),
-			BidValueOverride: v.GetUint64("epbs-bid-value-override"),
+			BuildStartTime:       v.GetInt64("build-start-time"),
+			BidStartTime:         v.GetInt64("epbs-bid-start"),
+			BidEndTime:           v.GetInt64("epbs-bid-end"),
+			RevealTime:           v.GetInt64("epbs-reveal-time"),
+			BidMinAmount:         v.GetUint64("epbs-bid-min"),
+			BidIncrease:          v.GetUint64("epbs-bid-increase"),
+			BidInterval:          v.GetInt64("epbs-bid-interval"),
+			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
+			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
+			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 		},
 		PayloadBuildTime:            v.GetUint64("payload-build-time"),
 		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),

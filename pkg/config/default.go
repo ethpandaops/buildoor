@@ -28,10 +28,11 @@ func DefaultConfig() *Config {
 		EPBS: EPBSConfig{
 			// Timing fields: 0 = auto-compute from slot time (see ApplySlotDefaults).
 			// Explicit non-zero values override the auto-computed defaults.
-			BidMinAmount: 1000000,   // 1M gwei = 0.001 ETH
-			BidIncrease:  100000,    // 100k gwei per subsequent bid
-			BidInterval:  500,       // 500ms between bids
-			BidSubsidy:   100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
+			BidMinAmount:         1000000,   // 1M gwei = 0.001 ETH
+			BidIncrease:          100000,    // 100k gwei per subsequent bid
+			BidInterval:          500,       // 500ms between bids
+			BidSubsidy:           100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
+			HeadVoteThresholdPct: 60,        // Gloas builder payment quorum (6/10)
 		},
 	}
 }

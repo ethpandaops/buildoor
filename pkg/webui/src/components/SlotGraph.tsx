@@ -276,60 +276,126 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           const fadeOut = `${(1 - HEAD_VOTES_EXTEND / totalWidth) * 100}%`;
           const maxVote = state.headVotes.reduce((best, p) => p.pct > best.pct ? p : best, state.headVotes[0]);
 
+          // Threshold line + met marker: the curve turns green from the
+          // crossing point onward.
+          const thresholdPct = state.headVoteThresholdPct ?? 0;
+          const metAt = state.headVoteThresholdMetAt;
+          const metX = metAt !== undefined
+            ? ((metAt - slotStartTime - rangeStart) / totalRange) * 100
+            : null;
+          const metPoint = metAt !== undefined
+            ? state.headVotes.find(p => p.time === metAt)
+            : undefined;
+          const metOffset = metX !== null && totalWidth > 0
+            ? `${Math.max(0, Math.min(100, ((metX - startX) / totalWidth) * 100))}%`
+            : null;
+          const lineStroke = metOffset !== null ? `url(#hvline-${slot})` : '#00bcd4';
+
+          const popoverItems = [
+            { label: 'Max Participation', value: `${maxVote.pct.toFixed(1)}%` },
+            { label: 'Participating ETH', value: `${maxVote.eth.toLocaleString()} ETH` }
+          ];
+          if (maxVote.voteCount !== undefined) {
+            popoverItems.push({ label: 'Votes', value: maxVote.voteCount.toLocaleString() });
+          }
+          if (thresholdPct > 0) {
+            popoverItems.push({ label: 'Threshold', value: `${thresholdPct.toFixed(0)}%` });
+            popoverItems.push({
+              label: 'Threshold Met',
+              value: metAt !== undefined
+                ? `${((metAt - slotStartTime) / 1000).toFixed(1)}s into slot`
+                : 'no'
+            });
+          }
+
           return (
-            <svg
-              className="head-votes-graph"
-              viewBox="0 0 100 100"
-              preserveAspectRatio="none"
-              style={{ overflow: 'visible' }}
-            >
-              <defs>
-                <linearGradient id={`hvg-${slot}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="rgba(0, 188, 212, 0.3)" />
-                  <stop offset="100%" stopColor="rgba(0, 188, 212, 0.05)" />
-                </linearGradient>
-                <linearGradient
-                  id={`hvfade-${slot}`}
-                  gradientUnits="userSpaceOnUse"
-                  x1={String(startX)} y1="0" x2={String(endX)} y2="0"
+            <>
+              <svg
+                className="head-votes-graph"
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                style={{ overflow: 'visible' }}
+              >
+                <defs>
+                  <linearGradient id={`hvg-${slot}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(0, 188, 212, 0.3)" />
+                    <stop offset="100%" stopColor="rgba(0, 188, 212, 0.05)" />
+                  </linearGradient>
+                  {metOffset !== null && (
+                    <linearGradient
+                      id={`hvline-${slot}`}
+                      gradientUnits="userSpaceOnUse"
+                      x1={String(startX)} y1="0" x2={String(endX)} y2="0"
+                    >
+                      <stop offset={metOffset} stopColor="#00bcd4" />
+                      <stop offset={metOffset} stopColor="#28a745" />
+                    </linearGradient>
+                  )}
+                  <linearGradient
+                    id={`hvfade-${slot}`}
+                    gradientUnits="userSpaceOnUse"
+                    x1={String(startX)} y1="0" x2={String(endX)} y2="0"
+                  >
+                    <stop offset="0%" stopColor="white" stopOpacity="0" />
+                    <stop offset={fadeIn} stopColor="white" stopOpacity="1" />
+                    <stop offset={fadeOut} stopColor="white" stopOpacity="1" />
+                    <stop offset="100%" stopColor="white" stopOpacity="0" />
+                  </linearGradient>
+                  <mask id={`hvmask-${slot}`}>
+                    <rect x={startX} y="0" width={totalWidth} height="100" fill={`url(#hvfade-${slot})`} />
+                  </mask>
+                </defs>
+                {thresholdPct > 0 && (
+                  <line
+                    x1="0" y1={pctToY(thresholdPct)} x2="100" y2={pctToY(thresholdPct)}
+                    stroke="#ffc107" strokeWidth="1" strokeDasharray="4 3"
+                    vectorEffect="non-scaling-stroke" opacity="0.5"
+                  />
+                )}
+                <g mask={`url(#hvmask-${slot})`}>
+                  <path d={areaPath} fill={`url(#hvg-${slot})`} />
+                  <path d={linePath} fill="none" stroke={lineStroke} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                </g>
+                {/* Wider invisible hit area for click interaction */}
+                <path
+                  d={linePath}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth="12"
+                  vectorEffect="non-scaling-stroke"
+                  style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPopover({
+                      data: {
+                        title: 'Head Vote Participation',
+                        items: popoverItems
+                      },
+                      x: Math.min(e.clientX, window.innerWidth - 330),
+                      y: e.clientY + 10
+                    });
+                  }}
+                />
+              </svg>
+              {thresholdPct > 0 && (
+                <span
+                  className="head-votes-threshold-label"
+                  style={{ bottom: `${Math.min(100, thresholdPct)}%` }}
                 >
-                  <stop offset="0%" stopColor="white" stopOpacity="0" />
-                  <stop offset={fadeIn} stopColor="white" stopOpacity="1" />
-                  <stop offset={fadeOut} stopColor="white" stopOpacity="1" />
-                  <stop offset="100%" stopColor="white" stopOpacity="0" />
-                </linearGradient>
-                <mask id={`hvmask-${slot}`}>
-                  <rect x={startX} y="0" width={totalWidth} height="100" fill={`url(#hvfade-${slot})`} />
-                </mask>
-              </defs>
-              <g mask={`url(#hvmask-${slot})`}>
-                <path d={areaPath} fill={`url(#hvg-${slot})`} />
-                <path d={linePath} fill="none" stroke="#00bcd4" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-              </g>
-              {/* Wider invisible hit area for click interaction */}
-              <path
-                d={linePath}
-                fill="none"
-                stroke="transparent"
-                strokeWidth="12"
-                vectorEffect="non-scaling-stroke"
-                style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPopover({
-                    data: {
-                      title: 'Head Vote Participation',
-                      items: [
-                        { label: 'Max Participation', value: `${maxVote.pct.toFixed(1)}%` },
-                        { label: 'Participating ETH', value: `${maxVote.eth.toLocaleString()} ETH` }
-                      ]
-                    },
-                    x: Math.min(e.clientX, window.innerWidth - 330),
-                    y: e.clientY + 10
-                  });
-                }}
-              />
-            </svg>
+                  {thresholdPct.toFixed(0)}%
+                </span>
+              )}
+              {metX !== null && metX >= 0 && metX <= 100 && (
+                <div
+                  className="head-votes-met-marker"
+                  style={{
+                    left: `${metX}%`,
+                    bottom: `${Math.min(100, metPoint?.pct ?? thresholdPct)}%`
+                  }}
+                  title="Vote threshold met"
+                />
+              )}
+            </>
           );
         })()}
 

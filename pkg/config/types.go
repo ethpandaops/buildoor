@@ -153,6 +153,14 @@ type EPBSConfig struct {
 	// block value. BidIncrease still applies per subsequent bid. Per-slot action
 	// plans override this per slot.
 	BidValueOverride uint64 `yaml:"bid_value_override" json:"bid_value_override"`
+
+	// HeadVoteThresholdPct is the head-vote participation threshold in percent
+	// (0-100) the vote tracker reports against: crossing it fires an immediate
+	// update with threshold_met set. 0 disables threshold checking. The default
+	// (60) mirrors the Gloas builder payment quorum
+	// (BUILDER_PAYMENT_THRESHOLD_NUMERATOR/DENOMINATOR = 6/10) — the
+	// participation level at which the builder's payment actually settles.
+	HeadVoteThresholdPct uint64 `yaml:"head_vote_threshold_pct" json:"head_vote_threshold_pct"`
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.
