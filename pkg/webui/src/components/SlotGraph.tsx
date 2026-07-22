@@ -33,37 +33,88 @@ const pctToY = (pct: number): number => {
   return 100 - Math.max(0, Math.min(100, pct));
 };
 
-// Builds extended SVG paths with horizontal extensions that fade at the edges.
+// A no-change run wider than this (viewBox units) fades out in the middle
+// instead of drawing a solid flat line across it.
+const HEAD_VOTES_GAP_MIN = 12;
+// Fade length at the edges of a faded-out run.
+const HEAD_VOTES_GAP_FADE = 4;
+
+interface FadeStop {
+  offset: number; // 0..1 across [startX, endX]
+  opacity: number;
+}
+
+// Builds the participation step path plus its visibility gradient stops.
+// Participation is a step function — it only rises when a vote arrives — so
+// segments run horizontally at the reached level and jump vertically at each
+// data point. Long no-change ranges (e.g. between the early raw votes and the
+// late aggregates) fade out and back in rather than drawing a solid line
+// across the whole slot.
 const buildHeadVotesPaths = (
   points: HeadVoteDataPoint[],
   slotStartTime: number,
   rangeStart: number,
   totalRange: number
-): { linePath: string; areaPath: string; startX: number; endX: number } | null => {
+): {
+  linePath: string;
+  areaPath: string;
+  startX: number;
+  endX: number;
+  fadeStops: FadeStop[];
+} | null => {
   if (points.length === 0) return null;
 
-  const coords = points.map(p => ({
-    x: ((p.time - slotStartTime - rangeStart) / totalRange) * 100,
-    y: pctToY(p.pct)
-  }));
+  const coords = points
+    .map(p => ({
+      x: ((p.time - slotStartTime - rangeStart) / totalRange) * 100,
+      y: pctToY(p.pct)
+    }))
+    .sort((a, b) => a.x - b.x);
 
-  const firstY = coords[0].y;
-  const lastY = coords[coords.length - 1].y;
   const startX = coords[0].x - HEAD_VOTES_EXTEND;
   const endX = coords[coords.length - 1].x + HEAD_VOTES_EXTEND;
+  const totalWidth = endX - startX;
 
-  // Line: horizontal extension left -> data points -> horizontal extension right
-  const parts = [
-    `M ${startX} ${firstY}`,
-    ...coords.map(c => `L ${c.x} ${c.y}`),
-    `L ${endX} ${lastY}`
-  ];
+  // Step path: hold the previous level to each point's x, then jump.
+  const parts = [`M ${startX} ${coords[0].y}`];
+  let prevY = coords[0].y;
+
+  for (const c of coords) {
+    parts.push(`L ${c.x} ${prevY}`);
+    if (c.y !== prevY) {
+      parts.push(`L ${c.x} ${c.y}`);
+      prevY = c.y;
+    }
+  }
+  parts.push(`L ${endX} ${prevY}`);
+
   const linePath = parts.join(' ');
 
   // Close via bottom for gradient fill area
   const areaPath = `${linePath} L ${endX} 100 L ${startX} 100 Z`;
 
-  return { linePath, areaPath, startX, endX };
+  // Visibility stops: fade in at the left edge, fade out/in across long
+  // no-change runs, fade out at the right edge.
+  const off = (x: number): number => Math.max(0, Math.min(1, (x - startX) / totalWidth));
+  const fadeStops: FadeStop[] = [
+    { offset: 0, opacity: 0 },
+    { offset: off(coords[0].x), opacity: 1 }
+  ];
+
+  for (let i = 1; i < coords.length; i++) {
+    const gap = coords[i].x - coords[i - 1].x;
+    if (gap > HEAD_VOTES_GAP_MIN) {
+      fadeStops.push({ offset: off(coords[i - 1].x), opacity: 1 });
+      fadeStops.push({ offset: off(coords[i - 1].x + HEAD_VOTES_GAP_FADE), opacity: 0 });
+      fadeStops.push({ offset: off(coords[i].x - HEAD_VOTES_GAP_FADE), opacity: 0 });
+      fadeStops.push({ offset: off(coords[i].x), opacity: 1 });
+    }
+  }
+
+  fadeStops.push({ offset: off(coords[coords.length - 1].x), opacity: 1 });
+  fadeStops.push({ offset: 1, opacity: 0 });
+
+  return { linePath, areaPath, startX, endX, fadeStops };
 };
 
 export const SlotGraph: React.FC<SlotGraphProps> = ({
@@ -270,22 +321,18 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           const paths = buildHeadVotesPaths(state.headVotes, slotStartTime, rangeStart, totalRange);
           if (!paths) return null;
 
-          const { linePath, areaPath, startX, endX } = paths;
+          const { linePath, areaPath, startX, endX, fadeStops } = paths;
           const totalWidth = endX - startX;
-          const fadeIn = `${(HEAD_VOTES_EXTEND / totalWidth) * 100}%`;
-          const fadeOut = `${(1 - HEAD_VOTES_EXTEND / totalWidth) * 100}%`;
           const maxVote = state.headVotes.reduce((best, p) => p.pct > best.pct ? p : best, state.headVotes[0]);
 
-          // Threshold line + met marker: the curve turns green from the
-          // crossing point onward.
+          // Threshold-met marker: the curve turns green from the crossing
+          // point onward; the marker sits at the threshold height on the
+          // crossing jump.
           const thresholdPct = state.headVoteThresholdPct ?? 0;
           const metAt = state.headVoteThresholdMetAt;
           const metX = metAt !== undefined
             ? ((metAt - slotStartTime - rangeStart) / totalRange) * 100
             : null;
-          const metPoint = metAt !== undefined
-            ? state.headVotes.find(p => p.time === metAt)
-            : undefined;
           const metOffset = metX !== null && totalWidth > 0
             ? `${Math.max(0, Math.min(100, ((metX - startX) / totalWidth) * 100))}%`
             : null;
@@ -336,22 +383,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     gradientUnits="userSpaceOnUse"
                     x1={String(startX)} y1="0" x2={String(endX)} y2="0"
                   >
-                    <stop offset="0%" stopColor="white" stopOpacity="0" />
-                    <stop offset={fadeIn} stopColor="white" stopOpacity="1" />
-                    <stop offset={fadeOut} stopColor="white" stopOpacity="1" />
-                    <stop offset="100%" stopColor="white" stopOpacity="0" />
+                    {fadeStops.map((s, i) => (
+                      <stop
+                        key={i}
+                        offset={`${(s.offset * 100).toFixed(2)}%`}
+                        stopColor="white"
+                        stopOpacity={s.opacity}
+                      />
+                    ))}
                   </linearGradient>
                   <mask id={`hvmask-${slot}`}>
                     <rect x={startX} y="0" width={totalWidth} height="100" fill={`url(#hvfade-${slot})`} />
                   </mask>
                 </defs>
-                {thresholdPct > 0 && (
-                  <line
-                    x1="0" y1={pctToY(thresholdPct)} x2="100" y2={pctToY(thresholdPct)}
-                    stroke="#ffc107" strokeWidth="1" strokeDasharray="4 3"
-                    vectorEffect="non-scaling-stroke" opacity="0.5"
-                  />
-                )}
                 <g mask={`url(#hvmask-${slot})`}>
                   <path d={areaPath} fill={`url(#hvg-${slot})`} />
                   <path d={linePath} fill="none" stroke={lineStroke} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
@@ -377,22 +421,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   }}
                 />
               </svg>
-              {thresholdPct > 0 && (
-                <span
-                  className="head-votes-threshold-label"
-                  style={{ bottom: `${Math.min(100, thresholdPct)}%` }}
-                >
-                  {thresholdPct.toFixed(0)}%
-                </span>
-              )}
               {metX !== null && metX >= 0 && metX <= 100 && (
                 <div
                   className="head-votes-met-marker"
                   style={{
                     left: `${metX}%`,
-                    bottom: `${Math.min(100, metPoint?.pct ?? thresholdPct)}%`
+                    bottom: `${Math.min(100, thresholdPct)}%`
                   }}
-                  title="Vote threshold met"
+                  title={`Vote threshold (${thresholdPct.toFixed(0)}%) met`}
                 />
               )}
             </>

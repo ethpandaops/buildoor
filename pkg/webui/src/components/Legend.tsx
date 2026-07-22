@@ -10,7 +10,6 @@ export const Legend: React.FC = () => {
         <span><span className="legend-dot bg-external-bid"></span> External Bid</span>
         <span className="legend-section ms-2">Network:</span>
         <span><span className="legend-dot bg-head-votes"></span> Head Votes</span>
-        <span><span className="legend-dot bg-vote-threshold"></span> Vote Threshold</span>
         <span><span className="legend-dot bg-vote-threshold-met"></span> Threshold Met</span>
         <span className="legend-section ms-2">Builder:</span>
         <span><span className="legend-dot bg-payload-attributes"></span> Payload Attributes</span>
