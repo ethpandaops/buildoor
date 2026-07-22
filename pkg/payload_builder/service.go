@@ -69,6 +69,7 @@ type Service struct {
 	scheduledBuildMu  sync.Mutex
 	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
 	skipFiredSlots    map[phase0.Slot]bool // Slots a BuildSkippedEvent was fired for (dedup per slot)
+	attrFallbackArmed map[phase0.Slot]bool // Slots a missing-attributes fallback check is armed for
 
 	// Payload inclusion tracking (deduplication between detection methods)
 	wonPayloadsMu sync.Mutex
@@ -123,6 +124,7 @@ func NewService(
 		log:                    serviceLog,
 		buildStartedSlots:      make(map[phase0.Slot]bool),
 		skipFiredSlots:         make(map[phase0.Slot]bool, 16),
+		attrFallbackArmed:      make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
 	}
 
@@ -408,6 +410,11 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
+	// Arm the missing-block fallback for the NEXT proposal slot: if its
+	// block goes missing entirely, some clients never emit fresh attributes
+	// and this slot's attributes get re-used instead.
+	s.scheduleAttributesFallback(event.ProposalSlot + 1)
+
 	// Resolve the slot's immutable action plan snapshot once. The plan
 	// service is the scheduling authority: the frozen snapshot carries the
 	// complete build decision (schedule + plan force/suppress + timing).
@@ -472,6 +479,101 @@ func (s *Service) fireBuildSkipped(slot phase0.Slot, build *action_plan.Resolved
 		Slot:   slot,
 		Reason: reason,
 	})
+}
+
+// scheduleAttributesFallback arms a one-shot check for the given proposal
+// slot: some clients do not re-emit payload_attributes when a slot's block is
+// missing entirely, leaving the builder without a build trigger. If no
+// attributes for targetSlot arrived by its build start time, the parent
+// slot's attributes are re-used with the proposal slot advanced (see
+// applyAttributesFallback). Armed once per slot.
+func (s *Service) scheduleAttributesFallback(targetSlot phase0.Slot) {
+	s.scheduledBuildMu.Lock()
+
+	if s.attrFallbackArmed[targetSlot] {
+		s.scheduledBuildMu.Unlock()
+		return
+	}
+
+	s.attrFallbackArmed[targetSlot] = true
+
+	if targetSlot > 64 {
+		cutoff := targetSlot - 64
+		for oldSlot := range s.attrFallbackArmed {
+			if oldSlot < cutoff {
+				delete(s.attrFallbackArmed, oldSlot)
+			}
+		}
+	}
+	s.scheduledBuildMu.Unlock()
+
+	// Fire at the slot's (globally configured) build start time: real
+	// attributes would have arrived long before it, and synthesizing then
+	// leaves the normal scheduling path an immediate build.
+	fireAt := s.chainSvc.SlotToTime(targetSlot).
+		Add(time.Duration(s.cfg.EPBS.BuildStartTime) * time.Millisecond)
+
+	time.AfterFunc(max(time.Until(fireAt), 0), func() {
+		s.applyAttributesFallback(targetSlot)
+	})
+}
+
+// attrFallbackLookback bounds how many slots the missing-block fallback
+// searches backwards for the last received payload attributes (covers runs
+// of consecutive missing blocks).
+const attrFallbackLookback = 8
+
+// applyAttributesFallback re-uses the last available payload attributes for
+// targetSlot when the beacon node never emitted any (missing block): the
+// proposal slot advances and the timestamp moves forward by the number of
+// skipped slots — every other property stays identical, since no new block
+// was built on top. Runs of multiple missing blocks are covered by searching
+// back up to attrFallbackLookback slots. The synthesized event is injected
+// into the event stream (cache + dispatch), so it flows through the exact
+// same build path as a node-received one.
+func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
+	if s.clClient == nil || s.ctx == nil || s.ctx.Err() != nil {
+		return
+	}
+
+	events := s.clClient.Events()
+
+	if events.GetLatestPayloadAttributes(targetSlot) != nil {
+		return // real attributes arrived; nothing to do
+	}
+
+	// Find the last slot we actually received (or previously synthesized)
+	// attributes for.
+	var parent *beacon.PayloadAttributesEvent
+
+	for lookback := phase0.Slot(1); lookback <= attrFallbackLookback && lookback <= targetSlot; lookback++ {
+		if parent = events.GetLatestPayloadAttributes(targetSlot - lookback); parent != nil {
+			break
+		}
+	}
+
+	if parent == nil {
+		return
+	}
+
+	skippedSlots := uint64(targetSlot - parent.ProposalSlot)
+
+	synthesized := *parent
+	synthesized.ProposalSlot = targetSlot
+	synthesized.Timestamp = parent.Timestamp +
+		skippedSlots*uint64(s.chainSvc.GetChainSpec().SecondsPerSlot.Seconds())
+
+	if !events.InjectPayloadAttributes(&synthesized) {
+		return // lost the race against a real event
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":          targetSlot,
+		"attrs_from":    parent.ProposalSlot,
+		"missing_slots": skippedSlots,
+		"parent_hash":   fmt.Sprintf("%x", synthesized.ParentBlockHash[:8]),
+	}).Info("No payload attributes received for slot (block missing?), " +
+		"re-using the last available attributes")
 }
 
 // scheduleBuildForSlot schedules payload building for the given slot.

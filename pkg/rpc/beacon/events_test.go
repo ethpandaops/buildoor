@@ -137,3 +137,26 @@ func TestParseSingleAttestationEvent_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// TestInjectPayloadAttributes caches and dispatches synthesized attributes,
+// but never overwrites a slot that already has node-received attributes.
+func TestInjectPayloadAttributes(t *testing.T) {
+	stream := NewEventStream(&Client{})
+	sub := stream.SubscribePayloadAttributes()
+	defer sub.Unsubscribe()
+
+	synthesized := &PayloadAttributesEvent{ProposalSlot: 10, ParentBlockNumber: 9}
+	require.True(t, stream.InjectPayloadAttributes(synthesized))
+	assert.Equal(t, synthesized, stream.GetLatestPayloadAttributes(10))
+
+	select {
+	case got := <-sub.Channel():
+		assert.Equal(t, synthesized, got)
+	default:
+		t.Fatal("expected the injected event to be dispatched")
+	}
+
+	// A second injection for the same slot is dropped (the cached event wins).
+	require.False(t, stream.InjectPayloadAttributes(&PayloadAttributesEvent{ProposalSlot: 10}))
+	assert.Equal(t, synthesized, stream.GetLatestPayloadAttributes(10))
+}

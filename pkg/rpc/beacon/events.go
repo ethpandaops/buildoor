@@ -304,6 +304,28 @@ func (e *EventStream) GetLatestPayloadAttributes(slot phase0.Slot) *PayloadAttri
 	return e.payloadAttrCache[slot]
 }
 
+// InjectPayloadAttributes caches and dispatches a locally synthesized
+// payload_attributes event exactly like one received from the beacon node
+// (used by the missing-block fallback: some clients do not re-emit attributes
+// when a slot's block is missing entirely). A node-received event for the
+// slot always wins: injection is dropped if one arrived in the meantime.
+// Returns whether the event was injected.
+func (e *EventStream) InjectPayloadAttributes(event *PayloadAttributesEvent) bool {
+	e.payloadAttrCacheMu.Lock()
+
+	if _, exists := e.payloadAttrCache[event.ProposalSlot]; exists {
+		e.payloadAttrCacheMu.Unlock()
+		return false
+	}
+
+	e.payloadAttrCache[event.ProposalSlot] = event
+	e.payloadAttrCacheMu.Unlock()
+
+	e.payloadAttributesDispatcher.Fire(event)
+
+	return true
+}
+
 // CleanupPayloadAttributesCache removes cached payload_attributes entries
 // for slots older than beforeSlot.
 func (e *EventStream) CleanupPayloadAttributesCache(beforeSlot phase0.Slot) {
