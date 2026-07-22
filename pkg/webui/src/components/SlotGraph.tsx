@@ -29,31 +29,82 @@ interface PopoverState {
   headVoteSlot?: number;
 }
 
-// Extension in viewBox units (~50px at typical container widths).
-const HEAD_VOTES_EXTEND = 5;
-
 // Maps participation percentage (0-100) to SVG Y coordinate (100=bottom, 0=top).
 const pctToY = (pct: number): number => {
   return 100 - Math.max(0, Math.min(100, pct));
 };
 
-// A no-change run wider than this (viewBox units) fades out in the middle
-// instead of drawing a solid flat line across it.
-const HEAD_VOTES_GAP_MIN = 12;
-// Fade length at the edges of a faded-out run.
-const HEAD_VOTES_GAP_FADE = 4;
+// Glow band heights below the line (viewBox units): stacked translucent
+// bands approximate a soft gradient hanging under the curve — wide enough
+// to read as a filled area, fading out well before the bottom. Painted
+// outer to inner; opacities accumulate towards the line.
+const HEAD_VOTES_BANDS: { height: number; opacity: number }[] = [
+  { height: 30, opacity: 0.02 },
+  { height: 20, opacity: 0.035 },
+  { height: 12, opacity: 0.055 },
+  { height: 6, opacity: 0.08 },
+];
 
-interface FadeStop {
-  offset: number; // 0..1 across [startX, endX]
-  opacity: number;
+// After the last data point the line (and its glow) extend this far and
+// fade out, so the curve visibly "runs off" instead of stopping abruptly.
+const HEAD_VOTES_EXTEND = 8;
+
+// Corner radius of the rounded steps, per axis. The viewBox is stretched
+// (100 units span ~600-1000px horizontally but only ~50-70px vertically),
+// so a visually circular ~3px corner needs very different unit radii.
+const HEAD_VOTES_CORNER_RX = 0.5;
+const HEAD_VOTES_CORNER_RY = 5;
+
+interface StepPoint {
+  x: number;
+  y: number;
 }
 
-// Builds the participation step path plus its visibility gradient stops.
+// roundedStepPath renders an orthogonal step polyline with rounded corners
+// (quadratic curves shortcutting each 90° turn) so the curve reads as a
+// designed chart rather than blocky steps. Returns the path without the
+// leading M command so callers can compose closed regions from it.
+const roundedStepPath = (pts: StepPoint[]): string => {
+  const segments: string[] = [];
+
+  for (let i = 1; i < pts.length; i++) {
+    const prev = pts[i - 1];
+    const cur = pts[i];
+    const next = pts[i + 1];
+
+    if (!next) {
+      segments.push(`L ${cur.x} ${cur.y}`);
+      break;
+    }
+
+    // Per-axis corner radii, clamped to half the adjoining segment lengths.
+    const horizontalIn = cur.y === prev.y;
+    const inLen = horizontalIn ? Math.abs(cur.x - prev.x) : Math.abs(cur.y - prev.y);
+    const outLen = horizontalIn ? Math.abs(next.y - cur.y) : Math.abs(next.x - cur.x);
+    const rIn = Math.min(horizontalIn ? HEAD_VOTES_CORNER_RX : HEAD_VOTES_CORNER_RY, inLen / 2);
+    const rOut = Math.min(horizontalIn ? HEAD_VOTES_CORNER_RY : HEAD_VOTES_CORNER_RX, outLen / 2);
+
+    const dirInX = Math.sign(cur.x - prev.x);
+    const dirInY = Math.sign(cur.y - prev.y);
+    const dirOutX = Math.sign(next.x - cur.x);
+    const dirOutY = Math.sign(next.y - cur.y);
+
+    const approach = { x: cur.x - dirInX * rIn, y: cur.y - dirInY * rIn };
+    const depart = { x: cur.x + dirOutX * rOut, y: cur.y + dirOutY * rOut };
+
+    segments.push(`L ${approach.x} ${approach.y}`);
+    segments.push(`Q ${cur.x} ${cur.y} ${depart.x} ${depart.y}`);
+  }
+
+  return segments.join(' ');
+};
+
+// Builds the participation step path plus the glow bands below it.
 // Participation is a step function — it only rises when a vote arrives — so
 // segments run horizontally at the reached level and jump vertically at each
-// data point. Long no-change ranges (e.g. between the early raw votes and the
-// late aggregates) fade out and back in rather than drawing a solid line
-// across the whole slot.
+// data point (with rounded corners). The graph is deliberately subtle
+// background information: a thin translucent line with a faint under-glow,
+// no area fill.
 const buildHeadVotesPaths = (
   points: HeadVoteDataPoint[],
   slotStartTime: number,
@@ -61,10 +112,10 @@ const buildHeadVotesPaths = (
   totalRange: number
 ): {
   linePath: string;
-  areaPath: string;
+  bands: { path: string; opacity: number }[]; // outer first (painted in order)
   startX: number;
   endX: number;
-  fadeStops: FadeStop[];
+  fadeFromX: number; // last data point; the fade-out runs from here to endX
 } | null => {
   if (points.length === 0) return null;
 
@@ -75,50 +126,46 @@ const buildHeadVotesPaths = (
     }))
     .sort((a, b) => a.x - b.x);
 
-  const startX = coords[0].x - HEAD_VOTES_EXTEND;
-  const endX = coords[coords.length - 1].x + HEAD_VOTES_EXTEND;
-  const totalWidth = endX - startX;
-
-  // Step path: hold the previous level to each point's x, then jump.
-  const parts = [`M ${startX} ${coords[0].y}`];
+  // Step waypoints: hold the previous level to each point's x, then jump.
+  const pts: StepPoint[] = [{ x: coords[0].x, y: coords[0].y }];
   let prevY = coords[0].y;
 
-  for (const c of coords) {
-    parts.push(`L ${c.x} ${prevY}`);
+  for (let i = 1; i < coords.length; i++) {
+    const c = coords[i];
+    pts.push({ x: c.x, y: prevY });
     if (c.y !== prevY) {
-      parts.push(`L ${c.x} ${c.y}`);
+      pts.push({ x: c.x, y: c.y });
       prevY = c.y;
     }
   }
-  parts.push(`L ${endX} ${prevY}`);
 
-  const linePath = parts.join(' ');
+  // Fading run-off past the last data point (clamped to the cell edge).
+  const fadeFromX = pts[pts.length - 1].x;
+  const extendX = Math.min(fadeFromX + HEAD_VOTES_EXTEND, 100);
 
-  // Close via bottom for gradient fill area
-  const areaPath = `${linePath} L ${endX} 100 L ${startX} 100 Z`;
-
-  // Visibility stops: fade in at the left edge, fade out/in across long
-  // no-change runs, fade out at the right edge.
-  const off = (x: number): number => Math.max(0, Math.min(1, (x - startX) / totalWidth));
-  const fadeStops: FadeStop[] = [
-    { offset: 0, opacity: 0 },
-    { offset: off(coords[0].x), opacity: 1 }
-  ];
-
-  for (let i = 1; i < coords.length; i++) {
-    const gap = coords[i].x - coords[i - 1].x;
-    if (gap > HEAD_VOTES_GAP_MIN) {
-      fadeStops.push({ offset: off(coords[i - 1].x), opacity: 1 });
-      fadeStops.push({ offset: off(coords[i - 1].x + HEAD_VOTES_GAP_FADE), opacity: 0 });
-      fadeStops.push({ offset: off(coords[i].x - HEAD_VOTES_GAP_FADE), opacity: 0 });
-      fadeStops.push({ offset: off(coords[i].x), opacity: 1 });
-    }
+  if (extendX > fadeFromX) {
+    pts.push({ x: extendX, y: prevY });
   }
 
-  fadeStops.push({ offset: off(coords[coords.length - 1].x), opacity: 1 });
-  fadeStops.push({ offset: 1, opacity: 0 });
+  const start = `M ${pts[0].x} ${pts[0].y}`;
+  const linePath = pts.length > 1 ? `${start} ${roundedStepPath(pts)}` : start;
 
-  return { linePath, areaPath, startX, endX, fadeStops };
+  // A band is the closed region between the (rounded) line and the line
+  // shifted down by h (clamped to the bottom; the hidden underside stays
+  // unrounded — invisible at these opacities).
+  const band = (h: number): string =>
+    linePath +
+    ' L ' +
+    [...pts].reverse().map(p => `${p.x} ${Math.min(100, p.y + h)}`).join(' L ') +
+    ' Z';
+
+  return {
+    linePath,
+    bands: HEAD_VOTES_BANDS.map(b => ({ path: band(b.height), opacity: b.opacity })),
+    startX: pts[0].x,
+    endX: pts[pts.length - 1].x,
+    fadeFromX
+  };
 };
 
 export const SlotGraph: React.FC<SlotGraphProps> = ({
@@ -337,8 +384,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           const paths = buildHeadVotesPaths(state.headVotes, slotStartTime, rangeStart, totalRange);
           if (!paths) return null;
 
-          const { linePath, areaPath, startX, endX, fadeStops } = paths;
+          const { linePath, bands, startX, endX, fadeFromX } = paths;
           const totalWidth = endX - startX;
+          const fadeOffset = totalWidth > 0
+            ? `${Math.max(0, Math.min(100, ((fadeFromX - startX) / totalWidth) * 100))}%`
+            : '100%';
           const maxVote = state.headVotes.reduce((best, p) => p.pct > best.pct ? p : best, state.headVotes[0]);
 
           // Threshold-met marker: the curve turns green from the crossing
@@ -380,10 +430,6 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 style={{ overflow: 'visible' }}
               >
                 <defs>
-                  <linearGradient id={`hvg-${slot}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="rgba(0, 188, 212, 0.3)" />
-                    <stop offset="100%" stopColor="rgba(0, 188, 212, 0.05)" />
-                  </linearGradient>
                   {metOffset !== null && (
                     <linearGradient
                       id={`hvline-${slot}`}
@@ -394,27 +440,35 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                       <stop offset={metOffset} stopColor="#28a745" />
                     </linearGradient>
                   )}
+                  {/* Fade-out over the run-off past the last data point */}
                   <linearGradient
                     id={`hvfade-${slot}`}
                     gradientUnits="userSpaceOnUse"
                     x1={String(startX)} y1="0" x2={String(endX)} y2="0"
                   >
-                    {fadeStops.map((s, i) => (
-                      <stop
-                        key={i}
-                        offset={`${(s.offset * 100).toFixed(2)}%`}
-                        stopColor="white"
-                        stopOpacity={s.opacity}
-                      />
-                    ))}
+                    <stop offset="0%" stopColor="white" stopOpacity="1" />
+                    <stop offset={fadeOffset} stopColor="white" stopOpacity="1" />
+                    <stop offset="100%" stopColor="white" stopOpacity="0" />
                   </linearGradient>
                   <mask id={`hvmask-${slot}`}>
                     <rect x={startX} y="0" width={totalWidth} height="100" fill={`url(#hvfade-${slot})`} />
                   </mask>
                 </defs>
                 <g mask={`url(#hvmask-${slot})`}>
-                  <path d={areaPath} fill={`url(#hvg-${slot})`} />
-                  <path d={linePath} fill="none" stroke={lineStroke} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                  {/* Soft under-glow: stacked translucent bands below the line */}
+                  {bands.map((b, i) => (
+                    <path key={i} d={b.path} fill={`rgba(0, 188, 212, ${b.opacity})`} />
+                  ))}
+                  <path
+                    d={linePath}
+                    fill="none"
+                    stroke={lineStroke}
+                    strokeWidth="1"
+                    strokeOpacity="0.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
                 </g>
                 {/* Wider invisible hit area for click interaction */}
                 <path

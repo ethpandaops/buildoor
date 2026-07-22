@@ -1,5 +1,7 @@
 import React from 'react';
 
+// Two-row legend: chain/network/voting context on top, our own
+// bidder / Builder API events below.
 export const Legend: React.FC = () => {
   return (
     <div className="mt-2">
@@ -8,13 +10,16 @@ export const Legend: React.FC = () => {
         <span><span className="legend-dot bg-block-received"></span> Block</span>
         <span><span className="legend-dot bg-payload-received"></span> Payload Envelope</span>
         <span><span className="legend-dot bg-external-bid"></span> External Bid</span>
-        <span className="legend-section ms-2">Network:</span>
-        <span><span className="legend-dot bg-head-votes"></span> Head Votes</span>
-        <span><span className="legend-dot bg-vote-threshold-met"></span> Threshold Met</span>
         <span className="legend-section ms-2">Builder:</span>
         <span><span className="legend-dot bg-payload-attributes"></span> Payload Attributes</span>
         <span><span className="legend-dot bg-payload-created"></span> Payload Created</span>
         <span><span className="legend-dot bg-build-failed"></span> Build Failed</span>
+        <span className="legend-section ms-2">Voting:</span>
+        <span><span className="legend-line legend-line-head-votes"></span> Head Votes</span>
+        <span><span className="legend-dot bg-vote-threshold-met"></span> Threshold Met</span>
+      </div>
+      <div className="timeline-legend d-flex flex-wrap gap-2 small mt-1">
+        <span className="legend-section">Bidder:</span>
         <span><span className="legend-dot bg-bid-submitted"></span> Bid Submitted</span>
         <span><span className="legend-dot bg-bid-failed"></span> Bid Failed</span>
         <span><span className="legend-dot bg-reveal-sent"></span> Reveal</span>

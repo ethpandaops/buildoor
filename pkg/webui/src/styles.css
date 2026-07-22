@@ -648,8 +648,26 @@
 .bg-reveal-sent { background: #6f42c1; }
 .bg-reveal-failed { background: #dc3545; }
 .bg-reveal-skipped { background: #6c757d; }
-.bg-head-votes { background: #00bcd4; }
 .bg-vote-threshold-met { background: #28a745; }
+
+/* Line-style legend swatch (the head-votes curve is a thin dashed line, not
+   a marker dot). */
+.legend-line {
+  display: inline-block;
+  width: 14px;
+  margin-right: 3px;
+  vertical-align: middle;
+}
+
+.legend-line-head-votes {
+  border-top: 1px solid rgba(0, 188, 212, 0.7);
+}
+
+/* The legend swatch mirrors the on-graph threshold-met marker (green dot
+   with a white ring, see .head-votes-met-marker). */
+.legend-dot.bg-vote-threshold-met {
+  border: 1px solid rgba(255, 255, 255, 0.8);
+}
 .bg-builder-api-delivered { background: #28a745; }
 .bg-builder-api-pending { background: #ffc107; }
 
