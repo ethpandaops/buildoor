@@ -28,7 +28,10 @@ const DashboardPage: React.FC = () => {
     clearEvents
   } = useEventStream();
 
-  const { status: builderAPIStatus, loading: builderAPIStatusLoading } = useBuilderAPIStatus();
+  // Refetch the Builder API status card when the SSE-delivered enable flag
+  // flips — the background poll itself runs on the slow shared interval.
+  const { status: builderAPIStatus, loading: builderAPIStatusLoading } =
+    useBuilderAPIStatus(serviceStatus?.builder_api_enabled);
 
   // The events panel must scroll internally rather than expand the page. A pure
   // CSS flex chain can't express "fill remaining viewport height, OR match the

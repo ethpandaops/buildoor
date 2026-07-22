@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { REFRESH_INTERVAL_SLOW_MS } from './refreshIntervals';
 import type { BuilderPreference, BuilderPreferencesResponse } from '../types';
 
 export function useBuilderPreferences() {
@@ -39,8 +40,8 @@ export function useBuilderPreferences() {
 
   useEffect(() => {
     fetchPreferences();
-    // Poll every 12 seconds (one slot) — proposers submit preferences ahead of their slot
-    const interval = setInterval(fetchPreferences, 12000);
+    // Builder preferences change rarely; slow aligned background refresh.
+    const interval = setInterval(fetchPreferences, REFRESH_INTERVAL_SLOW_MS);
     return () => clearInterval(interval);
   }, []);
 
