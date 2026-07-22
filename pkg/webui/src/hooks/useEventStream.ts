@@ -365,8 +365,16 @@ export function useEventStream(): UseEventStreamResult {
           break;
         }
 
+        case 'reveal_started': {
+          const data = event.data as { slot: number; attempt: number; started_at: number };
+          updateSlotState(data.slot, {
+            revealInFlight: { attempt: data.attempt, startedAt: data.started_at }
+          });
+          break;
+        }
+
         case 'reveal': {
-          const data = event.data as { slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string; attempt?: number; max_attempts?: number };
+          const data = event.data as { slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string; attempt?: number; max_attempts?: number; started_at?: number; timestamp?: number };
           const failed = !data.success && !data.skipped;
           const attempt = data.attempt || 0;
           const maxAttempts = data.max_attempts || 0;
@@ -380,7 +388,8 @@ export function useEventStream(): UseEventStreamResult {
             const st = prev[data.slot] || { slot: data.slot };
             const revealAttempts: RevealAttempt[] = st.revealAttempts ? [...st.revealAttempts] : [];
             revealAttempts.push({
-              time: event.timestamp,
+              time: data.timestamp ?? event.timestamp,
+              startedAt: data.started_at || undefined,
               success: data.success,
               skipped: data.skipped,
               skipReason: data.skip_reason,
@@ -397,7 +406,8 @@ export function useEventStream(): UseEventStreamResult {
                 revealed: data.success,
                 revealSkipped: data.skipped,
                 revealFailed: failed,
-                revealSentAt: event.timestamp
+                revealSentAt: event.timestamp,
+                revealInFlight: undefined // the attempt completed
               }
             };
           });

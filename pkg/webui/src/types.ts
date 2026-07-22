@@ -162,8 +162,11 @@ export interface RevealEvent {
 }
 
 // A single payload reveal attempt (the reveal may be retried on failure).
+// startedAt/time bracket the attempt (construction + submit call); startedAt
+// is unset on skips where nothing was attempted.
 export interface RevealAttempt {
   time: number;
+  startedAt?: number;
   success: boolean;
   skipped: boolean;
   skipReason?: string;
@@ -237,6 +240,9 @@ export interface SlotState {
   revealFailed?: boolean;
   revealSentAt?: number;
   revealAttempts?: RevealAttempt[];
+  // Set while a reveal attempt's submit call is in flight (cleared by the
+  // completion event); drives the live-growing call span.
+  revealInFlight?: { attempt: number; startedAt: number };
   headVotes?: HeadVoteDataPoint[];
   headVoteThresholdPct?: number;
   headVoteThresholdMetAt?: number;
