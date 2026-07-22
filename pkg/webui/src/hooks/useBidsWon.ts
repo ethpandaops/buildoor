@@ -14,9 +14,9 @@ export function useBidsWon(offset: number, limit: number) {
 
     try {
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
-      const authHeader = authStore.getAuthHeader();
-      if (authHeader) {
-        headers['Authorization'] = authHeader;
+      const authToken = await authStore.getAuthHeader();
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
       }
 
       const response = await fetch(

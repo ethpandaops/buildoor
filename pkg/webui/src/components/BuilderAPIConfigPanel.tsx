@@ -43,7 +43,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
     setSaving(true);
     try {
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
-      const token = getAuthHeader();
+      const token = await getAuthHeader();
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
@@ -67,7 +67,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
     e.stopPropagation();
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const token = getAuthHeader();
+    const token = await getAuthHeader();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }

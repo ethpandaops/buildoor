@@ -10,7 +10,8 @@ type FrontendConfig struct {
 
 	// AuthProviderURL is the canonical URL of the remote authenticatoor
 	// service. Tokens are validated against its JWKS, and the SPA picks
-	// it up via /api/runtime-config to load <url>/client.js.
+	// it up via /api/runtime-config to load <url>/client-v2.js (the
+	// shared-session client with automatic token refresh).
 	AuthProviderURL string
 
 	// InjectHeadHTML is a raw HTML snippet (typically <script>/<meta>/<link>
