@@ -146,6 +146,50 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/action-plan/test-transform": {
+            "post": {
+                "description": "Runs an operator jq expression against a sample payload / bid /\nenvelope (a captured artifact when sample_slot is given and\navailable, otherwise a zero-value template of the object) and\nreturns the transformed JSON, so expressions can be built and\ntested live before being saved to a slot plan. Bid and envelope\ntransforms operate on the MESSAGE, matching production.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Evaluate a jq transform against a sample builder object",
+                "operationId": "testActionPlanTransform",
+                "parameters": [
+                    {
+                        "description": "Target, expression and optional sample slot",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.TestTransformRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.TestTransformResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/audit-log": {
             "get": {
                 "description": "Returns a paginated list of authenticated mutating actions. Empty when no state-db is configured.",
@@ -304,6 +348,75 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Builder API not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/head-votes/{slot}": {
+            "get": {
+                "description": "Returns the slot's raw single-attestation arrivals grouped by\nvalidator-ranges client name into fixed-width time buckets\nfrom the slot start, plus per-name totals and the count of\nattesters that landed on chain without being seen as singles.\nOnly slots still retained by the head vote tracker are served.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Per-name head-vote arrival heatmap for a slot",
+                "operationId": "getHeadVoteDetail",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Beacon block root (default: the slot's primary root)",
+                        "name": "root",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Bucket width in ms (default slot_ms/24, clamped to [50, slot_ms])",
+                        "name": "bucket_ms",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.HeadVoteDetailResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No vote detail retained for this slot",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Head vote tracker unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1298,6 +1411,15 @@ const docTemplate = `{
                 }
             }
         },
+        "action_plan.BuildPlan": {
+            "type": "object",
+            "properties": {
+                "reorg_parent_payload": {
+                    "description": "ReorgParentPayload builds on the grandparent (n-2) execution payload\ninstead of the immediate parent: the FCU head block hash and the payload\nattributes' withdrawals are taken from the PARENT slot's payload\nattributes (whose parent is n-2), while every other property comes from\nthe current slot. This is a deliberate parent-payload reorg attempt —\nrejected by mainnet forkchoice, but useful for exercising the reveal /\ninclusion path against a withheld parent.",
+                    "type": "boolean"
+                }
+            }
+        },
         "action_plan.BuilderAPIPlan": {
             "type": "object",
             "properties": {
@@ -1360,6 +1482,14 @@ const docTemplate = `{
                 },
                 "slot": {
                     "type": "integer"
+                },
+                "transforms": {
+                    "description": "Transforms carries the effective jq transform expressions (empty when no\ntransform plan applies). Nil only when no plan expression is set.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedTransforms"
+                        }
+                    ]
                 }
             }
         },
@@ -1378,6 +1508,12 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "bid": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "build": {
                     "type": "array",
                     "items": {
                         "type": "integer"
@@ -1418,6 +1554,12 @@ const docTemplate = `{
                 },
                 "to_slot": {
                     "type": "integer"
+                },
+                "transforms": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
                 }
             }
         },
@@ -1475,6 +1617,10 @@ const docTemplate = `{
                     "description": "PlanInvolved marks decisions where a per-slot plan existed or any\nconsumer was effectively active — i.e. skips worth surfacing.",
                     "type": "boolean"
                 },
+                "reorg_parent_payload": {
+                    "description": "ReorgParentPayload builds the slot's payload on the grandparent (n-2)\nexecution payload instead of the immediate parent — a deliberate\nparent-payload reorg attempt (see BuildPlan.ReorgParentPayload).",
+                    "type": "boolean"
+                },
                 "skip_reason": {
                     "description": "SkipReason is one of the BuildSkipReason* constants when Build is\nfalse, empty otherwise.",
                     "type": "string"
@@ -1503,26 +1649,71 @@ const docTemplate = `{
         "action_plan.ResolvedRevealSettings": {
             "type": "object",
             "properties": {
+                "broadcast_validation": {
+                    "description": "BroadcastValidation is the envelope submission's broadcast_validation\nlevel: gossip | consensus | consensus_and_equivocation.",
+                    "type": "string"
+                },
                 "bypass_deadline": {
                     "description": "BypassDeadline disables the \"past the in-slot deadline → skip\" check so\ndeliberately late reveals are attempted.",
                     "type": "boolean"
+                },
+                "gate_mode": {
+                    "description": "GateMode decides the reveal moment: time | vote | vote_or_time |\nvote_and_time.",
+                    "type": "string"
+                },
+                "max_attempts": {
+                    "description": "MaxAttempts / RetryIntervalMs are the publish retry policy\n(global-only, no per-slot override).",
+                    "type": "integer"
+                },
+                "retry_interval_ms": {
+                    "type": "integer"
                 },
                 "reveal_time_ms": {
                     "type": "integer"
                 },
                 "suppressed": {
                     "type": "boolean"
+                },
+                "vote_threshold_pct": {
+                    "description": "VoteThresholdPct is the participation threshold (percent) opening the\nvote gate.",
+                    "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedTransforms": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "type": "string"
+                },
+                "envelope": {
+                    "type": "string"
+                },
+                "payload": {
+                    "type": "string"
                 }
             }
         },
         "action_plan.RevealPlan": {
             "type": "object",
             "properties": {
+                "broadcast_validation": {
+                    "description": "BroadcastValidation overrides the envelope submission's broadcast\nvalidation level: gossip | consensus | consensus_and_equivocation.",
+                    "type": "string"
+                },
+                "gate_mode": {
+                    "description": "GateMode overrides the reveal gate: time | vote | vote_or_time |\nvote_and_time.",
+                    "type": "string"
+                },
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 },
                 "reveal_time_ms": {
-                    "description": "RevealTimeMs is signed milliseconds relative to slot start.",
+                    "description": "RevealTimeMs is signed milliseconds relative to slot start (time gate).",
+                    "type": "integer"
+                },
+                "vote_threshold_pct": {
+                    "description": "VoteThresholdPct overrides the vote gate's participation threshold.",
                     "type": "integer"
                 }
             }
@@ -1533,6 +1724,9 @@ const docTemplate = `{
                 "bid": {
                     "$ref": "#/definitions/action_plan.BidPlan"
                 },
+                "build": {
+                    "$ref": "#/definitions/action_plan.BuildPlan"
+                },
                 "builder_api": {
                     "$ref": "#/definitions/action_plan.BuilderAPIPlan"
                 },
@@ -1542,10 +1736,27 @@ const docTemplate = `{
                 "slot": {
                     "type": "integer"
                 },
+                "transforms": {
+                    "$ref": "#/definitions/action_plan.TransformPlan"
+                },
                 "updated_at": {
                     "type": "string"
                 },
                 "updated_by": {
+                    "type": "string"
+                }
+            }
+        },
+        "action_plan.TransformPlan": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "type": "string"
+                },
+                "envelope": {
+                    "type": "string"
+                },
+                "payload": {
                     "type": "string"
                 }
             }
@@ -1675,6 +1886,58 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/api.ValidatorRegistrationResponse"
                     }
+                }
+            }
+        },
+        "api.HeadVoteDetailResponse": {
+            "type": "object",
+            "properties": {
+                "bucket_count": {
+                    "type": "integer"
+                },
+                "bucket_ms": {
+                    "type": "integer"
+                },
+                "root": {
+                    "type": "string"
+                },
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.HeadVoteDetailRow"
+                    }
+                },
+                "slot": {
+                    "type": "integer"
+                },
+                "slot_start_ms": {
+                    "type": "integer"
+                },
+                "total_members": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.HeadVoteDetailRow": {
+            "type": "object",
+            "properties": {
+                "counts": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "in_block_unseen": {
+                    "type": "integer"
+                },
+                "members": {
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "seen": {
+                    "type": "integer"
                 }
             }
         },
@@ -1973,6 +2236,47 @@ const docTemplate = `{
                 }
             }
         },
+        "api.TestTransformRequest": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "description": "Expression is the jq program to evaluate.",
+                    "type": "string"
+                },
+                "sample_slot": {
+                    "description": "SampleSlot, when \u003e 0, sources the input from that slot's captured\nartifact (falling back to a template when it is unavailable).",
+                    "type": "integer"
+                },
+                "target": {
+                    "description": "Target is one of payload | bid | envelope.",
+                    "type": "string"
+                }
+            }
+        },
+        "api.TestTransformResponse": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "description": "Error is the parse/eval error message (present when the expression fails).",
+                    "type": "string"
+                },
+                "input": {
+                    "description": "Input is the JSON the expression ran against (message JSON for bid /\nenvelope; the payload for payload), pretty-printed as a string.",
+                    "type": "string"
+                },
+                "input_source": {
+                    "description": "InputSource is \"artifact:slot-N\" or \"template\".",
+                    "type": "string"
+                },
+                "output": {
+                    "description": "Output is the transform result, pretty-printed (present when Error is empty).",
+                    "type": "string"
+                },
+                "target": {
+                    "type": "string"
+                }
+            }
+        },
         "api.UpdateActionPlanRequest": {
             "type": "object",
             "properties": {
@@ -2267,6 +2571,18 @@ const docTemplate = `{
                 "num_transactions": {
                     "type": "integer"
                 },
+                "payload_check_slot": {
+                    "description": "PayloadCheckSlot is the follow-up block's slot the verdict came from.",
+                    "type": "integer"
+                },
+                "payload_status": {
+                    "description": "PayloadStatus is the canonical verdict for the won payload: pending\nuntil the first follow-up block is seen, then canonical or missed based\non that block's committed parent execution hash. Pre-Gloas wins are\ncanonical immediately (the payload is embedded in the block).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.PayloadStatus"
+                        }
+                    ]
+                },
                 "source": {
                     "description": "\"epbs\" | \"builder_api\"",
                     "type": "string"
@@ -2281,6 +2597,21 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "slot_results.PayloadStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "canonical",
+                "missed",
+                "orphaned"
+            ],
+            "x-enum-varnames": [
+                "PayloadStatusPending",
+                "PayloadStatusCanonical",
+                "PayloadStatusMissed",
+                "PayloadStatusOrphaned"
+            ]
         },
         "slot_results.RevealAttempt": {
             "type": "object",

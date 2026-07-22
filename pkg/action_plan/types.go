@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 )
 
@@ -169,15 +170,27 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	return nil
 }
 
-// RevealPlan is the per-slot payload reveal instruction. Reveals have no
-// global enable flag; "disabled" withholds the envelope, "custom" overrides
-// the reveal time (possibly past the in-slot deadline for adverse testing,
-// clamped to at most one additional slot after slot end).
+// RevealPlan is the per-slot payload reveal instruction. "disabled" withholds
+// the envelope, "custom" force-activates the reveal (even when globally
+// disabled) and overrides the gate settings (possibly past the in-slot
+// deadline for adverse testing, clamped to at most one additional slot after
+// slot end).
 type RevealPlan struct {
 	Mode Mode `json:"mode"`
 
-	// RevealTimeMs is signed milliseconds relative to slot start.
+	// RevealTimeMs is signed milliseconds relative to slot start (time gate).
 	RevealTimeMs *int64 `json:"reveal_time_ms,omitempty"`
+
+	// GateMode overrides the reveal gate: time | vote | vote_or_time |
+	// vote_and_time.
+	GateMode *string `json:"gate_mode,omitempty"`
+
+	// VoteThresholdPct overrides the vote gate's participation threshold.
+	VoteThresholdPct *uint64 `json:"vote_threshold_pct,omitempty"`
+
+	// BroadcastValidation overrides the envelope submission's broadcast
+	// validation level: gossip | consensus | consensus_and_equivocation.
+	BroadcastValidation *string `json:"broadcast_validation,omitempty"`
 }
 
 func (p *RevealPlan) clone() *RevealPlan {
@@ -187,6 +200,9 @@ func (p *RevealPlan) clone() *RevealPlan {
 
 	c := *p
 	c.RevealTimeMs = cloneScalar(p.RevealTimeMs)
+	c.GateMode = cloneScalar(p.GateMode)
+	c.VoteThresholdPct = cloneScalar(p.VoteThresholdPct)
+	c.BroadcastValidation = cloneScalar(p.BroadcastValidation)
 
 	return &c
 }
@@ -196,8 +212,27 @@ func (p *RevealPlan) validate(slotMs int64) error {
 		return err
 	}
 
-	if p.Mode == ModeDisabled && p.RevealTimeMs != nil {
+	if p.Mode == ModeDisabled && (p.RevealTimeMs != nil || p.GateMode != nil ||
+		p.VoteThresholdPct != nil || p.BroadcastValidation != nil) {
 		return errors.New("reveal: overrides are only allowed in custom mode")
+	}
+
+	if p.GateMode != nil {
+		probe := config.RevealConfig{GateMode: *p.GateMode}
+		if probe.NormalizedGateMode() != *p.GateMode {
+			return fmt.Errorf("reveal.gate_mode: invalid value %q", *p.GateMode)
+		}
+	}
+
+	if p.VoteThresholdPct != nil && *p.VoteThresholdPct > 100 {
+		return fmt.Errorf("reveal.vote_threshold_pct: must be within [0, 100], got %d", *p.VoteThresholdPct)
+	}
+
+	if p.BroadcastValidation != nil {
+		probe := config.RevealConfig{BroadcastValidation: *p.BroadcastValidation}
+		if probe.NormalizedBroadcastValidation() != *p.BroadcastValidation {
+			return fmt.Errorf("reveal.broadcast_validation: invalid value %q", *p.BroadcastValidation)
+		}
 	}
 
 	// Custom reveal times may run into the next slot for late-reveal testing,

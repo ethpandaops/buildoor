@@ -31,6 +31,19 @@ definitions:
       mode:
         $ref: '#/definitions/action_plan.Mode'
     type: object
+  action_plan.BuildPlan:
+    properties:
+      reorg_parent_payload:
+        description: |-
+          ReorgParentPayload builds on the grandparent (n-2) execution payload
+          instead of the immediate parent: the FCU head block hash and the payload
+          attributes' withdrawals are taken from the PARENT slot's payload
+          attributes (whose parent is n-2), while every other property comes from
+          the current slot. This is a deliberate parent-payload reorg attempt —
+          rejected by mainnet forkchoice, but useful for exercising the reveal /
+          inclusion path against a withheld parent.
+        type: boolean
+    type: object
   action_plan.BuilderAPIPlan:
     properties:
       mode:
@@ -80,6 +93,12 @@ definitions:
         $ref: '#/definitions/action_plan.ResolvedRevealSettings'
       slot:
         type: integer
+      transforms:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedTransforms'
+        description: |-
+          Transforms carries the effective jq transform expressions (empty when no
+          transform plan applies). Nil only when no plan expression is set.
     type: object
   action_plan.Mode:
     enum:
@@ -92,6 +111,10 @@ definitions:
   action_plan.PlanUpdate:
     properties:
       bid:
+        items:
+          type: integer
+        type: array
+      build:
         items:
           type: integer
         type: array
@@ -119,6 +142,10 @@ definitions:
         type: array
       to_slot:
         type: integer
+      transforms:
+        items:
+          type: integer
+        type: array
     type: object
   action_plan.ResolvedBidSettings:
     properties:
@@ -169,6 +196,12 @@ definitions:
           PlanInvolved marks decisions where a per-slot plan existed or any
           consumer was effectively active — i.e. skips worth surfacing.
         type: boolean
+      reorg_parent_payload:
+        description: |-
+          ReorgParentPayload builds the slot's payload on the grandparent (n-2)
+          execution payload instead of the immediate parent — a deliberate
+          parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
+        type: boolean
       skip_reason:
         description: |-
           SkipReason is one of the BuildSkipReason* constants when Build is
@@ -194,37 +227,95 @@ definitions:
     type: object
   action_plan.ResolvedRevealSettings:
     properties:
+      broadcast_validation:
+        description: |-
+          BroadcastValidation is the envelope submission's broadcast_validation
+          level: gossip | consensus | consensus_and_equivocation.
+        type: string
       bypass_deadline:
         description: |-
           BypassDeadline disables the "past the in-slot deadline → skip" check so
           deliberately late reveals are attempted.
         type: boolean
+      gate_mode:
+        description: |-
+          GateMode decides the reveal moment: time | vote | vote_or_time |
+          vote_and_time.
+        type: string
+      max_attempts:
+        description: |-
+          MaxAttempts / RetryIntervalMs are the publish retry policy
+          (global-only, no per-slot override).
+        type: integer
+      retry_interval_ms:
+        type: integer
       reveal_time_ms:
         type: integer
       suppressed:
         type: boolean
+      vote_threshold_pct:
+        description: |-
+          VoteThresholdPct is the participation threshold (percent) opening the
+          vote gate.
+        type: integer
+    type: object
+  action_plan.ResolvedTransforms:
+    properties:
+      bid:
+        type: string
+      envelope:
+        type: string
+      payload:
+        type: string
     type: object
   action_plan.RevealPlan:
     properties:
+      broadcast_validation:
+        description: |-
+          BroadcastValidation overrides the envelope submission's broadcast
+          validation level: gossip | consensus | consensus_and_equivocation.
+        type: string
+      gate_mode:
+        description: |-
+          GateMode overrides the reveal gate: time | vote | vote_or_time |
+          vote_and_time.
+        type: string
       mode:
         $ref: '#/definitions/action_plan.Mode'
       reveal_time_ms:
-        description: RevealTimeMs is signed milliseconds relative to slot start.
+        description: RevealTimeMs is signed milliseconds relative to slot start (time
+          gate).
+        type: integer
+      vote_threshold_pct:
+        description: VoteThresholdPct overrides the vote gate's participation threshold.
         type: integer
     type: object
   action_plan.SlotPlan:
     properties:
       bid:
         $ref: '#/definitions/action_plan.BidPlan'
+      build:
+        $ref: '#/definitions/action_plan.BuildPlan'
       builder_api:
         $ref: '#/definitions/action_plan.BuilderAPIPlan'
       reveal:
         $ref: '#/definitions/action_plan.RevealPlan'
       slot:
         type: integer
+      transforms:
+        $ref: '#/definitions/action_plan.TransformPlan'
       updated_at:
         type: string
       updated_by:
+        type: string
+    type: object
+  action_plan.TransformPlan:
+    properties:
+      bid:
+        type: string
+      envelope:
+        type: string
+      payload:
         type: string
     type: object
   api.ActionPlanResponse:
@@ -309,6 +400,40 @@ definitions:
         items:
           $ref: '#/definitions/api.ValidatorRegistrationResponse'
         type: array
+    type: object
+  api.HeadVoteDetailResponse:
+    properties:
+      bucket_count:
+        type: integer
+      bucket_ms:
+        type: integer
+      root:
+        type: string
+      rows:
+        items:
+          $ref: '#/definitions/api.HeadVoteDetailRow'
+        type: array
+      slot:
+        type: integer
+      slot_start_ms:
+        type: integer
+      total_members:
+        type: integer
+    type: object
+  api.HeadVoteDetailRow:
+    properties:
+      counts:
+        items:
+          type: integer
+        type: array
+      in_block_unseen:
+        type: integer
+      members:
+        type: integer
+      name:
+        type: string
+      seen:
+        type: integer
     type: object
   api.LifecycleStatusResponse:
     properties:
@@ -502,6 +627,41 @@ definitions:
         type: string
       withdrawable_epoch:
         type: integer
+    type: object
+  api.TestTransformRequest:
+    properties:
+      expression:
+        description: Expression is the jq program to evaluate.
+        type: string
+      sample_slot:
+        description: |-
+          SampleSlot, when > 0, sources the input from that slot's captured
+          artifact (falling back to a template when it is unavailable).
+        type: integer
+      target:
+        description: Target is one of payload | bid | envelope.
+        type: string
+    type: object
+  api.TestTransformResponse:
+    properties:
+      error:
+        description: Error is the parse/eval error message (present when the expression
+          fails).
+        type: string
+      input:
+        description: |-
+          Input is the JSON the expression ran against (message JSON for bid /
+          envelope; the payload for payload), pretty-printed as a string.
+        type: string
+      input_source:
+        description: InputSource is "artifact:slot-N" or "template".
+        type: string
+      output:
+        description: Output is the transform result, pretty-printed (present when
+          Error is empty).
+        type: string
+      target:
+        type: string
     type: object
   api.UpdateActionPlanRequest:
     properties:
@@ -712,6 +872,18 @@ definitions:
         type: integer
       num_transactions:
         type: integer
+      payload_check_slot:
+        description: PayloadCheckSlot is the follow-up block's slot the verdict came
+          from.
+        type: integer
+      payload_status:
+        allOf:
+        - $ref: '#/definitions/slot_results.PayloadStatus'
+        description: |-
+          PayloadStatus is the canonical verdict for the won payload: pending
+          until the first follow-up block is seen, then canonical or missed based
+          on that block's committed parent execution hash. Pre-Gloas wins are
+          canonical immediately (the payload is embedded in the block).
       source:
         description: '"epbs" | "builder_api"'
         type: string
@@ -722,6 +894,18 @@ definitions:
       value_wei:
         type: string
     type: object
+  slot_results.PayloadStatus:
+    enum:
+    - pending
+    - canonical
+    - missed
+    - orphaned
+    type: string
+    x-enum-varnames:
+    - PayloadStatusPending
+    - PayloadStatusCanonical
+    - PayloadStatusMissed
+    - PayloadStatusOrphaned
   slot_results.RevealAttempt:
     properties:
       at:
@@ -896,6 +1080,41 @@ paths:
       summary: Update per-slot action plans
       tags:
       - ActionPlan
+  /api/buildoor/action-plan/test-transform:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Runs an operator jq expression against a sample payload / bid /
+        envelope (a captured artifact when sample_slot is given and
+        available, otherwise a zero-value template of the object) and
+        returns the transformed JSON, so expressions can be built and
+        tested live before being saved to a slot plan. Bid and envelope
+        transforms operate on the MESSAGE, matching production.
+      operationId: testActionPlanTransform
+      parameters:
+      - description: Target, expression and optional sample slot
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.TestTransformRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TestTransformResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Evaluate a jq transform against a sample builder object
+      tags:
+      - ActionPlan
   /api/buildoor/audit-log:
     get:
       description: Returns a paginated list of authenticated mutating actions. Empty
@@ -1014,6 +1233,57 @@ paths:
       summary: Get cached builder preferences
       tags:
       - Buildoor
+  /api/buildoor/head-votes/{slot}:
+    get:
+      description: |-
+        Returns the slot's raw single-attestation arrivals grouped by
+        validator-ranges client name into fixed-width time buckets
+        from the slot start, plus per-name totals and the count of
+        attesters that landed on chain without being seen as singles.
+        Only slots still retained by the head vote tracker are served.
+      operationId: getHeadVoteDetail
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      - description: 'Beacon block root (default: the slot''s primary root)'
+        in: query
+        name: root
+        type: string
+      - description: Bucket width in ms (default slot_ms/24, clamped to [50, slot_ms])
+        in: query
+        name: bucket_ms
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.HeadVoteDetailResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No vote detail retained for this slot
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Head vote tracker unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Per-name head-vote arrival heatmap for a slot
+      tags:
+      - Stats
   /api/buildoor/overview:
     get:
       description: |-

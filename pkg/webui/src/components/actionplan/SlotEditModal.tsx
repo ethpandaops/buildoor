@@ -141,7 +141,10 @@ type FormMode = 'unchanged' | 'inherit' | 'custom' | 'disabled';
 interface FieldDef {
   key: string;
   label: string;
-  unit: 'ms' | 'gwei';
+  unit: 'ms' | 'gwei' | '%' | '';
+  // Enum fields render a select instead of a number input; the raw string
+  // value is sent as the override.
+  options?: string[];
 }
 
 const BID_FIELDS: FieldDef[] = [
@@ -160,7 +163,18 @@ const BUILDER_API_FIELDS: FieldDef[] = [
   { key: 'response_delay_ms', label: 'Response Delay', unit: 'ms' },
 ];
 
-const REVEAL_FIELDS: FieldDef[] = [{ key: 'reveal_time_ms', label: 'Reveal Time (rel. slot)', unit: 'ms' }];
+const REVEAL_FIELDS: FieldDef[] = [
+  { key: 'reveal_time_ms', label: 'Reveal Time (rel. slot)', unit: 'ms' },
+  {
+    key: 'gate_mode', label: 'Gate Mode', unit: '',
+    options: ['time', 'vote', 'vote_or_time', 'vote_and_time'],
+  },
+  { key: 'vote_threshold_pct', label: 'Vote Threshold', unit: '%' },
+  {
+    key: 'broadcast_validation', label: 'Broadcast Validation', unit: '',
+    options: ['gossip', 'consensus', 'consensus_and_equivocation'],
+  },
+];
 
 interface CategoryFormState {
   mode: FormMode;
@@ -181,7 +195,7 @@ function initCategoryState(
   const fields: Record<string, string> = {};
   for (const def of defs) {
     const value = raw[def.key];
-    if (typeof value === 'number') {
+    if (typeof value === 'number' || typeof value === 'string') {
       fields[def.key] = String(value);
     }
   }
@@ -197,12 +211,20 @@ function parseCategoryFields(
   name: string,
   defs: FieldDef[],
   state: CategoryFormState
-): { values: Record<string, number>; error: string | null } {
-  const values: Record<string, number> = {};
+): { values: Record<string, number | string>; error: string | null } {
+  const values: Record<string, number | string> = {};
 
   for (const def of defs) {
     const raw = (state.fields[def.key] ?? '').trim();
     if (raw === '') continue;
+
+    if (def.options) {
+      if (!def.options.includes(raw)) {
+        return { values, error: `${name}: ${def.label} must be one of ${def.options.join(', ')}` };
+      }
+      values[def.key] = raw;
+      continue;
+    }
 
     const num = Number(raw);
     if (!Number.isFinite(num) || !Number.isInteger(num)) {
@@ -218,7 +240,7 @@ type CategoryOutcome =
   | { kind: 'none' }
   | { kind: 'clear' }
   | { kind: 'replace'; obj: Record<string, unknown> }
-  | { kind: 'set'; paths: Record<string, number | boolean | null> }
+  | { kind: 'set'; paths: Record<string, number | string | boolean | null> }
   | { kind: 'error'; error: string };
 
 // resolveCategory turns one category form into its PlanUpdate contribution.
@@ -250,10 +272,13 @@ function resolveCategory(
       if (error) return { kind: 'error', error };
 
       if (single && initial && initial['mode'] === 'custom') {
-        const paths: Record<string, number | boolean | null> = {};
+        const paths: Record<string, number | string | boolean | null> = {};
 
         for (const def of defs) {
-          const oldValue = typeof initial[def.key] === 'number' ? (initial[def.key] as number) : undefined;
+          const rawOld = initial[def.key];
+          const oldValue = typeof rawOld === 'number' || typeof rawOld === 'string'
+            ? (rawOld as number | string)
+            : undefined;
           const newValue = values[def.key];
 
           if (newValue === undefined && oldValue !== undefined) {
@@ -317,19 +342,35 @@ const CategoryForm: React.FC<{
         {fields.map((def) => (
           <div key={def.key} className="col-6 col-lg-4">
             <label className="form-label small mb-0">{def.label}</label>
-            <div className="input-group input-group-sm">
-              <input
-                type="number"
-                className="form-control"
-                placeholder="inherit"
+            {def.options ? (
+              <select
+                className="form-select form-select-sm"
                 value={state.fields[def.key] ?? ''}
                 disabled={disabled}
                 onChange={(e) =>
                   onChange({ ...state, fields: { ...state.fields, [def.key]: e.target.value } })
                 }
-              />
-              <span className="input-group-text">{def.unit}</span>
-            </div>
+              >
+                <option value="">inherit</option>
+                {def.options.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="input-group input-group-sm">
+                <input
+                  type="number"
+                  className="form-control"
+                  placeholder="inherit"
+                  value={state.fields[def.key] ?? ''}
+                  disabled={disabled}
+                  onChange={(e) =>
+                    onChange({ ...state, fields: { ...state.fields, [def.key]: e.target.value } })
+                  }
+                />
+                <span className="input-group-text">{def.unit}</span>
+              </div>
+            )}
           </div>
         ))}
         {showIgnorePrefs && (
@@ -482,7 +523,15 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
               <span className={badgeClass('success')}>active</span>
             )}
           </KV>
+          <KV label="Gate">{frozen.reveal.gate_mode}</KV>
           <KV label="Reveal Time">{frozen.reveal.reveal_time_ms} ms</KV>
+          {frozen.reveal.gate_mode !== 'time' && (
+            <KV label="Vote Threshold">{frozen.reveal.vote_threshold_pct}%</KV>
+          )}
+          <KV label="Broadcast Validation">{frozen.reveal.broadcast_validation}</KV>
+          <KV label="Retries">
+            {frozen.reveal.max_attempts} × {frozen.reveal.retry_interval_ms} ms
+          </KV>
           {frozen.reveal.bypass_deadline && (
             <KV label="Flags">
               <span className={badgeClass('warning')}>bypass deadline</span>

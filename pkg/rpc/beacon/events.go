@@ -113,7 +113,10 @@ type payloadAttributesEventJSON struct {
 	} `json:"data"`
 }
 
-// AttestationEvent represents an attestation event from the beacon node.
+// AttestationEvent is a reduced aggregate-format attestation (as found in
+// block bodies): committee_bits + concatenated aggregation_bits on Electra+,
+// Index = committee pre-Electra. Consumed by the head vote tracker's subnet
+// coverage measurement via GetBlockAttestations.
 type AttestationEvent struct {
 	AggregationBits []byte
 	Slot            phase0.Slot
@@ -123,15 +126,29 @@ type AttestationEvent struct {
 	ReceivedAt      time.Time
 }
 
-// attestationEventJSON is used for JSON unmarshaling of attestation events.
-type attestationEventJSON struct {
-	AggregationBits string `json:"aggregation_bits"`
-	Data            struct {
+// SingleAttestationEvent represents a single_attestation event (Electra+): one
+// raw, unaggregated attestation the beacon node accepted from an attestation
+// subnet or the API. AttesterIndex is the global validator index.
+type SingleAttestationEvent struct {
+	Slot            phase0.Slot
+	CommitteeIndex  phase0.CommitteeIndex
+	AttesterIndex   phase0.ValidatorIndex
+	BeaconBlockRoot phase0.Root
+	ReceivedAt      time.Time
+}
+
+// singleAttestationEventJSON is used for JSON unmarshaling of
+// single_attestation events. Only the fields needed for vote accounting are
+// parsed — the signature and source/target checkpoints are deliberately
+// skipped: the node already validated the attestation and this topic delivers
+// thousands of events per second at scale.
+type singleAttestationEventJSON struct {
+	CommitteeIndex string `json:"committee_index"`
+	AttesterIndex  string `json:"attester_index"`
+	Data           struct {
 		Slot            string `json:"slot"`
-		Index           string `json:"index"`
 		BeaconBlockRoot string `json:"beacon_block_root"`
 	} `json:"data"`
-	CommitteeBits string `json:"committee_bits,omitempty"`
 }
 
 // proposerPreferencesEventJSON is used for JSON unmarshaling of proposer_preferences events.
@@ -177,7 +194,7 @@ type EventStream struct {
 	bidDispatcher                 *utils.Dispatcher[*BidEvent]
 	payloadDispatcher             *utils.Dispatcher[*PayloadAvailableEvent]
 	payloadAttributesDispatcher   *utils.Dispatcher[*PayloadAttributesEvent]
-	attestationDispatcher         *utils.Dispatcher[*AttestationEvent]
+	singleAttestationDispatcher   *utils.Dispatcher[*SingleAttestationEvent]
 	proposerPreferencesDispatcher *utils.Dispatcher[*gloas.SignedProposerPreferences]
 	cancelFunc                    context.CancelFunc
 	running                       bool
@@ -199,7 +216,7 @@ func NewEventStream(client *Client) *EventStream {
 		bidDispatcher:                 &utils.Dispatcher[*BidEvent]{},
 		payloadDispatcher:             &utils.Dispatcher[*PayloadAvailableEvent]{},
 		payloadAttributesDispatcher:   &utils.Dispatcher[*PayloadAttributesEvent]{},
-		attestationDispatcher:         &utils.Dispatcher[*AttestationEvent]{},
+		singleAttestationDispatcher:   &utils.Dispatcher[*SingleAttestationEvent]{},
 		proposerPreferencesDispatcher: &utils.Dispatcher[*gloas.SignedProposerPreferences]{},
 		payloadAttrCache:              make(map[phase0.Slot]*PayloadAttributesEvent, 4),
 	}
@@ -225,7 +242,7 @@ func (e *EventStream) Start(ctx context.Context) error {
 	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_available", 30*time.Second)
-	go e.runTopicLoop(streamCtx, "attestation", 5*time.Second)
+	go e.runTopicLoop(streamCtx, "single_attestation", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "proposer_preferences", 5*time.Second)
 
 	return nil
@@ -265,9 +282,12 @@ func (e *EventStream) SubscribePayloadAttributes() *utils.Subscription[*PayloadA
 	return e.payloadAttributesDispatcher.Subscribe(16, false)
 }
 
-// SubscribeAttestations returns a subscription for attestation events.
-func (e *EventStream) SubscribeAttestations() *utils.Subscription[*AttestationEvent] {
-	return e.attestationDispatcher.Subscribe(256, false)
+// SubscribeSingleAttestations returns a subscription for single_attestation
+// events. The buffer is sized for the raw-vote firehose (~active_validators/32
+// events per slot with a subscribe-all-subnets beacon node); consumers must do
+// O(1) work per event.
+func (e *EventStream) SubscribeSingleAttestations() *utils.Subscription[*SingleAttestationEvent] {
+	return e.singleAttestationDispatcher.Subscribe(8192, false)
 }
 
 // SubscribeProposerPreferences returns a subscription for proposer_preferences events.
@@ -474,7 +494,7 @@ func (e *EventStream) handleEvent(eventType, data string) {
 			return
 		}
 
-		e.client.log.WithFields(map[string]interface{}{
+		e.client.log.WithFields(map[string]any{
 			"slot":        event.ProposalSlot,
 			"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 		}).Debug("Payload attributes event received")
@@ -486,21 +506,21 @@ func (e *EventStream) handleEvent(eventType, data string) {
 
 		e.payloadAttributesDispatcher.Fire(event)
 
-	case "attestation":
-		var raw attestationEventJSON
+	case "single_attestation":
+		var raw singleAttestationEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
-			e.client.log.WithError(err).Debug("Failed to parse attestation event JSON")
+			e.client.log.WithError(err).Debug("Failed to parse single attestation event JSON")
 			return
 		}
 
-		event, err := parseAttestationEvent(&raw)
+		event, err := parseSingleAttestationEvent(&raw)
 		if err != nil {
-			e.client.log.WithError(err).Debug("Failed to convert attestation event")
+			e.client.log.WithError(err).Debug("Failed to convert single attestation event")
 			return
 		}
 
 		event.ReceivedAt = time.Now()
-		e.attestationDispatcher.Fire(event)
+		e.singleAttestationDispatcher.Fire(event)
 
 	case "proposer_preferences":
 		e.client.log.WithField("raw", data).Info("Proposer preferences SSE event received")
@@ -516,7 +536,7 @@ func (e *EventStream) handleEvent(eventType, data string) {
 			return
 		}
 
-		e.client.log.WithFields(map[string]interface{}{
+		e.client.log.WithFields(map[string]any{
 			"slot":             raw.Data.Message.ProposalSlot,
 			"validator_index":  raw.Data.Message.ValidatorIndex,
 			"target_gas_limit": raw.Data.Message.TargetGasLimit,
@@ -818,16 +838,22 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 	}, nil
 }
 
-// parseAttestationEvent converts a raw JSON attestation event to the typed AttestationEvent.
-func parseAttestationEvent(raw *attestationEventJSON) (*AttestationEvent, error) {
+// parseSingleAttestationEvent converts a raw JSON single_attestation event to
+// the typed SingleAttestationEvent.
+func parseSingleAttestationEvent(raw *singleAttestationEventJSON) (*SingleAttestationEvent, error) {
+	committeeIndex, err := strconv.ParseUint(raw.CommitteeIndex, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid committee_index: %w", err)
+	}
+
+	attesterIndex, err := strconv.ParseUint(raw.AttesterIndex, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid attester_index: %w", err)
+	}
+
 	slot, err := strconv.ParseUint(raw.Data.Slot, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid slot: %w", err)
-	}
-
-	index, err := strconv.ParseUint(raw.Data.Index, 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("invalid index: %w", err)
 	}
 
 	blockRoot, err := parseRoot(raw.Data.BeaconBlockRoot)
@@ -835,26 +861,10 @@ func parseAttestationEvent(raw *attestationEventJSON) (*AttestationEvent, error)
 		return nil, fmt.Errorf("invalid beacon_block_root: %w", err)
 	}
 
-	aggBits, err := hex.DecodeString(strings.TrimPrefix(raw.AggregationBits, "0x"))
-	if err != nil {
-		return nil, fmt.Errorf("invalid aggregation_bits: %w", err)
-	}
-
-	event := &AttestationEvent{
-		AggregationBits: aggBits,
+	return &SingleAttestationEvent{
 		Slot:            phase0.Slot(slot),
-		Index:           index,
+		CommitteeIndex:  phase0.CommitteeIndex(committeeIndex),
+		AttesterIndex:   phase0.ValidatorIndex(attesterIndex),
 		BeaconBlockRoot: blockRoot,
-	}
-
-	if raw.CommitteeBits != "" {
-		cbBits, err := hex.DecodeString(strings.TrimPrefix(raw.CommitteeBits, "0x"))
-		if err != nil {
-			return nil, fmt.Errorf("invalid committee_bits: %w", err)
-		}
-
-		event.CommitteeBits = cbBits
-	}
-
-	return event, nil
+	}, nil
 }

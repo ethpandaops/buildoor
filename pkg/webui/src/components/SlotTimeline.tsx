@@ -9,6 +9,7 @@ interface SlotTimelineProps {
   slotServiceStatuses: Record<number, ServiceStatus>;
   currentConfig: Config | null;
   serviceStatus: ServiceStatus | null;
+  hideHeadVotes?: boolean;
 }
 
 const MAX_SLOTS_TO_SHOW = 5;
@@ -24,7 +25,8 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
   slotConfigs,
   slotServiceStatuses,
   currentConfig,
-  serviceStatus
+  serviceStatus,
+  hideHeadVotes
 }) => {
   const [slotDisplay, setSlotDisplay] = useState<SlotDisplayState>({ displaySlot: 0, showNextSlot: false });
   const firstValidSlotRef = useRef<number>(-1);
@@ -134,6 +136,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
           chainInfo={chainInfo}
           currentDisplaySlot={displaySlot}
           serviceStatus={serviceStatus}
+          hideHeadVotes={hideHeadVotes}
         />
       ))}
     </div>

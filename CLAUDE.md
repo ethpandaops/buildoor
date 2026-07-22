@@ -41,7 +41,7 @@ go run main.go run \
   --epbs \
   --epbs-bid-start 1000 \
   --epbs-bid-end 3000 \
-  --epbs-reveal-time 4000
+  --reveal-time 4000
 
 # Run with lifecycle management (deposits/exits)
 go run main.go run \
@@ -192,15 +192,25 @@ npm run clean
 
 2. **Payload Bidder** (`pkg/payload_bidder/`) — shared Gloas+ bid/reveal domain
    - `Signer`, `BuildSignedBid`, `BuildSignedEnvelope`: bid/envelope construction + signing
-   - `RevealService`: the ONLY envelope publisher. Own main loop (channel + timer, no
-     polling); both flows request reveals via `RequestReveal`; dedupes per slot (exactly
-     one publish per won slot); timing/suppression come from the slot's frozen plan
-     (`frozen.Reveal`: plan-disabled slots fire a terminal skipped result with reason
-     `plan_disabled`; custom reveal times may bypass the in-slot deadline for
-     late-reveal testing, clamped to slot end + 1 slot); envelope construction is
-     split from publish (`buildEnvelope`) so every per-attempt `RevealResult` carries
-     the built envelope — failed publishes stay inspectable; envelope signing uses
-     the TARGET slot's fork; retries ×3
+   - `RevealService`: the ONLY envelope publisher. Own main loop (channel + timer +
+     head-vote subscription, no polling); both flows request reveals via
+     `RequestReveal`; dedupes per slot (exactly one publish per won slot). All
+     settings come from the slot's frozen plan (`frozen.Reveal`, resolved from the
+     standalone `reveal.*` config section — the reveal serves BOTH flows and is NOT
+     an ePBS-bidder setting): gate mode `time` | `vote` | `vote_or_time` |
+     `vote_and_time` (vote gates open event-driven when head-vote participation on
+     the committing block reaches `reveal.vote_threshold_pct`; unsatisfied gates
+     withhold at slot end with reason `vote_gate_timeout`), `broadcast_validation`
+     passed to the envelope submission API (gossip | consensus |
+     consensus_and_equivocation — the latter is the builder anti-unbundling
+     protection), and the retry policy (`reveal.max_attempts` ×
+     `reveal.retry_interval_ms`). Suppression: plan-disabled slots skip with
+     `plan_disabled`, global `reveal.enabled=false` skips with `disabled` (a
+     plan-custom slot force-activates either way and may bypass the in-slot
+     deadline, clamped to slot end + 1 slot). Envelope construction is split from
+     publish (`buildEnvelope`) so every per-attempt `RevealResult` carries the
+     built envelope — failed publishes stay inspectable; envelope signing uses
+     the TARGET slot's fork
    - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
      forks), requests the p2p-side reveal, fires `PayloadIncludedEvent` (carries the
      `WonBlock` summary — storage is owned by the slot results tracker). Reorg-aware
@@ -237,6 +247,33 @@ npm run clean
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
    - Provides slot↔timestamp conversions
+   - `HeadVoteTracker`: per-slot attestation participation aggregated locally
+     from raw `single_attestation` SSE events ONLY (streaming from the Gloas
+     attester deadline at 25% of the slot). The aggregated `attestation` topic
+     is deliberately NOT subscribed — aggregates arrive at the 50% aggregate
+     deadline, which is also the `PAYLOAD_DUE_BPS` reveal deadline, too late
+     to inform anything. Per-(slot, beacon_block_root) bitmaps over locally
+     computed attester duties, O(1) merge with incremental balance accounting;
+     undercounting is the only failure mode (the BN only emits singles for
+     subscribed subnets — run it with subscribe-all-subnets). Updates are
+     throttled (≥1 pp step per 100 ms flush per slot); crossing the
+     configurable `epbs.head_vote_threshold_pct` (default 60 = the Gloas
+     builder payment quorum, 0 = disabled) fires immediately with
+     `threshold_met`. Feeds the WebUI `head_votes` SSE event (participation
+     curve + threshold-met marker in the slot graph);
+     `GetParticipation(slot, root)` exposes snapshots for future consumers
+     (e.g. reveal gating). Per-vote arrival times are recorded (`voteTimes`,
+     uint16 ms-offset per member) and served via `GetVoteDetail(slot, root)`
+     (zero root = primary) together with the block ground-truth bitmap — the
+     WebUI heatmap endpoint groups them by validator-ranges client name
+     (retention 8 slots, in-memory only). **Subnet coverage detection**: every imported
+     block's attestations (fetched per head event, aggregate-format walk) are
+     the ground truth compared against the singles bitmap; a rolling 16-block
+     window seeing <80% of on-chain attesters (min 8 blocks / 16 attesters,
+     recover at ≥90%) sets the `Low` flag on the `vote_coverage` SSE event
+     (initial-state + on change) — the UI then shows a warning badge (hover
+     callout with the subscribe-all-subnets flags) in the Slot Timeline
+     header and hides the head-vote graph as unreliable
 
 4. **Lifecycle Manager** (`pkg/lifecycle/`)
    - Builder registration on beacon chain
@@ -329,10 +366,12 @@ Proposer ───Builder API─────────▶ builderapi (legacy: 
 4. Head event → InclusionTracker matches the block against our payload cache; on a win
    it records the pending payment, requests the reveal, and fires the inclusion event
    (the slot results tracker stores the outcome)
-5. RevealService publishes the envelope at the slot's frozen reveal time, deduped per
-   slot — a Builder-API-won block's reveal was already requested by the epbs dialect
-   handler at block submission, so the p2p-side request is a no-op. Plan-suppressed
-   slots skip with reason `plan_disabled`
+5. RevealService publishes the envelope once the slot's frozen reveal gates open
+   (time and/or vote threshold), deduped per slot — a Builder-API-won block's reveal
+   was already requested by the epbs dialect handler at block submission, so the
+   p2p-side request is a no-op. Plan-suppressed slots skip with reason
+   `plan_disabled`, globally disabled reveals with `disabled`, unsatisfied vote
+   gates with `vote_gate_timeout`
 6. RevealResult → payment moves from pending to balance deduction; WebUI event fires;
    the slot results tracker records the attempt + envelope artifact
 
@@ -354,10 +393,25 @@ Key config sections:
 - **Builder keys**: `--builder-privkey` (BLS), `--wallet-privkey` (ECDSA)
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
-- **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`, `--epbs-reveal-time`
+- **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
   `--epbs-bid-value-override` (absolute p2p bid base, 0 = off),
+  `--epbs-vote-threshold` (head-vote participation threshold in percent,
+  default 60, 0 = off),
   `--builder-api-value-override` (absolute served total value, 0 = off)
+- **Payload reveal** (own section — serves both the p2p bidder and Builder
+  API flows): `--reveal-enabled` (default true), `--reveal-gate-mode`
+  (time | vote | vote_or_time | vote_and_time, default vote_or_time —
+  reveal at the payment quorum or the time gate, whichever first),
+  `--reveal-time` (time gate in ms, 0 = auto), `--reveal-vote-threshold`
+  (participation % opening the vote gate, default 60),
+  `--reveal-broadcast-validation` (gossip | consensus |
+  consensus_and_equivocation, default consensus_and_equivocation — the
+  builder anti-unbundling protection), `--reveal-max-attempts` (default 3),
+  `--reveal-retry-interval` (default 500 ms). All mutable via
+  `POST /api/config/settings` with `reveal.*` keys; per-slot overridable
+  through the action plan's reveal category (gate_mode, vote_threshold_pct,
+  broadcast_validation, reveal_time_ms)
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
@@ -580,6 +634,13 @@ To make frontend changes:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
   JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
   is JSON-only metadata
+- `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
+  arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
+  client name into fixed-width time buckets from the slot start (default
+  slot_ms/24), plus per-name seen/members and the count of attesters that
+  landed on chain without being seen as singles. Zero/absent root resolves the
+  slot's primary root; only tracker-retained slots (8) are served (404
+  otherwise). Fetched by the Head Vote Participation popover's heatmap
 - `POST /api/config/settings` - Generic path-based global settings update keyed by
   canonical registry keys (`{"epbs.bid_subsidy": 1000, "schedule.mode": "all"}`);
   atomic, unknown keys rejected (auth + audit)

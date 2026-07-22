@@ -127,11 +127,29 @@ type ResolvedBuilderAPISettings struct {
 }
 
 // ResolvedRevealSettings are the effective reveal parameters for the slot.
-// Reveals have no global enable flag, so the category is always present with
-// a Suppressed marker instead of being nil.
+// The category is always present with a Suppressed marker instead of being
+// nil: suppression comes from the plan's disabled mode or the global
+// reveal.enabled switch (a plan-custom slot force-activates either way).
 type ResolvedRevealSettings struct {
 	Suppressed   bool  `json:"suppressed,omitempty"`
 	RevealTimeMs int64 `json:"reveal_time_ms"`
+
+	// GateMode decides the reveal moment: time | vote | vote_or_time |
+	// vote_and_time.
+	GateMode string `json:"gate_mode"`
+
+	// VoteThresholdPct is the participation threshold (percent) opening the
+	// vote gate.
+	VoteThresholdPct uint64 `json:"vote_threshold_pct"`
+
+	// BroadcastValidation is the envelope submission's broadcast_validation
+	// level: gossip | consensus | consensus_and_equivocation.
+	BroadcastValidation string `json:"broadcast_validation"`
+
+	// MaxAttempts / RetryIntervalMs are the publish retry policy
+	// (global-only, no per-slot override).
+	MaxAttempts     uint64 `json:"max_attempts"`
+	RetryIntervalMs int64  `json:"retry_interval_ms"`
 
 	// BypassDeadline disables the "past the in-slot deadline → skip" check so
 	// deliberately late reveals are attempted.
@@ -395,7 +413,13 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 
 func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 	resolved := &ResolvedRevealSettings{
-		RevealTimeMs: cfg.EPBS.RevealTime,
+		Suppressed:          !cfg.Reveal.Enabled,
+		RevealTimeMs:        cfg.Reveal.TimeMs,
+		GateMode:            cfg.Reveal.NormalizedGateMode(),
+		VoteThresholdPct:    cfg.Reveal.VoteThresholdPct,
+		BroadcastValidation: cfg.Reveal.NormalizedBroadcastValidation(),
+		MaxAttempts:         max(cfg.Reveal.MaxAttempts, 1),
+		RetryIntervalMs:     cfg.Reveal.RetryIntervalMs,
 	}
 
 	if plan == nil || plan.Reveal == nil {
@@ -408,8 +432,14 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 		return resolved
 	}
 
+	// Custom mode force-activates the reveal even when globally disabled and
+	// bypasses the in-slot deadline for deliberately late reveals.
+	resolved.Suppressed = false
 	resolved.BypassDeadline = true
 	applyOverride(&resolved.RevealTimeMs, plan.Reveal.RevealTimeMs)
+	applyOverride(&resolved.GateMode, plan.Reveal.GateMode)
+	applyOverride(&resolved.VoteThresholdPct, plan.Reveal.VoteThresholdPct)
+	applyOverride(&resolved.BroadcastValidation, plan.Reveal.BroadcastValidation)
 
 	return resolved
 }

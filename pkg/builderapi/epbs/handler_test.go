@@ -152,7 +152,7 @@ type stubEnvelopePublisher struct {
 }
 
 func (p *stubEnvelopePublisher) SubmitExecutionPayloadEnvelope(
-	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte,
+	_ context.Context, _ *eth2all.SignedExecutionPayloadEnvelope, _ [][]byte, _ [][]byte, _ string,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -191,7 +191,8 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 	require.NoError(t, err)
 
 	cfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
-	cfg.EPBS.RevealTime = revealTimeMs
+	cfg.Reveal = config.DefaultConfig().Reveal
+	cfg.Reveal.TimeMs = revealTimeMs
 
 	chainSvc := &stubChainService{
 		genesisTime:  time.Now().Add(-slotDuration), // slot 1 starts now
@@ -209,7 +210,7 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, planSvc, log)
+		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 
