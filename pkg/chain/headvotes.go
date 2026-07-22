@@ -506,7 +506,8 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 			"seen_pct":  fmt.Sprintf("%.1f%%", cov.SeenPct),
 			"attesters": cov.Attesters,
 		}).Warn("Raw attestation subnet coverage is low — beacon node likely runs " +
-			"without subscribe-all-subnets; head vote tracking is unreliable")
+			"without subscribe-all-subnets; head vote tracking undercounts and " +
+			"vote-threshold-gated reveals are unreliable (gates open late or never)")
 	} else if t.coverageLow && cov.SeenPct >= coverageRecoverThreshold {
 		t.coverageLow = false
 

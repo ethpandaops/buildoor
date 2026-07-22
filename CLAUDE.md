@@ -273,7 +273,10 @@ npm run clean
      recover at ≥90%) sets the `Low` flag on the `vote_coverage` SSE event
      (initial-state + on change) — the UI then shows a warning badge (hover
      callout with the subscribe-all-subnets flags) in the Slot Timeline
-     header and hides the head-vote graph as unreliable
+     header and hides the head-vote graph. Low coverage makes BOTH the graph
+     AND vote-threshold-gated reveals unreliable: the undercounted
+     participation opens reveal vote gates late or never (withheld at slot
+     end)
 
 4. **Lifecycle Manager** (`pkg/lifecycle/`)
    - Builder registration on beacon chain
