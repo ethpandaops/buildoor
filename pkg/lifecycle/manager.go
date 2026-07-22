@@ -239,9 +239,12 @@ func (m *Manager) CheckAndTopup(ctx context.Context) error {
 func (m *Manager) InitiateExit(ctx context.Context) error {
 	m.stateMu.RLock()
 	builderIndex := m.builderState.Index
+	isRegistered := m.builderState.IsRegistered
 	m.stateMu.RUnlock()
 
-	if builderIndex == 0 {
+	// Index 0 is a valid builder index; only the registration flag tells us
+	// whether an exit can be submitted.
+	if !isRegistered {
 		return fmt.Errorf("builder not registered")
 	}
 

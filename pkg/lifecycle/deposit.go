@@ -24,11 +24,18 @@ var ErrDepositFeeTooHigh = errors.New("builder deposit queue fee exceeds configu
 // pre-fork excess inhibitor (before GLOAS_FORK_EPOCH), so deposits can't be submitted yet.
 var ErrContractNotActive = errors.New("builder deposit contract not active yet")
 
+// ErrContractNotDeployed is returned when a builder system contract has no code at
+// its expected address. Before the Amsterdam fork this is normal (the EL injects the
+// predeploys at the fork); after the fork it means the network uses different
+// addresses than this build expects.
+var ErrContractNotDeployed = errors.New("builder system contract not deployed")
+
 // isDepositDeferred reports whether err indicates a deposit/top-up that should be
-// delayed and retried later (queue fee over the limit, or contract not yet active)
-// rather than treated as a hard failure.
+// delayed and retried later (queue fee over the limit, or contract not yet active
+// or deployed) rather than treated as a hard failure.
 func isDepositDeferred(err error) bool {
-	return errors.Is(err, ErrDepositFeeTooHigh) || errors.Is(err, ErrContractNotActive)
+	return errors.Is(err, ErrDepositFeeTooHigh) || errors.Is(err, ErrContractNotActive) ||
+		errors.Is(err, ErrContractNotDeployed)
 }
 
 // depositGasLimit is the gas limit for builder deposit transactions.

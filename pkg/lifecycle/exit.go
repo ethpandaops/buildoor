@@ -12,8 +12,11 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
-// exitGasLimit is the gas limit for builder exit transactions.
-const exitGasLimit = 500000
+// exitGasLimit is the gas limit for builder exit transactions. The current
+// EIP-8282 exit predeploy consumes ~590k gas for a request append (observed on
+// glamsterdam devnet-7), so this matches the deposit gas limit rather than the
+// ~100k an EIP-7002-style append would suggest.
+const exitGasLimit = 1000000
 
 // ExitService handles builder exits via the EIP-8282 builder exit system contract.
 //
