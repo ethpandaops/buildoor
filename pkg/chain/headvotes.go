@@ -178,11 +178,11 @@ func NewHeadVoteTracker(
 	log logrus.FieldLogger,
 ) *HeadVoteTracker {
 	return &HeadVoteTracker{
-		cfg:                   cfg,
-		chainSvc:              chainSvc,
-		clClient:              clClient,
-		log:                   log.WithField("component", "head-vote-tracker"),
-		slotStates:            make(map[phase0.Slot]*slotVoteState, voteSlotRetention),
+		cfg:                cfg,
+		chainSvc:           chainSvc,
+		clClient:           clClient,
+		log:                log.WithField("component", "head-vote-tracker"),
+		slotStates:         make(map[phase0.Slot]*slotVoteState, voteSlotRetention),
 		coverageSamples:    make([]coverageSample, 0, coverageWindowSlots),
 		updateDispatcher:   &utils.Dispatcher[*HeadVoteUpdate]{},
 		coverageDispatcher: &utils.Dispatcher[*SubnetCoverage]{},
