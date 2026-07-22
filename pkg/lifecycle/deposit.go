@@ -30,6 +30,13 @@ var ErrContractNotActive = errors.New("builder deposit contract not active yet")
 // addresses than this build expects.
 var ErrContractNotDeployed = errors.New("builder system contract not deployed")
 
+// ErrBuilderExited is returned when a deposit/top-up targets a builder whose exit has
+// been initiated. Exited builders can never be reactivated: the deposit would only top
+// up the exited registry entry and be withdrawn back to the wallet by the sweep. The
+// pubkey becomes depositable again only once it leaves the builder registry (its index
+// is reused by a different builder's deposit).
+var ErrBuilderExited = errors.New("builder has exited and cannot be reactivated; deposits are disabled until the pubkey leaves the builder registry")
+
 // isDepositDeferred reports whether err indicates a deposit/top-up that should be
 // delayed and retried later (queue fee over the limit, or contract not yet active
 // or deployed) rather than treated as a hard failure.
@@ -107,9 +114,16 @@ func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *BuilderS
 // DepositMaxFeeGwei is set, returns ErrDepositFeeTooHigh if the fee exceeds the limit
 // so the caller can delay and retry. The transaction value is stake + queue fee.
 func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) error {
-	s.log.WithField("amount_gwei", amountGwei).Info("Creating builder deposit")
-
 	pubkey := s.signer.PublicKey()
+
+	// Refuse deposits for an exited builder entry: they cannot reactivate it and
+	// are withdrawn back to the wallet, minus gas and the queue fee. A fresh
+	// registration (pubkey absent from the registry) passes this check.
+	if chain.HasBuilderExited(s.chainSvc.GetBuilderByPubkey(pubkey)) {
+		return ErrBuilderExited
+	}
+
+	s.log.WithField("amount_gwei", amountGwei).Info("Creating builder deposit")
 	withdrawalCredentials := BuilderWithdrawalCredentials(s.wallet.Address())
 
 	// Step 1: Compute the builder-deposit signing root (DOMAIN_BUILDER_DEPOSIT,
