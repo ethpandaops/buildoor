@@ -45,7 +45,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleLifecycleSave = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -67,7 +67,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleExit = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -89,7 +89,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleLifecycleToggle = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }

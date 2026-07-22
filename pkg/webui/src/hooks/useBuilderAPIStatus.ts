@@ -17,7 +17,7 @@ export function useBuilderAPIStatus(refreshKey?: unknown) {
     const fetchStatus = async () => {
       try {
         const headers: HeadersInit = {};
-        const token = getAuthHeader();
+        const token = await getAuthHeader();
         if (token) {
           headers['Authorization'] = `Bearer ${token}`;
         }

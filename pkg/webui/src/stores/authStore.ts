@@ -1,38 +1,53 @@
 import type { AuthState } from '../types';
 
 // Singleton auth store. Drives authentication via the centralized
-// authenticatoor service when window.ethpandaops.buildoor.config
-// .authProviderURL is set (injected by the backend into index.html);
-// otherwise runs in "open" mode (no auth required).
+// authenticatoor service (v2 shared-session client) when
+// window.ethpandaops.buildoor.config.authProviderURL is set (injected by
+// the backend into index.html); otherwise runs in "open" mode (no auth
+// required).
+//
+// v2 model: the authenticatoor client mounts a hidden iframe on the auth
+// service origin which owns the session — it refreshes tokens before
+// expiry and keeps login state in sync across every ethpandaops app and
+// tab. This store simply mirrors the client's "status" events into React
+// state and asks the client for a fresh token on every API call. No token
+// is ever cached in the app.
 //
 // Public surface:
 //   authStore.initialize(): kicks off boot — must be called once at app start.
 //   authStore.getState(): synchronous current state.
 //   authStore.subscribe(fn): change subscription, returns unsubscribe.
-//   authStore.getAuthHeader(): bearer token for API calls, or null.
-//   authStore.login(): full-page redirect to authenticatoor /auth/login.
-//   authStore.logout(): clear local session.
-//   authStore.fetchToken(): re-attempt the iframe path; returns new state.
+//   authStore.getAuthHeader(): Promise<string|null> — fresh bearer token
+//     for API calls (fetched from the auth client every time), or null.
+//   authStore.login(): full-page redirect to authenticatoor /auth/login
+//     (resolves without navigating when already authenticated).
+//   authStore.logout(): global logout — all apps/tabs converge.
+//   authStore.fetchToken(): force a token fetch; returns new state.
 //
 // In open mode:
 //   - authEnabled = false, isLoggedIn = true (UI treats user as authorized)
-//   - getAuthHeader returns null (no Authorization header on requests)
+//   - getAuthHeader resolves null (no Authorization header on requests)
 //   - login()/logout() are no-ops (and the UI should hide login controls)
 
 const AUTH_STATE_CHANGE_EVENT = 'buildoor_auth_state_change';
 
-// Minimal shape of window.ethpandaops.authenticatoor we rely on.
+// TokenInfo pushed by the v2 client on every session change.
+export interface AuthTokenInfo {
+  status: 'unauthenticated' | 'authenticated' | 'refreshing';
+  authenticated: boolean;
+  user: string;
+  exp: number;
+}
+
+// Minimal shape of the v2 window.ethpandaops.authenticatoor we rely on.
 interface AuthenticatoorLib {
-  checkLogin: () => Promise<{
-    authenticated: boolean;
-    token: string;
-    exp: number;
-    user: string;
-  }>;
-  login: () => void;
-  logout: () => void;
-  getToken: () => string | null;
-  isLoggedIn: () => boolean;
+  version?: number;
+  addEventListener: (type: 'status', cb: (info: AuthTokenInfo) => void) => void;
+  removeEventListener: (type: 'status', cb: (info: AuthTokenInfo) => void) => void;
+  getStatus: () => Promise<AuthTokenInfo>;
+  getToken: () => Promise<string | null>;
+  login: () => Promise<boolean>;
+  logout: () => Promise<void>;
   authServiceURL: () => string;
 }
 
@@ -58,7 +73,6 @@ const OPEN_STATE: AuthState = {
   authEnabled: false,
   isLoggedIn: true, // open mode: treat as authorized
   user: null,
-  token: null,
   expiresAt: null,
 };
 
@@ -66,7 +80,6 @@ const ANON_STATE: AuthState = {
   authEnabled: true,
   isLoggedIn: false,
   user: null,
-  token: null,
   expiresAt: null,
 };
 
@@ -109,6 +122,18 @@ class AuthStore {
     };
   }
 
+  // Mirror a TokenInfo pushed by the auth client into our state. The
+  // "refreshing" status still carries authenticated=true while the old
+  // token is valid, so the UI doesn't flicker during background refreshes.
+  private applyTokenInfo = (info: AuthTokenInfo): void => {
+    this.setState({
+      authEnabled: true,
+      isLoggedIn: info.authenticated,
+      user: info.authenticated ? info.user || null : null,
+      expiresAt: info.authenticated && info.exp ? info.exp * 1000 : null,
+    });
+  };
+
   private loadAuthScript(authProviderURL: string): Promise<void> {
     return new Promise((resolve, reject) => {
       // Already loaded?
@@ -117,7 +142,7 @@ class AuthStore {
         return;
       }
       const script = document.createElement('script');
-      script.src = authProviderURL.replace(/\/+$/, '') + '/client.js';
+      script.src = authProviderURL.replace(/\/+$/, '') + '/client-v2.js';
       script.async = true;
       script.onload = () => {
         if (window.ethpandaops?.authenticatoor) resolve();
@@ -142,10 +167,9 @@ class AuthStore {
         return;
       }
 
-      // Remote mode — load the authenticatoor client library and run its
-      // checkLogin (fragment → cache → silent iframe up to 30s). Treat the
-      // user as anonymous in the meantime; re-render when the promise
-      // resolves with authenticated=true.
+      // Remote mode — load the v2 authenticatoor client and mirror its
+      // status events. Treat the user as anonymous until the first status
+      // arrives (the client replays the current state on subscribe).
       this.setState({ ...ANON_STATE });
 
       try {
@@ -157,25 +181,22 @@ class AuthStore {
       }
 
       this.lib = window.ethpandaops?.authenticatoor ?? null;
-      if (!this.lib) {
-        console.error('authStore: ethpandaops.authenticatoor not available after load');
+      if (!this.lib || typeof this.lib.addEventListener !== 'function') {
+        console.error('authStore: ethpandaops.authenticatoor (v2) not available after load');
+        this.lib = null;
         this.initialized = true;
         return;
       }
 
+      // Every future session change (login/logout/refresh in ANY app or
+      // tab) lands here and re-renders the top bar.
+      this.lib.addEventListener('status', this.applyTokenInfo);
+
       try {
-        const info = await this.lib.checkLogin();
-        if (info.authenticated) {
-          this.setState({
-            authEnabled: true,
-            isLoggedIn: true,
-            user: info.user || null,
-            token: info.token,
-            expiresAt: info.exp * 1000,
-          });
-        }
+        // Settle the initial state before resolving initialization.
+        this.applyTokenInfo(await this.lib.getStatus());
       } catch (e) {
-        console.error('authStore: checkLogin failed', e);
+        console.error('authStore: getStatus failed', e);
       }
 
       this.initialized = true;
@@ -185,26 +206,16 @@ class AuthStore {
   }
 
   /**
-   * Re-attempt the silent token acquisition path. Useful when an API call
-   * comes back 401 — the token may have expired.
+   * Force a token fetch through the auth client (the client refreshes via
+   * its shared frame when needed). Useful when an API call comes back 401.
    */
   async fetchToken(): Promise<AuthState> {
     if (!this.state.authEnabled || !this.lib) return this.state;
     try {
-      const info = await this.lib.checkLogin();
-      if (info.authenticated) {
-        this.setState({
-          authEnabled: true,
-          isLoggedIn: true,
-          user: info.user || null,
-          token: info.token,
-          expiresAt: info.exp * 1000,
-        });
-      } else {
-        this.setState({ ...ANON_STATE });
-      }
+      await this.lib.getToken();
+      this.applyTokenInfo(await this.lib.getStatus());
     } catch {
-      this.setState({ ...ANON_STATE });
+      // Keep current state; the status listener reports the real outcome.
     }
     return this.state;
   }
@@ -215,13 +226,18 @@ class AuthStore {
 
   /**
    * Returns the bearer token to attach to API calls, or null when no auth
-   * is required (open mode) or the user isn't authenticated yet.
+   * is required (open mode) or the user isn't authenticated. Always asks
+   * the auth client for a fresh token — never cached here — so a token
+   * refreshed by the shared frame is picked up immediately.
    */
-  getAuthHeader(): string | null {
+  async getAuthHeader(): Promise<string | null> {
     if (!this.state.authEnabled) return null;
-    if (!this.state.token) return null;
-    if (this.state.expiresAt && this.state.expiresAt < Date.now()) return null;
-    return this.state.token;
+    if (!this.lib) return null;
+    try {
+      return await this.lib.getToken();
+    } catch {
+      return null;
+    }
   }
 
   subscribe(listener: AuthStateListener): () => void {
@@ -233,17 +249,21 @@ class AuthStore {
 
   login(): void {
     if (!this.state.authEnabled) return;
-    this.lib?.login();
+    void this.lib?.login();
   }
 
   logout(): void {
     if (!this.state.authEnabled) return;
-    this.lib?.logout();
+    // Global logout: the shared frame clears the session everywhere; our
+    // status listener flips the state when it lands. Set it eagerly too
+    // so the UI reacts instantly.
+    void this.lib?.logout();
     this.setState({ ...ANON_STATE });
   }
 
   destroy(): void {
     window.removeEventListener(AUTH_STATE_CHANGE_EVENT, this.handleExternalStateChange);
+    this.lib?.removeEventListener('status', this.applyTokenInfo);
     this.listeners.clear();
   }
 }

@@ -63,7 +63,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
 
   const postSettings = async (settings: Record<string, unknown>): Promise<boolean> => {
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }

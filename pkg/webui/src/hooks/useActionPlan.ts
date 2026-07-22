@@ -159,7 +159,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
   const applyUpdates = useCallback(
     async (updates: PlanUpdate[]): Promise<ApplyUpdatesResult> => {
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
-      const authToken = authStore.getAuthHeader();
+      const authToken = await authStore.getAuthHeader();
       if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`;
       }
