@@ -2626,7 +2626,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "skip_reason": {
-                    "description": "plan_disabled | late",
+                    "description": "plan_disabled | disabled | late | vote_gate_timeout",
+                    "type": "string"
+                },
+                "started_at": {
+                    "description": "StartedAt is when the attempt began (envelope construction + submit\ncall); nil on skips where nothing was attempted.",
                     "type": "string"
                 },
                 "status": {
