@@ -501,6 +501,11 @@ type EventStreamManager struct {
 	slotStates   map[phase0.Slot]*SlotStateEvent
 	slotStatesMu sync.RWMutex
 
+	// Head roots already broadcast per slot (guarded by slotStatesMu). The BN
+	// may emit repeated head events for the same block; only the first per
+	// (slot, root) is forwarded so followups don't re-stamp the received time.
+	seenHeadRoots map[phase0.Slot]map[phase0.Root]struct{}
+
 	// Track last sent stats to avoid spam
 	lastStats   StatsResponse
 	lastStatsMu sync.Mutex
@@ -546,10 +551,11 @@ func NewEventStreamManager(
 		// across restarts: clients keep their highest processed seq to
 		// dedupe replays and would otherwise drop every event after a
 		// restart.
-		seq:        uint64(time.Now().UnixMicro()),
-		ctx:        ctx,
-		cancel:     cancel,
-		slotStates: make(map[phase0.Slot]*SlotStateEvent, 16),
+		seq:           uint64(time.Now().UnixMicro()),
+		ctx:           ctx,
+		cancel:        cancel,
+		slotStates:    make(map[phase0.Slot]*SlotStateEvent, 16),
+		seenHeadRoots: make(map[phase0.Slot]map[phase0.Root]struct{}, 16),
 	}
 }
 
@@ -1146,18 +1152,25 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmi
 }
 
 func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
-	m.broadcastForSlot(event.Slot, &StreamEvent{
-		Type:      EventTypeHeadReceived,
-		Timestamp: time.Now().UnixMilli(),
-		Data: HeadReceivedEvent{
-			Slot:       uint64(event.Slot),
-			BlockRoot:  fmt.Sprintf("0x%x", event.Block[:]),
-			ReceivedAt: time.Now().UnixMilli(),
-		},
-	})
+	// Forward only the first head event per (slot, root); the BN may re-emit
+	// the same block and a followup would re-stamp the received time. A new
+	// root for the slot (reorg) still passes.
+	m.slotStatesMu.Lock()
+
+	roots, ok := m.seenHeadRoots[event.Slot]
+	if !ok {
+		roots = make(map[phase0.Root]struct{}, 1)
+		m.seenHeadRoots[event.Slot] = roots
+	}
+
+	if _, seen := roots[event.Block]; seen {
+		m.slotStatesMu.Unlock()
+		return
+	}
+
+	roots[event.Block] = struct{}{}
 
 	// Update slot state - bidding closed
-	m.slotStatesMu.Lock()
 	if state, ok := m.slotStates[event.Slot]; ok {
 		state.BidsClosed = true
 	} else {
@@ -1167,6 +1180,16 @@ func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
 		}
 	}
 	m.slotStatesMu.Unlock()
+
+	m.broadcastForSlot(event.Slot, &StreamEvent{
+		Type:      EventTypeHeadReceived,
+		Timestamp: time.Now().UnixMilli(),
+		Data: HeadReceivedEvent{
+			Slot:       uint64(event.Slot),
+			BlockRoot:  fmt.Sprintf("0x%x", event.Block[:]),
+			ReceivedAt: time.Now().UnixMilli(),
+		},
+	})
 
 	m.broadcastSlotState(event.Slot)
 }
@@ -1575,6 +1598,12 @@ func (m *EventStreamManager) cleanupOldSlots(currentSlot phase0.Slot) {
 	for slot := range m.slotStates {
 		if currentSlot > phase0.Slot(keepSlots) && slot < currentSlot-phase0.Slot(keepSlots) {
 			delete(m.slotStates, slot)
+		}
+	}
+
+	for slot := range m.seenHeadRoots {
+		if currentSlot > phase0.Slot(keepSlots) && slot < currentSlot-phase0.Slot(keepSlots) {
+			delete(m.seenHeadRoots, slot)
 		}
 	}
 }
