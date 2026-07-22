@@ -160,6 +160,15 @@ export interface RevealAttempt {
   maxAttempts: number;
 }
 
+// Raw single-attestation subnet coverage vs. next-block attesters. `low` marks
+// the vote graph unreliable (beacon node likely without subscribe-all-subnets).
+export interface VoteCoverage {
+  slots: number;
+  attesters: number;
+  seen_pct: number;
+  low: boolean;
+}
+
 export interface HeadVoteDataPoint {
   time: number;
   pct: number;

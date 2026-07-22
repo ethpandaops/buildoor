@@ -17,6 +17,7 @@ interface SlotGraphProps {
   chainInfo: ChainInfo | null;
   currentDisplaySlot: number;
   serviceStatus: ServiceStatus | null;
+  hideHeadVotes?: boolean;
 }
 
 interface PopoverState {
@@ -125,7 +126,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   currentConfig,
   chainInfo,
   currentDisplaySlot,
-  serviceStatus
+  serviceStatus,
+  hideHeadVotes
 }) => {
   const [popover, setPopover] = useState<PopoverState | null>(null);
 
@@ -316,8 +318,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
         </div>
 
-        {/* Head votes participation graph */}
-        {state.headVotes && state.headVotes.length > 0 && (() => {
+        {/* Head votes participation graph (hidden when subnet coverage is too
+            low to trust the raw single-attestation view) */}
+        {!hideHeadVotes && state.headVotes && state.headVotes.length > 0 && (() => {
           const paths = buildHeadVotesPaths(state.headVotes, slotStartTime, rangeStart, totalRange);
           if (!paths) return null;
 

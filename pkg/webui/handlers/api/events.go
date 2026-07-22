@@ -42,6 +42,7 @@ const (
 	EventTypePayloadAvailable            EventType = "payload_available"
 	EventTypeBuilderInfo                 EventType = "builder_info"
 	EventTypeHeadVotes                   EventType = "head_votes"
+	EventTypeVoteCoverage                EventType = "vote_coverage"
 	EventTypeBidWon                      EventType = "bid_won"
 	EventTypeBuilderAPIGetHeaderRcvd     EventType = "builder_api_get_header_received"
 	EventTypeBuilderAPIGetHeaderDlvd     EventType = "builder_api_get_header_delivered"
@@ -218,6 +219,16 @@ type HeadVotesStreamEvent struct {
 	ThresholdPct     float64 `json:"threshold_pct"`
 	ThresholdMet     bool    `json:"threshold_met"`
 	Timestamp        int64   `json:"timestamp"`
+}
+
+// VoteCoverageStreamEvent reports how many next-block attesters were seen as
+// raw single attestations beforehand. `low` marks the vote graph unreliable
+// (beacon node likely running without subscribe-all-subnets).
+type VoteCoverageStreamEvent struct {
+	Slots     int     `json:"slots"`
+	Attesters int     `json:"attesters"`
+	SeenPct   float64 `json:"seen_pct"`
+	Low       bool    `json:"low"`
 }
 
 // BidWonStreamEvent is sent when a bid is won (block successfully delivered).
@@ -469,13 +480,19 @@ func (m *EventStreamManager) Start() {
 		resultUpdateChan = resultUpdateSub.Channel()
 	}
 
-	// Subscribe to head vote updates (if chain service available)
+	// Subscribe to head vote + subnet coverage updates (if chain service available)
 	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
 
 	var headVoteChan <-chan *chain.HeadVoteUpdate
 
+	var covSub *utils.Subscription[*chain.SubnetCoverage]
+
+	var coverageChan <-chan *chain.SubnetCoverage
+
 	if m.chainSvc != nil {
 		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
+			covSub = tracker.SubscribeCoverage()
+			coverageChan = covSub.Channel()
 			hvSub = tracker.SubscribeUpdates()
 			headVoteChan = hvSub.Channel()
 		}
@@ -507,6 +524,10 @@ func (m *EventStreamManager) Start() {
 
 		if hvSub != nil {
 			defer hvSub.Unsubscribe()
+		}
+
+		if covSub != nil {
+			defer covSub.Unsubscribe()
 		}
 
 		if planChangeSub != nil {
@@ -565,6 +586,18 @@ func (m *EventStreamManager) Start() {
 				}
 
 				m.handleHeadVoteUpdate(event)
+
+			case event, ok := <-coverageChan:
+				if !ok {
+					coverageChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeVoteCoverage,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      voteCoverageEvent(event),
+				})
 
 			case event, ok := <-planChangeChan:
 				if !ok {
@@ -964,6 +997,16 @@ func (m *EventStreamManager) handlePayloadAvailableEvent(event *beacon.PayloadAv
 	})
 }
 
+// voteCoverageEvent converts a tracker coverage summary to the wire shape.
+func voteCoverageEvent(cov *chain.SubnetCoverage) VoteCoverageStreamEvent {
+	return VoteCoverageStreamEvent{
+		Slots:     cov.Slots,
+		Attesters: cov.Attesters,
+		SeenPct:   cov.SeenPct,
+		Low:       cov.Low,
+	}
+}
+
 func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeHeadVotes,
@@ -1264,6 +1307,20 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		Data:      m.getServiceStatus(),
 	}) {
 		return
+	}
+
+	// Send current attestation subnet coverage
+	if m.chainSvc != nil {
+		if tracker := m.chainSvc.GetHeadVoteTracker(); tracker != nil {
+			cov := tracker.GetSubnetCoverage()
+			if !send(&StreamEvent{
+				Type:      EventTypeVoteCoverage,
+				Timestamp: time.Now().UnixMilli(),
+				Data:      voteCoverageEvent(&cov),
+			}) {
+				return
+			}
+		}
 	}
 
 	// Send current stats

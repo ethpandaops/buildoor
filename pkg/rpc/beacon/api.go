@@ -132,3 +132,52 @@ func (c *Client) SubmitVoluntaryExit(ctx context.Context, exit *phase0.SignedVol
 
 	return nil
 }
+
+// GetBlockAttestations fetches a beacon block and returns its attestations
+// reduced to the AttestationEvent shape consumed by the head vote tracker.
+// Handles both the Electra+ format (committee_bits + concatenated
+// aggregation_bits) and the pre-Electra format (data.index = committee).
+func (c *Client) GetBlockAttestations(ctx context.Context, blockID string) ([]*AttestationEvent, error) {
+	provider, ok := c.client.(eth2client.SignedBeaconBlockProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support signed beacon block provider")
+	}
+
+	resp, err := provider.AgnosticSignedBeaconBlock(ctx, &api.SignedBeaconBlockOpts{
+		Block: blockID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get beacon block: %w", err)
+	}
+
+	if resp.Data == nil || resp.Data.Message == nil || resp.Data.Message.Body == nil {
+		return nil, fmt.Errorf("beacon block response is nil")
+	}
+
+	atts := resp.Data.Message.Body.Attestations
+	events := make([]*AttestationEvent, 0, len(atts))
+
+	for _, att := range atts {
+		if att == nil || att.Data == nil {
+			continue
+		}
+
+		event := &AttestationEvent{
+			AggregationBits: att.AggregationBits,
+			Slot:            att.Data.Slot,
+			Index:           uint64(att.Data.Index),
+			BeaconBlockRoot: att.Data.BeaconBlockRoot,
+		}
+
+		// Electra+ attestations carry the committee selection separately;
+		// data.index no longer identifies a committee there (Gloas repurposes
+		// it as the payload-availability signal).
+		if len(att.CommitteeBits) > 0 {
+			event.CommitteeBits = att.CommitteeBits
+		}
+
+		events = append(events, event)
+	}
+
+	return events, nil
+}

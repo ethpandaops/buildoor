@@ -237,21 +237,29 @@ npm run clean
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
    - Provides slot↔timestamp conversions
-   - `HeadVoteTracker`: per-slot attestation participation from locally
-     aggregated raw `single_attestation` SSE events (streaming from the Gloas
-     attester deadline at 25% of the slot — the aggregated `attestation` topic
-     only arrives at 50%, which is also the `PAYLOAD_DUE_BPS` reveal deadline).
-     Per-(slot, beacon_block_root) bitmaps over locally computed attester
-     duties, O(1) merge with incremental balance accounting; aggregates merge
-     into the same bitmaps as a late-slot complement (the BN only emits singles
-     for subscribed subnets — run it with subscribe-all-subnets for full early
-     coverage; undercounting is the only failure mode). Updates are throttled
-     (≥1 pp step per 100 ms flush per slot); crossing the configurable
-     `epbs.head_vote_threshold_pct` (default 60 = the Gloas builder payment
-     quorum, 0 = disabled) fires immediately with `threshold_met`. Feeds the
-     WebUI `head_votes` SSE event (participation curve + threshold line/marker
-     in the slot graph); `GetParticipation(slot, root)` exposes snapshots for
-     future consumers (e.g. reveal gating)
+   - `HeadVoteTracker`: per-slot attestation participation aggregated locally
+     from raw `single_attestation` SSE events ONLY (streaming from the Gloas
+     attester deadline at 25% of the slot). The aggregated `attestation` topic
+     is deliberately NOT subscribed — aggregates arrive at the 50% aggregate
+     deadline, which is also the `PAYLOAD_DUE_BPS` reveal deadline, too late
+     to inform anything. Per-(slot, beacon_block_root) bitmaps over locally
+     computed attester duties, O(1) merge with incremental balance accounting;
+     undercounting is the only failure mode (the BN only emits singles for
+     subscribed subnets — run it with subscribe-all-subnets). Updates are
+     throttled (≥1 pp step per 100 ms flush per slot); crossing the
+     configurable `epbs.head_vote_threshold_pct` (default 60 = the Gloas
+     builder payment quorum, 0 = disabled) fires immediately with
+     `threshold_met`. Feeds the WebUI `head_votes` SSE event (participation
+     curve + threshold-met marker in the slot graph);
+     `GetParticipation(slot, root)` exposes snapshots for future consumers
+     (e.g. reveal gating). **Subnet coverage detection**: every imported
+     block's attestations (fetched per head event, aggregate-format walk) are
+     the ground truth compared against the singles bitmap; a rolling 16-block
+     window seeing <80% of on-chain attesters (min 8 blocks / 16 attesters,
+     recover at ≥90%) sets the `Low` flag on the `vote_coverage` SSE event
+     (initial-state + on change) — the UI then shows a warning badge (hover
+     callout with the subscribe-all-subnets flags) in the Slot Timeline
+     header and hides the head-vote graph as unreliable
 
 4. **Lifecycle Manager** (`pkg/lifecycle/`)
    - Builder registration on beacon chain

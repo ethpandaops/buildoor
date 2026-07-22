@@ -18,6 +18,7 @@ const DashboardPage: React.FC = () => {
     stats,
     builderInfo,
     serviceStatus,
+    voteCoverage,
     currentSlot,
     slotStates,
     slotConfigs,
@@ -80,6 +81,27 @@ const DashboardPage: React.FC = () => {
             <div className="card-header d-flex justify-content-between align-items-center">
               <h5 className="mb-0">Slot Timeline</h5>
               <div className="d-flex gap-2">
+                {voteCoverage?.low && (
+                  <span className="badge bg-warning text-dark coverage-warning">
+                    <i className="fas fa-triangle-exclamation me-1"></i>
+                    Low vote coverage
+                    <span className="coverage-callout">
+                      <span className="coverage-callout-title">
+                        Attestation subnet coverage low
+                      </span>
+                      Only {voteCoverage.seen_pct.toFixed(0)}% of the attesters that landed
+                      on chain were seen as raw single attestations (last{' '}
+                      {voteCoverage.slots} blocks). The beacon node is likely running
+                      without subscribe-all-subnets, so the head-vote graph is unreliable
+                      and has been hidden.
+                      <br />
+                      Enable it via <code>--subscribe-all-subnets</code>{' '}
+                      (Lighthouse/Prysm/Nimbus/Grandine),{' '}
+                      <code>--p2p-subscribe-all-subnets-enabled</code> (Teku) or{' '}
+                      <code>--subscribeAllSubnets</code> (Lodestar).
+                    </span>
+                  </span>
+                )}
                 <span className={`badge ${connected ? 'bg-success' : 'bg-danger'}`}>
                   {connected ? 'Connected' : 'Disconnected'}
                 </span>
@@ -94,6 +116,7 @@ const DashboardPage: React.FC = () => {
                 slotServiceStatuses={slotServiceStatuses}
                 currentConfig={config}
                 serviceStatus={serviceStatus}
+                hideHeadVotes={voteCoverage?.low ?? false}
               />
               <Legend />
             </div>

@@ -3,7 +3,9 @@ package chain
 import (
 	"context"
 	"fmt"
+	"math/bits"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -29,7 +31,33 @@ const (
 	// voteSlotRetention is how many slots of vote state are kept before
 	// pruning (relative to the latest head slot).
 	voteSlotRetention = 4
+
+	// Subnet coverage detection: every imported block's attestations are the
+	// ground truth of which votes existed; comparing them against the raw
+	// singles we saw beforehand measures our subnet visibility. A beacon node
+	// without subscribe-all-subnets only sees singles on its duty subnets, so
+	// sustained low coverage flags the vote graph as unreliable.
+	coverageWindowSlots      = 16   // rolling window of measured blocks
+	coverageMinSlots         = 8    // minimum measurements before flagging
+	coverageMinAttesters     = 16   // minimum attesters counted before flagging
+	coverageLowThreshold     = 80.0 // flag when the seen percentage falls below this
+	coverageRecoverThreshold = 90.0 // clear once the seen percentage reaches this
 )
+
+// SubnetCoverage summarizes how many of the attesters that landed in recent
+// blocks were previously seen as raw single attestations.
+type SubnetCoverage struct {
+	Slots     int     // measured blocks in the window
+	Attesters int     // total attesters counted across the window
+	SeenPct   float64 // percent of those attesters seen as singles beforehand
+	Low       bool    // sustained miss above coverageMissThreshold
+}
+
+// coverageSample is one block's attester count vs. previously-seen singles.
+type coverageSample struct {
+	seen  int
+	total int
+}
 
 // HeadVoteUpdate is dispatched when head vote participation changes.
 type HeadVoteUpdate struct {
@@ -61,7 +89,7 @@ type slotCommitteeLayout struct {
 // Bits map 1:1 to the slot layout's member positions; participation is
 // accumulated incrementally as bits are set.
 type rootVoteState struct {
-	voteBits         []byte
+	voteBits         []byte // one bit per committee member seen via single_attestation
 	participatingETH uint64
 	voteCount        int
 	lastVoteAt       time.Time // receive time of the last merged vote; stamps updates
@@ -104,11 +132,15 @@ func (s *slotVoteState) primary() (phase0.Root, *rootVoteState) {
 // HeadVoteTracker tracks per-slot attestation participation by aggregating raw
 // single_attestation events (streaming in from the Gloas attester deadline at
 // 25% of the slot) into per-root bitmaps against locally computed attester
-// duties. Aggregated attestation events are merged into the same bitmaps as a
-// late-slot complement: the node only sees raw votes on subnets it subscribes
-// to, while aggregates cover all committees by the aggregate deadline (50%).
-// Updates are throttled to percent-steps on a flush interval; crossing the
-// configured participation threshold fires immediately.
+// duties. Raw singles are the ONLY participation source — aggregates are
+// deliberately not subscribed (they arrive at the 50% aggregate deadline,
+// which is also the payload reveal deadline, far too late to be useful).
+// Instead, every imported block's attestations serve as the ground truth to
+// measure how much of the vote our singles view actually covered: a node
+// without subscribe-all-subnets only sees singles on its duty subnets, and a
+// sustained miss flags the tracking as unreliable. Updates are throttled to
+// percent-steps on a flush interval; crossing the configured participation
+// threshold fires immediately.
 type HeadVoteTracker struct {
 	cfg      *config.Config // shared live config; threshold read per check, never cached
 	chainSvc Service
@@ -118,7 +150,14 @@ type HeadVoteTracker struct {
 	mu         sync.Mutex
 	slotStates map[phase0.Slot]*slotVoteState
 
-	updateDispatcher *utils.Dispatcher[*HeadVoteUpdate]
+	// Subnet coverage detection state (guarded by mu; fetch guarded by the
+	// in-flight flag so a slow beacon node cannot pile up block fetches).
+	coverageSamples     []coverageSample
+	coverageLow         bool
+	coverageFetchActive atomic.Bool
+
+	updateDispatcher   *utils.Dispatcher[*HeadVoteUpdate]
+	coverageDispatcher *utils.Dispatcher[*SubnetCoverage]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -133,12 +172,14 @@ func NewHeadVoteTracker(
 	log logrus.FieldLogger,
 ) *HeadVoteTracker {
 	return &HeadVoteTracker{
-		cfg:              cfg,
-		chainSvc:         chainSvc,
-		clClient:         clClient,
-		log:              log.WithField("component", "head-vote-tracker"),
-		slotStates:       make(map[phase0.Slot]*slotVoteState, voteSlotRetention),
-		updateDispatcher: &utils.Dispatcher[*HeadVoteUpdate]{},
+		cfg:                cfg,
+		chainSvc:           chainSvc,
+		clClient:           clClient,
+		log:                log.WithField("component", "head-vote-tracker"),
+		slotStates:         make(map[phase0.Slot]*slotVoteState, voteSlotRetention),
+		coverageSamples:    make([]coverageSample, 0, coverageWindowSlots),
+		updateDispatcher:   &utils.Dispatcher[*HeadVoteUpdate]{},
+		coverageDispatcher: &utils.Dispatcher[*SubnetCoverage]{},
 	}
 }
 
@@ -167,6 +208,41 @@ func (t *HeadVoteTracker) SubscribeUpdates() *utils.Subscription[*HeadVoteUpdate
 	return t.updateDispatcher.Subscribe(64, false)
 }
 
+// SubscribeCoverage returns a subscription for subnet coverage updates
+// (at most one per imported block).
+func (t *HeadVoteTracker) SubscribeCoverage() *utils.Subscription[*SubnetCoverage] {
+	return t.coverageDispatcher.Subscribe(16, false)
+}
+
+// GetSubnetCoverage returns the current subnet coverage summary.
+func (t *HeadVoteTracker) GetSubnetCoverage() SubnetCoverage {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.buildCoverage()
+}
+
+// buildCoverage assembles the coverage summary from the rolling window.
+// Caller must hold t.mu.
+func (t *HeadVoteTracker) buildCoverage() SubnetCoverage {
+	var seen, total int
+	for _, s := range t.coverageSamples {
+		seen += s.seen
+		total += s.total
+	}
+
+	cov := SubnetCoverage{
+		Slots:     len(t.coverageSamples),
+		Attesters: total,
+		Low:       t.coverageLow,
+	}
+	if total > 0 {
+		cov.SeenPct = float64(seen) / float64(total) * 100.0
+	}
+
+	return cov
+}
+
 // GetParticipation returns the current participation snapshot for a tracked
 // (slot, beacon block root) pair; ok is false when the pair is not tracked.
 func (t *HeadVoteTracker) GetParticipation(slot phase0.Slot, root phase0.Root) (HeadVoteUpdate, bool) {
@@ -192,9 +268,6 @@ func (t *HeadVoteTracker) run() {
 	headSub := t.clClient.Events().SubscribeHead()
 	defer headSub.Unsubscribe()
 
-	attSub := t.clClient.Events().SubscribeAttestations()
-	defer attSub.Unsubscribe()
-
 	singleSub := t.clClient.Events().SubscribeSingleAttestations()
 	defer singleSub.Unsubscribe()
 
@@ -207,8 +280,6 @@ func (t *HeadVoteTracker) run() {
 			return
 		case event := <-headSub.Channel():
 			t.handleHeadEvent(event)
-		case event := <-attSub.Channel():
-			t.handleAttestationEvent(event)
 		case event := <-singleSub.Channel():
 			t.handleSingleAttestation(event)
 		case <-ticker.C:
@@ -262,6 +333,114 @@ func (t *HeadVoteTracker) handleHeadEvent(event *beacon.HeadEvent) {
 			delete(t.slotStates, slot)
 		}
 	}
+
+	// The imported block's attestations are the ground truth for measuring
+	// how many votes our raw single_attestation view actually covered.
+	if t.ctx != nil && t.clClient != nil && t.coverageFetchActive.CompareAndSwap(false, true) {
+		t.wg.Add(1)
+
+		go t.measureBlockCoverage(event.Block)
+	}
+}
+
+// measureBlockCoverage fetches the block's attestations and records how many
+// of its attesters were previously seen as raw singles.
+func (t *HeadVoteTracker) measureBlockCoverage(root phase0.Root) {
+	defer t.wg.Done()
+	defer t.coverageFetchActive.Store(false)
+
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+
+	atts, err := t.clClient.GetBlockAttestations(ctx, fmt.Sprintf("%#x", root))
+	if err != nil {
+		t.log.WithError(err).Debug("Failed to fetch block attestations for coverage measurement")
+		return
+	}
+
+	t.recordBlockAttestations(atts)
+}
+
+// recordBlockAttestations compares a block's attesters against the singles
+// bitmap of each tracked (slot, root) and updates the coverage window.
+func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEvent) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Dedupe attesters across the block's (possibly overlapping) attestations
+	// into one bitmap per tracked (slot, root).
+	type slotRoot struct {
+		slot phase0.Slot
+		root phase0.Root
+	}
+
+	blockBits := make(map[slotRoot][]byte, 2)
+
+	for _, att := range atts {
+		state, ok := t.slotStates[att.Slot]
+		if !ok {
+			continue
+		}
+
+		key := slotRoot{att.Slot, att.BeaconBlockRoot}
+
+		bitmap, ok := blockBits[key]
+		if !ok {
+			bitmap = make([]byte, (state.layout.totalMembers+7)/8)
+			blockBits[key] = bitmap
+		}
+
+		walkAggregateBits(state.layout, att, func(pos int) {
+			setBit(bitmap, pos)
+		})
+	}
+
+	changed := false
+
+	for key, bitmap := range blockBits {
+		total := popCount(bitmap)
+		if total == 0 {
+			continue
+		}
+
+		seen := 0
+		if rs, ok := t.slotStates[key.slot].roots[key.root]; ok {
+			seen = popCountAnd(bitmap, rs.voteBits)
+		}
+
+		t.coverageSamples = append(t.coverageSamples, coverageSample{seen: seen, total: total})
+		if len(t.coverageSamples) > coverageWindowSlots {
+			t.coverageSamples = t.coverageSamples[len(t.coverageSamples)-coverageWindowSlots:]
+		}
+
+		changed = true
+	}
+
+	if !changed {
+		return
+	}
+
+	// Flag with hysteresis on the window's weighted seen percentage.
+	cov := t.buildCoverage()
+
+	if !t.coverageLow && cov.Slots >= coverageMinSlots && cov.Attesters >= coverageMinAttesters &&
+		cov.SeenPct < coverageLowThreshold {
+		t.coverageLow = true
+
+		t.log.WithFields(logrus.Fields{
+			"seen_pct":  fmt.Sprintf("%.1f%%", cov.SeenPct),
+			"attesters": cov.Attesters,
+		}).Warn("Raw attestation subnet coverage is low — beacon node likely runs " +
+			"without subscribe-all-subnets; head vote tracking is unreliable")
+	} else if t.coverageLow && cov.SeenPct >= coverageRecoverThreshold {
+		t.coverageLow = false
+
+		t.log.WithField("seen_pct", fmt.Sprintf("%.1f%%", cov.SeenPct)).
+			Info("Raw attestation subnet coverage recovered")
+	}
+
+	cov.Low = t.coverageLow
+	t.coverageDispatcher.Fire(&cov)
 }
 
 // handleSingleAttestation merges one raw vote into its (slot, root) bitmap in
@@ -300,35 +479,9 @@ func (t *HeadVoteTracker) handleSingleAttestation(event *beacon.SingleAttestatio
 	}
 
 	setBit(rs.voteBits, int(pos))
+
 	rs.participatingETH += uint64(layout.weights[pos])
 	rs.voteCount++
-	rs.lastVoteAt = event.ReceivedAt
-	rs.dirty = true
-
-	t.maybeFireThreshold(event.Slot, state, event.BeaconBlockRoot, rs)
-}
-
-// handleAttestationEvent merges an aggregated attestation's bits into its
-// (slot, root) bitmap. Aggregates arrive by the aggregate deadline (50% of the
-// slot) and backfill votes from subnets the node does not subscribe to.
-func (t *HeadVoteTracker) handleAttestationEvent(event *beacon.AttestationEvent) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	state := t.getOrCreateSlotState(event.Slot)
-	if state == nil {
-		return
-	}
-
-	rs := t.getOrCreateRootState(state, event.BeaconBlockRoot)
-	if rs == nil {
-		return
-	}
-
-	if !t.mergeAggregateBits(state.layout, rs, event) {
-		return
-	}
-
 	rs.lastVoteAt = event.ReceivedAt
 	rs.dirty = true
 
@@ -462,26 +615,19 @@ func (t *HeadVoteTracker) buildCommitteeLayout(slot phase0.Slot) *slotCommitteeL
 	return layout
 }
 
-// mergeAggregateBits ORs an aggregate's bits into the root's bitmap, updating
-// participation incrementally per newly set bit. Handles the Electra+ format
+// walkAggregateBits visits the global bit position of every attester set in
+// an aggregate-format attestation. Handles the Electra+ format
 // (committee_bits selects committees, aggregation_bits is concatenated) and
-// the pre-Electra format (Index identifies a single committee). Returns true
-// if any new bit was set.
-func (t *HeadVoteTracker) mergeAggregateBits(
+// the pre-Electra format (Index identifies a single committee).
+func walkAggregateBits(
 	layout *slotCommitteeLayout,
-	rs *rootVoteState,
 	event *beacon.AttestationEvent,
-) bool {
-	changed := false
-
-	mergeCommittee := func(offset, size, bitBase int) {
+	visit func(pos int),
+) {
+	walkCommittee := func(offset, size, bitBase int) {
 		for j := range size {
-			if isBitSet(event.AggregationBits, bitBase+j) && !isBitSet(rs.voteBits, offset+j) {
-				setBit(rs.voteBits, offset+j)
-
-				rs.participatingETH += uint64(layout.weights[offset+j])
-				rs.voteCount++
-				changed = true
+			if isBitSet(event.AggregationBits, bitBase+j) {
+				visit(offset + j)
 			}
 		}
 	}
@@ -496,19 +642,17 @@ func (t *HeadVoteTracker) mergeAggregateBits(
 				continue
 			}
 
-			mergeCommittee(layout.committeeOffsets[ci], layout.committeeSizes[ci], aggBitPos)
+			walkCommittee(layout.committeeOffsets[ci], layout.committeeSizes[ci], aggBitPos)
 			aggBitPos += layout.committeeSizes[ci]
 		}
 	} else {
 		committeeIdx := int(event.Index)
 		if committeeIdx >= len(layout.committeeSizes) {
-			return false
+			return
 		}
 
-		mergeCommittee(layout.committeeOffsets[committeeIdx], layout.committeeSizes[committeeIdx], 0)
+		walkCommittee(layout.committeeOffsets[committeeIdx], layout.committeeSizes[committeeIdx], 0)
 	}
-
-	return changed
 }
 
 // maybeFireThreshold fires an immediate update when the primary root newly
@@ -642,4 +786,26 @@ func setBit(data []byte, pos int) {
 	}
 
 	data[byteIdx] |= 1 << uint(pos%8)
+}
+
+// popCount returns the number of set bits in the byte slice.
+func popCount(data []byte) int {
+	count := 0
+	for _, b := range data {
+		count += bits.OnesCount8(b)
+	}
+
+	return count
+}
+
+// popCountAnd returns the number of bits set in both byte slices.
+func popCountAnd(a, b []byte) int {
+	n := min(len(a), len(b))
+
+	count := 0
+	for i := range n {
+		count += bits.OnesCount8(a[i] & b[i])
+	}
+
+	return count
 }

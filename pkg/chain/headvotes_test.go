@@ -199,48 +199,59 @@ func TestHeadVoteTrackerRejectsInconsistentVotes(t *testing.T) {
 	require.False(t, ok, "out-of-window slots must not allocate state")
 }
 
-func TestHeadVoteTrackerAggregateMergeOverlap(t *testing.T) {
+func TestHeadVoteTrackerBlockCoverageElectraFormat(t *testing.T) {
 	rootA := phase0.Root{0xaa}
 	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
 		5: {{0, 1, 2}, {3, 4}},
 	}, 8)
 
-	// A raw vote for member 1 arrives first.
+	// Raw votes for members 1 (committee 0) and 3 (committee 1) were seen.
 	tracker.handleSingleAttestation(singleVote(5, 0, 1, rootA))
+	tracker.handleSingleAttestation(singleVote(5, 1, 3, rootA))
 
-	// Electra-format aggregate covering both committees: members 0,1 of
-	// committee 0 and member 3 of committee 1 (concatenated bit positions
-	// 0,1 and 3).
-	tracker.handleAttestationEvent(&beacon.AttestationEvent{
-		Slot:            5,
-		BeaconBlockRoot: rootA,
-		CommitteeBits:   []byte{0b11},
-		AggregationBits: []byte{0b01011},
+	// Block attestation, Electra format: two overlapping attestations
+	// covering members 0,1 of committee 0 and member 3 of committee 1
+	// (concatenated bit positions 0,1 and 3) — overlaps count once.
+	tracker.recordBlockAttestations([]*beacon.AttestationEvent{
+		{
+			Slot:            5,
+			BeaconBlockRoot: rootA,
+			CommitteeBits:   []byte{0b11},
+			AggregationBits: []byte{0b01011},
+		},
+		{
+			Slot:            5,
+			BeaconBlockRoot: rootA,
+			CommitteeBits:   []byte{0b01},
+			AggregationBits: []byte{0b011},
+		},
 	})
 
-	update, ok := tracker.GetParticipation(5, rootA)
-	require.True(t, ok)
-	assert.Equal(t, 3, update.VoteCount, "overlapping bit must count once")
-	assert.Equal(t, uint64(96), update.ParticipationETH)
+	cov := tracker.GetSubnetCoverage()
+	assert.Equal(t, 1, cov.Slots)
+	assert.Equal(t, 3, cov.Attesters, "block attesters must dedupe across attestations")
+	assert.InDelta(t, 2.0/3.0*100.0, cov.SeenPct, 0.001)
 }
 
-func TestHeadVoteTrackerPreElectraAggregate(t *testing.T) {
+func TestHeadVoteTrackerBlockCoveragePreElectraFormat(t *testing.T) {
 	rootA := phase0.Root{0xaa}
 	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
 		5: {{0, 1, 2}, {3, 4}},
 	}, 8)
 
+	tracker.handleSingleAttestation(singleVote(5, 1, 4, rootA))
+
 	// Pre-Electra format: Index selects committee 1, bits cover both members.
-	tracker.handleAttestationEvent(&beacon.AttestationEvent{
+	tracker.recordBlockAttestations([]*beacon.AttestationEvent{{
 		Slot:            5,
 		BeaconBlockRoot: rootA,
 		Index:           1,
 		AggregationBits: []byte{0b11},
-	})
+	}})
 
-	update, ok := tracker.GetParticipation(5, rootA)
-	require.True(t, ok)
-	assert.Equal(t, 2, update.VoteCount)
+	cov := tracker.GetSubnetCoverage()
+	assert.Equal(t, 2, cov.Attesters)
+	assert.InDelta(t, 50.0, cov.SeenPct, 0.001)
 }
 
 func TestHeadVoteTrackerRootSwitchPreservesBitmaps(t *testing.T) {
@@ -496,4 +507,74 @@ func TestHeadVoteTrackerTimestampsFromReceiveTime(t *testing.T) {
 	updates = drainUpdates(sub)
 	require.Len(t, updates, 1)
 	assert.Equal(t, lastVoteAt.UnixMilli(), updates[0].Timestamp)
+}
+
+// TestHeadVoteTrackerSubnetCoverageDetection flags sustained low singles
+// coverage against block attestations and recovers once singles reappear.
+func TestHeadVoteTrackerSubnetCoverageDetection(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: {{0, 1, 2, 3}},
+	}, 8)
+
+	covSub := tracker.SubscribeCoverage()
+	defer covSub.Unsubscribe()
+
+	drainCoverage := func() []*SubnetCoverage {
+		out := make([]*SubnetCoverage, 0, 8)
+		for {
+			select {
+			case c := <-covSub.Channel():
+				out = append(out, c)
+			default:
+				return out
+			}
+		}
+	}
+
+	blockAtt := &beacon.AttestationEvent{
+		Slot:            5,
+		BeaconBlockRoot: rootA,
+		CommitteeBits:   []byte{0b1},
+		AggregationBits: []byte{0b1111},
+	}
+
+	// Track the slot via its head event only (no singles seen at all) — the
+	// coverage measurement must work for slots without any raw votes.
+	tracker.handleHeadEvent(&beacon.HeadEvent{Slot: 5, Block: rootA})
+
+	// 7 measured blocks: below the minimum sample count, never low.
+	for range 7 {
+		tracker.recordBlockAttestations([]*beacon.AttestationEvent{blockAtt})
+	}
+
+	for _, c := range drainCoverage() {
+		assert.False(t, c.Low)
+	}
+	assert.False(t, tracker.GetSubnetCoverage().Low)
+
+	// The 8th block (32 attesters total, 0% seen) trips the flag.
+	tracker.recordBlockAttestations([]*beacon.AttestationEvent{blockAtt})
+
+	updates := drainCoverage()
+	require.NotEmpty(t, updates)
+	assert.True(t, updates[len(updates)-1].Low)
+	assert.Zero(t, updates[len(updates)-1].SeenPct)
+
+	cov := tracker.GetSubnetCoverage()
+	assert.True(t, cov.Low)
+	assert.Equal(t, 32, cov.Attesters)
+
+	// Singles reappear: the sliding window recovers and clears the flag.
+	for i := phase0.ValidatorIndex(0); i < 4; i++ {
+		tracker.handleSingleAttestation(singleVote(5, 0, i, rootA))
+	}
+
+	for range coverageWindowSlots {
+		tracker.recordBlockAttestations([]*beacon.AttestationEvent{blockAtt})
+	}
+
+	cov = tracker.GetSubnetCoverage()
+	assert.False(t, cov.Low)
+	assert.InDelta(t, 100.0, cov.SeenPct, 0.001)
 }
