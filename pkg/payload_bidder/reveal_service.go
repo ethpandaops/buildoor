@@ -43,6 +43,16 @@ type RevealRequest struct {
 	Transport payload_builder.BidTransport
 }
 
+// RevealStarted announces the beginning of a reveal attempt (envelope
+// construction + submit call) so the UI can render the in-flight call live;
+// the matching RevealResult follows when the attempt completes.
+type RevealStarted struct {
+	Slot      phase0.Slot
+	Transport payload_builder.BidTransport
+	Attempt   int // 1-based
+	StartedAt time.Time
+}
+
 // RevealResult reports the outcome of a reveal attempt.
 type RevealResult struct {
 	Slot        phase0.Slot
@@ -53,6 +63,12 @@ type RevealResult struct {
 	Error       string // failure reason (when Success is false)
 	Attempt     int    // 1-based
 	MaxAttempts int
+
+	// StartedAt/CompletedAt bracket the attempt (envelope construction +
+	// submit call) — the submit call alone takes several hundred ms on some
+	// clients, so the span matters. Zero on skips (nothing was attempted).
+	StartedAt   time.Time
+	CompletedAt time.Time
 
 	// Envelope is the signed envelope built for the attempt. It is set from
 	// construction onward on every attempt (including failed publishes) and
@@ -99,6 +115,7 @@ type RevealService struct {
 
 	requests chan *RevealRequest
 	results  utils.Dispatcher[*RevealResult]
+	starts   utils.Dispatcher[*RevealStarted]
 	pending  map[phase0.Slot]*revealState // owned by the run loop; no mutex
 
 	ctx    context.Context
@@ -110,12 +127,13 @@ type RevealService struct {
 // revealState is the run-loop-owned schedule/gate/retry state for one slot's
 // reveal.
 type revealState struct {
-	req      *RevealRequest
-	settings *action_plan.ResolvedRevealSettings     // frozen reveal settings for the slot
-	envelope *eth2all.SignedExecutionPayloadEnvelope // built on the first attempt, reused on retries
-	blobs    [][]byte
-	proofs   [][]byte
-	attempts int
+	req              *RevealRequest
+	settings         *action_plan.ResolvedRevealSettings     // frozen reveal settings for the slot
+	envelope         *eth2all.SignedExecutionPayloadEnvelope // built on the first attempt, reused on retries
+	blobs            [][]byte
+	proofs           [][]byte
+	attempts         int
+	attemptStartedAt time.Time // start of the current attempt (construction + submit)
 
 	voteGateMet bool
 	timeDue     time.Time // when the time gate opens (gate modes involving time)
@@ -210,6 +228,12 @@ func (s *RevealService) SetBuilderIndex(index uint64) {
 // SubscribeResults subscribes to reveal results (consumed by the WebUI).
 func (s *RevealService) SubscribeResults(capacity int, blocking bool) *utils.Subscription[*RevealResult] {
 	return s.results.Subscribe(capacity, blocking)
+}
+
+// SubscribeStarts subscribes to reveal attempt starts (consumed by the WebUI
+// to render the in-flight submit call live).
+func (s *RevealService) SubscribeStarts(capacity int, blocking bool) *utils.Subscription[*RevealStarted] {
+	return s.starts.Subscribe(capacity, blocking)
 }
 
 // RequestReveal enqueues a reveal request; non-blocking: a full queue is
@@ -474,6 +498,14 @@ func (s *RevealService) processDue(now time.Time) {
 		}
 
 		state.attempts++
+		state.attemptStartedAt = time.Now()
+
+		s.starts.Fire(&RevealStarted{
+			Slot:      slot,
+			Transport: state.req.Transport,
+			Attempt:   state.attempts,
+			StartedAt: state.attemptStartedAt,
+		})
 
 		s.log.WithFields(logrus.Fields{
 			"slot":         slot,
@@ -518,6 +550,8 @@ func (s *RevealService) processDue(now time.Time) {
 			Success:     true,
 			Attempt:     state.attempts,
 			MaxAttempts: int(state.settings.MaxAttempts),
+			StartedAt:   state.attemptStartedAt,
+			CompletedAt: time.Now(),
 			Envelope:    state.envelope,
 		})
 
@@ -551,6 +585,8 @@ func (s *RevealService) handlePublishFailure(slot phase0.Slot, state *revealStat
 		Error:       err.Error(),
 		Attempt:     state.attempts,
 		MaxAttempts: maxAttempts,
+		StartedAt:   state.attemptStartedAt,
+		CompletedAt: time.Now(),
 		Envelope:    state.envelope,
 	})
 

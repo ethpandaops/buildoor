@@ -43,6 +43,7 @@ const (
 	EventTypeBuilderInfo                 EventType = "builder_info"
 	EventTypeHeadVotes                   EventType = "head_votes"
 	EventTypeVoteCoverage                EventType = "vote_coverage"
+	EventTypeRevealStarted               EventType = "reveal_started"
 	EventTypeBidWon                      EventType = "bid_won"
 	EventTypeBuilderAPIGetHeaderRcvd     EventType = "builder_api_get_header_received"
 	EventTypeBuilderAPIGetHeaderDlvd     EventType = "builder_api_get_header_delivered"
@@ -149,15 +150,28 @@ type HeadReceivedEvent struct {
 	ReceivedAt int64  `json:"received_at"`
 }
 
+// RevealStartedStreamEvent is sent when a reveal attempt begins (envelope
+// construction + submit call) so the UI can render the in-flight call live;
+// the matching reveal event follows on completion.
+type RevealStartedStreamEvent struct {
+	Slot      uint64 `json:"slot"`
+	Attempt   int    `json:"attempt"`
+	StartedAt int64  `json:"started_at"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // RevealStreamEvent is sent when we submit or skip a reveal (one per attempt).
+// StartedAt/Timestamp bracket the attempt (construction + submit call) so the
+// UI can render the call's duration; StartedAt is 0 on skips.
 type RevealStreamEvent struct {
 	Slot        uint64 `json:"slot"`
 	Success     bool   `json:"success"`
 	Skipped     bool   `json:"skipped"`
-	SkipReason  string `json:"skip_reason,omitempty"` // plan_disabled | late (skips only)
+	SkipReason  string `json:"skip_reason,omitempty"` // plan_disabled | disabled | late | vote_gate_timeout (skips only)
 	Error       string `json:"error,omitempty"`
 	Attempt     int    `json:"attempt,omitempty"`
 	MaxAttempts int    `json:"max_attempts,omitempty"`
+	StartedAt   int64  `json:"started_at,omitempty"`
 	Timestamp   int64  `json:"timestamp"`
 }
 
@@ -436,9 +450,15 @@ func (m *EventStreamManager) Start() {
 
 	var revealChan <-chan *payload_bidder.RevealResult
 
+	var revealStartSub *utils.Subscription[*payload_bidder.RevealStarted]
+
+	var revealStartChan <-chan *payload_bidder.RevealStarted
+
 	if m.revealSvc != nil {
 		revealSub = m.revealSvc.SubscribeResults(16, false)
 		revealChan = revealSub.Channel()
+		revealStartSub = m.revealSvc.SubscribeStarts(16, false)
+		revealStartChan = revealStartSub.Channel()
 	}
 
 	// Subscribe to payload inclusion events from the shared inclusion tracker (if available)
@@ -516,6 +536,10 @@ func (m *EventStreamManager) Start() {
 
 		if revealSub != nil {
 			defer revealSub.Unsubscribe()
+		}
+
+		if revealStartSub != nil {
+			defer revealStartSub.Unsubscribe()
 		}
 
 		if bidIncludedSub != nil {
@@ -630,6 +654,23 @@ func (m *EventStreamManager) Start() {
 				}
 
 				m.BroadcastReveal(event)
+
+			case event, ok := <-revealStartChan:
+				if !ok {
+					revealStartChan = nil
+					continue
+				}
+
+				m.broadcastForSlot(event.Slot, &StreamEvent{
+					Type:      EventTypeRevealStarted,
+					Timestamp: time.Now().UnixMilli(),
+					Data: RevealStartedStreamEvent{
+						Slot:      uint64(event.Slot),
+						Attempt:   event.Attempt,
+						StartedAt: event.StartedAt.UnixMilli(),
+						Timestamp: event.StartedAt.UnixMilli(),
+					},
+				})
 
 			case event, ok := <-bidIncludedChan:
 				if !ok {
@@ -1511,6 +1552,16 @@ func (m *EventStreamManager) BroadcastBidFailed(slot uint64, blockHash string, v
 func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult) {
 	slot := uint64(event.Slot)
 
+	completedAt := time.Now().UnixMilli()
+	if !event.CompletedAt.IsZero() {
+		completedAt = event.CompletedAt.UnixMilli()
+	}
+
+	var startedAt int64
+	if !event.StartedAt.IsZero() {
+		startedAt = event.StartedAt.UnixMilli()
+	}
+
 	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeReveal,
 		Timestamp: time.Now().UnixMilli(),
@@ -1522,7 +1573,8 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 			Error:       event.Error,
 			Attempt:     event.Attempt,
 			MaxAttempts: event.MaxAttempts,
-			Timestamp:   time.Now().UnixMilli(),
+			StartedAt:   startedAt,
+			Timestamp:   completedAt,
 		},
 	})
 

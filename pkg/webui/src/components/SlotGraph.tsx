@@ -712,9 +712,32 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               );
             })}
 
-            {/* Reveal attempts — one dot per attempt so each retry/error is visible */}
+            {/* In-flight reveal: the submit call is running right now — grow
+                the span live toward the current time (capped at the 5s submit
+                timeout + margin) until the completion event replaces it with
+                the static span + outcome dot below */}
+            {genesisTime > 0 && state.revealInFlight && (
+              <BuildDelayLine
+                className="reveal-call-line"
+                leftPct={calculatePosition(state.revealInFlight.startedAt - slotStartTime, rangeStart, totalRange)}
+                slotStartTime={slotStartTime}
+                rangeStart={rangeStart}
+                totalRange={totalRange}
+                expectedEndAt={state.revealInFlight.startedAt + 6000}
+                onClick={(e) => showPopover(e, {
+                  title: `Payload Reveal (in progress${state.revealInFlight ? `, attempt ${state.revealInFlight.attempt}` : ''})`,
+                  items: [
+                    { label: 'Started', value: `${(state.revealInFlight?.startedAt ?? 0) - slotStartTime}ms` }
+                  ]
+                })}
+              />
+            )}
+
+            {/* Reveal attempts — a call-span line from attempt start to
+                completion (the submit call takes several hundred ms on some
+                clients) ending in the outcome dot; one span+dot per attempt
+                so each retry/error is visible */}
             {genesisTime > 0 && state.revealAttempts?.map((att, idx) => {
-              const failed = !att.success && !att.skipped;
               const status = att.success ? 'Success' : (att.skipped ? 'Skipped' : 'Failed');
               // A skipped attempt (reveal withheld by the action plan or missed
               // deadline) never published an envelope — render it distinctly
@@ -723,19 +746,43 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               const title = att.attempt && att.maxAttempts
                 ? `Payload Reveal (attempt ${att.attempt}/${att.maxAttempts})`
                 : att.skipped ? 'Payload Reveal (withheld)' : 'Payload Reveal';
-              return renderEventDot(
-                dotClass,
-                att.time - slotStartTime,
-                {
-                  title,
-                  items: [
-                    { label: 'Time', value: `${att.time - slotStartTime}ms` },
-                    { label: 'Status', value: status },
-                    ...(att.skipped && att.skipReason ? [{ label: 'Reason', value: att.skipReason }] : []),
-                    ...(att.error ? [{ label: 'Error', value: att.error }] : [])
-                  ]
-                },
-                `reveal-${idx}`
+
+              const durationMs = att.startedAt !== undefined ? att.time - att.startedAt : undefined;
+              const startX = att.startedAt !== undefined
+                ? calculatePosition(att.startedAt - slotStartTime, rangeStart, totalRange)
+                : -1;
+              const endX = calculatePosition(att.time - slotStartTime, rangeStart, totalRange);
+
+              return (
+                <React.Fragment key={`reveal-${idx}`}>
+                  {startX >= 0 && endX > startX && endX <= 100 && (
+                    <div
+                      className={`reveal-call-line ${att.success ? '' : 'reveal-call-line-failed'}`}
+                      style={{
+                        left: `${Math.max(0, startX)}%`,
+                        width: `${endX - Math.max(0, startX)}%`
+                      }}
+                    />
+                  )}
+                  {renderEventDot(
+                    dotClass,
+                    att.time - slotStartTime,
+                    {
+                      title,
+                      items: [
+                        ...(att.startedAt !== undefined
+                          ? [{ label: 'Started', value: `${att.startedAt - slotStartTime}ms` }]
+                          : []),
+                        { label: att.startedAt !== undefined ? 'Completed' : 'Time', value: `${att.time - slotStartTime}ms` },
+                        ...(durationMs !== undefined ? [{ label: 'Duration', value: `${durationMs}ms` }] : []),
+                        { label: 'Status', value: status },
+                        ...(att.skipped && att.skipReason ? [{ label: 'Reason', value: att.skipReason }] : []),
+                        ...(att.error ? [{ label: 'Error', value: att.error }] : [])
+                      ]
+                    },
+                    `reveal-dot-${idx}`
+                  )}
+                </React.Fragment>
               );
             })}
           </div>

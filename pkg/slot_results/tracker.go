@@ -479,6 +479,15 @@ func (t *Tracker) handleRevealResult(result *payload_bidder.RevealResult) {
 		At:         time.Now(),
 	}
 
+	if !result.CompletedAt.IsZero() {
+		attempt.At = result.CompletedAt
+	}
+
+	if !result.StartedAt.IsZero() {
+		startedAt := result.StartedAt
+		attempt.StartedAt = &startedAt
+	}
+
 	switch {
 	case result.Skipped && result.SkipReason == payload_bidder.RevealSkipReasonPlanDisabled:
 		attempt.Status = RevealStatusSuppressed

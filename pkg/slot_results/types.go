@@ -137,10 +137,14 @@ type BlockSubmission struct {
 type RevealAttempt struct {
 	Status     RevealStatus `json:"status"`
 	Transport  string       `json:"transport"`
-	SkipReason string       `json:"skip_reason,omitempty"` // plan_disabled | late
+	SkipReason string       `json:"skip_reason,omitempty"` // plan_disabled | disabled | late | vote_gate_timeout
 	Error      string       `json:"error,omitempty"`
 	Attempt    int          `json:"attempt"`
 	At         time.Time    `json:"at"`
+
+	// StartedAt is when the attempt began (envelope construction + submit
+	// call); nil on skips where nothing was attempted.
+	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
 // InclusionResult records that the slot's payload was seen included at the

@@ -8,6 +8,9 @@ interface BuildDelayLineProps {
   endAt?: number;             // absolute ms; when set, the line is finalized (success)
   expectedEndAt?: number;     // absolute ms; caps the in-progress right edge
   onClick: (e: React.MouseEvent) => void;
+  // Base CSS class; "<className>-active" is appended while in progress.
+  // Defaults to the payload build span style.
+  className?: string;
 }
 
 // BuildDelayLine renders the payload build span on the slot timeline.
@@ -23,7 +26,8 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   totalRange,
   endAt,
   expectedEndAt,
-  onClick
+  onClick,
+  className = 'build-delay-line'
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number>(0);
@@ -71,12 +75,12 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt]);
 
   // Styling: finalized (plain) vs in-progress (pulsing).
-  const stateClass = endAt ? '' : ' build-delay-line-active';
+  const stateClass = endAt ? '' : ` ${className}-active`;
 
   return (
     <div
       ref={ref}
-      className={`build-delay-line${stateClass}`}
+      className={`${className}${stateClass}`}
       onClick={onClick}
     />
   );
