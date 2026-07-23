@@ -275,10 +275,6 @@ type BlockInfo struct {
 	FinalitySafeExecutionBlockHash phase0.Hash32
 	ParentRoot                     phase0.Root
 	StateRoot                      phase0.Root
-	// Gas limit committed for the block's execution payload: the builder
-	// bid's gas_limit from Gloas on (present even when the payload was
-	// withheld), the embedded payload's gas_limit before.
-	GasLimit uint64
 }
 
 // FinalityInfo contains finality checkpoint execution block hashes.
@@ -328,11 +324,6 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get finality-safe execution block hash: %w", err)
 	}
 
-	gasLimit, err := agnosticExecutionGasLimit(msg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get execution gas limit: %w", err)
-	}
-
 	return &BlockInfo{
 		Slot:                           msg.Slot,
 		Root:                           root,
@@ -340,7 +331,6 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		FinalitySafeExecutionBlockHash: finalitySafeHash,
 		ParentRoot:                     msg.ParentRoot,
 		StateRoot:                      msg.StateRoot,
-		GasLimit:                       gasLimit,
 	}, nil
 }
 
@@ -388,28 +378,6 @@ func agnosticFinalitySafeExecutionBlockHash(msg *all.BeaconBlock) (phase0.Hash32
 	}
 
 	return body.ExecutionPayload.BlockHash, nil
-}
-
-// agnosticExecutionGasLimit extracts the committed execution gas limit from a
-// fork-agnostic beacon block. From Gloas on it is the builder bid's gas_limit
-// (the value consensus gas-limit checks compare a child bid against, even when
-// the payload was withheld); before Gloas it is the embedded payload's.
-func agnosticExecutionGasLimit(msg *all.BeaconBlock) (uint64, error) {
-	body := msg.Body
-
-	if msg.Version >= version.DataVersionGloas {
-		if body.SignedExecutionPayloadBid == nil || body.SignedExecutionPayloadBid.Message == nil {
-			return 0, fmt.Errorf("no execution payload bid in block")
-		}
-
-		return body.SignedExecutionPayloadBid.Message.GasLimit, nil
-	}
-
-	if body.ExecutionPayload == nil {
-		return 0, fmt.Errorf("no execution payload in block")
-	}
-
-	return body.ExecutionPayload.GasLimit, nil
 }
 
 // GetFinalityInfo fetches finality checkpoints and returns execution block hashes.
