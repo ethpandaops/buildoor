@@ -8,6 +8,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -101,7 +102,14 @@ func (s *BalanceService) GetEffectiveBalance(ctx context.Context) (uint64, error
 }
 
 // NeedsTopup checks if a top-up is needed and returns the required amount.
+// It returns ErrBuilderExited for a builder whose exit has been initiated: after the
+// sweep zeroes the balance a top-up would otherwise trigger every cooldown, cycling
+// funds wallet -> exited entry -> (64 epochs locked) -> wallet forever.
 func (s *BalanceService) NeedsTopup(ctx context.Context) (bool, uint64, error) {
+	if chain.HasBuilderExited(s.depositSvc.chainSvc.GetBuilderByPubkey(s.depositSvc.signer.PublicKey())) {
+		return false, 0, ErrBuilderExited
+	}
+
 	effectiveBalance, err := s.GetEffectiveBalance(ctx)
 	if err != nil {
 		return false, 0, err

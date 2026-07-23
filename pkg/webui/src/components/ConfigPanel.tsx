@@ -35,7 +35,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
   const handleTimingSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -74,7 +74,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     e.stopPropagation();
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }

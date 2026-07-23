@@ -59,7 +59,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -83,7 +83,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
   const handleScheduleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }

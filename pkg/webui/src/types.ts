@@ -9,7 +9,6 @@ export interface AuthState {
   authEnabled: boolean;
   isLoggedIn: boolean;
   user: string | null;
-  token: string | null;
   expiresAt: number | null; // Local timestamp (ms)
 }
 

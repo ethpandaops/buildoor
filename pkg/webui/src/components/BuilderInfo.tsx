@@ -45,7 +45,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleLifecycleSave = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -67,7 +67,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleExit = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -89,7 +89,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const handleLifecycleToggle = async () => {
     if (!isLoggedIn) return;
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = getAuthHeader();
+    const authToken = await getAuthHeader();
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
     }
@@ -148,6 +148,18 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
         )}
       </div>
       <div className="card-body p-2">
+        {/* Exited-key warning: per the Gloas spec an exited builder can never be
+            reactivated — deposits to the pubkey only top up the exited entry and
+            are swept back to the wallet, so top-ups are disabled */}
+        {(registrationState === 'exiting' || registrationState === 'exited') && (
+          <div className="alert alert-warning py-2 px-2 small mb-2">
+            <i className="fas fa-exclamation-triangle me-1"></i>
+            <strong>Builder key {registrationState === 'exited' ? 'exited' : 'exiting'} — cannot be reactivated.</strong>{' '}
+            Deposits to this key only top up the exited entry and are withdrawn back to the wallet,
+            so automatic top-ups are disabled. The key becomes usable for a fresh registration only
+            after its registry slot is reused by another builder&apos;s deposit.
+          </div>
+        )}
         <table className="table table-sm table-borderless mb-0">
           <tbody>
             {/* Builder Identity */}
