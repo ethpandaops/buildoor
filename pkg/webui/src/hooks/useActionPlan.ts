@@ -119,6 +119,11 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     }
   }, [minSlot, maxSlot]);
 
+  // Stable handle for the SSE handlers, which must not resubscribe whenever
+  // the visible range changes.
+  const fetchAllRef = useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
+
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
@@ -131,6 +136,12 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       mergePlanChange(change.slots, change.plans || []);
     });
 
+    // Rule changes rewrite the effective plan of every uncovered slot, so the
+    // whole visible range has to come back from the authoritative endpoint.
+    const offRules = onStreamEvent('action_plan_rules_updated', () => {
+      fetchAllRef.current();
+    });
+
     const offResult = onStreamEvent('slot_result_updated', (data) => {
       const result = data as SlotResult;
       const slot = toSlotNumber(result?.slot);
@@ -141,6 +152,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
     return () => {
       offPlan();
+      offRules();
       offResult();
     };
   }, [mergePlanChange]);

@@ -38,12 +38,19 @@ type PlanChangeEvent struct {
 	Plans []*SlotPlan `json:"plans"`
 }
 
-// PlanService owns the sparse per-slot action plan store, its freeze state and
-// its persistence. It is the single writer; all reads return deep copies.
+// RuleChangeEvent carries the authoritative rule set after a committed change.
+type RuleChangeEvent struct {
+	Rules []*SlotRule `json:"rules"`
+}
+
+// PlanService owns the sparse per-slot action plan store, the recurring rules
+// that fill the slots it does not cover, their freeze state and their
+// persistence. It is the single writer; all reads return deep copies.
 type PlanService struct {
 	cfg      *config.Config
 	chainSvc chain.Service
 	store    *memstore.Store[phase0.Slot, *SlotPlan]
+	rules    *memstore.Store[string, *SlotRule]
 
 	mu     sync.Mutex
 	frozen map[phase0.Slot]*FrozenPlan
@@ -52,7 +59,8 @@ type PlanService struct {
 	// builds are exempt). Guarded by mu.
 	slotsBuilt uint64
 
-	changes utils.Dispatcher[*PlanChangeEvent]
+	changes     utils.Dispatcher[*PlanChangeEvent]
+	ruleChanges utils.Dispatcher[*RuleChangeEvent]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -68,15 +76,18 @@ func NewPlanService(cfg *config.Config, chainSvc chain.Service, log logrus.Field
 		cfg:      cfg,
 		chainSvc: chainSvc,
 		store:    memstore.New[phase0.Slot, *SlotPlan](),
+		rules:    memstore.New[string, *SlotRule](),
 		frozen:   make(map[phase0.Slot]*FrozenPlan, 64),
 		log:      log.WithField("component", "action-plan"),
 	}
 }
 
-// SetPersistence attaches the state-db backed persistence (kv_store namespace
-// "slot_plans") and rehydrates previously stored plans.
+// SetPersistence attaches the state-db backed persistence (kv_store namespaces
+// "slot_plans" and "slot_rules") and rehydrates previously stored plans and
+// recurring rules.
 func (s *PlanService) SetPersistence(ctx context.Context, stateDB *db.Database) {
 	s.store.SetPersistence(ctx, db.NewKVPersistence(stateDB, Namespace, PlanCodec{}), s.log)
+	s.rules.SetPersistence(ctx, db.NewKVPersistence(stateDB, RulesNamespace, RuleCodec{}), s.log)
 }
 
 // Start launches the pruning loop (driven by epoch transitions).
@@ -103,6 +114,7 @@ func (s *PlanService) Stop() {
 
 	s.wg.Wait()
 	s.store.Stop()
+	s.rules.Stop()
 
 	s.log.Info("Action plan service stopped")
 }
@@ -125,7 +137,9 @@ func (s *PlanService) run(epochSub *utils.Subscription[*chain.EpochStats]) {
 	}
 }
 
-// Get returns a deep copy of the slot's plan, or nil when none exists.
+// Get returns a deep copy of the slot's explicitly stored plan, or nil when
+// none exists. Recurring rules are deliberately not consulted — use
+// PlanForSlot for the effective plan.
 func (s *PlanService) Get(slot phase0.Slot) *SlotPlan {
 	plan, ok := s.store.Get(slot)
 	if !ok {
@@ -135,8 +149,26 @@ func (s *PlanService) Get(slot phase0.Slot) *SlotPlan {
 	return plan.Clone()
 }
 
-// GetRange returns deep copies of all plans within [minSlot, maxSlot],
-// slot-ascending.
+// PlanForSlot returns the effective plan for a slot: the explicitly stored
+// plan if there is one, otherwise the first matching recurring rule
+// materialized for the slot (marked with its rule id). Precedence is
+// wholesale — an explicit plan is never merged with a rule.
+func (s *PlanService) PlanForSlot(slot phase0.Slot) *SlotPlan {
+	if plan, ok := s.store.Get(slot); ok {
+		return plan.Clone()
+	}
+
+	rule := matchRule(s.sortedRules(), slot, s.slotsPerEpoch())
+	if rule == nil {
+		return nil
+	}
+
+	return rule.planFor(slot)
+}
+
+// GetRange returns deep copies of all effective plans within
+// [minSlot, maxSlot], slot-ascending: every explicitly stored plan plus the
+// plans recurring rules contribute to the still-open slots of the range.
 func (s *PlanService) GetRange(minSlot, maxSlot phase0.Slot) []*SlotPlan {
 	entries := s.store.Entries()
 	plans := make([]*SlotPlan, 0, len(entries))
@@ -147,15 +179,78 @@ func (s *PlanService) GetRange(minSlot, maxSlot phase0.Slot) []*SlotPlan {
 		}
 	}
 
+	plans = append(plans, s.rulePlansInRange(minSlot, maxSlot, entries)...)
+
 	sortPlansBySlot(plans)
 
 	return plans
 }
 
+// rulePlansInRange materializes the rule-derived plans of a range. Only slots
+// that can still execute under the CURRENT rule set are covered: past and
+// already frozen slots ran under whatever was configured back then, and their
+// slot result carries the authoritative applied plan.
+func (s *PlanService) rulePlansInRange(minSlot, maxSlot phase0.Slot,
+	explicit map[phase0.Slot]*SlotPlan) []*SlotPlan {
+	rules := s.sortedRules()
+	slotsPerEpoch := s.slotsPerEpoch()
+
+	if len(rules) == 0 || slotsPerEpoch == 0 {
+		return nil
+	}
+
+	if firstOpen := s.chainSvc.GetCurrentSlot() + 1; firstOpen > minSlot {
+		minSlot = firstOpen
+	}
+
+	if maxSlot < minSlot {
+		return nil
+	}
+
+	frozen := s.frozenSlotsInRange(minSlot, maxSlot)
+
+	var plans []*SlotPlan
+
+	for slot := minSlot; ; slot++ {
+		_, hasPlan := explicit[slot]
+		_, isFrozen := frozen[slot]
+
+		if !hasPlan && !isFrozen {
+			if rule := matchRule(rules, slot, slotsPerEpoch); rule != nil {
+				plans = append(plans, rule.planFor(slot))
+			}
+		}
+
+		if slot == maxSlot {
+			break
+		}
+	}
+
+	return plans
+}
+
+// frozenSlotsInRange snapshots the freeze markers within the range under one
+// lock; the marker map is pruned to roughly an epoch, so this stays cheap.
+func (s *PlanService) frozenSlotsInRange(minSlot, maxSlot phase0.Slot) map[phase0.Slot]struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	frozen := make(map[phase0.Slot]struct{}, len(s.frozen))
+
+	for slot := range s.frozen {
+		if slot >= minSlot && slot <= maxSlot {
+			frozen[slot] = struct{}{}
+		}
+	}
+
+	return frozen
+}
+
 // Freeze resolves and records the slot's immutable execution snapshot. The
 // first caller wins; every later caller (and every other decision point of
 // the same slot) receives the identical snapshot. From this moment on the
-// slot's plan can no longer be edited.
+// slot's plan can no longer be edited, and later rule changes no longer
+// affect it.
 func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -164,10 +259,8 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 		return frozen
 	}
 
-	var plan *SlotPlan
-	if stored, ok := s.store.Get(slot); ok {
-		plan = stored.Clone()
-	}
+	// Rule resolution reads the plan/rule stores only — it must never take s.mu.
+	plan := s.PlanForSlot(slot)
 
 	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
 	frozen := resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
@@ -336,6 +429,115 @@ func (s *PlanService) ApplyUpdates(updates []*PlanUpdate, actor string) (*PlanCh
 // delivery; intended for the SSE bridge).
 func (s *PlanService) SubscribeChanges(capacity int) *utils.Subscription[*PlanChangeEvent] {
 	return s.changes.Subscribe(capacity, false)
+}
+
+// SubscribeRuleChanges subscribes to committed recurring-rule mutations
+// (non-blocking delivery; intended for the SSE bridge).
+func (s *PlanService) SubscribeRuleChanges(capacity int) *utils.Subscription[*RuleChangeEvent] {
+	return s.ruleChanges.Subscribe(capacity, false)
+}
+
+// Rules returns deep copies of all recurring rules, id-ascending — which is
+// also the order in which they are matched.
+func (s *PlanService) Rules() []*SlotRule {
+	stored := s.sortedRules()
+	rules := make([]*SlotRule, len(stored))
+
+	for i, rule := range stored {
+		rules[i] = rule.Clone()
+	}
+
+	return rules
+}
+
+// SetRules atomically replaces the whole recurring rule set: either every rule
+// validates and is committed, or nothing changes. Already frozen slots keep
+// the plan they froze with; every later slot resolves against the new set.
+func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, error) {
+	if len(rules) > MaxRules {
+		return nil, fmt.Errorf("too many rules: %d (max %d)", len(rules), MaxRules)
+	}
+
+	spec := s.chainSvc.GetChainSpec()
+	now := time.Now()
+
+	staged := make(map[string]*SlotRule, len(rules))
+
+	for i, rule := range rules {
+		if rule == nil {
+			return nil, fmt.Errorf("rule %d: must not be null", i)
+		}
+
+		if err := rule.Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot); err != nil {
+			return nil, err
+		}
+
+		if _, dup := staged[rule.ID]; dup {
+			return nil, fmt.Errorf("duplicate rule id %q", rule.ID)
+		}
+
+		stored := rule.Clone()
+		stored.UpdatedAt = now
+		stored.UpdatedBy = actor
+		staged[rule.ID] = stored
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for id := range s.rules.Entries() {
+		if _, keep := staged[id]; !keep {
+			s.rules.Delete(id)
+		}
+	}
+
+	for id, rule := range staged {
+		s.rules.Put(id, rule)
+	}
+
+	event := &RuleChangeEvent{Rules: s.Rules()}
+
+	s.log.WithFields(logrus.Fields{
+		"rules": len(event.Rules),
+		"actor": actor,
+	}).Info("Updated action plan rules")
+
+	s.ruleChanges.Fire(event)
+
+	return event.Rules, nil
+}
+
+// sortedRules returns the stored rules in match order (id-ascending). The
+// returned values are the stored pointers — package-internal read-only use.
+func (s *PlanService) sortedRules() []*SlotRule {
+	rules := s.rules.Values()
+
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].ID < rules[j].ID
+	})
+
+	return rules
+}
+
+func (s *PlanService) slotsPerEpoch() uint64 {
+	spec := s.chainSvc.GetChainSpec()
+	if spec == nil {
+		return 0
+	}
+
+	return spec.SlotsPerEpoch
+}
+
+// matchRule returns the first rule of the (id-ordered) set that applies to the
+// slot, so the id decides which rule wins when several match.
+func matchRule(rules []*SlotRule, slot phase0.Slot, slotsPerEpoch uint64) *SlotRule {
+	for _, rule := range rules {
+		if rule.Matches(slot, slotsPerEpoch) {
+			return rule
+		}
+	}
+
+	return nil
 }
 
 // pruneForEpoch drops past plans outside the retention window and stale

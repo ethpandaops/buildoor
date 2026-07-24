@@ -126,6 +126,11 @@ definitions:
         type: boolean
       from_slot:
         type: integer
+      ignore_rules:
+        description: |-
+          IgnoreRules is two-state on purpose: absent = unchanged, true/false =
+          set the slot's recurring-rule opt-out.
+        type: boolean
       reveal:
         items:
           type: integer
@@ -298,9 +303,57 @@ definitions:
         $ref: '#/definitions/action_plan.BuildPlan'
       builder_api:
         $ref: '#/definitions/action_plan.BuilderAPIPlan'
+      ignore_rules:
+        description: |-
+          IgnoreRules opts the slot out of every recurring rule, so it runs on the
+          plain global baseline. Without it an empty plan is dropped, which would
+          hand the slot straight back to the matching rule.
+        type: boolean
       reveal:
         $ref: '#/definitions/action_plan.RevealPlan'
+      rule_id:
+        description: |-
+          RuleID marks a plan synthesized from a recurring rule. Synthesized plans
+          are never stored — the field is empty on every persisted plan.
+        type: string
       slot:
+        type: integer
+      transforms:
+        $ref: '#/definitions/action_plan.TransformPlan'
+      updated_at:
+        type: string
+      updated_by:
+        type: string
+    type: object
+  action_plan.SlotRule:
+    properties:
+      bid:
+        $ref: '#/definitions/action_plan.BidPlan'
+      build:
+        $ref: '#/definitions/action_plan.BuildPlan'
+      builder_api:
+        $ref: '#/definitions/action_plan.BuilderAPIPlan'
+      description:
+        type: string
+      enabled:
+        type: boolean
+      from_epoch:
+        description: |-
+          FromEpoch / ToEpoch bound the rule to an inclusive epoch window; nil is
+          unbounded on that side.
+        type: integer
+      id:
+        type: string
+      reveal:
+        $ref: '#/definitions/action_plan.RevealPlan'
+      slots_in_epoch:
+        description: |-
+          SlotsInEpoch are the matched slot indices within an epoch (0-based, so
+          31 is the last slot of a 32-slot epoch).
+        items:
+          type: integer
+        type: array
+      to_epoch:
         type: integer
       transforms:
         $ref: '#/definitions/action_plan.TransformPlan'
@@ -327,6 +380,20 @@ definitions:
       plans:
         items:
           $ref: '#/definitions/action_plan.SlotPlan'
+        type: array
+    type: object
+  api.ActionPlanRulesRequest:
+    properties:
+      rules:
+        items:
+          $ref: '#/definitions/action_plan.SlotRule'
+        type: array
+    type: object
+  api.ActionPlanRulesResponse:
+    properties:
+      rules:
+        items:
+          $ref: '#/definitions/action_plan.SlotRule'
         type: array
     type: object
   api.AuditLogResponse:
@@ -1165,6 +1232,81 @@ paths:
               type: string
             type: object
       summary: Update per-slot action plans
+      tags:
+      - ActionPlan
+  /api/buildoor/action-plan/rules:
+    get:
+      description: |-
+        Returns the recurring slot rules, id-ascending (which is also
+        their match order). A rule applies its categories to every slot
+        whose index within the epoch matches, unless the slot carries
+        an explicit plan.
+      operationId: getActionPlanRules
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ActionPlanRulesResponse'
+        "503":
+          description: Plan service unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get recurring action plan rules
+      tags:
+      - ActionPlan
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Atomically replaces the whole recurring rule set (every rule
+        validates or nothing changes). Each rule matches slot indices
+        within an epoch, optionally bounded to an epoch window, and
+        carries the same categories as a slot plan — e.g. win slot 31
+        of every epoch and withhold its payload. Already frozen slots
+        keep the plan they froze with. Requires authentication.
+      operationId: updateActionPlanRules
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Full rule set
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.ActionPlanRulesRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Authoritative rule set
+          schema:
+            $ref: '#/definitions/api.ActionPlanRulesResponse'
+        "400":
+          description: Validation error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "503":
+          description: Plan service unavailable
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Replace the recurring action plan rules
       tags:
       - ActionPlan
   /api/buildoor/action-plan/test-transform:

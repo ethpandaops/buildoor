@@ -58,6 +58,7 @@ const (
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
+	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
 	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
 	EventTypeLifecycle                   EventType = "lifecycle"
 	EventTypeBidIncluded                 EventType = "bid_included"
@@ -626,9 +627,15 @@ func (m *EventStreamManager) Start() {
 
 	var planChangeChan <-chan *action_plan.PlanChangeEvent
 
+	var ruleChangeSub *utils.Subscription[*action_plan.RuleChangeEvent]
+
+	var ruleChangeChan <-chan *action_plan.RuleChangeEvent
+
 	if m.planSvc != nil {
 		planChangeSub = m.planSvc.SubscribeChanges(16)
 		planChangeChan = planChangeSub.Channel()
+		ruleChangeSub = m.planSvc.SubscribeRuleChanges(16)
+		ruleChangeChan = ruleChangeSub.Channel()
 	}
 
 	// Subscribe to slot result updates (if results tracker available). SSE is
@@ -709,6 +716,10 @@ func (m *EventStreamManager) Start() {
 
 		if planChangeSub != nil {
 			defer planChangeSub.Unsubscribe()
+		}
+
+		if ruleChangeSub != nil {
+			defer ruleChangeSub.Unsubscribe()
 		}
 
 		if resultUpdateSub != nil {
@@ -792,6 +803,18 @@ func (m *EventStreamManager) Start() {
 
 				m.Broadcast(&StreamEvent{
 					Type:      EventTypeActionPlanUpdated,
+					Timestamp: time.Now().UnixMilli(),
+					Data:      event,
+				})
+
+			case event, ok := <-ruleChangeChan:
+				if !ok {
+					ruleChangeChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeActionPlanRulesUpdated,
 					Timestamp: time.Now().UnixMilli(),
 					Data:      event,
 				})

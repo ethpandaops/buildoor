@@ -215,6 +215,83 @@ func TestUpdateActionPlanErrorMapping(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func postActionPlanRules(t *testing.T, env *planAPITestEnv, body string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/buildoor/action-plan/rules",
+		bytes.NewReader([]byte(body)))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	env.handler.UpdateActionPlanRules(rec, req)
+
+	return rec
+}
+
+func TestActionPlanRulesRoundTrip(t *testing.T) {
+	env := newPlanAPITestEnv(t)
+
+	// The motivating scenario: win the last slot of every epoch, never reveal.
+	rec := postActionPlanRules(t, env, `{"rules":[{
+		"id":"slot31-withhold",
+		"enabled":true,
+		"description":"win slot 31 and withhold the payload",
+		"slots_in_epoch":[31],
+		"bid":{"mode":"custom","bid_value_gwei":1000000,"ignore_missing_prefs":true},
+		"reveal":{"mode":"disabled"}
+	}]}`)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var resp ActionPlanRulesResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Rules, 1)
+	assert.Equal(t, "slot31-withhold", resp.Rules[0].ID)
+
+	rec = httptest.NewRecorder()
+	env.handler.GetActionPlanRules(rec,
+		httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan/rules", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.Rules, 1)
+	assert.Equal(t, action_plan.ModeDisabled, resp.Rules[0].Reveal.Mode)
+
+	// Rule-derived plans surface in the range query, marked with their rule.
+	rec = httptest.NewRecorder()
+	env.handler.GetActionPlan(rec,
+		httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan?min_slot=1024&max_slot=1055", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var plans ActionPlanResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &plans))
+	require.Len(t, plans.Plans, 1)
+	assert.Equal(t, phase0.Slot(1055), plans.Plans[0].Slot)
+	assert.Equal(t, "slot31-withhold", plans.Plans[0].RuleID)
+}
+
+func TestActionPlanRulesValidation(t *testing.T) {
+	env := newPlanAPITestEnv(t)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"bad id", `{"rules":[{"id":"Bad Id","enabled":true,"slots_in_epoch":[31],"reveal":{"mode":"disabled"}}]}`},
+		{"slot out of range", `{"rules":[{"id":"r","enabled":true,"slots_in_epoch":[32],"reveal":{"mode":"disabled"}}]}`},
+		{"no instruction", `{"rules":[{"id":"r","enabled":true,"slots_in_epoch":[31]}]}`},
+		{"unknown field", `{"rules":[{"id":"r","enabled":true,"slots_in_epoch":[31],"nope":1}]}`},
+		{"malformed", `{`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, http.StatusBadRequest, postActionPlanRules(t, env, tt.body).Code)
+		})
+	}
+
+	assert.Empty(t, env.planSvc.Rules(), "no rejected rule may be committed")
+}
+
 func TestGetSlotResultsRange(t *testing.T) {
 	env := newPlanAPITestEnv(t)
 

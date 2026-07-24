@@ -330,8 +330,18 @@ type SlotPlan struct {
 	Reveal     *RevealPlan     `json:"reveal,omitempty"`
 	Build      *BuildPlan      `json:"build,omitempty"`
 	Transforms *TransformPlan  `json:"transforms,omitempty"`
-	UpdatedAt  time.Time       `json:"updated_at"`
-	UpdatedBy  string          `json:"updated_by"`
+
+	// IgnoreRules opts the slot out of every recurring rule, so it runs on the
+	// plain global baseline. Without it an empty plan is dropped, which would
+	// hand the slot straight back to the matching rule.
+	IgnoreRules bool `json:"ignore_rules,omitempty"`
+
+	// RuleID marks a plan synthesized from a recurring rule. Synthesized plans
+	// are never stored — the field is empty on every persisted plan.
+	RuleID string `json:"rule_id,omitempty"`
+
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by"`
 }
 
 // Clone returns a deep copy. All plan values crossing the package boundary
@@ -351,10 +361,11 @@ func (p *SlotPlan) Clone() *SlotPlan {
 	return &c
 }
 
-// IsEmpty reports whether the plan carries no instruction at all.
+// IsEmpty reports whether the plan carries no instruction at all. An explicit
+// rule opt-out is an instruction, so such a plan is kept.
 func (p *SlotPlan) IsEmpty() bool {
 	return p == nil || (p.Bid == nil && p.BuilderAPI == nil && p.Reveal == nil &&
-		p.Build.isZero() && p.Transforms.isZero())
+		p.Build.isZero() && p.Transforms.isZero() && !p.IgnoreRules)
 }
 
 // BidOverride returns the per-slot enable override for p2p bidding:
@@ -459,6 +470,10 @@ type PlanUpdate struct {
 	Build      json.RawMessage `json:"build,omitempty"`
 	Transforms json.RawMessage `json:"transforms,omitempty"`
 
+	// IgnoreRules is two-state on purpose: absent = unchanged, true/false =
+	// set the slot's recurring-rule opt-out.
+	IgnoreRules *bool `json:"ignore_rules,omitempty"`
+
 	Set map[string]json.RawMessage `json:"set,omitempty"`
 }
 
@@ -560,6 +575,10 @@ func ApplyUpdateToPlan(existing *SlotPlan, u *PlanUpdate) (*SlotPlan, error) {
 		result.Transforms = transforms
 	}
 
+	if u.IgnoreRules != nil {
+		result.IgnoreRules = *u.IgnoreRules
+	}
+
 	if err := applySetPaths(result, u.Set); err != nil {
 		return nil, err
 	}
@@ -636,8 +655,8 @@ func applySetPaths(plan *SlotPlan, set map[string]json.RawMessage) error {
 
 			plan.Transforms = patched
 		default:
-			return fmt.Errorf(
-				"set: unknown path %q (categories: bid, builder_api, reveal, build, transforms)", path)
+			return fmt.Errorf("set: unknown path %q (categories: bid, builder_api, reveal, "+
+				"build, transforms; the rule opt-out is the top-level \"ignore_rules\" member)", path)
 		}
 	}
 

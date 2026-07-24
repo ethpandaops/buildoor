@@ -1203,6 +1203,18 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   text-decoration: line-through;
 }
 
+/* Chips derived from a recurring rule: hollow, so a stored plan for the slot
+   stays visually distinct from a rule that merely applies to it. */
+.ap-chip-rule {
+  background: transparent;
+  outline: 1px dashed currentColor;
+  outline-offset: -1px;
+}
+
+.ap-chip-custom.ap-chip-rule {
+  color: var(--bs-primary);
+}
+
 /* Build-modifier chip (parent-payload reorg): amber to read as "adverse". */
 .ap-chip-reorg {
   background: #fd7e14;

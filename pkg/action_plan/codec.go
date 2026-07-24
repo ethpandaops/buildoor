@@ -50,3 +50,42 @@ func (PlanCodec) DecodeValue(value []byte) (*SlotPlan, error) {
 
 	return plan, nil
 }
+
+// RuleCodec translates recurring slot rules to their persisted form in the
+// kv_store: the rule id as key, JSON-encoded values.
+type RuleCodec struct{}
+
+var _ db.KVCodec[string, *SlotRule] = RuleCodec{}
+
+// EncodeKey uses the rule id verbatim.
+func (RuleCodec) EncodeKey(id string) string {
+	return id
+}
+
+// DecodeKey uses the stored key verbatim.
+func (RuleCodec) DecodeKey(key string) (string, error) {
+	if key == "" {
+		return "", fmt.Errorf("empty slot rule key")
+	}
+
+	return key, nil
+}
+
+// EncodeValue JSON-encodes a slot rule.
+func (RuleCodec) EncodeValue(rule *SlotRule) ([]byte, error) {
+	if rule == nil {
+		return nil, fmt.Errorf("cannot encode nil slot rule")
+	}
+
+	return json.Marshal(rule)
+}
+
+// DecodeValue JSON-decodes a slot rule.
+func (RuleCodec) DecodeValue(value []byte) (*SlotRule, error) {
+	rule := &SlotRule{}
+	if err := json.Unmarshal(value, rule); err != nil {
+		return nil, fmt.Errorf("failed to decode slot rule: %w", err)
+	}
+
+	return rule, nil
+}

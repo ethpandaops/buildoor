@@ -85,8 +85,10 @@ interface SlotCellProps {
   onCellClick: (slot: number, shiftKey: boolean) => void;
 }
 
-const chipClass = (mode?: 'custom' | 'disabled'): string =>
-  mode === 'disabled' ? 'ap-chip ap-chip-disabled' : 'ap-chip ap-chip-custom';
+// Rule-derived plans are drawn dashed: they are not stored for the slot and a
+// rule change (or an explicit plan) can still replace them.
+const chipClass = (mode: 'custom' | 'disabled' | undefined, fromRule: boolean): string =>
+  `ap-chip ${mode === 'disabled' ? 'ap-chip-disabled' : 'ap-chip-custom'}${fromRule ? ' ap-chip-rule' : ''}`;
 
 const SlotCellInner: React.FC<SlotCellProps> = ({
   slot,
@@ -103,7 +105,11 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
   const t = plan?.transforms;
   const hasTransform = !!(t && (t.payload || t.bid || t.envelope));
 
+  const fromRule = !!plan?.rule_id;
+
   const titleParts = [`Slot ${slot}`];
+  if (fromRule) titleParts.push(`rule: ${plan?.rule_id}`);
+  if (plan?.ignore_rules) titleParts.push('recurring rules ignored');
   if (plan?.bid) titleParts.push(`bid: ${plan.bid.mode}`);
   if (plan?.builder_api) titleParts.push(`builder api: ${plan.builder_api.mode}`);
   if (plan?.reveal) titleParts.push(`reveal: ${plan.reveal.mode}`);
@@ -127,9 +133,9 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
         onClick={(e) => onCellClick(slot, e.shiftKey)}
       >
         <span className="ap-chips">
-          {plan?.bid && <span className={chipClass(plan.bid.mode)}>B</span>}
-          {plan?.builder_api && <span className={chipClass(plan.builder_api.mode)}>A</span>}
-          {plan?.reveal && <span className={chipClass(plan.reveal.mode)}>R</span>}
+          {plan?.bid && <span className={chipClass(plan.bid.mode, fromRule)}>B</span>}
+          {plan?.builder_api && <span className={chipClass(plan.builder_api.mode, fromRule)}>A</span>}
+          {plan?.reveal && <span className={chipClass(plan.reveal.mode, fromRule)}>R</span>}
           {reorgParent && <span className="ap-chip ap-chip-reorg" title="Build on n-2 payload">P</span>}
           {hasTransform && <span className="ap-chip ap-chip-transform" title="jq transform">jq</span>}
         </span>

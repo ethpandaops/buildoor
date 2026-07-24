@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import type {
-  ActionMode,
   FrozenPlan,
   PlanUpdate,
   SlotPlan,
@@ -8,6 +7,18 @@ import type {
 } from '../../types';
 import type { ApplyUpdatesResult } from '../../hooks/useActionPlan';
 import { TransformEditor, type TransformState } from './TransformEditor';
+import {
+  BID_FIELDS,
+  BUILDER_API_FIELDS,
+  REVEAL_FIELDS,
+  BuildForm,
+  CategoryForm,
+  initCategoryState,
+  resolveCategory,
+  type BuildFlagMode,
+  type CategoryFormState,
+  type CategoryOutcome,
+} from './planForms';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -128,312 +139,6 @@ const ArtifactLinks: React.FC<{
       SSZ
     </button>
   </span>
-);
-
-// ---------------------------------------------------------------------------
-// Edit form model
-// ---------------------------------------------------------------------------
-
-// 'unchanged' exists only in bulk mode (leave targeted slots as they are);
-// 'inherit' clears the category back to the global baseline.
-type FormMode = 'unchanged' | 'inherit' | 'custom' | 'disabled';
-
-interface FieldDef {
-  key: string;
-  label: string;
-  unit: 'ms' | 'gwei' | '%' | '';
-  // Enum fields render a select instead of a number input; the raw string
-  // value is sent as the override.
-  options?: string[];
-}
-
-const BID_FIELDS: FieldDef[] = [
-  { key: 'bid_start_time', label: 'Bid Start (rel. slot)', unit: 'ms' },
-  { key: 'bid_end_time', label: 'Bid End (rel. slot)', unit: 'ms' },
-  { key: 'bid_min_amount', label: 'Bid Min', unit: 'gwei' },
-  { key: 'bid_increase', label: 'Bid Increase', unit: 'gwei' },
-  { key: 'bid_interval', label: 'Bid Interval', unit: 'ms' },
-  { key: 'bid_subsidy', label: 'Bid Subsidy', unit: 'gwei' },
-  { key: 'bid_value_gwei', label: 'Bid Value Override', unit: 'gwei' },
-];
-
-const BUILDER_API_FIELDS: FieldDef[] = [
-  { key: 'value_subsidy_gwei', label: 'Value Subsidy', unit: 'gwei' },
-  { key: 'total_value_override_gwei', label: 'Total Value Override', unit: 'gwei' },
-  { key: 'response_delay_ms', label: 'Response Delay', unit: 'ms' },
-];
-
-const REVEAL_FIELDS: FieldDef[] = [
-  { key: 'reveal_time_ms', label: 'Reveal Time (rel. slot)', unit: 'ms' },
-  {
-    key: 'gate_mode', label: 'Gate Mode', unit: '',
-    options: ['time', 'vote', 'vote_or_time', 'vote_and_time'],
-  },
-  { key: 'vote_threshold_pct', label: 'Vote Threshold', unit: '%' },
-  {
-    key: 'broadcast_validation', label: 'Broadcast Validation', unit: '',
-    options: ['gossip', 'consensus', 'consensus_and_equivocation'],
-  },
-];
-
-interface CategoryFormState {
-  mode: FormMode;
-  fields: Record<string, string>; // raw input values; empty = inherit
-  ignoreMissingPrefs: boolean;
-}
-
-function initCategoryState(
-  category: { mode: ActionMode } | undefined,
-  defs: FieldDef[],
-  bulk: boolean
-): CategoryFormState {
-  if (bulk || !category) {
-    return { mode: bulk ? 'unchanged' : 'inherit', fields: {}, ignoreMissingPrefs: false };
-  }
-
-  const raw = category as unknown as Record<string, unknown>;
-  const fields: Record<string, string> = {};
-  for (const def of defs) {
-    const value = raw[def.key];
-    if (typeof value === 'number' || typeof value === 'string') {
-      fields[def.key] = String(value);
-    }
-  }
-
-  return {
-    mode: category.mode,
-    fields,
-    ignoreMissingPrefs: raw['ignore_missing_prefs'] === true,
-  };
-}
-
-function parseCategoryFields(
-  name: string,
-  defs: FieldDef[],
-  state: CategoryFormState
-): { values: Record<string, number | string>; error: string | null } {
-  const values: Record<string, number | string> = {};
-
-  for (const def of defs) {
-    const raw = (state.fields[def.key] ?? '').trim();
-    if (raw === '') continue;
-
-    if (def.options) {
-      if (!def.options.includes(raw)) {
-        return { values, error: `${name}: ${def.label} must be one of ${def.options.join(', ')}` };
-      }
-      values[def.key] = raw;
-      continue;
-    }
-
-    const num = Number(raw);
-    if (!Number.isFinite(num) || !Number.isInteger(num)) {
-      return { values, error: `${name}: ${def.label} must be an integer (${def.unit})` };
-    }
-    values[def.key] = num;
-  }
-
-  return { values, error: null };
-}
-
-type CategoryOutcome =
-  | { kind: 'none' }
-  | { kind: 'clear' }
-  | { kind: 'replace'; obj: Record<string, unknown> }
-  | { kind: 'set'; paths: Record<string, number | string | boolean | null> }
-  | { kind: 'error'; error: string };
-
-// resolveCategory turns one category form into its PlanUpdate contribution.
-// Single-slot edits of an existing custom category use fine-grained `set`
-// paths so unchanged sibling fields are never clobbered; mode switches send
-// the full category object.
-function resolveCategory(
-  name: string,
-  defs: FieldDef[],
-  state: CategoryFormState,
-  initial: Record<string, unknown> | undefined,
-  single: boolean,
-  withIgnorePrefs: boolean
-): CategoryOutcome {
-  switch (state.mode) {
-    case 'unchanged':
-      return { kind: 'none' };
-
-    case 'inherit':
-      if (single && !initial) return { kind: 'none' };
-      return { kind: 'clear' };
-
-    case 'disabled':
-      if (single && initial && initial['mode'] === 'disabled') return { kind: 'none' };
-      return { kind: 'replace', obj: { mode: 'disabled' } };
-
-    case 'custom': {
-      const { values, error } = parseCategoryFields(name, defs, state);
-      if (error) return { kind: 'error', error };
-
-      if (single && initial && initial['mode'] === 'custom') {
-        const paths: Record<string, number | string | boolean | null> = {};
-
-        for (const def of defs) {
-          const rawOld = initial[def.key];
-          const oldValue = typeof rawOld === 'number' || typeof rawOld === 'string'
-            ? (rawOld as number | string)
-            : undefined;
-          const newValue = values[def.key];
-
-          if (newValue === undefined && oldValue !== undefined) {
-            paths[`${name}.${def.key}`] = null; // clear one override
-          } else if (newValue !== undefined && newValue !== oldValue) {
-            paths[`${name}.${def.key}`] = newValue;
-          }
-        }
-
-        if (withIgnorePrefs) {
-          const oldFlag = initial['ignore_missing_prefs'] === true;
-          if (state.ignoreMissingPrefs !== oldFlag) {
-            paths[`${name}.ignore_missing_prefs`] = state.ignoreMissingPrefs;
-          }
-        }
-
-        if (Object.keys(paths).length === 0) return { kind: 'none' };
-        return { kind: 'set', paths };
-      }
-
-      const obj: Record<string, unknown> = { mode: 'custom', ...values };
-      if (withIgnorePrefs && state.ignoreMissingPrefs) {
-        obj['ignore_missing_prefs'] = true;
-      }
-      return { kind: 'replace', obj };
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Category form section
-// ---------------------------------------------------------------------------
-
-const CategoryForm: React.FC<{
-  title: string;
-  bulk: boolean;
-  state: CategoryFormState;
-  fields: FieldDef[];
-  disabled: boolean;
-  showIgnorePrefs?: boolean;
-  onChange: (next: CategoryFormState) => void;
-}> = ({ title, bulk, state, fields, disabled, showIgnorePrefs, onChange }) => (
-  <div className="mb-3">
-    <div className="d-flex align-items-center gap-2 mb-1">
-      <div className="section-header">{title}</div>
-      <select
-        className="form-select form-select-sm w-auto"
-        value={state.mode}
-        disabled={disabled}
-        onChange={(e) => onChange({ ...state, mode: e.target.value as FormMode })}
-      >
-        {bulk && <option value="unchanged">unchanged</option>}
-        <option value="inherit">{bulk ? 'inherit (clear)' : 'inherit'}</option>
-        <option value="custom">custom</option>
-        <option value="disabled">disabled</option>
-      </select>
-    </div>
-
-    {state.mode === 'custom' && (
-      <div className="row g-2">
-        {fields.map((def) => (
-          <div key={def.key} className="col-6 col-lg-4">
-            <label className="form-label small mb-0">{def.label}</label>
-            {def.options ? (
-              <select
-                className="form-select form-select-sm"
-                value={state.fields[def.key] ?? ''}
-                disabled={disabled}
-                onChange={(e) =>
-                  onChange({ ...state, fields: { ...state.fields, [def.key]: e.target.value } })
-                }
-              >
-                <option value="">inherit</option>
-                {def.options.map((opt) => (
-                  <option key={opt} value={opt}>{opt}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="input-group input-group-sm">
-                <input
-                  type="number"
-                  className="form-control"
-                  placeholder="inherit"
-                  value={state.fields[def.key] ?? ''}
-                  disabled={disabled}
-                  onChange={(e) =>
-                    onChange({ ...state, fields: { ...state.fields, [def.key]: e.target.value } })
-                  }
-                />
-                <span className="input-group-text">{def.unit}</span>
-              </div>
-            )}
-          </div>
-        ))}
-        {showIgnorePrefs && (
-          <div className="col-12">
-            <div className="form-check">
-              <input
-                className="form-check-input"
-                type="checkbox"
-                id="ap-ignore-prefs"
-                checked={state.ignoreMissingPrefs}
-                disabled={disabled}
-                onChange={(e) => onChange({ ...state, ignoreMissingPrefs: e.target.checked })}
-              />
-              <label className="form-check-label small" htmlFor="ap-ignore-prefs">
-                Ignore missing proposer preferences (bid with the payload's fee recipient)
-              </label>
-            </div>
-          </div>
-        )}
-        <div className="col-12 form-text mt-0">
-          Empty fields inherit the global config. Timing values are signed ms relative to slot start.
-        </div>
-      </div>
-    )}
-  </div>
-);
-
-// ---------------------------------------------------------------------------
-// Build category (modeless single flag)
-// ---------------------------------------------------------------------------
-
-// 'unchanged' only exists in bulk mode; 'off' = normal parent, 'on' = reorg.
-type BuildFlagMode = 'unchanged' | 'off' | 'on';
-
-const BuildForm: React.FC<{
-  bulk: boolean;
-  value: BuildFlagMode;
-  disabled: boolean;
-  onChange: (next: BuildFlagMode) => void;
-}> = ({ bulk, value, disabled, onChange }) => (
-  <div className="mb-3">
-    <div className="d-flex align-items-center gap-2 mb-1">
-      <div className="section-header">Build</div>
-      <select
-        className="form-select form-select-sm w-auto"
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value as BuildFlagMode)}
-      >
-        {bulk && <option value="unchanged">unchanged</option>}
-        <option value="off">normal parent</option>
-        <option value="on">reorg parent (build on n-2)</option>
-      </select>
-    </div>
-    {value === 'on' && (
-      <div className="form-text mt-0">
-        Builds the payload on the grandparent (n-2) execution payload instead of the immediate
-        parent — parent hash, parent number and withdrawals come from the parent slot, everything
-        else from this slot. A deliberate parent-payload reorg attempt; rejected by mainnet
-        forkchoice, useful for testing.
-      </div>
-    )}
-  </div>
 );
 
 // ---------------------------------------------------------------------------
@@ -980,29 +685,38 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   const isPastSingle = isSingle && singleSlot <= currentSlot;
   const bulk = !isSingle;
 
-  const initialPlan = isSingle ? plans[singleSlot] : undefined;
+  // The effective plan seeds the form; only a STORED plan is a diff base. A
+  // rule-derived plan lives nowhere, so saving it writes full categories and
+  // detaches the slot from the rule.
+  const effectivePlan = isSingle ? plans[singleSlot] : undefined;
+  const rulePlan = effectivePlan?.rule_id ? effectivePlan : undefined;
+  const initialPlan = rulePlan ? undefined : effectivePlan;
 
   const [bidState, setBidState] = useState<CategoryFormState>(() =>
-    initCategoryState(initialPlan?.bid, BID_FIELDS, bulk)
+    initCategoryState(effectivePlan?.bid, BID_FIELDS, bulk)
   );
   const [apiState, setApiState] = useState<CategoryFormState>(() =>
-    initCategoryState(initialPlan?.builder_api, BUILDER_API_FIELDS, bulk)
+    initCategoryState(effectivePlan?.builder_api, BUILDER_API_FIELDS, bulk)
   );
   const [revealState, setRevealState] = useState<CategoryFormState>(() =>
-    initCategoryState(initialPlan?.reveal, REVEAL_FIELDS, bulk)
+    initCategoryState(effectivePlan?.reveal, REVEAL_FIELDS, bulk)
   );
   // Build is a modeless single-flag category: tri-state in bulk, on/off single.
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(() =>
-    bulk ? 'unchanged' : initialPlan?.build?.reorg_parent_payload ? 'on' : 'off'
+    bulk ? 'unchanged' : effectivePlan?.build?.reorg_parent_payload ? 'on' : 'off'
   );
 
   // Transforms (modeless jq expressions). In bulk mode we start empty and only
   // send the ones the operator fills in.
   const [transforms, setTransforms] = useState<TransformState>(() => ({
-    payload: (!bulk && initialPlan?.transforms?.payload) || '',
-    bid: (!bulk && initialPlan?.transforms?.bid) || '',
-    envelope: (!bulk && initialPlan?.transforms?.envelope) || '',
+    payload: (!bulk && effectivePlan?.transforms?.payload) || '',
+    bid: (!bulk && effectivePlan?.transforms?.bid) || '',
+    envelope: (!bulk && effectivePlan?.transforms?.envelope) || '',
   }));
+
+  // Per-slot opt-out from every recurring rule. In bulk mode it is write-only
+  // (checked applies it to all targets, unchecked leaves each slot as it is).
+  const [ignoreRules, setIgnoreRules] = useState(initialPlan?.ignore_rules === true);
 
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -1112,6 +826,11 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
       }
     });
 
+    if (bulk ? ignoreRules : ignoreRules !== (initialPlan?.ignore_rules === true)) {
+      update.ignore_rules = ignoreRules;
+      hasChange = true;
+    }
+
     if (Object.keys(setPaths).length > 0) {
       update.set = setPaths;
     }
@@ -1187,6 +906,14 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                       category as it is per slot; &quot;inherit (clear)&quot; removes it.
                     </div>
                   )}
+                  {rulePlan && (
+                    <div className="alert alert-secondary small py-2">
+                      <i className="fas fa-repeat me-1"></i>
+                      This slot has no plan of its own — it follows recurring rule{' '}
+                      <strong>{rulePlan.rule_id}</strong>, whose values are pre-filled below. Saving
+                      stores them as an explicit plan for this slot, detaching it from the rule.
+                    </div>
+                  )}
                   <CategoryForm
                     title="Bid (p2p)"
                     bulk={bulk}
@@ -1218,6 +945,27 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     disabled={formDisabled}
                     onChange={setBuildReorg}
                   />
+                  <div className="mb-3">
+                    <div className="section-header mb-1">Recurring rules</div>
+                    <div className="form-check">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        id="ap-ignore-rules"
+                        checked={ignoreRules}
+                        disabled={formDisabled}
+                        onChange={(e) => setIgnoreRules(e.target.checked)}
+                      />
+                      <label className="form-check-label small" htmlFor="ap-ignore-rules">
+                        Ignore recurring rules
+                        {bulk && ' (applies to all targeted slots; leave unchecked to keep each as it is)'}
+                      </label>
+                    </div>
+                    <div className="form-text mt-0">
+                      Runs the slot on the plain global baseline even when a rule matches it. Any
+                      category set above already overrides the rule on its own.
+                    </div>
+                  </div>
                   <TransformEditor
                     bulk={bulk}
                     value={transforms}
