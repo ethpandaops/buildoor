@@ -6,6 +6,8 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
 // slot31Rule is the motivating scenario: win the last slot of every epoch and
@@ -283,6 +285,57 @@ func TestGetRangeIncludesRulePlans(t *testing.T) {
 	require.Equal(t, phase0.Slot(2079), plans[0].Slot)
 	require.Empty(t, plans[0].RuleID)
 	require.Equal(t, ModeDisabled, plans[0].Bid.Mode)
+}
+
+func TestRuleForcedBuildDoesNotConsumeNextN(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EPBSEnabled = true
+	cfg.BuilderAPIEnabled = true
+	cfg.APIPort = 8080
+	cfg.Schedule.Mode = config.ScheduleModeNextN
+	cfg.Schedule.NextN = 1
+
+	svc := newTestService(newStubChain(), cfg)
+
+	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "tester")
+	require.NoError(t, err)
+
+	// A rule forces the build past the schedule, so it must not spend budget.
+	forced := svc.Freeze(2047)
+	require.True(t, forced.Build.Build)
+	require.True(t, forced.Build.Forced)
+
+	svc.OnSlotBuilt(2047)
+	require.Equal(t, uint64(0), svc.GetSlotsBuilt())
+	require.Equal(t, 1, svc.GetSlotsRemaining())
+
+	// A scheduled build on an unmatched slot still consumes it.
+	scheduled := svc.Freeze(2048)
+	require.True(t, scheduled.Build.Build)
+	require.False(t, scheduled.Build.Forced)
+
+	svc.OnSlotBuilt(2048)
+	require.Equal(t, uint64(1), svc.GetSlotsBuilt())
+	require.Equal(t, 0, svc.GetSlotsRemaining())
+
+	// With the budget spent the rule keeps forcing its own slots.
+	require.True(t, svc.Freeze(2079).Build.Build)
+	require.False(t, svc.Freeze(2080).Build.Build)
+}
+
+func TestUnmatchableRulesAfterSpecChange(t *testing.T) {
+	chainSvc := newStubChain()
+	svc := newTestService(chainSvc, nil)
+
+	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "tester")
+	require.NoError(t, err)
+	require.Empty(t, svc.unmatchableRules())
+
+	// Same state-db, network with a shorter epoch: slot index 31 cannot occur.
+	chainSvc.spec.SlotsPerEpoch = 8
+
+	require.Equal(t, []string{"slot31-withhold"}, svc.unmatchableRules())
+	require.Nil(t, svc.PlanForSlot(2047), "an unmatchable rule must not resolve")
 }
 
 func TestMatchRuleOrderIsDeterministic(t *testing.T) {

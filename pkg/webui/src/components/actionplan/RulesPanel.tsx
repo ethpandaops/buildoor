@@ -88,6 +88,8 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
     onDone?.();
   };
 
+  // Upsert by id. The modal rejects a new rule reusing an existing id, so this
+  // only ever replaces the rule the operator opened for editing.
   const handleSave = (rule: SlotRule) => {
     const next = rules.some((r) => r.id === rule.id)
       ? rules.map((r) => (r.id === rule.id ? rule : r))
@@ -228,6 +230,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
         <RuleEditModal
           key={editing.rule?.id ?? 'new'}
           rule={editing.rule}
+          existingIds={rules.map((r) => r.id)}
           slotsPerEpoch={slotsPerEpoch}
           canEdit={canEdit}
           saving={saving}

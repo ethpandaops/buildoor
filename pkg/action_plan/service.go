@@ -52,6 +52,10 @@ type PlanService struct {
 	store    *memstore.Store[phase0.Slot, *SlotPlan]
 	rules    *memstore.Store[string, *SlotRule]
 
+	// mu guards frozen and slotsBuilt, and additionally serializes recurring
+	// rule swaps against Freeze: both stores have their own locks, but only
+	// this mutex guarantees that no slot freezes against a half-replaced rule
+	// set. Do not drop it from SetRules.
 	mu     sync.Mutex
 	frozen map[phase0.Slot]*FrozenPlan
 
@@ -100,9 +104,50 @@ func (s *PlanService) Start(ctx context.Context) error {
 
 	go s.run(epochSub)
 
+	// Rehydrated rules are validated against the spec they were written under,
+	// not the active one — a state-db carried to a network with a different
+	// SLOTS_PER_EPOCH would otherwise leave them silently dead.
+	for _, id := range s.unmatchableRules() {
+		s.log.WithFields(logrus.Fields{
+			"rule":            id,
+			"slots_per_epoch": s.slotsPerEpoch(),
+		}).Warn("Recurring rule can never match: slot index out of range for the active chain spec")
+	}
+
 	s.log.Info("Action plan service started")
 
 	return nil
+}
+
+// unmatchableRules returns the ids of rules carrying a slot index the active
+// chain spec can never produce. Writes are validated against the spec, so this
+// only ever fires for rules rehydrated from another network's state-db.
+func (s *PlanService) unmatchableRules() []string {
+	rules := s.sortedRules()
+	if len(rules) == 0 {
+		return nil
+	}
+
+	slotsPerEpoch := s.slotsPerEpoch()
+	if slotsPerEpoch == 0 {
+		s.log.Warn("Cannot verify recurring rules: chain spec unavailable")
+
+		return nil
+	}
+
+	var unmatchable []string
+
+	for _, rule := range rules {
+		for _, index := range rule.SlotsInEpoch {
+			if index >= slotsPerEpoch {
+				unmatchable = append(unmatchable, rule.ID)
+
+				break
+			}
+		}
+	}
+
+	return unmatchable
 }
 
 // Stop terminates the pruning loop and flushes the store. Must be called

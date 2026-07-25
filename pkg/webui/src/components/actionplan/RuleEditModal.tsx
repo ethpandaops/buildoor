@@ -93,6 +93,8 @@ function parseOptionalEpoch(raw: string, label: string): { value?: number; error
 interface RuleEditModalProps {
   /** The rule being edited, or null for a new one. */
   rule: SlotRule | null;
+  /** Ids already in use — a new rule must not silently replace one of them. */
+  existingIds: string[];
   slotsPerEpoch: number;
   canEdit: boolean;
   saving: boolean;
@@ -103,6 +105,7 @@ interface RuleEditModalProps {
 
 export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   rule,
+  existingIds,
   slotsPerEpoch,
   canEdit,
   saving,
@@ -171,6 +174,13 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+
+    // Saving upserts by id, so a new rule reusing one would replace it without
+    // a trace — the server only sees the collapsed set and cannot catch it.
+    if (!rule && existingIds.includes(id.trim())) {
+      setFormError(`A rule with id "${id.trim()}" already exists — edit it or pick another id.`);
+      return;
+    }
 
     const { slots, error: slotError } = parseSlotList(slotList, slotsPerEpoch);
     if (slotError) {
