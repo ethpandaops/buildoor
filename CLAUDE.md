@@ -856,13 +856,15 @@ saving detaches that slot into an explicit plan.
 5. Run it for every epoch instead (the "slot 31 missing" devnet scenario):
    `curl -X POST .../api/buildoor/action-plan/rules -d '{"rules":[{
    "id":"slot31-withhold","enabled":true,"slots_in_epoch":[31],
-   "bid":{"mode":"custom","bid_subsidy":1000000000,"ignore_missing_prefs":true},
+   "bid":{"mode":"custom","bid_subsidy":200000000},
    "reveal":{"mode":"disabled"}}]}'` → every slot 31 is bid for and, once won,
    never revealed: the block exists, its execution payload does not. Use
    `bid_subsidy` (added on top of the block value) rather than the absolute
    `bid_value_gwei` to outbid competitors: the absolute value replaces the block
    value entirely and silently loses whenever it is set below what the block is
-   worth on that network
+   worth on that network. A rule that loses the auction withholds nothing, and
+   the only symptom is the grid's "bid, not included" dot — size the subsidy
+   against the other builders' bids, not against a round number
 
 ## Common Issues
 

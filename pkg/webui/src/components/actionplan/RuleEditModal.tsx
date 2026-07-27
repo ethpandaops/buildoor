@@ -33,7 +33,9 @@ const PRESETS: Preset[] = [
       // A subsidy adds to the block value, so it outbids competitors whatever
       // the block is worth — an absolute bid_value_gwei would have to be
       // re-tuned per network and silently loses when it guesses too low.
-      bid: { mode: 'custom', bid_subsidy: 1000000000, ignore_missing_prefs: true },
+      // Raise it if another builder still wins the slot: the grid's bid dot
+      // shows "bid, not included" for exactly that case.
+      bid: { mode: 'custom', bid_subsidy: 200000000 },
       reveal: { mode: 'disabled' },
     }),
   },
