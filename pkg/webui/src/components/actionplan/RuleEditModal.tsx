@@ -25,12 +25,15 @@ const PRESETS: Preset[] = [
   {
     id: 'win-and-withhold',
     label: 'Win the last slot of every epoch, withhold the payload',
-    hint: 'Bids an absolute value (tune it to outbid the other builders), then never reveals the envelope — the block exists, its execution payload does not.',
+    hint: 'Outbids the other builders with a large subsidy on top of the block value, then never reveals the envelope — the block exists, its execution payload does not.',
     apply: (slotsPerEpoch) => ({
       id: 'slot-last-withhold',
       description: 'win the last slot of every epoch and withhold the payload',
       slots_in_epoch: [Math.max(0, slotsPerEpoch - 1)],
-      bid: { mode: 'custom', bid_value_gwei: 1000000, ignore_missing_prefs: true },
+      // A subsidy adds to the block value, so it outbids competitors whatever
+      // the block is worth — an absolute bid_value_gwei would have to be
+      // re-tuned per network and silently loses when it guesses too low.
+      bid: { mode: 'custom', bid_subsidy: 1000000000, ignore_missing_prefs: true },
       reveal: { mode: 'disabled' },
     }),
   },
