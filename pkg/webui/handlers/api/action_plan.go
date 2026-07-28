@@ -43,6 +43,16 @@ type UpdateActionPlanResponse struct {
 	Plans  []*action_plan.SlotPlan `json:"plans"`
 }
 
+// ActionPlanRulesRequest replaces the whole recurring rule set atomically.
+type ActionPlanRulesRequest struct {
+	Rules []*action_plan.SlotRule `json:"rules"`
+}
+
+// ActionPlanRulesResponse returns the authoritative recurring rule set.
+type ActionPlanRulesResponse struct {
+	Rules []*action_plan.SlotRule `json:"rules"`
+}
+
 // SlotResultsResponse is the response of the slot results range query.
 type SlotResultsResponse struct {
 	Results []*slot_results.SlotResult `json:"results"`
@@ -193,6 +203,87 @@ func (h *APIHandler) UpdateActionPlan(w http.ResponseWriter, r *http.Request) {
 		Slots:  change.Slots,
 		Plans:  change.Plans,
 	})
+}
+
+// GetActionPlanRules godoc
+// @Id getActionPlanRules
+// @Summary Get recurring action plan rules
+// @Tags ActionPlan
+// @Description Returns the recurring slot rules, id-ascending (which is also
+// @Description their match order). A rule applies its categories to every slot
+// @Description whose index within the epoch matches, unless the slot carries
+// @Description an explicit plan.
+// @Produce json
+// @Success 200 {object} ActionPlanRulesResponse
+// @Failure 503 {object} map[string]string "Plan service unavailable"
+// @Router /api/buildoor/action-plan/rules [get]
+func (h *APIHandler) GetActionPlanRules(w http.ResponseWriter, r *http.Request) {
+	if h.planSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "action plan service not available")
+		return
+	}
+
+	rules := h.planSvc.Rules()
+	if rules == nil {
+		rules = []*action_plan.SlotRule{}
+	}
+
+	writeJSON(w, http.StatusOK, &ActionPlanRulesResponse{Rules: rules})
+}
+
+// UpdateActionPlanRules godoc
+// @Id updateActionPlanRules
+// @Summary Replace the recurring action plan rules
+// @Tags ActionPlan
+// @Description Atomically replaces the whole recurring rule set (every rule
+// @Description validates or nothing changes). Each rule matches slot indices
+// @Description within an epoch, optionally bounded to an epoch window, and
+// @Description carries the same categories as a slot plan — e.g. win slot 31
+// @Description of every epoch and withhold its payload. Already frozen slots
+// @Description keep the plan they froze with. Requires authentication.
+// @Accept json
+// @Produce json
+// @Param Authorization header string true "Bearer token"
+// @Param request body ActionPlanRulesRequest true "Full rule set"
+// @Success 200 {object} ActionPlanRulesResponse "Authoritative rule set"
+// @Failure 400 {object} map[string]string "Validation error"
+// @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 503 {object} map[string]string "Plan service unavailable"
+// @Router /api/buildoor/action-plan/rules [post]
+func (h *APIHandler) UpdateActionPlanRules(w http.ResponseWriter, r *http.Request) {
+	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
+	if token == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if h.planSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "action plan service not available")
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxPlanUpdateBodyBytes)
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	var req ActionPlanRulesRequest
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	rules, err := h.planSvc.SetRules(req.Rules, actorFromToken(token))
+	if err != nil {
+		h.audit(r, token, "action_plan.rules", "", req, "error: "+err.Error())
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	h.audit(r, token, "action_plan.rules", "", req, "ok")
+
+	writeJSON(w, http.StatusOK, &ActionPlanRulesResponse{Rules: rules})
 }
 
 // GetSlotResults godoc

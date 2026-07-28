@@ -536,8 +536,34 @@ export interface SlotPlan {
   reveal?: RevealPlan;
   build?: BuildPlan;
   transforms?: TransformPlan;
+  // Opts the slot out of every recurring rule (runs on the global baseline).
+  ignore_rules?: boolean;
+  // Set on plans synthesized from a recurring rule; never on stored plans.
+  rule_id?: string;
   updated_at: string;
   updated_by: string;
+}
+
+// A recurring plan template: its categories apply to every slot whose index
+// within the epoch matches, unless the slot carries an explicit plan.
+export interface SlotRule {
+  id: string;
+  enabled: boolean;
+  description?: string;
+  slots_in_epoch: number[];
+  from_epoch?: number;
+  to_epoch?: number;
+  bid?: BidPlan;
+  builder_api?: BuilderAPIPlan;
+  reveal?: RevealPlan;
+  build?: BuildPlan;
+  transforms?: TransformPlan;
+  updated_at?: string;
+  updated_by?: string;
+}
+
+export interface ActionPlanRulesResponse {
+  rules: SlotRule[];
 }
 
 // One mutation unit of the bulk plan update API. Category members are
@@ -554,6 +580,8 @@ export interface PlanUpdate {
   reveal?: RevealPlan | null;
   build?: BuildPlan | null;
   transforms?: TransformPlan | null;
+  // Two-state: absent = unchanged, true/false = set the rule opt-out.
+  ignore_rules?: boolean;
   set?: Record<string, number | string | boolean | null>;
 }
 

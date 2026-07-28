@@ -146,6 +146,103 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/action-plan/rules": {
+            "get": {
+                "description": "Returns the recurring slot rules, id-ascending (which is also\ntheir match order). A rule applies its categories to every slot\nwhose index within the epoch matches, unless the slot carries\nan explicit plan.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get recurring action plan rules",
+                "operationId": "getActionPlanRules",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ActionPlanRulesResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Plan service unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Atomically replaces the whole recurring rule set (every rule\nvalidates or nothing changes). Each rule matches slot indices\nwithin an epoch, optionally bounded to an epoch window, and\ncarries the same categories as a slot plan — e.g. win slot 31\nof every epoch and withhold its payload. Already frozen slots\nkeep the plan they froze with. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Replace the recurring action plan rules",
+                "operationId": "updateActionPlanRules",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Full rule set",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.ActionPlanRulesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Authoritative rule set",
+                        "schema": {
+                            "$ref": "#/definitions/api.ActionPlanRulesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "503": {
+                        "description": "Plan service unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/action-plan/test-transform": {
             "post": {
                 "description": "Runs an operator jq expression against a sample payload / bid /\nenvelope (a captured artifact when sample_slot is given and\navailable, otherwise a zero-value template of the object) and\nreturns the transformed JSON, so expressions can be built and\ntested live before being saved to a slot plan. Bid and envelope\ntransforms operate on the MESSAGE, matching production.",
@@ -1531,6 +1628,10 @@ const docTemplate = `{
                 "from_slot": {
                     "type": "integer"
                 },
+                "ignore_rules": {
+                    "description": "IgnoreRules is two-state on purpose: absent = unchanged, true/false =\nset the slot's recurring-rule opt-out.",
+                    "type": "boolean"
+                },
                 "reveal": {
                     "type": "array",
                     "items": {
@@ -1730,10 +1831,67 @@ const docTemplate = `{
                 "builder_api": {
                     "$ref": "#/definitions/action_plan.BuilderAPIPlan"
                 },
+                "ignore_rules": {
+                    "description": "IgnoreRules opts the slot out of every recurring rule, so it runs on the\nplain global baseline. Without it an empty plan is dropped, which would\nhand the slot straight back to the matching rule.",
+                    "type": "boolean"
+                },
                 "reveal": {
                     "$ref": "#/definitions/action_plan.RevealPlan"
                 },
+                "rule_id": {
+                    "description": "RuleID marks a plan synthesized from a recurring rule. Synthesized plans\nare never stored — the field is empty on every persisted plan.",
+                    "type": "string"
+                },
                 "slot": {
+                    "type": "integer"
+                },
+                "transforms": {
+                    "$ref": "#/definitions/action_plan.TransformPlan"
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "updated_by": {
+                    "type": "string"
+                }
+            }
+        },
+        "action_plan.SlotRule": {
+            "type": "object",
+            "properties": {
+                "bid": {
+                    "$ref": "#/definitions/action_plan.BidPlan"
+                },
+                "build": {
+                    "$ref": "#/definitions/action_plan.BuildPlan"
+                },
+                "builder_api": {
+                    "$ref": "#/definitions/action_plan.BuilderAPIPlan"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "from_epoch": {
+                    "description": "FromEpoch / ToEpoch bound the rule to an inclusive epoch window; nil is\nunbounded on that side.",
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "reveal": {
+                    "$ref": "#/definitions/action_plan.RevealPlan"
+                },
+                "slots_in_epoch": {
+                    "description": "SlotsInEpoch are the matched slot indices within an epoch (0-based, so\n31 is the last slot of a 32-slot epoch).",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "to_epoch": {
                     "type": "integer"
                 },
                 "transforms": {
@@ -1774,6 +1932,28 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/action_plan.SlotPlan"
+                    }
+                }
+            }
+        },
+        "api.ActionPlanRulesRequest": {
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.SlotRule"
+                    }
+                }
+            }
+        },
+        "api.ActionPlanRulesResponse": {
+            "type": "object",
+            "properties": {
+                "rules": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.SlotRule"
                     }
                 }
             }

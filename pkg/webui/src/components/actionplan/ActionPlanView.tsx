@@ -1,9 +1,11 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useActionPlan } from '../../hooks/useActionPlan';
+import { useActionPlanRules } from '../../hooks/useActionPlanRules';
 import { useAuthContext } from '../../context/AuthContext';
 import { ActionPlanGrid } from './ActionPlanGrid';
 import { BulkEditBar } from './BulkEditBar';
+import { RulesPanel } from './RulesPanel';
 import { SlotEditModal, type ModalTarget } from './SlotEditModal';
 
 // Default epoch window around the current epoch.
@@ -43,6 +45,12 @@ export const ActionPlanView: React.FC = () => {
   const maxSlot = window ? (window.end + 1) * slotsPerEpoch - 1 : -1;
 
   const { plans, results, loading, error, refetch, applyUpdates } = useActionPlan(minSlot, maxSlot);
+  const {
+    rules,
+    loading: rulesLoading,
+    error: rulesError,
+    saveRules,
+  } = useActionPlanRules();
 
   // Selection (future slots only) + range anchor for shift-click.
   const [selection, setSelection] = useState<Set<number>>(new Set());
@@ -158,6 +166,15 @@ export const ActionPlanView: React.FC = () => {
         <div className="card-body">
           {error && <div className="alert alert-danger small py-2">{error}</div>}
 
+          <RulesPanel
+            rules={rules}
+            slotsPerEpoch={slotsPerEpoch}
+            canEdit={canEdit}
+            loading={rulesLoading}
+            error={rulesError}
+            saveRules={saveRules}
+          />
+
           <BulkEditBar
             selectionCount={selection.size}
             canEdit={canEdit}
@@ -186,6 +203,7 @@ export const ActionPlanView: React.FC = () => {
             <span><span className="ap-chip ap-chip-reorg">P</span> reorg parent</span>
             <span><span className="ap-chip ap-chip-transform">jq</span> transform</span>
             <span><span className="ap-chip ap-chip-disabled">B</span> disabled</span>
+            <span><span className="ap-chip ap-chip-custom ap-chip-rule">B</span> from a recurring rule</span>
             <span className="legend-section">Bid (left dot):</span>
             <span><span className="ap-dot ap-dot-included d-inline-block"></span> included</span>
             <span><span className="ap-dot ap-dot-bidding d-inline-block"></span> bid, not included</span>

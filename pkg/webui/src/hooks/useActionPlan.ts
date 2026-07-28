@@ -53,28 +53,6 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
   const rangeRef = useRef({ min: minSlot, max: maxSlot });
   rangeRef.current = { min: minSlot, max: maxSlot };
 
-  // Merge an authoritative {slots, plans} change set (POST response or SSE
-  // event) into the in-range plan state; a null plan deletes the slot's entry.
-  const mergePlanChange = useCallback((slots: number[], changed: (SlotPlan | null)[]) => {
-    setPlans((prev) => {
-      let next: Record<number, SlotPlan> | null = null;
-      for (let i = 0; i < slots.length; i++) {
-        const slot = toSlotNumber(slots[i]);
-        if (slot < rangeRef.current.min || slot > rangeRef.current.max) continue;
-        const plan = changed[i] ?? null;
-        if (plan === null) {
-          if (prev[slot] === undefined && next === null) continue;
-          next = next ?? { ...prev };
-          delete next[slot];
-        } else {
-          next = next ?? { ...prev };
-          next[slot] = plan;
-        }
-      }
-      return next ?? prev;
-    });
-  }, []);
-
   const fetchAll = useCallback(async () => {
     if (maxSlot < minSlot) return;
 
@@ -119,6 +97,43 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     }
   }, [minSlot, maxSlot]);
 
+  // Stable handle for the SSE handlers, which must not resubscribe whenever
+  // the visible range changes.
+  const fetchAllRef = useRef(fetchAll);
+  fetchAllRef.current = fetchAll;
+
+  // Apply an authoritative {slots, plans} change set (POST response or SSE
+  // event) to the in-range plan state. A stored plan always wins over a
+  // recurring rule, so setting one can be merged in place — but DELETING one
+  // hands the slot back to whatever rule matches it, and only the server knows
+  // that. Any in-range deletion therefore refetches instead of merging.
+  const applyPlanChange = useCallback((slots: number[], changed: (SlotPlan | null)[]) => {
+    const { min, max } = rangeRef.current;
+    const inRange: number[] = [];
+
+    for (let i = 0; i < slots.length; i++) {
+      const slot = toSlotNumber(slots[i]);
+      if (slot < min || slot > max) continue;
+
+      if ((changed[i] ?? null) === null) {
+        fetchAllRef.current();
+        return;
+      }
+
+      inRange.push(i);
+    }
+
+    if (inRange.length === 0) return;
+
+    setPlans((prev) => {
+      const next = { ...prev };
+      for (const i of inRange) {
+        next[toSlotNumber(slots[i])] = changed[i] as SlotPlan;
+      }
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
@@ -128,7 +143,13 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     const offPlan = onStreamEvent('action_plan_updated', (data) => {
       const change = data as { slots?: number[]; plans?: (SlotPlan | null)[] };
       if (!change?.slots?.length) return;
-      mergePlanChange(change.slots, change.plans || []);
+      applyPlanChange(change.slots, change.plans || []);
+    });
+
+    // Rule changes rewrite the effective plan of every uncovered slot, so the
+    // whole visible range has to come back from the authoritative endpoint.
+    const offRules = onStreamEvent('action_plan_rules_updated', () => {
+      fetchAllRef.current();
     });
 
     const offResult = onStreamEvent('slot_result_updated', (data) => {
@@ -141,9 +162,10 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
     return () => {
       offPlan();
+      offRules();
       offResult();
     };
-  }, [mergePlanChange]);
+  }, [applyPlanChange]);
 
   // Refetch the visible range after an SSE reconnect (updates during the gap
   // were never delivered).
@@ -183,7 +205,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
         // from our own patch.
         const change = body as UpdateActionPlanResponse;
         if (change?.slots?.length) {
-          mergePlanChange(change.slots, change.plans || []);
+          applyPlanChange(change.slots, change.plans || []);
         }
 
         return { ok: true };
@@ -191,7 +213,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
         return { ok: false, error: err instanceof Error ? err.message : 'Unknown error' };
       }
     },
-    [mergePlanChange]
+    [applyPlanChange]
   );
 
   return { plans, results, loading, error, refetch: fetchAll, applyUpdates };

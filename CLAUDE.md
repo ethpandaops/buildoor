@@ -163,6 +163,21 @@ npm run clean
      sample_slot → runs the exact production gojq against a captured artifact, else
      the latest buffered one, else an illustrative template; bid/envelope reduced to
      `.message`).
+   - **Recurring rules** (`rules.go`) cover what sparse plans cannot: a scenario
+     that must repeat for a whole devnet run. A `SlotRule` matches slot INDICES
+     within the epoch (`slots_in_epoch`, optionally bounded by `from_epoch`/
+     `to_epoch`) and carries the very same categories as a `SlotPlan` — e.g.
+     win slot 31 of every epoch (`bid: custom` + value override) and withhold
+     its payload (`reveal: disabled`), the ePBS analogue of "run a devnet with
+     slot 31 missing". Precedence is WHOLESALE, never merged: an explicit plan
+     for a slot replaces any rule, and `SlotPlan.IgnoreRules` opts a single slot
+     out entirely (which is why such a plan is not "empty"). Rules resolve at
+     freeze/read time (`PlanForSlot`), so a rule change never rewrites an
+     already frozen slot, and the materialized plan is marked with `rule_id` —
+     it is synthesized on every read, never persisted per slot. Several matching
+     rules: lowest id wins. The set is replaced atomically (`SetRules`, max 32),
+     persisted via the `kv_store` `slot_rules` namespace, and fires
+     `RuleChangeEvent`
    - **Freeze semantics**: `Freeze(slot)` resolves the immutable `FrozenPlan` (raw plan
      + effective settings merged from the live global config + target-slot fork + the
      COMPLETE build decision incl. schedule modes and next_n accounting) the first time
@@ -178,7 +193,10 @@ npm run clean
      fine-grained `set` paths (`"bid.bid_min_amount": 5000`); overlapping updates
      apply in request order; committed changes fire `PlanChangeEvent`.
    - Persisted via the `kv_store` `slot_plans` namespace; past plans prune to
-     `slot-result-retention-epochs`, future plans never.
+     `slot-result-retention-epochs`, future plans never. `GetRange` returns the
+     EFFECTIVE plans of a range: stored plans plus the rule-derived plans of the
+     still-open slots (`> currentSlot`, not yet frozen) — past slots keep their
+     recorded history instead of being described by today's rules.
 
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
@@ -340,8 +358,11 @@ npm run clean
    - **Action Plan View**: epoch × slot timetable (rows = epochs, columns =
      slots) rendering plan chips + result status per cell; click-to-edit modal
      for future slots, full outcome detail + SSZ/JSON artifact downloads for
-     past slots; multi-slot/range bulk editing; live via the
-     `action_plan_updated`/`slot_result_updated` SSE events
+     past slots; multi-slot/range bulk editing; a Recurring Rules panel
+     (list/toggle/edit/delete + scenario presets like "win the last slot of
+     every epoch and withhold the payload"); rule-derived cells render dashed
+     chips; live via the `action_plan_updated`/`action_plan_rules_updated`/
+     `slot_result_updated` SSE events
    - **Bids Won View**: Paginated table of our blocks included on chain
      - Tab navigation: Dashboard / Bids Won / Action Plan
      - Real-time updates when new blocks are included (bid_won SSE from the
@@ -453,7 +474,8 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
   SSZ), `validator_registrations` (Builder API registrations, SSZ; codec in
   `builderapi/legacy`), `builder_preferences` (max_execution_payment, LE uint64;
   codec in `builderapi/epbs`), `slot_plans` (per-slot action plans, JSON; codec in
-  `action_plan`), `slot_results` (per-slot outcome summaries, JSON; codec in
+  `action_plan`), `slot_rules` (recurring per-slot-index plan templates, JSON;
+  codec in `action_plan`), `slot_results` (per-slot outcome summaries, JSON; codec in
   `slot_results`; the legacy `won_blocks` namespace is migrated into it once on
   startup and then deleted)
 - `slot_artifacts` — dedicated table (NOT a kv namespace: blobs are too large for
@@ -518,9 +540,11 @@ buildoor/
 ├── cmd/                    # CLI commands (root, run, deposit, exit)
 ├── pkg/
 │   ├── action_plan/       # per-slot scheduling authority: sparse SlotPlan store,
+│   │                      # recurring SlotRules (slot-index-in-epoch templates,
+│   │                      # wholesale precedence under explicit plans),
 │   │                      # freeze semantics (FrozenPlan = raw plan + resolved
 │   │                      # effective settings + complete build decision), atomic
-│   │                      # bulk updates w/ path-based partial edits, kv codec
+│   │                      # bulk updates w/ path-based partial edits, kv codecs
 │   ├── slot_results/      # generic per-slot outcome history: attempt-aware
 │   │                      # SlotResult tracker (blocking subscriptions, baseline
 │   │                      # slot clock, won-block view, won_blocks migration) +
@@ -623,13 +647,21 @@ To make frontend changes:
   - Query params: `offset` (default: 0), `limit` (default: 20, max: 100)
   - Returns: `{ bids_won: [], total: number, offset: number, limit: number }`
 - `GET /api/buildoor/builder-api-status` - Builder API configuration and validator count
-- `GET /api/buildoor/action-plan?min_slot=&max_slot=` - Per-slot action plans in the
-  inclusive range (max span 320 epochs)
+- `GET /api/buildoor/action-plan?min_slot=&max_slot=` - EFFECTIVE per-slot action
+  plans in the inclusive range (max span 320 epochs): stored plans plus the
+  rule-derived plans of the still-open slots (those carry `rule_id`)
 - `POST /api/buildoor/action-plan` - Atomic bulk plan mutation (auth + audit).
   Body `{updates: [...]}`; each update targets `slots` and/or `from_slot..to_slot`,
   with three-state category members (absent/null/object) and fine-grained `set`
-  paths (`{"bid.bid_min_amount": 5000}`). Past/frozen slots → 409. Returns the
+  paths (`{"bid.bid_min_amount": 5000}`) plus the top-level `ignore_rules`
+  member (per-slot recurring-rule opt-out). Past/frozen slots → 409. Returns the
   authoritative normalized plans
+- `GET /api/buildoor/action-plan/rules` - Recurring rules, id-ascending (= match
+  order)
+- `POST /api/buildoor/action-plan/rules` - Atomically replaces the WHOLE rule set
+  (auth + audit). Body `{rules: [...]}`; each rule has an id slug, `enabled`,
+  `slots_in_epoch`, optional `from_epoch`/`to_epoch` and the same categories as a
+  slot plan. All-or-nothing validation (400 on any bad rule); max 32 rules
 - `GET /api/buildoor/slot-results?min_slot=&max_slot=` - Attempt-level outcome
   history per slot (build, bids, submissions, reveals, inclusion, applied plan)
 - `GET /api/buildoor/slot-results/{slot}/payload|envelope|bids|bids/{index}` - Raw
@@ -670,6 +702,9 @@ To make frontend changes:
   - Logged in event stream for debugging
 - `action_plan_updated` - Fired on committed plan mutations; data is the
   authoritative `{slots: [...], plans: [...]}` change set (null plan = deleted)
+- `action_plan_rules_updated` - Fired on committed recurring-rule mutations; data
+  is the authoritative `{rules: [...]}` set. The plan grid refetches its range
+  because rules change the effective plan of every uncovered slot
 - `slot_result_updated` - Fired when a slot's result record changes (coalesced to
   ~1/s per slot); data is the full SlotResult. SSE is an invalidation channel —
   the REST range endpoints are the source of truth
@@ -787,6 +822,12 @@ happened afterwards, down to the exact SSZ objects.
   past slots reject edits with 409. Operators should plan ≥2 slots ahead
 - At-least-once semantics across restarts: an in-flight future slot may be
   re-frozen after a restart
+- **Recurring rules** apply a plan template to the same slot index of every epoch
+  (`slots_in_epoch`, optional `from_epoch`/`to_epoch`) — the tool for scenarios
+  that must hold for a whole devnet run rather than a bounded slot list. An
+  explicit plan for a slot replaces the rule wholesale (never merged); a plan
+  with `ignore_rules` opts a single slot out. Rules resolve at freeze time, so
+  editing them never rewrites a frozen slot
 
 **Outcome inspection** (see `pkg/slot_results/`): every active slot gets an
 attempt-level `SlotResult` (REST range queries + `slot_result_updated` SSE) and
@@ -797,8 +838,10 @@ artifact kind).
 
 **WebUI**: the Action Plan tab renders an epoch × slot timetable (rows = epochs,
 columns = slots) with plan chips + result status per cell, click-to-edit modal
-(future slots) / full outcome detail with artifact downloads (past slots), and
-multi-slot/range bulk editing.
+(future slots) / full outcome detail with artifact downloads (past slots),
+multi-slot/range bulk editing, and a Recurring Rules panel with scenario presets.
+Rule-derived cells draw dashed chips; opening one pre-fills the rule's values and
+saving detaches that slot into an explicit plan.
 
 **Testing the feature:**
 1. Plan a future slot: `curl -X POST .../api/buildoor/action-plan -d
@@ -810,6 +853,18 @@ multi-slot/range bulk editing.
 4. Test a withheld reveal: `{"set":{"reveal.mode":"disabled"}}` on a future slot →
    the reveal attempt records `suppressed`/`plan_disabled`, the envelope artifact
    still exists
+5. Run it for every epoch instead (the "slot 31 missing" devnet scenario):
+   `curl -X POST .../api/buildoor/action-plan/rules -d '{"rules":[{
+   "id":"slot31-withhold","enabled":true,"slots_in_epoch":[31],
+   "bid":{"mode":"custom","bid_subsidy":200000000},
+   "reveal":{"mode":"disabled"}}]}'` → every slot 31 is bid for and, once won,
+   never revealed: the block exists, its execution payload does not. Use
+   `bid_subsidy` (added on top of the block value) rather than the absolute
+   `bid_value_gwei` to outbid competitors: the absolute value replaces the block
+   value entirely and silently loses whenever it is set below what the block is
+   worth on that network. A rule that loses the auction withholds nothing, and
+   the only symptom is the grid's "bid, not included" dot — size the subsidy
+   against the other builders' bids, not against a round number
 
 ## Common Issues
 
