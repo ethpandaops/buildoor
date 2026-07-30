@@ -1339,10 +1339,11 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
    the badge opening the per-candidate popover. */
 .candidate-mini-bar {
   position: absolute;
-  height: 3px;
+  height: 2px;
   border-radius: 1px;
   cursor: pointer;
   z-index: 3;
+  pointer-events: auto;
 }
 
 .candidate-mini-bar:hover {
@@ -1351,11 +1352,11 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
 
 .candidate-badge {
   position: absolute;
-  bottom: 12px;
-  transform: translateX(-100%);
-  padding: 0 3px;
-  font-size: 9px;
-  line-height: 12px;
+  top: 12px;
+  pointer-events: auto;
+  padding: 0 2px;
+  font-size: 8px;
+  line-height: 10px;
   color: #cdd3dc;
   background: rgba(70, 80, 95, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.25);

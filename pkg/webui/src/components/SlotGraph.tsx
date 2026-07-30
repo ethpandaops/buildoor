@@ -627,7 +627,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 style={{
                   left: `${startPct}%`,
                   width: `${endPct - startPct}%`,
-                  bottom: `${2 + idx * 4}px`,
+                  top: `${14 + idx * 3}px`,
                   backgroundColor: candidateColor(build.candidate),
                   opacity: build.failed ? 0.35 : 0.85
                 }}
@@ -640,7 +640,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           {multiCandidate && buildStartX < 100 && (
             <div
               className="candidate-badge"
-              style={{ left: `${Math.max(0, buildStartX)}%` }}
+              style={{ left: `${Math.min(97, Math.max(0, buildStartX))}%` }}
               onClick={(e) => showPopover(e, candidateListPopover(candidateBuilds, slotStartTime))}
             >
               {`\u29c9${candidateBuilds.length}`}

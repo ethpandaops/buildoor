@@ -258,9 +258,9 @@ type BuildConfig struct {
 	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
 
 	// Parallel runs the selected candidate builds concurrently against the
-	// EL (one payloadId each) instead of sequentially. Sequential builds run
-	// speculative candidates first and the canonical one last, so the EL's
-	// head ends on the canonical chain.
+	// EL, each with its own payload ID (default). Disable it to serialize
+	// them — the canonical candidate builds first so it keeps its scheduled
+	// start, and the speculative ones follow.
 	Parallel bool `yaml:"parallel" json:"parallel"`
 
 	// SpeculativeBuildTimeMs, when non-zero, is the EL build time granted to

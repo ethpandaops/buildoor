@@ -37,10 +37,14 @@ type PayloadBuilder struct {
 	mu           sync.Mutex
 }
 
-// activeBuildKey identifies one in-progress build: a slot may build several
-// candidate payloads on different execution parents concurrently.
+// activeBuildKey identifies one in-progress build by the full parent tuple:
+// candidates can share an execution parent while differing in the beacon
+// parent (parent_empty and grandparent_full both extend the grandparent's
+// payload), so the beacon root must be part of the key or they collide and
+// cancel each other.
 type activeBuildKey struct {
 	slot       phase0.Slot
+	parentRoot phase0.Root
 	parentHash phase0.Hash32
 }
 
@@ -92,7 +96,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	attrs *beacon.PayloadAttributesEvent,
 	buildTimeMs uint64,
 ) (*Payload, error) {
-	buildKey := activeBuildKey{slot: attrs.ProposalSlot, parentHash: attrs.ParentBlockHash}
+	buildKey := activeBuildKey{
+		slot:       attrs.ProposalSlot,
+		parentRoot: attrs.ParentBlockRoot,
+		parentHash: attrs.ParentBlockHash,
+	}
 
 	b.mu.Lock()
 
@@ -108,16 +116,20 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	buildCtx, cancel := context.WithCancel(ctx)
 
-	b.activeBuilds[buildKey] = &activeBuild{cancelFn: cancel}
+	build := &activeBuild{cancelFn: cancel}
+	b.activeBuilds[buildKey] = build
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		if build, ok := b.activeBuilds[buildKey]; ok {
-			build.cancelFn()
+		// Only retire our own build: a newer build of the same tuple has
+		// already replaced (and cancelled) this one.
+		if current, ok := b.activeBuilds[buildKey]; ok && current == build {
 			delete(b.activeBuilds, buildKey)
 		}
 		b.mu.Unlock()
+
+		cancel()
 	}()
 
 	// Resolve the fork active at the build epoch and the engine method version it implies.
@@ -129,10 +141,22 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("cannot build payload for fork %s: %w", beaconFork, err)
 	}
 
-	// Get finality info (still need safe/finalized block hashes).
-	finalityInfo, err := b.clClient.GetFinalityInfo(buildCtx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get finality info: %w", err)
+	// Safe/finalized hashes for the forkchoice state. The head tracker keeps
+	// them fresh per head change, so concurrent candidate builds share one
+	// snapshot instead of each paying the beacon-API round trips; the direct
+	// fetch only covers the window before the first refresh.
+	var finalityInfo *beacon.FinalityInfo
+	if headTracker := b.chainSvc.GetHeadTracker(); headTracker != nil {
+		finalityInfo = headTracker.FinalityInfo()
+	}
+
+	if finalityInfo == nil {
+		fetched, err := b.clClient.GetFinalityInfo(buildCtx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get finality info: %w", err)
+		}
+
+		finalityInfo = fetched
 	}
 
 	// Resolve the fee recipient (and target gas limit) for the build. The
@@ -238,9 +262,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	payloadID := *fcuResp.PayloadID
 
 	b.mu.Lock()
-	if build, ok := b.activeBuilds[buildKey]; ok {
-		build.payloadID = payloadID
-	}
+	build.payloadID = payloadID
 	b.mu.Unlock()
 
 	b.log.WithFields(logrus.Fields{

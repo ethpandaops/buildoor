@@ -23,11 +23,25 @@ export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
   reveal?: RevealConfig;
+  build?: BuildConfig;
   deposit_amount: number;
   topup_threshold: number;
   topup_amount: number;
   payload_build_time?: number;
   extra_data?: string;
+}
+
+// Build-candidate policy: which parent candidates a slot builds payloads for
+// (auto | always | never per candidate) and how the engine builds run.
+export interface BuildConfig {
+  candidate_parent_full?: string;
+  candidate_parent_empty?: string;
+  candidate_grandparent_full?: string;
+  candidate_grandparent_empty?: string;
+  parallel?: boolean;
+  speculative_build_time_ms?: number;
+  auto_weak_head_pct?: number;
+  enforce_bid_gas_limit?: boolean;
 }
 
 // Payload reveal config (own section, shared by the p2p bidder and Builder

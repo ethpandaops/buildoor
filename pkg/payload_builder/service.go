@@ -28,6 +28,7 @@ const buildCallTimeout = 10 * time.Second
 // transformTimeout bounds how long an operator jq payload transform may run.
 const transformTimeout = 2 * time.Second
 
+
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
 //
@@ -723,9 +724,9 @@ func (s *Service) scheduleBuildForSlot(slot phase0.Slot, buildStartMs int64) {
 
 // executeBuildForSlot runs the slot's build pass: resolve the candidate set
 // (configured policy + chain view + received attribute variants) and build
-// every selected target — sequentially from most speculative to most
-// canonical (so the EL head ends on the canonical chain), or concurrently
-// when parallel builds are enabled.
+// every selected target — sequentially in candidateBuildOrder (canonical
+// first, so it starts at the configured build time), or concurrently when
+// parallel builds are enabled.
 func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 	targets := s.resolveBuildTargets(slot)
 	if len(targets) == 0 {

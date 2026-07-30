@@ -133,6 +133,8 @@ type HeadTracker struct {
 
 	mu              sync.RWMutex
 	head            *beacon.BlockInfo
+	finality        *beacon.FinalityInfo
+	finalityHead    phase0.Root
 	blocks          map[phase0.Root]*beacon.BlockInfo
 	payloadRevealed map[phase0.Root]bool
 	payloadEmpty    map[phase0.Root]bool
@@ -209,6 +211,7 @@ func (h *HeadTracker) run() {
 			h.processHead(event)
 		case event := <-payloadSub.Channel():
 			h.markPayloadRevealed(event.BlockRoot)
+			h.prefetchELMeta(event.BlockRoot)
 		case event := <-reorgSub.Channel():
 			h.log.WithFields(logrus.Fields{
 				"slot":     event.Slot,
@@ -218,6 +221,47 @@ func (h *HeadTracker) run() {
 			}).Info("Beacon node reported chain reorg")
 		}
 	}
+}
+
+// FinalityInfo returns the finality checkpoint execution hashes cached for
+// the current head (nil until the first refresh completes). Refreshed once
+// per head change, so build paths never pay the beacon-API round trips.
+func (h *HeadTracker) FinalityInfo() *beacon.FinalityInfo {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	return h.finality
+}
+
+// refreshFinality re-resolves the finality info for the given head, unless it
+// is already cached for it. Runs in the tracker's event loop, off every build
+// hot path.
+func (h *HeadTracker) refreshFinality(headRoot phase0.Root) {
+	if h.clClient == nil {
+		return
+	}
+
+	h.mu.RLock()
+	upToDate := h.finalityHead == headRoot && h.finality != nil
+	h.mu.RUnlock()
+
+	if upToDate {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(h.ctx, headFetchTimeout)
+	defer cancel()
+
+	info, err := h.clClient.GetFinalityInfo(ctx)
+	if err != nil {
+		h.log.WithError(err).Debug("Failed to refresh finality info")
+		return
+	}
+
+	h.mu.Lock()
+	h.finality = info
+	h.finalityHead = headRoot
+	h.mu.Unlock()
 }
 
 // CurrentHead returns the most recently observed head block (nil until the
@@ -440,6 +484,7 @@ func (h *HeadTracker) processHead(event *beacon.HeadEvent) {
 	}
 
 	h.prune(newHead.Slot)
+	h.refreshFinality(newHead.Root)
 
 	h.headChangeDispatcher.Fire(change)
 }
@@ -578,18 +623,24 @@ func (h *HeadTracker) buildCandidate(
 		ParentPayloadStatus: parentStatus,
 	}
 
+	// Cache-only: candidate resolution runs on the build hot path and must
+	// never block on a beacon-API round trip.
 	committer := h.findCommitterOfExecHash(ctx, parent, elParentHash)
 	if committer != nil {
 		candidate.ELParentGasLimit = committer.GasLimit
 		candidate.ELParentNumber = committer.ExecutionBlockNumber
+	}
 
-		if candidate.ELParentNumber == 0 {
-			if meta := h.resolveELMeta(ctx, committer, elParentHash); meta != nil {
-				candidate.ELParentNumber = meta.number
+	if candidate.ELParentNumber == 0 {
+		h.mu.RLock()
+		meta := h.elMeta[elParentHash]
+		h.mu.RUnlock()
 
-				if candidate.ELParentGasLimit == 0 {
-					candidate.ELParentGasLimit = meta.gasLimit
-				}
+		if meta != nil {
+			candidate.ELParentNumber = meta.number
+
+			if candidate.ELParentGasLimit == 0 {
+				candidate.ELParentGasLimit = meta.gasLimit
 			}
 		}
 	}
@@ -597,10 +648,60 @@ func (h *HeadTracker) buildCandidate(
 	return candidate
 }
 
+// LookupELParentMeta returns the block number and gas limit of the execution
+// block identified by execHash from already-known data only: the committing
+// beacon block's own fields and the envelope-metadata cache. It never
+// performs a beacon-API fetch, so build hot paths never block on one
+// (payload-available events prefetch the metadata in the background).
+func (h *HeadTracker) LookupELParentMeta(
+	ctx context.Context, fromRoot phase0.Root, execHash phase0.Hash32,
+) (number, gasLimit uint64) {
+	h.mu.RLock()
+	from, cached := h.blocks[fromRoot]
+	meta := h.elMeta[execHash]
+	h.mu.RUnlock()
+
+	if meta != nil {
+		return meta.number, meta.gasLimit
+	}
+
+	if !cached {
+		return 0, 0
+	}
+
+	if committer := h.findCommitterOfExecHash(ctx, from, execHash); committer != nil {
+		return committer.ExecutionBlockNumber, committer.GasLimit
+	}
+
+	return 0, 0
+}
+
+// prefetchELMeta resolves and caches the envelope metadata of a revealed
+// payload in the background, so later build passes find it cached instead of
+// blocking on a beacon-API fetch.
+func (h *HeadTracker) prefetchELMeta(root phase0.Root) {
+	if h.clClient == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(h.ctx, headFetchTimeout)
+		defer cancel()
+
+		block, err := h.GetBlock(ctx, root)
+		if err != nil {
+			return
+		}
+
+		h.resolveELMeta(ctx, block, block.ExecutionBlockHash)
+	}()
+}
+
 // ResolveELParentMeta resolves the block number and gas limit of the
 // execution block identified by execHash, walking the beacon ancestry from
 // fromRoot to find the block that committed it (best-effort; zeros when
-// unknown).
+// unknown). May fetch from the beacon node — do not call from build hot
+// paths; use LookupELParentMeta there.
 func (h *HeadTracker) ResolveELParentMeta(
 	ctx context.Context, fromRoot phase0.Root, execHash phase0.Hash32,
 ) (number, gasLimit uint64) {

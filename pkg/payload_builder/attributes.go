@@ -98,7 +98,7 @@ func (s *Service) sanitizeAttributes(event *beacon.PayloadAttributesEvent) *beac
 	}
 
 	if sanitized.ParentBlockNumber == 0 {
-		number, _ := headTracker.ResolveELParentMeta(
+		number, _ := headTracker.LookupELParentMeta(
 			ctx, sanitized.ParentBlockRoot, sanitized.ParentBlockHash)
 		if number != 0 {
 			if sanitized == event {

@@ -22,14 +22,18 @@ type buildTarget struct {
 	derived   bool
 }
 
-// speculativeBuildOrder lists candidate keys from most speculative to most
-// canonical: sequential build passes run in this order so the EL's head ends
-// on the canonical chain.
-var speculativeBuildOrder = []chain.CandidateKey{
-	chain.CandidateGrandparentEmpty,
-	chain.CandidateGrandparentFull,
-	chain.CandidateParentEmpty,
+// candidateBuildOrder lists candidate keys in the order a sequential build
+// pass runs them: the canonical candidate first, so it starts at exactly the
+// configured build start time and is never delayed by speculative builds
+// (payload attributes typically arrive barely one build ahead of the slot).
+// The speculative builds follow; the EL head they leave behind is transient —
+// the beacon node's own forkchoiceUpdated calls drive it back to the
+// canonical chain, and the next slot's canonical build targets it again.
+var candidateBuildOrder = []chain.CandidateKey{
 	chain.CandidateParentFull,
+	chain.CandidateParentEmpty,
+	chain.CandidateGrandparentFull,
+	chain.CandidateGrandparentEmpty,
 }
 
 // resolveBuildTargets assembles the slot's build list from the configured
@@ -59,10 +63,10 @@ func (s *Service) resolveBuildTargets(slot phase0.Slot) []*buildTarget {
 		variantByTuple[beacon.AttrParentKeyOf(event)] = event
 	}
 
-	targets := make([]*buildTarget, 0, len(speculativeBuildOrder)+len(variants))
-	covered := make(map[beacon.AttrParentKey]bool, len(speculativeBuildOrder)+len(variants))
+	targets := make([]*buildTarget, 0, len(candidateBuildOrder)+len(variants))
+	covered := make(map[beacon.AttrParentKey]bool, len(candidateBuildOrder)+len(variants))
 
-	for _, key := range speculativeBuildOrder {
+	for _, key := range candidateBuildOrder {
 		candidate := candidateByKey[key]
 		if candidate == nil {
 			continue
@@ -420,9 +424,15 @@ func (s *Service) resolveOnDemandTarget(slot phase0.Slot, tuple beacon.AttrParen
 	return nil
 }
 
-// candidateBuildTime returns the EL build time for a target: speculative
-// candidates may use a shorter configured build time.
+// candidateBuildTime returns the EL build time for a target. Parallel builds
+// all run inside the same designated build window, so every candidate gets
+// the full build time; only serialized builds shorten the speculative ones to
+// fit them alongside the canonical build.
 func (s *Service) candidateBuildTime(target *buildTarget) uint64 {
+	if s.cfg.Build.Parallel {
+		return s.cfg.PayloadBuildTime
+	}
+
 	if target.candidate != chain.CandidateParentFull && target.candidate != "" &&
 		s.cfg.Build.SpeculativeBuildTimeMs != 0 {
 		return s.cfg.Build.SpeculativeBuildTimeMs

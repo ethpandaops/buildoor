@@ -329,12 +329,13 @@ export function useEventStream(): UseEventStreamResult {
             `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
             event.timestamp);
           updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at },
-            state => ({
-              // The earliest candidate start drives the primary build line.
-              payloadBuildStartedAt: state.payloadBuildStartedAt !== undefined
-                ? Math.min(state.payloadBuildStartedAt, data.started_at)
-                : data.started_at
-            }));
+            state => (
+              // The primary line spans the primary candidate's own build; the
+              // first start seeds it until a payload becomes primary.
+              state.payloadBuildStartedAt === undefined
+                ? { payloadBuildStartedAt: data.started_at }
+                : {}
+            ));
           break;
         }
 
@@ -378,10 +379,15 @@ export function useEventStream(): UseEventStreamResult {
               return {};
             }
 
+            // The primary line spans this candidate's own build, so the start
+            // moves with the primary rather than covering every candidate.
+            const own = state.candidateBuilds?.find(b => b.candidate === (data.candidate ?? ''));
+
             return {
             payloadReady: true,
             payloadBuildFailed: false,
             payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
+            payloadBuildStartedAt: own?.startedAt ?? state.payloadBuildStartedAt,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,

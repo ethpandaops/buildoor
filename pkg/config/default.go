@@ -41,6 +41,7 @@ func DefaultConfig() *Config {
 			CandidateParentEmpty:      CandidateModeAuto,
 			CandidateGrandparentFull:  CandidateModeAuto,
 			CandidateGrandparentEmpty: CandidateModeNever,
+			Parallel:                  true,
 			AutoWeakHeadPct:           40,
 		},
 		Reveal: RevealConfig{
