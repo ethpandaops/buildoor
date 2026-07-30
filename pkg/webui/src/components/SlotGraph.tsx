@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
-import { Popover, PopoverData } from './Popover';
+import { Popover, PopoverData, type PopoverItem } from './Popover';
 import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
@@ -209,23 +209,77 @@ const candidateColor = (candidate?: string): string | undefined =>
 const candidateLabel = (candidate?: string): string =>
   (candidate && CANDIDATE_LABELS[candidate]) || 'unclassified';
 
-// candidateListPopover renders the per-candidate build list for the badge and
-// mini-bar popovers.
-const candidateListPopover = (
-  builds: import('../types').CandidateBuild[],
+
+
+// Short tab labels and ordering for the per-candidate payload tabs.
+const CANDIDATE_SHORT: Record<string, string> = {
+  parent_full: 'parent',
+  parent_empty: 'parent (empty)',
+  grandparent_full: 'grandparent',
+  grandparent_empty: 'grandparent (empty)'
+};
+
+const CANDIDATE_ORDER: Record<string, number> = {
+  parent_full: 0,
+  parent_empty: 1,
+  grandparent_full: 2,
+  grandparent_empty: 3
+};
+
+const candidateShortLabel = (candidate?: string): string =>
+  (candidate && CANDIDATE_SHORT[candidate]) || 'unclassified';
+
+const candidateOrder = (candidate?: string): number =>
+  (candidate ? CANDIDATE_ORDER[candidate] : undefined) ?? 9;
+
+// candidatePayloadItems renders one candidate payload's rows for its tab in
+// the payload-created popover.
+const candidatePayloadItems = (
+  build: import('../types').CandidateBuild,
   slotStartTime: number
-): PopoverData => ({
-  title: 'Build Candidates',
-  items: builds.map(build => ({
-    label: candidateLabel(build.candidate),
-    value: build.failed
-      ? `failed: ${build.error ?? 'unknown error'}`
-      : build.readyAt !== undefined
-        ? `ready +${build.readyAt - slotStartTime}ms` +
-          (build.blockHash ? ` · ${build.blockHash.substring(0, 12)}…` : '')
-        : 'building…'
-  }))
-});
+): PopoverItem[] => {
+  if (build.failed) {
+    return [
+      { label: 'Status', value: 'build failed' },
+      { label: 'Error', value: build.error ?? 'unknown error' }
+    ];
+  }
+
+  if (build.readyAt === undefined) {
+    return [{ label: 'Status', value: 'building…' }];
+  }
+
+  const d = build.detail;
+
+  return [
+    { label: 'Ready', value: `${build.readyAt - slotStartTime}ms` },
+    ...(build.blockHash
+      ? [{ label: 'Block Hash', value: truncateHashStr(build.blockHash), copyValue: build.blockHash }]
+      : []),
+    ...(build.blockValueGwei !== undefined
+      ? [{ label: 'Block Value', value: formatGwei(build.blockValueGwei) }]
+      : []),
+    ...(d?.blockNumber !== undefined ? [{ label: 'Block #', value: `${d.blockNumber}` }] : []),
+    ...(d?.gasUsed !== undefined
+      ? [{
+          label: 'Gas',
+          value: `${d.gasUsed.toLocaleString()} / ${(d.gasLimit ?? 0).toLocaleString()}`
+        }]
+      : []),
+    ...(d
+      ? [{
+          label: 'Contents',
+          value: `${d.numTransactions ?? 0} txs, ${d.numBlobs ?? 0} blobs, ` +
+            `${d.numWithdrawals ?? 0} wdrls, ${d.numExecRequests ?? 0} reqs`
+        }]
+      : [])
+  ];
+};
+
+// truncateHashStr shortens a hash for popover display (module scope twin of
+// the component-local helper).
+const truncateHashStr = (hash: string, len = 16): string =>
+  hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
 
 export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
@@ -354,10 +408,6 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const multiCandidate = candidateBuilds.length > 1;
   const primaryCandidate = state.payloadCandidate
     ?? (candidateBuilds.length === 1 ? candidateBuilds[0].candidate : undefined);
-  const secondaryBuilds = multiCandidate
-    ? candidateBuilds.filter(b => b.candidate !== primaryCandidate)
-    : [];
-
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
     return hash.substring(0, len) + '...';
@@ -610,42 +660,6 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             />
           )}
 
-          {/* Non-primary candidate builds: thin stacked mini-bars under the
-              primary build line, colored by candidate (no labels — the badge
-              popover carries the detail). */}
-          {genesisTime > 0 && secondaryBuilds.map((build, idx) => {
-            const startAt = build.startedAt ?? (slotStartTime + buildStartMs);
-            const endAt = build.readyAt ?? build.failedAt ?? Date.now();
-            const startPct = Math.max(0, calculatePosition(startAt - slotStartTime, rangeStart, totalRange));
-            const endPct = Math.min(100, calculatePosition(endAt - slotStartTime, rangeStart, totalRange));
-            if (endPct <= startPct) return null;
-
-            return (
-              <div
-                key={`cand-${build.candidate}-${idx}`}
-                className="candidate-mini-bar"
-                style={{
-                  left: `${startPct}%`,
-                  width: `${endPct - startPct}%`,
-                  top: `${14 + idx * 3}px`,
-                  backgroundColor: candidateColor(build.candidate),
-                  opacity: build.failed ? 0.35 : 0.85
-                }}
-                onClick={(e) => showPopover(e, candidateListPopover(candidateBuilds, slotStartTime))}
-              />
-            );
-          })}
-
-          {/* Candidate badge: click for the per-candidate build list. */}
-          {multiCandidate && buildStartX < 100 && (
-            <div
-              className="candidate-badge"
-              style={{ left: `${Math.min(97, Math.max(0, buildStartX))}%` }}
-              onClick={(e) => showPopover(e, candidateListPopover(candidateBuilds, slotStartTime))}
-            >
-              {`\u29c9${candidateBuilds.length}`}
-            </div>
-          )}
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
@@ -713,17 +727,33 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             `payload-attributes-${i}`
           ))}
 
-          {/* Payload created */}
+          {/* Payload created — one tab per built candidate payload */}
           {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
-              title: 'Payload Created',
+              title: multiCandidate ? 'Payloads Created' : 'Payload Created',
               wide: true,
               artifact: {
                 url: `/api/buildoor/slot-results/${slot}/payload`,
                 filename: `slot-${slot}-payload.ssz`
               },
+              tabs: multiCandidate
+                ? [...candidateBuilds]
+                    .sort((a, b) => candidateOrder(a.candidate) - candidateOrder(b.candidate))
+                    .map(build => ({
+                      key: build.candidate || 'unclassified',
+                      label: candidateShortLabel(build.candidate),
+                      color: candidateColor(build.candidate),
+                      items: candidatePayloadItems(build, slotStartTime),
+                      artifact: build.candidate
+                        ? {
+                            url: `/api/buildoor/slot-results/${slot}/payload?candidate=${build.candidate}`,
+                            filename: `slot-${slot}-payload-${build.candidate}.ssz`
+                          }
+                        : undefined
+                    }))
+                : undefined,
               items: [
                 { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
                 ...(state.payloadBlockHash ? [{

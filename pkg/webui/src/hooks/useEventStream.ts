@@ -367,11 +367,27 @@ export function useEventStream(): UseEventStreamResult {
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
+          const detail = {
+            blockNumber: data.block_number,
+            feeRecipient: data.fee_recipient,
+            gasLimit: data.gas_limit,
+            gasUsed: data.gas_used,
+            baseFeePerGas: data.base_fee_per_gas,
+            extraData: data.extra_data,
+            blobGasUsed: data.blob_gas_used,
+            excessBlobGas: data.excess_blob_gas,
+            numTransactions: data.num_transactions,
+            numWithdrawals: data.num_withdrawals,
+            numBlobs: data.num_blobs,
+            numExecRequests: data.num_exec_requests
+          };
+
           updateCandidateBuild(data.slot, data.candidate ?? '', {
             readyAt: data.ready_at,
             failed: false,
             blockHash: data.block_hash,
-            blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0
+            blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0,
+            detail
           }, state => {
             // A less canonical candidate never displaces the primary payload.
             if (state.payloadReady &&
@@ -391,20 +407,7 @@ export function useEventStream(): UseEventStreamResult {
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
-            payloadDetail: {
-              blockNumber: data.block_number,
-              feeRecipient: data.fee_recipient,
-              gasLimit: data.gas_limit,
-              gasUsed: data.gas_used,
-              baseFeePerGas: data.base_fee_per_gas,
-              extraData: data.extra_data,
-              blobGasUsed: data.blob_gas_used,
-              excessBlobGas: data.excess_blob_gas,
-              numTransactions: data.num_transactions,
-              numWithdrawals: data.num_withdrawals,
-              numBlobs: data.num_blobs,
-              numExecRequests: data.num_exec_requests
-            }
+            payloadDetail: detail
             };
           });
           break;

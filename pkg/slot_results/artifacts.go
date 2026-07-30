@@ -430,6 +430,49 @@ func (s *ArtifactStore) ListBids(slot phase0.Slot) ([]db.SlotArtifact, error) {
 	return s.stateDB.GetSlotArtifactMetas(uint64(slot), ArtifactKindBid)
 }
 
+// PayloadIndexForCandidate returns the per-slot payload artifact index built
+// for the given candidate key, scanning the slot's payload artifact metadata.
+// Returns false when the slot has no payload artifact for that candidate.
+func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate string) (int, bool) {
+	s.mu.Lock()
+
+	metas := make([]db.SlotArtifact, 0, 4)
+
+	if kinds, ok := s.buffer[slot]; ok {
+		for _, artifact := range kinds[ArtifactKindPayload] {
+			meta := *artifact
+			meta.Data = nil
+			metas = append(metas, meta)
+		}
+	}
+	s.mu.Unlock()
+
+	if len(metas) == 0 {
+		stored, err := s.stateDB.GetSlotArtifactMetas(uint64(slot), ArtifactKindPayload)
+		if err != nil {
+			s.log.WithError(err).WithField("slot", slot).
+				Debug("Failed to list payload artifact metas")
+
+			return 0, false
+		}
+
+		metas = stored
+	}
+
+	for _, artifact := range metas {
+		var meta PayloadArtifactMeta
+		if err := json.Unmarshal([]byte(artifact.Meta), &meta); err != nil {
+			continue
+		}
+
+		if meta.Candidate == candidate {
+			return artifact.Idx, true
+		}
+	}
+
+	return 0, false
+}
+
 // PruneBefore drops all artifacts for slots below the cutoff from the buffer
 // and the database.
 func (s *ArtifactStore) PruneBefore(cutoff phase0.Slot) {

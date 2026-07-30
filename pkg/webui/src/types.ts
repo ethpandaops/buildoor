@@ -318,6 +318,7 @@ export interface CandidateBuild {
   error?: string;
   blockHash?: string;
   blockValueGwei?: number;
+  detail?: PayloadDetail;
 }
 
 // UI State types

@@ -1335,39 +1335,44 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   line-height: 16px;
 }
 
-/* Candidate builds: thin per-candidate bars under the primary build line and
-   the badge opening the per-candidate popover. */
-.candidate-mini-bar {
-  position: absolute;
-  height: 2px;
-  border-radius: 1px;
-  cursor: pointer;
-  z-index: 3;
-  pointer-events: auto;
+/* Per-candidate payload tabs inside the payload-created popover. */
+.popover-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 6px;
 }
 
-.candidate-mini-bar:hover {
-  filter: brightness(1.3);
-}
-
-.candidate-badge {
-  position: absolute;
-  top: 12px;
-  pointer-events: auto;
-  padding: 0 2px;
-  font-size: 8px;
-  line-height: 10px;
-  color: #cdd3dc;
-  background: rgba(70, 80, 95, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+.popover-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #aab2bd;
+  background: rgba(70, 80, 95, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 3px;
   cursor: pointer;
-  z-index: 6;
-  user-select: none;
 }
 
-.candidate-badge:hover {
-  background: rgba(90, 100, 118, 0.95);
+.popover-tab:hover {
+  background: rgba(90, 100, 118, 0.6);
+  color: #dfe4ea;
+}
+
+.popover-tab.active {
+  background: rgba(110, 122, 142, 0.85);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.popover-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
 }
 
 .ap-chip-candidates {
