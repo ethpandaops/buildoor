@@ -1054,6 +1054,28 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 	}
 }
 
+// UnmarkPayloadWon clears the won marker of a payload whose winning block was
+// reorged out, so a later re-inclusion is detected (and counted) again.
+func (s *Service) UnmarkPayloadWon(blockHash phase0.Hash32) {
+	s.wonPayloadsMu.Lock()
+	_, wasWon := s.wonPayloads[blockHash]
+	delete(s.wonPayloads, blockHash)
+	s.wonPayloadsMu.Unlock()
+
+	if !wasWon {
+		return
+	}
+
+	s.log.WithField("block_hash", fmt.Sprintf("%x", blockHash[:8])).
+		Warn("Won payload's block was reorged out")
+
+	s.incrementStat(func(stats *BuilderStats) {
+		if stats.BlocksIncluded > 0 {
+			stats.BlocksIncluded--
+		}
+	})
+}
+
 // markPayloadWon records a payload as won (included on-chain), deduplicating
 // between the two detection methods (payload_attributes parent hash and head event).
 func (s *Service) markPayloadWon(blockHash phase0.Hash32, slot phase0.Slot) {

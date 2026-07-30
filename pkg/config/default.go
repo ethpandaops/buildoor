@@ -54,6 +54,7 @@ func DefaultConfig() *Config {
 			BroadcastValidation: BroadcastValidationConsensusAndEquivocation,
 			MaxAttempts:         3,
 			RetryIntervalMs:     500,
+			RebindOnReorg:       true,
 			// TimeMs: 0 = auto-compute from slot time (see ApplySlotDefaults).
 		},
 	}

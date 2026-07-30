@@ -14,6 +14,9 @@ type PendingPayment struct {
 	Slot  phase0.Slot
 	Epoch phase0.Epoch
 	Value uint64 // Gwei
+	// Disputed marks a payment whose winning block was reorged out: it no
+	// longer counts toward the pending total unless the block returns.
+	Disputed bool
 }
 
 // PaymentTracker tracks the builder's payment obligations and live balance
@@ -145,7 +148,8 @@ func (t *PaymentTracker) ReconcileToEpoch(snapshotEpoch phase0.Epoch) {
 	t.adjustmentEpoch = snapshotEpoch
 }
 
-// GetTotalPendingPayments returns the sum of unrevealed won bid obligations.
+// GetTotalPendingPayments returns the sum of unrevealed won bid obligations
+// (disputed payments — winning block reorged out — excluded).
 func (t *PaymentTracker) GetTotalPendingPayments() uint64 {
 	t.pendingMu.Lock()
 	defer t.pendingMu.Unlock()
@@ -153,10 +157,41 @@ func (t *PaymentTracker) GetTotalPendingPayments() uint64 {
 	var total uint64
 
 	for _, p := range t.pendingPayments {
+		if p.Disputed {
+			continue
+		}
+
 		total += p.Value
 	}
 
 	return total
+}
+
+// SetPaymentDisputed flags (or clears) a pending payment whose winning block
+// was reorged out. An already settled payment (revealed and deducted) cannot
+// be rolled back locally — the on-chain payment quorum decides its fate — so
+// the dispute is only logged in that case.
+func (t *PaymentTracker) SetPaymentDisputed(slot phase0.Slot, disputed bool) {
+	t.pendingMu.Lock()
+	payment, ok := t.pendingPayments[slot]
+
+	if ok {
+		payment.Disputed = disputed
+	}
+	t.pendingMu.Unlock()
+
+	logCtx := t.log.WithFields(logrus.Fields{
+		"slot":     slot,
+		"disputed": disputed,
+	})
+
+	switch {
+	case ok:
+		logCtx.Info("Updated pending payment dispute state (reorg)")
+	case disputed:
+		logCtx.Warn("Winning block reorged out after the payment settled locally — " +
+			"the on-chain payment quorum decides the final outcome")
+	}
 }
 
 // PruneExpiredPayments removes pending payments older than 2 epochs.

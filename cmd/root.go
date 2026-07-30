@@ -112,6 +112,7 @@ func init() {
 	rootCmd.PersistentFlags().String("reveal-broadcast-validation", defaults.Reveal.BroadcastValidation, "Envelope broadcast validation: gossip, consensus or consensus_and_equivocation")
 	rootCmd.PersistentFlags().Uint64("reveal-max-attempts", defaults.Reveal.MaxAttempts, "Total publish attempts per reveal")
 	rootCmd.PersistentFlags().Int64("reveal-retry-interval", defaults.Reveal.RetryIntervalMs, "Wait between failed reveal attempts in ms")
+	rootCmd.PersistentFlags().Bool("reveal-rebind-on-reorg", defaults.Reveal.RebindOnReorg, "Re-bind a slot's reveal (rebuilt, re-signed envelope) when our payload is re-included under a different block root after a reorg")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
@@ -231,6 +232,7 @@ func initConfig() error {
 			BroadcastValidation: v.GetString("reveal-broadcast-validation"),
 			MaxAttempts:         v.GetUint64("reveal-max-attempts"),
 			RetryIntervalMs:     v.GetInt64("reveal-retry-interval"),
+			RebindOnReorg:       v.GetBool("reveal-rebind-on-reorg"),
 		},
 		Build: config.BuildConfig{
 			CandidateParentFull:       v.GetString("build-candidate-parent-full"),

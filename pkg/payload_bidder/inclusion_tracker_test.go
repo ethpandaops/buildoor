@@ -393,3 +393,53 @@ func TestWonBlockCodecRoundTrip(t *testing.T) {
 	_, err = codec.DecodeValue([]byte("not json"))
 	require.Error(t, err)
 }
+
+func TestInclusionTracker_OrphanDisputesPaymentAndUnmarksWin(t *testing.T) {
+	logger, _ := newHookedLogger()
+
+	ourHash := phase0.Hash32{0xab}
+	ourRoot := phase0.Root{0x05}
+	winBlock := &beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash}
+	competing5 := &beacon.BlockInfo{
+		Slot: 5, Root: phase0.Root{0x55}, ExecutionBlockHash: phase0.Hash32{0x55},
+	}
+	onChain6 := &beacon.BlockInfo{
+		Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+		FinalitySafeExecutionBlockHash: ourHash,
+	}
+
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	chainSvc.primeHeadTracker(logger, winBlock, competing5, onChain6)
+	builderSvc := newTestBuilderSvc(chainSvc)
+	payments := NewPaymentTracker(chainSvc, logger)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, payments, logger)
+
+	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
+	builderSvc.GetPayloadCache().Store(payload)
+
+	// Win at slot 5: pending payment recorded... (payments require revealSvc
+	// too in checkForOurPayload, so record directly).
+	payments.RecordWonBid(5, 1000)
+	tracker.processBlockInfo(winBlock)
+
+	require.Equal(t, uint64(1000), payments.GetTotalPendingPayments())
+
+	// Canonical follow-up, then a reorg replacing our slot-5 block.
+	tracker.processBlockInfo(onChain6)
+	require.Equal(t, uint64(1000), payments.GetTotalPendingPayments())
+
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot: 6, Root: phase0.Root{0x66}, ParentRoot: competing5.Root,
+		FinalitySafeExecutionBlockHash: competing5.ExecutionBlockHash,
+	})
+	assert.Zero(t, payments.GetTotalPendingPayments(),
+		"orphaned win must dispute the pending payment")
+
+	// The chain switches back: the payment is restored.
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot: 7, Root: phase0.Root{0x07}, ParentRoot: onChain6.Root,
+		FinalitySafeExecutionBlockHash: phase0.Hash32{0x06},
+	})
+	assert.Equal(t, uint64(1000), payments.GetTotalPendingPayments(),
+		"re-canonical win must restore the pending payment")
+}

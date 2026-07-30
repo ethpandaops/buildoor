@@ -347,6 +347,12 @@ type RevealConfig struct {
 
 	// RetryIntervalMs is the wait between failed publish attempts.
 	RetryIntervalMs int64 `yaml:"retry_interval_ms" json:"retry_interval_ms"`
+
+	// RebindOnReorg re-binds a slot's reveal to a different beacon block when
+	// the block the reveal was scheduled for is reorged out and our payload is
+	// re-included under a sibling root: the envelope is rebuilt and re-signed
+	// for the new root (the payload bytes are unchanged).
+	RebindOnReorg bool `yaml:"rebind_on_reorg" json:"rebind_on_reorg"`
 }
 
 // NormalizedGateMode returns the gate mode, falling back to RevealGateTime

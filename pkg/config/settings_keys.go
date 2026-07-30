@@ -28,6 +28,7 @@ const (
 	KeyRevealBroadcastValidation = "reveal.broadcast_validation"
 	KeyRevealMaxAttempts         = "reveal.max_attempts"
 	KeyRevealRetryInterval       = "reveal.retry_interval_ms"
+	KeyRevealRebindOnReorg       = "reveal.rebind_on_reorg"
 
 	KeyBuildCandidateParentFull       = "build.candidate_parent_full"
 	KeyBuildCandidateParentEmpty      = "build.candidate_parent_empty"

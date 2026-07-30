@@ -226,6 +226,8 @@ func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
 		firstVerdict := win.verdict == ""
 		win.verdict = verdict
 
+		t.applyVerdictSideEffects(slot, win, verdict)
+
 		t.payloadStatusDispatch.Fire(&PayloadStatusEvent{
 			Slot:           slot,
 			Verdict:        verdict,
@@ -249,6 +251,25 @@ func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
 		if firstVerdict {
 			t.logPaymentState(slot)
 		}
+	}
+}
+
+
+// applyVerdictSideEffects propagates a verdict change into the win and
+// payment bookkeeping: an orphaned winning block clears the payload's won
+// marker (so a re-inclusion is detected again) and disputes the pending
+// payment; a block returning to the canonical chain restores it.
+func (t *InclusionTracker) applyVerdictSideEffects(
+	slot phase0.Slot, win *wonTracking, verdict PayloadVerdict,
+) {
+	orphaned := verdict == PayloadVerdictOrphaned
+
+	if orphaned {
+		t.builderSvc.UnmarkPayloadWon(win.execHash)
+	}
+
+	if t.payments != nil {
+		t.payments.SetPaymentDisputed(slot, orphaned)
 	}
 }
 

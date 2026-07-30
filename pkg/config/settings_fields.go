@@ -103,6 +103,7 @@ func Fields() []Field {
 		newField(KeyRevealBroadcastValidation, "reveal-broadcast-validation", func(c *Config) *string { return &c.Reveal.BroadcastValidation }),
 		newField(KeyRevealMaxAttempts, "reveal-max-attempts", func(c *Config) *uint64 { return &c.Reveal.MaxAttempts }),
 		newField(KeyRevealRetryInterval, "reveal-retry-interval", func(c *Config) *int64 { return &c.Reveal.RetryIntervalMs }),
+		newField(KeyRevealRebindOnReorg, "reveal-rebind-on-reorg", func(c *Config) *bool { return &c.Reveal.RebindOnReorg }),
 
 		newField(KeyBuildCandidateParentFull, "build-candidate-parent-full", func(c *Config) *string { return &c.Build.CandidateParentFull }),
 		newField(KeyBuildCandidateParentEmpty, "build-candidate-parent-empty", func(c *Config) *string { return &c.Build.CandidateParentEmpty }),
