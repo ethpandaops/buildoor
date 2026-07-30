@@ -321,6 +321,17 @@ func (h *HeadTracker) PrimeHead(info *beacon.BlockInfo) {
 	}
 }
 
+// LookupBlock returns a cached block by root without ever fetching, for
+// callers that must not block (UI event assembly, hot paths).
+func (h *HeadTracker) LookupBlock(root phase0.Root) (*beacon.BlockInfo, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	info, ok := h.blocks[root]
+
+	return info, ok
+}
+
 // GetBlock resolves a block by root through the shared ancestry cache,
 // fetching from the beacon node on a miss.
 func (h *HeadTracker) GetBlock(ctx context.Context, root phase0.Root) (*beacon.BlockInfo, error) {

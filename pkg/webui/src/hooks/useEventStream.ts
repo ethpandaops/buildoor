@@ -362,6 +362,8 @@ export function useEventStream(): UseEventStreamResult {
           // gwei so it matches the gwei-based formatGwei display used elsewhere.
           const data = event.data as {
             slot: number; candidate?: string; block_hash: string; block_value: string; ready_at: number;
+            parent_block_hash?: string; parent_block_number?: number;
+            parent_block_root?: string; parent_slot?: number;
             block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
@@ -387,6 +389,10 @@ export function useEventStream(): UseEventStreamResult {
             failed: false,
             blockHash: data.block_hash,
             blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0,
+            parentBlockHash: data.parent_block_hash,
+            parentBlockNumber: data.parent_block_number,
+            parentBlockRoot: data.parent_block_root,
+            parentSlot: data.parent_slot,
             detail
           }, state => {
             // A less canonical candidate never displaces the primary payload.

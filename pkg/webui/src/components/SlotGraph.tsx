@@ -256,6 +256,7 @@ const candidatePayloadItems = (
     ...(build.blockHash
       ? [{ label: 'Block Hash', value: truncateHashStr(build.blockHash), copyValue: build.blockHash }]
       : []),
+    ...parentRows(build.parentBlockRoot, build.parentSlot, build.parentBlockHash, build.parentBlockNumber),
     ...(build.blockValueGwei !== undefined
       ? [{ label: 'Block Value', value: formatGwei(build.blockValueGwei) }]
       : []),
@@ -275,6 +276,48 @@ const candidatePayloadItems = (
       : [])
   ];
 };
+
+// candidateRows labels which built candidate payload an event committed to,
+// matched by the payload's block hash.
+const candidateRows = (
+  builds: import('../types').CandidateBuild[],
+  blockHash?: string
+): PopoverItem[] => {
+  if (!blockHash || builds.length < 2) {
+    return [];
+  }
+
+  const match = builds.find(
+    (build) => build.blockHash && build.blockHash.toLowerCase() === blockHash.toLowerCase()
+  );
+
+  return match ? [{ label: 'Payload', value: candidateShortLabel(match.candidate) }] : [];
+};
+
+// parentRows renders the parent tuple a payload was built on: the beacon
+// parent (root + its slot) and the execution parent (hash + its block
+// number), so the payload's position in the chain is readable.
+const parentRows = (
+  parentRoot?: string,
+  parentSlot?: number,
+  parentHash?: string,
+  parentNumber?: number
+): PopoverItem[] => [
+  ...(parentRoot
+    ? [{
+        label: parentSlot !== undefined ? `Parent Block (slot ${parentSlot})` : 'Parent Block',
+        value: truncateHashStr(parentRoot),
+        copyValue: parentRoot
+      }]
+    : []),
+  ...(parentHash
+    ? [{
+        label: parentNumber ? `Parent Payload (#${parentNumber})` : 'Parent Payload',
+        value: truncateHashStr(parentHash),
+        copyValue: parentHash
+      }]
+    : [])
+];
 
 // truncateHashStr shortens a hash for popover display (module scope twin of
 // the component-local helper).
@@ -765,6 +808,13 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   label: 'Block Value',
                   value: formatGwei(state.payloadBlockValue)
                 }] : []),
+                ...(() => {
+                  const primary = candidateBuilds.find(b => b.candidate === primaryCandidate)
+                    ?? candidateBuilds[0];
+
+                  return parentRows(primary?.parentBlockRoot, primary?.parentSlot,
+                    primary?.parentBlockHash, primary?.parentBlockNumber);
+                })(),
                 ...(state.payloadDetail?.blockNumber !== undefined ? [{
                   label: 'Block #',
                   value: `${state.payloadDetail.blockNumber}`
@@ -874,7 +924,12 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     }
                   ] : [])
                 ] : []),
-                ...(won ? [{ label: 'Result', value: 'Our payload was included in this block' }] : [])
+                ...(won
+                  ? [
+                      { label: 'Result', value: 'Our payload was included in this block' },
+                      ...candidateRows(candidateBuilds, state.payloadBlockHash)
+                    ]
+                  : [])
               ]
             };
             return (
@@ -1017,6 +1072,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                       value: truncateHash(bid.blockHash),
                       copyValue: bid.blockHash
                     }] : []),
+                    ...candidateRows(candidateBuilds, bid.blockHash),
                     ...(bid.parentBlockHash ? [{
                       label: 'Parent Hash',
                       value: truncateHash(bid.parentBlockHash),
@@ -1174,7 +1230,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     label: 'Block Hash',
                     value: truncateHash(state.getHeaderBlockHash),
                     copyValue: state.getHeaderBlockHash
-                  }] : [])
+                  }] : []),
+                  ...candidateRows(candidateBuilds, state.getHeaderBlockHash)
                 ]
               },
               'builder-api-get-header'
@@ -1220,7 +1277,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     label: 'Block Hash',
                     value: truncateHash(state.getBidBlockHash),
                     copyValue: state.getBidBlockHash
-                  }] : [])
+                  }] : []),
+                  ...candidateRows(candidateBuilds, state.getBidBlockHash)
                 ]
               },
               'builder-api-get-bid'

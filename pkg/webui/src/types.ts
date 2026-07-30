@@ -318,6 +318,11 @@ export interface CandidateBuild {
   error?: string;
   blockHash?: string;
   blockValueGwei?: number;
+  // Parent tuple this candidate payload extends.
+  parentBlockHash?: string;
+  parentBlockNumber?: number;
+  parentBlockRoot?: string;
+  parentSlot?: number;
   detail?: PayloadDetail;
 }
 
