@@ -230,11 +230,32 @@ type EventStream struct {
 	mu                            sync.Mutex
 	wg                            sync.WaitGroup
 
-	// Per-slot cache of latest payload_attributes events.
-	// Multiple events may arrive for the same slot (e.g. reorgs, updated attributes);
-	// we always keep the latest one so the builder uses the most up-to-date data.
-	payloadAttrCache   map[phase0.Slot]*PayloadAttributesEvent
+	// Per-slot cache of payload_attributes events, keyed by parent tuple.
+	// Multiple events may arrive for the same slot with DIFFERENT parents
+	// (reorgs, Gloas full/empty parent flips): each parent tuple keeps its
+	// latest event (last-writer-wins per variant) and the slot additionally
+	// tracks the newest event overall.
+	payloadAttrCache   map[phase0.Slot]*slotAttrVariants
 	payloadAttrCacheMu sync.RWMutex
+}
+
+// AttrParentKey identifies a payload-attributes variant by the parent tuple
+// it builds on: the beacon parent block root and the execution parent hash.
+type AttrParentKey struct {
+	Root phase0.Root
+	Hash phase0.Hash32
+}
+
+// AttrParentKeyOf returns the parent tuple of a payload-attributes event.
+func AttrParentKeyOf(event *PayloadAttributesEvent) AttrParentKey {
+	return AttrParentKey{Root: event.ParentBlockRoot, Hash: event.ParentBlockHash}
+}
+
+// slotAttrVariants holds all payload-attributes variants received for one
+// proposal slot plus the newest event overall (arrival order).
+type slotAttrVariants struct {
+	latest   *PayloadAttributesEvent
+	variants map[AttrParentKey]*PayloadAttributesEvent
 }
 
 // NewEventStream creates a new event stream for the given client.
@@ -248,7 +269,7 @@ func NewEventStream(client *Client) *EventStream {
 		payloadAttributesDispatcher:   &utils.Dispatcher[*PayloadAttributesEvent]{},
 		singleAttestationDispatcher:   &utils.Dispatcher[*SingleAttestationEvent]{},
 		proposerPreferencesDispatcher: &utils.Dispatcher[*gloas.SignedProposerPreferences]{},
-		payloadAttrCache:              make(map[phase0.Slot]*PayloadAttributesEvent, 4),
+		payloadAttrCache:              make(map[phase0.Slot]*slotAttrVariants, 4),
 	}
 }
 
@@ -331,30 +352,98 @@ func (e *EventStream) SubscribeProposerPreferences() *utils.Subscription[*gloas.
 	return e.proposerPreferencesDispatcher.Subscribe(32, false)
 }
 
-// GetLatestPayloadAttributes returns the latest cached payload_attributes event
-// for the given slot, or nil if none has been received.
+// GetLatestPayloadAttributes returns the newest cached payload_attributes
+// event for the given slot (across all parent variants), or nil if none has
+// been received.
 func (e *EventStream) GetLatestPayloadAttributes(slot phase0.Slot) *PayloadAttributesEvent {
 	e.payloadAttrCacheMu.RLock()
 	defer e.payloadAttrCacheMu.RUnlock()
 
-	return e.payloadAttrCache[slot]
+	entry := e.payloadAttrCache[slot]
+	if entry == nil {
+		return nil
+	}
+
+	return entry.latest
+}
+
+// GetPayloadAttributesVariants returns every cached payload_attributes
+// variant for the given slot (one per parent tuple, arbitrary order).
+func (e *EventStream) GetPayloadAttributesVariants(slot phase0.Slot) []*PayloadAttributesEvent {
+	e.payloadAttrCacheMu.RLock()
+	defer e.payloadAttrCacheMu.RUnlock()
+
+	entry := e.payloadAttrCache[slot]
+	if entry == nil {
+		return nil
+	}
+
+	variants := make([]*PayloadAttributesEvent, 0, len(entry.variants))
+	for _, event := range entry.variants {
+		variants = append(variants, event)
+	}
+
+	return variants
+}
+
+// GetPayloadAttributesVariant returns the cached payload_attributes event for
+// the given slot and parent tuple, or nil.
+func (e *EventStream) GetPayloadAttributesVariant(
+	slot phase0.Slot, key AttrParentKey,
+) *PayloadAttributesEvent {
+	e.payloadAttrCacheMu.RLock()
+	defer e.payloadAttrCacheMu.RUnlock()
+
+	entry := e.payloadAttrCache[slot]
+	if entry == nil {
+		return nil
+	}
+
+	return entry.variants[key]
+}
+
+// cachePayloadAttributes stores a node-received event: last-writer-wins per
+// parent tuple, and the event becomes the slot's newest overall.
+func (e *EventStream) cachePayloadAttributes(event *PayloadAttributesEvent) {
+	e.payloadAttrCacheMu.Lock()
+	defer e.payloadAttrCacheMu.Unlock()
+
+	entry := e.payloadAttrCache[event.ProposalSlot]
+	if entry == nil {
+		entry = &slotAttrVariants{variants: make(map[AttrParentKey]*PayloadAttributesEvent, 2)}
+		e.payloadAttrCache[event.ProposalSlot] = entry
+	}
+
+	entry.variants[AttrParentKeyOf(event)] = event
+	entry.latest = event
 }
 
 // InjectPayloadAttributes caches and dispatches a locally synthesized
 // payload_attributes event exactly like one received from the beacon node
-// (used by the missing-block fallback: some clients do not re-emit attributes
-// when a slot's block is missing entirely). A node-received event for the
-// slot always wins: injection is dropped if one arrived in the meantime.
-// Returns whether the event was injected.
+// (used by the missing-block fallback and candidate synthesis). A
+// node-received event always wins: injection is dropped when the slot already
+// has an event for the same parent tuple, and an injected event only becomes
+// the slot's newest when the slot had none at all. Returns whether the event
+// was injected.
 func (e *EventStream) InjectPayloadAttributes(event *PayloadAttributesEvent) bool {
 	e.payloadAttrCacheMu.Lock()
 
-	if _, exists := e.payloadAttrCache[event.ProposalSlot]; exists {
+	entry := e.payloadAttrCache[event.ProposalSlot]
+	if entry == nil {
+		entry = &slotAttrVariants{variants: make(map[AttrParentKey]*PayloadAttributesEvent, 2)}
+		e.payloadAttrCache[event.ProposalSlot] = entry
+	}
+
+	key := AttrParentKeyOf(event)
+	if _, exists := entry.variants[key]; exists {
 		e.payloadAttrCacheMu.Unlock()
 		return false
 	}
 
-	e.payloadAttrCache[event.ProposalSlot] = event
+	entry.variants[key] = event
+	if entry.latest == nil {
+		entry.latest = event
+	}
 	e.payloadAttrCacheMu.Unlock()
 
 	e.payloadAttributesDispatcher.Fire(event)
@@ -572,10 +661,7 @@ func (e *EventStream) handleEvent(eventType, data string) {
 			"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 		}).Debug("Payload attributes event received")
 
-		// Cache the latest attributes per slot (overwrites any previous event for the same slot).
-		e.payloadAttrCacheMu.Lock()
-		e.payloadAttrCache[event.ProposalSlot] = event
-		e.payloadAttrCacheMu.Unlock()
+		e.cachePayloadAttributes(event)
 
 		e.payloadAttributesDispatcher.Fire(event)
 

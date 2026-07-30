@@ -583,6 +583,39 @@ func (h *HeadTracker) buildCandidate(
 	return candidate
 }
 
+// ResolveELParentMeta resolves the block number and gas limit of the
+// execution block identified by execHash, walking the beacon ancestry from
+// fromRoot to find the block that committed it (best-effort; zeros when
+// unknown).
+func (h *HeadTracker) ResolveELParentMeta(
+	ctx context.Context, fromRoot phase0.Root, execHash phase0.Hash32,
+) (number, gasLimit uint64) {
+	from, err := h.GetBlock(ctx, fromRoot)
+	if err != nil {
+		return 0, 0
+	}
+
+	committer := h.findCommitterOfExecHash(ctx, from, execHash)
+	if committer == nil {
+		return 0, 0
+	}
+
+	number = committer.ExecutionBlockNumber
+	gasLimit = committer.GasLimit
+
+	if number == 0 {
+		if meta := h.resolveELMeta(ctx, committer, execHash); meta != nil {
+			number = meta.number
+
+			if gasLimit == 0 {
+				gasLimit = meta.gasLimit
+			}
+		}
+	}
+
+	return number, gasLimit
+}
+
 // findCommitterOfExecHash walks the ancestry from the given block looking for
 // the beacon block that committed the execution block with the given hash.
 func (h *HeadTracker) findCommitterOfExecHash(

@@ -66,8 +66,12 @@ type Service struct {
 	lastKnownPayloadSlot      phase0.Slot // Slot of the block with known payload
 
 	// Build tracking
-	scheduledBuildMu  sync.Mutex
-	buildStartedSlots map[phase0.Slot]bool // Slots where building has started (to prevent re-building)
+	scheduledBuildMu sync.Mutex
+	// Parent tuple each slot's scheduled/started build is based on. A later
+	// attributes event for the same slot with a DIFFERENT parent (reorg,
+	// Gloas full/empty flip) aborts the in-flight build and reschedules;
+	// events repeating the same parent are ignored.
+	scheduledBuilds   map[phase0.Slot]beacon.AttrParentKey
 	skipFiredSlots    map[phase0.Slot]bool // Slots a BuildSkippedEvent was fired for (dedup per slot)
 	attrFallbackArmed map[phase0.Slot]bool // Slots a missing-attributes fallback check is armed for
 
@@ -122,7 +126,7 @@ func NewService(
 		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
-		buildStartedSlots:      make(map[phase0.Slot]bool),
+		scheduledBuilds:        make(map[phase0.Slot]beacon.AttrParentKey, 16),
 		skipFiredSlots:         make(map[phase0.Slot]bool, 16),
 		attrFallbackArmed:      make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
@@ -431,14 +435,36 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		return
 	}
 
-	// Check if already scheduled/building/built for this slot
+	// Deduplicate against the parent tuple the slot's build is already
+	// scheduled (or running) for: the same parent again is a no-op, a
+	// different parent means the chain moved (reorg / payload-miss flip) and
+	// the build must be redone on the new parent.
+	eventKey := beacon.AttrParentKeyOf(event)
+
 	s.scheduledBuildMu.Lock()
-	if s.buildStartedSlots[event.ProposalSlot] {
+	scheduledKey, alreadyScheduled := s.scheduledBuilds[event.ProposalSlot]
+
+	if alreadyScheduled && scheduledKey == eventKey {
 		s.scheduledBuildMu.Unlock()
 		return
 	}
-	s.buildStartedSlots[event.ProposalSlot] = true
+
+	s.scheduledBuilds[event.ProposalSlot] = eventKey
 	s.scheduledBuildMu.Unlock()
+
+	if alreadyScheduled {
+		s.log.WithFields(logrus.Fields{
+			"slot":       event.ProposalSlot,
+			"old_parent": fmt.Sprintf("%x", scheduledKey.Hash[:8]),
+			"new_parent": fmt.Sprintf("%x", eventKey.Hash[:8]),
+		}).Warn("Build parent changed after scheduling, rebuilding on the new parent")
+
+		// Abort a build that may already be running on the stale parent; the
+		// rescheduled build below replaces it (and its cached payload).
+		if s.payloadBuilder != nil {
+			s.payloadBuilder.AbortBuild(event.ProposalSlot)
+		}
+	}
 
 	s.scheduleBuildForSlot(event.ProposalSlot, frozen.Build.BuildStartTimeMs)
 }
@@ -563,6 +589,25 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 	synthesized.Timestamp = parent.Timestamp +
 		skippedSlots*uint64(s.chainSvc.GetChainSpec().SecondsPerSlot.Seconds())
 
+	// The proposer changes per slot: resolve the target slot's proposer from
+	// the cached duties instead of carrying the source slot's over.
+	if proposer, ok := s.lookupProposer(targetSlot); ok {
+		synthesized.ProposerIndex = proposer
+	} else {
+		s.log.WithField("slot", targetSlot).Warn(
+			"Cannot resolve proposer for synthesized attributes, keeping the source slot's")
+	}
+
+	// The randao mix rotates at epoch boundaries; a value copied across one
+	// is invalid and any payload built from it will be rejected.
+	spec := s.chainSvc.GetChainSpec()
+	if uint64(targetSlot)/spec.SlotsPerEpoch != uint64(parent.ProposalSlot)/spec.SlotsPerEpoch {
+		s.log.WithFields(logrus.Fields{
+			"slot":       targetSlot,
+			"attrs_from": parent.ProposalSlot,
+		}).Warn("Synthesized attributes cross an epoch boundary, prev_randao may be stale")
+	}
+
 	if !events.InjectPayloadAttributes(&synthesized) {
 		return // lost the race against a real event
 	}
@@ -574,6 +619,24 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 		"parent_hash":   fmt.Sprintf("%x", synthesized.ParentBlockHash[:8]),
 	}).Info("No payload attributes received for slot (block missing?), " +
 		"re-using the last available attributes")
+}
+
+// lookupProposer resolves the scheduled proposer of a slot from the cached
+// epoch duties.
+func (s *Service) lookupProposer(slot phase0.Slot) (phase0.ValidatorIndex, bool) {
+	spec := s.chainSvc.GetChainSpec()
+	stats := s.chainSvc.GetEpochStats(s.chainSvc.GetEpochOfSlot(slot))
+
+	if stats == nil {
+		return 0, false
+	}
+
+	slotIndex := uint64(slot) % spec.SlotsPerEpoch
+	if slotIndex >= uint64(len(stats.ProposerDuties)) {
+		return 0, false
+	}
+
+	return stats.ProposerDuties[slotIndex], true
 }
 
 // scheduleBuildForSlot schedules payload building for the given slot.
@@ -624,6 +687,11 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		"slot":        event.ProposalSlot,
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 	}).Info("Starting payload build")
+
+	// Validate the attributes against the chain view and correct known
+	// client inconsistencies (unrevealed parent payload references, missing
+	// parent block numbers) before anything derives from them.
+	event = s.sanitizeAttributes(event)
 
 	// The frozen plan (idempotent Freeze) decides whether to build this slot's
 	// payload on the grandparent execution payload (a parent-reorg test). When
@@ -832,9 +900,9 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 
 		// Cleanup old build tracking
 		s.scheduledBuildMu.Lock()
-		for oldSlot := range s.buildStartedSlots {
+		for oldSlot := range s.scheduledBuilds {
 			if oldSlot < cleanupSlot {
-				delete(s.buildStartedSlots, oldSlot)
+				delete(s.scheduledBuilds, oldSlot)
 			}
 		}
 		s.scheduledBuildMu.Unlock()
