@@ -483,6 +483,7 @@ func TestSchedulerIntervalIncreaseAndCompetitorHigh(t *testing.T) {
 	// Age the last bid past the interval, then re-bid with the increase.
 	h.scheduler.mu.Lock()
 	h.scheduler.slotStates[testSlot].LastBidTime = time.Now().Add(-time.Second)
+	h.scheduler.slotStates[testSlot].BidPayloads[phase0.Hash32{0xbb}] = time.Now().Add(-time.Second)
 	h.scheduler.mu.Unlock()
 
 	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
@@ -510,6 +511,7 @@ func TestSchedulerOverflowClampsInsteadOfWrapping(t *testing.T) {
 	// Re-bid: MaxUint64 + 1*10 must clamp, not wrap to 9.
 	h.scheduler.mu.Lock()
 	h.scheduler.slotStates[testSlot].LastBidTime = time.Now().Add(-time.Second)
+	h.scheduler.slotStates[testSlot].BidPayloads[phase0.Hash32{0xbb}] = time.Now().Add(-time.Second)
 	h.scheduler.mu.Unlock()
 
 	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
@@ -659,4 +661,26 @@ func TestSchedulerAutoCandidateSticky(t *testing.T) {
 	h.scheduler.mu.Unlock()
 	assert.True(t, state.BidCandidateSet)
 	assert.Equal(t, chain.CandidateParentEmpty, state.BidCandidate)
+}
+
+func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	// Interval mode: candidates must not throttle each other in one tick.
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":500,"bid_candidate":"all"}`)
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
+	require.NotNil(t, h.nextEvent(),
+		"second candidate must bid in the same tick despite the interval")
+	require.Nil(t, h.nextEvent())
+
+	// Within the interval neither payload re-bids.
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	require.Nil(t, h.nextEvent())
 }

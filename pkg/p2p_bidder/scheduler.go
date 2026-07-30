@@ -28,10 +28,14 @@ type SlotState struct {
 	LastBidTime      time.Time
 	LastBidHash      phase0.Hash32
 	BidCount         int
-	BidsClosed       bool                   // Block received, no more bids possible
-	ClosedByRoot     phase0.Root            // block root that closed bidding (reopens if orphaned)
-	NoPrefsWarnedFor bool                   // Missing-preferences skip already reported for this slot
-	BidPayloads      map[phase0.Hash32]bool // payload hashes already bid (single-bid dedup)
+	BidsClosed       bool        // Block received, no more bids possible
+	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
+	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
+	// BidPayloads tracks the last bid time per payload: interval throttling
+	// and single-bid dedup are PER PAYLOAD, so multi-candidate bidding
+	// ("all") does not starve the other candidates behind one payload's
+	// interval gate.
+	BidPayloads map[phase0.Hash32]time.Time
 
 	// BidCandidate is the candidate the auto selection committed to on the
 	// first bid of the slot (sticky unless candidate switching is enabled).
@@ -390,15 +394,18 @@ func (s *Scheduler) trySubmitBid(
 		return
 	}
 
-	// Check bid interval
+	// Check bid interval (per payload, so "all" mode candidates do not
+	// throttle each other)
+	lastBid, alreadyBid := state.BidPayloads[payload.BlockHash]
+
 	if bidSettings.IntervalMs > 0 {
-		if time.Since(state.LastBidTime) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
+		if alreadyBid && time.Since(lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
 			s.mu.Unlock()
 			return
 		}
 	} else {
 		// Single bid mode - only bid payloads we have not bid yet.
-		if state.BidPayloads[payload.BlockHash] {
+		if alreadyBid {
 			s.mu.Unlock()
 			return
 		}
@@ -449,10 +456,10 @@ func (s *Scheduler) trySubmitBid(
 	state.LastBidHash = payload.BlockHash
 
 	if state.BidPayloads == nil {
-		state.BidPayloads = make(map[phase0.Hash32]bool, 2)
+		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
 	}
 
-	state.BidPayloads[payload.BlockHash] = true
+	state.BidPayloads[payload.BlockHash] = now
 	state.BidCount++
 	bidCount := state.BidCount
 	s.mu.Unlock()
