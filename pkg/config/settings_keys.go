@@ -27,6 +27,15 @@ const (
 	KeyRevealMaxAttempts         = "reveal.max_attempts"
 	KeyRevealRetryInterval       = "reveal.retry_interval_ms"
 
+	KeyBuildCandidateParentFull       = "build.candidate_parent_full"
+	KeyBuildCandidateParentEmpty      = "build.candidate_parent_empty"
+	KeyBuildCandidateGrandparentFull  = "build.candidate_grandparent_full"
+	KeyBuildCandidateGrandparentEmpty = "build.candidate_grandparent_empty"
+	KeyBuildParallel                  = "build.parallel"
+	KeyBuildSpeculativeBuildTime      = "build.speculative_build_time_ms"
+	KeyBuildAutoWeakHeadPct           = "build.auto_weak_head_pct"
+	KeyBuildEnforceBidGasLimit        = "build.enforce_bid_gas_limit"
+
 	KeyPayloadBuildTime        = "payload_build_time"
 	KeyExtraData               = "extra_data"
 	KeyBuilderAPISubsidy       = "builder_api.block_value_subsidy_gwei"

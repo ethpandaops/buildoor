@@ -9,6 +9,7 @@ import (
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
@@ -23,6 +24,10 @@ import (
 type Payload struct {
 	// Attributes is the payload_attributes event this build was triggered by.
 	Attributes *beacon.PayloadAttributesEvent
+	// Candidate classifies the parent tuple this payload was built on
+	// relative to the chain view at build time (parent/grandparent x
+	// full/empty). Empty when the tuple matched no known candidate.
+	Candidate chain.CandidateKey
 	// ExecutionPayload is the fork-agnostic beacon execution payload.
 	ExecutionPayload *eth2all.ExecutionPayload
 	// BlobsBundle holds the blobs/commitments/proofs (Deneb+), nil if none.

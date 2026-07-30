@@ -181,13 +181,13 @@ func TestHandlePayloadAttributes_RescheduleOnParentChange(t *testing.T) {
 	svc.handlePayloadAttributesEvent(first)
 
 	svc.scheduledBuildMu.Lock()
-	key, scheduled := svc.scheduledBuilds[slot]
+	state := svc.slotBuilds[slot]
 	svc.scheduledBuildMu.Unlock()
-	require.True(t, scheduled)
-	assert.Equal(t, beacon.AttrParentKeyOf(first), key)
+	require.NotNil(t, state)
+	assert.True(t, state.passScheduled, "first attributes event schedules the build pass")
 
-	// The same parent again is a no-op; a different parent reschedules and
-	// records the new tuple.
+	// Later events for the same slot — same or different parent — accumulate
+	// as variants without rescheduling; the pass resolves them at fire time.
 	svc.handlePayloadAttributesEvent(first)
 
 	reorged := &beacon.PayloadAttributesEvent{
@@ -198,7 +198,8 @@ func TestHandlePayloadAttributes_RescheduleOnParentChange(t *testing.T) {
 	svc.handlePayloadAttributesEvent(reorged)
 
 	svc.scheduledBuildMu.Lock()
-	key = svc.scheduledBuilds[slot]
+	state = svc.slotBuilds[slot]
 	svc.scheduledBuildMu.Unlock()
-	assert.Equal(t, beacon.AttrParentKeyOf(reorged), key)
+	assert.True(t, state.passScheduled)
+	assert.Empty(t, state.started, "no candidate build starts before the pass fires")
 }

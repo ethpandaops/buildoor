@@ -11,6 +11,7 @@ import (
 // the build as in-progress rather than waiting for the payload to be ready.
 type PayloadBuildStartedEvent struct {
 	Slot      phase0.Slot
+	Candidate string    // candidate key the build targets ("" = unclassified)
 	StartedAt time.Time // When the build started
 }
 
@@ -18,9 +19,10 @@ type PayloadBuildStartedEvent struct {
 // (e.g. the WebUI) use it to mark the in-progress build as failed instead of
 // leaving it rendered as perpetually building.
 type PayloadBuildFailedEvent struct {
-	Slot     phase0.Slot
-	Error    string    // Failure reason
-	FailedAt time.Time // When the build failed
+	Slot      phase0.Slot
+	Candidate string    // candidate key the build targeted ("" = unclassified)
+	Error     string    // Failure reason
+	FailedAt  time.Time // When the build failed
 }
 
 // BuildSkippedEvent is emitted when the builder deliberately does not build

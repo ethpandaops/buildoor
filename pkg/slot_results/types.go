@@ -94,6 +94,14 @@ type BuildOutcome struct {
 	Status     BuildStatus `json:"status"`
 	SkipReason string      `json:"skip_reason,omitempty"` // action_plan.BuildSkipReason* when skipped
 
+	// Candidate classifies which build-parent candidate this outcome belongs
+	// to (parent_full, parent_empty, grandparent_full, grandparent_empty;
+	// empty = unclassified or single-build slot).
+	Candidate string `json:"candidate,omitempty"`
+	// ArtifactIdx is the per-slot payload artifact index of this build's
+	// captured payload (nil when no artifact was captured).
+	ArtifactIdx *int `json:"artifact_idx,omitempty"`
+
 	BlockHash       string `json:"block_hash,omitempty"`
 	BlockValueWei   string `json:"block_value_wei,omitempty"`
 	NumTransactions int    `json:"num_transactions,omitempty"`
@@ -226,7 +234,11 @@ type SlotResult struct {
 	// AppliedPlan is the frozen plan snapshot the slot executed under.
 	AppliedPlan *action_plan.FrozenPlan `json:"applied_plan,omitempty"`
 
+	// Build is the slot's primary build outcome (the most canonical ready
+	// candidate, or the single lifecycle record). Builds lists every
+	// candidate build the slot produced when more than one ran.
 	Build            *BuildOutcome     `json:"build,omitempty"`
+	Builds           []*BuildOutcome   `json:"builds,omitempty"`
 	Bids             []BidAttempt      `json:"bids,omitempty"`
 	BlockSubmissions []BlockSubmission `json:"block_submissions,omitempty"`
 	RevealAttempts   []RevealAttempt   `json:"reveal_attempts,omitempty"`
@@ -249,7 +261,25 @@ func (r *SlotResult) Clone() *SlotResult {
 
 	if r.Build != nil {
 		build := *r.Build
+		if r.Build.ArtifactIdx != nil {
+			idx := *r.Build.ArtifactIdx
+			build.ArtifactIdx = &idx
+		}
+
 		c.Build = &build
+	}
+
+	if r.Builds != nil {
+		c.Builds = make([]*BuildOutcome, len(r.Builds))
+		for i, build := range r.Builds {
+			clone := *build
+			if build.ArtifactIdx != nil {
+				idx := *build.ArtifactIdx
+				clone.ArtifactIdx = &idx
+			}
+
+			c.Builds[i] = &clone
+		}
 	}
 
 	if r.Inclusion != nil {

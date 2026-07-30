@@ -319,7 +319,9 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 		BlockNumber: 42,
 		GasLimit:    30_000_000,
 	}
-	require.NoError(t, env.tracker.Artifacts().StorePayload(2000, version.DataVersionFulu, payload))
+	_, storeErr := env.tracker.Artifacts().StorePayload(
+		2000, version.DataVersionFulu, payload, slot_results.PayloadArtifactMeta{})
+	require.NoError(t, storeErr)
 
 	newRequest := func(accept string) *http.Request {
 		req := httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payload", nil)

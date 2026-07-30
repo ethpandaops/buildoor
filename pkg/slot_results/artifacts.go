@@ -62,9 +62,10 @@ type BidArtifactMeta struct {
 type ArtifactStore struct {
 	stateDB *db.Database
 
-	mu     sync.Mutex
-	buffer map[phase0.Slot]map[string][]*db.SlotArtifact
-	bidIdx map[phase0.Slot]int // next bid index per slot; lazily seeded from MAX(idx)+1
+	mu         sync.Mutex
+	buffer     map[phase0.Slot]map[string][]*db.SlotArtifact
+	bidIdx     map[phase0.Slot]int // next bid index per slot; lazily seeded from MAX(idx)+1
+	payloadIdx map[phase0.Slot]*payloadIdxState
 
 	writeQueue chan []db.SlotArtifact
 
@@ -81,6 +82,7 @@ func NewArtifactStore(stateDB *db.Database, log logrus.FieldLogger) *ArtifactSto
 		stateDB:    stateDB,
 		buffer:     make(map[phase0.Slot]map[string][]*db.SlotArtifact, memoryBufferSlots),
 		bidIdx:     make(map[phase0.Slot]int, memoryBufferSlots),
+		payloadIdx: make(map[phase0.Slot]*payloadIdxState, memoryBufferSlots),
 		writeQueue: make(chan []db.SlotArtifact, writerQueueCap),
 		log:        log.WithField("component", "slot-artifacts"),
 	}
@@ -151,11 +153,73 @@ func (s *ArtifactStore) runWriter() {
 	}
 }
 
-// StorePayload captures the slot's built execution payload (idx 0; repeated
-// captures for the same slot replace it — the builder produces one payload
-// per slot).
-func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion, payload sszMarshaler) error {
-	return s.store(slot, ArtifactKindPayload, 0, fork, "", payload)
+// PayloadArtifactMeta is the JSON metadata stored alongside a payload
+// artifact: which candidate parent the payload was built on.
+type PayloadArtifactMeta struct {
+	V               int    `json:"v"`
+	Candidate       string `json:"candidate,omitempty"`
+	ParentBlockRoot string `json:"parent_block_root,omitempty"`
+	ParentBlockHash string `json:"parent_block_hash,omitempty"`
+	At              int64  `json:"at"` // unix milliseconds
+}
+
+// StorePayload captures one built execution payload and returns its per-slot
+// artifact index. A slot may produce several candidate payloads (reorg /
+// payload-miss preparedness): each parent tuple gets its own index, and a
+// rebuild on the same tuple replaces its artifact. Index allocation is
+// restart-safe (seeded from MAX(idx)+1).
+func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion,
+	payload sszMarshaler, meta PayloadArtifactMeta) (int, error) {
+	meta.V = 1
+
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return 0, fmt.Errorf("failed to encode payload artifact meta: %w", err)
+	}
+
+	tuple := meta.ParentBlockRoot + "/" + meta.ParentBlockHash
+
+	s.mu.Lock()
+
+	state := s.payloadIdx[slot]
+	if state == nil {
+		next := 0
+
+		maxIdx, exists, err := s.stateDB.GetMaxSlotArtifactIdx(uint64(slot), ArtifactKindPayload)
+		if err != nil {
+			s.mu.Unlock()
+
+			return 0, fmt.Errorf("failed to seed payload artifact index: %w", err)
+		}
+
+		if exists {
+			next = maxIdx + 1
+		}
+
+		state = &payloadIdxState{next: next, byTuple: make(map[string]int, 2)}
+		s.payloadIdx[slot] = state
+	}
+
+	idx, seen := state.byTuple[tuple]
+	if !seen {
+		idx = state.next
+		state.next++
+		state.byTuple[tuple] = idx
+	}
+	s.mu.Unlock()
+
+	if err := s.store(slot, ArtifactKindPayload, idx, fork, string(metaJSON), payload); err != nil {
+		return 0, err
+	}
+
+	return idx, nil
+}
+
+// payloadIdxState allocates per-slot payload artifact indices: one index per
+// parent tuple, rebuilds replace in place.
+type payloadIdxState struct {
+	next    int
+	byTuple map[string]int
 }
 
 // StoreBid captures one signed bid and returns its per-slot artifact index.
@@ -277,6 +341,7 @@ func (s *ArtifactStore) insertBuffer(slot phase0.Slot, artifact *db.SlotArtifact
 		for _, evict := range slots[:len(s.buffer)-memoryBufferSlots] {
 			delete(s.buffer, evict)
 			delete(s.bidIdx, evict)
+			delete(s.payloadIdx, evict)
 		}
 	}
 }
@@ -373,6 +438,7 @@ func (s *ArtifactStore) PruneBefore(cutoff phase0.Slot) {
 		if slot < cutoff {
 			delete(s.buffer, slot)
 			delete(s.bidIdx, slot)
+			delete(s.payloadIdx, slot)
 		}
 	}
 	s.mu.Unlock()

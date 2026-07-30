@@ -90,6 +90,16 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 
+	// Payload build candidates (reorg / payload-miss preparedness)
+	rootCmd.PersistentFlags().String("build-candidate-parent-full", defaults.Build.CandidateParentFull, "Build the normal candidate on the head block and its payload: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-parent-empty", defaults.Build.CandidateParentEmpty, "Build the payload-miss candidate on the head block but its execution parent: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-grandparent-full", defaults.Build.CandidateGrandparentFull, "Build the reorg candidate on the head block's parent: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-grandparent-empty", defaults.Build.CandidateGrandparentEmpty, "Build the reorg + payload-miss candidate: auto, always or never")
+	rootCmd.PersistentFlags().Bool("build-parallel", defaults.Build.Parallel, "Build selected candidates concurrently against the EL instead of sequentially (speculative first, canonical last)")
+	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
+	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
+	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
+
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
 	rootCmd.PersistentFlags().String("reveal-gate-mode", defaults.Reveal.GateMode, "Reveal gate: time, vote, vote_or_time or vote_and_time")
@@ -214,6 +224,16 @@ func initConfig() error {
 			MaxAttempts:         v.GetUint64("reveal-max-attempts"),
 			RetryIntervalMs:     v.GetInt64("reveal-retry-interval"),
 		},
+		Build: config.BuildConfig{
+			CandidateParentFull:       v.GetString("build-candidate-parent-full"),
+			CandidateParentEmpty:      v.GetString("build-candidate-parent-empty"),
+			CandidateGrandparentFull:  v.GetString("build-candidate-grandparent-full"),
+			CandidateGrandparentEmpty: v.GetString("build-candidate-grandparent-empty"),
+			Parallel:                  v.GetBool("build-parallel"),
+			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
+			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),
+			EnforceBidGasLimit:        v.GetBool("build-enforce-bid-gas-limit"),
+		},
 		PayloadBuildTime:            v.GetUint64("payload-build-time"),
 		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),
 		SlotArtifactRetentionEpochs: v.GetUint64("slot-artifact-retention-epochs"),
@@ -227,6 +247,17 @@ func initConfig() error {
 
 	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
+	}
+
+	for flag, mode := range map[string]string{
+		"--build-candidate-parent-full":       cfg.Build.CandidateParentFull,
+		"--build-candidate-parent-empty":      cfg.Build.CandidateParentEmpty,
+		"--build-candidate-grandparent-full":  cfg.Build.CandidateGrandparentFull,
+		"--build-candidate-grandparent-empty": cfg.Build.CandidateGrandparentEmpty,
+	} {
+		if mode != config.NormalizedCandidateMode(mode, "") {
+			return fmt.Errorf("invalid %s %q: must be auto, always or never", flag, mode)
+		}
 	}
 
 	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {

@@ -30,14 +30,22 @@ type PayloadBuilder struct {
 	cfg               *config.Config             // shared config; mutable settings are read live, never cached
 	log               logrus.FieldLogger
 
-	// Active build tracking
-	activeBuild *activeBuild
-	mu          sync.Mutex
+	// Active build tracking: multiple candidate builds may run for the same
+	// slot (one per parent tuple); builds for older slots are cancelled when
+	// a newer slot starts.
+	activeBuilds map[activeBuildKey]*activeBuild
+	mu           sync.Mutex
+}
+
+// activeBuildKey identifies one in-progress build: a slot may build several
+// candidate payloads on different execution parents concurrently.
+type activeBuildKey struct {
+	slot       phase0.Slot
+	parentHash phase0.Hash32
 }
 
 // activeBuild tracks an in-progress payload build.
 type activeBuild struct {
-	slot      phase0.Slot
 	payloadID paris.PayloadID
 	cancelFn  context.CancelFunc
 }
@@ -62,6 +70,7 @@ func NewPayloadBuilder(
 		feeRecipient:      feeRecipient,
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
+		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
 		log:               log.WithField("component", "payload-builder"),
 	}
 }
@@ -71,33 +80,42 @@ func NewPayloadBuilder(
 // The event contains all necessary information: timestamp, randao, withdrawals, etc.
 //
 // The attributes may be an effective copy with the parent fields redirected to
-// the grandparent payload (parent-reorg test); this method treats whatever
-// parent it is given as authoritative and stores it on the returned Payload,
-// so the bid built from that payload advertises the same parent it built on.
+// another candidate parent (reorg / payload-miss handling); this method treats
+// whatever parent it is given as authoritative and stores it on the returned
+// Payload, so the bid built from that payload advertises the same parent it
+// built on.
+//
+// buildTimeMs is the EL build wait; 0 uses the live-configured
+// PayloadBuildTime.
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
+	buildTimeMs uint64,
 ) (*Payload, error) {
+	buildKey := activeBuildKey{slot: attrs.ProposalSlot, parentHash: attrs.ParentBlockHash}
+
 	b.mu.Lock()
 
-	// Cancel any existing build for a different slot
-	if b.activeBuild != nil && b.activeBuild.slot != attrs.ProposalSlot {
-		b.activeBuild.cancelFn()
-		b.activeBuild = nil
+	// Cancel builds for older slots and any earlier build of this exact
+	// parent tuple; concurrent candidate builds of the same slot on other
+	// parents keep running.
+	for key, build := range b.activeBuilds {
+		if key.slot != attrs.ProposalSlot || key == buildKey {
+			build.cancelFn()
+			delete(b.activeBuilds, key)
+		}
 	}
 
 	buildCtx, cancel := context.WithCancel(ctx)
 
-	b.activeBuild = &activeBuild{
-		slot:     attrs.ProposalSlot,
-		cancelFn: cancel,
-	}
+	b.activeBuilds[buildKey] = &activeBuild{cancelFn: cancel}
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		if b.activeBuild != nil && b.activeBuild.slot == attrs.ProposalSlot {
-			b.activeBuild = nil
+		if build, ok := b.activeBuilds[buildKey]; ok {
+			build.cancelFn()
+			delete(b.activeBuilds, buildKey)
 		}
 		b.mu.Unlock()
 	}()
@@ -170,7 +188,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		Version:               engineVersion,
 		Timestamp:             attrs.Timestamp,
 		PrevRandao:            paris.Hash32(attrs.PrevRandao),
-		SuggestedFeeRecipient: paris.Address(b.feeRecipient),
+		SuggestedFeeRecipient: paris.Address(proposerFeeRecipient),
 		Withdrawals:           convertWithdrawalsToEngineFormat(attrs.Withdrawals),
 		ParentBeaconBlockRoot: paris.Hash32(attrs.ParentBeaconBlockRoot),
 		SlotNumber:            uint64(attrs.ProposalSlot),
@@ -220,8 +238,8 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	payloadID := *fcuResp.PayloadID
 
 	b.mu.Lock()
-	if b.activeBuild != nil && b.activeBuild.slot == attrs.ProposalSlot {
-		b.activeBuild.payloadID = payloadID
+	if build, ok := b.activeBuilds[buildKey]; ok {
+		build.payloadID = payloadID
 	}
 	b.mu.Unlock()
 
@@ -230,8 +248,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
-	// Read the build time live from config so UI overrides take effect immediately.
+	// Read the build time live from config so UI overrides take effect
+	// immediately; an explicit per-build time (speculative candidates) wins.
 	payloadBuildTime := b.cfg.PayloadBuildTime
+	if buildTimeMs != 0 {
+		payloadBuildTime = buildTimeMs
+	}
 
 	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
 
@@ -258,12 +280,17 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("getPayload returned no execution payload")
 	}
 
-	// Inject our extra-data marker and recompute the block hash on the typed payload.
+	gasLimitOverride := b.resolveGasLimitOverride(buildCtx, attrs, beaconFork,
+		targetGasLimit, enginePayload.GasLimit, enginePayload.GasUsed)
+
+	// Inject our extra-data marker (and the gas limit override, if any) and
+	// recompute the block hash on the typed payload.
 	newHash, err := ModifyPayloadExtraData(
 		enginePayload,
 		resp.ExecutionRequests,
 		[]byte(b.cfg.ExtraData),
 		common.Hash(attrs.ParentBeaconBlockRoot),
+		gasLimitOverride,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to modify payload extra data: %w", err)
@@ -298,7 +325,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
 		"block_hash":        fmt.Sprintf("%x", newHash[:8]),
-		"parent_hash":       finalityInfo.HeadExecutionBlockHash,
+		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
 		"block_value":       blockValue.String(),
 		"has_blobs":         resp.BlobsBundle != nil,
 		"has_exec_requests": len(resp.ExecutionRequests) > 0,
@@ -310,15 +337,69 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	return event, nil
 }
 
-// AbortBuild aborts any active build for the given slot.
+// resolveGasLimitOverride returns the gas limit the built payload must carry
+// per the bid gossip rules (the EL parent's gas limit stepped toward the
+// proposer's target), or 0 when no override applies: the rule is disabled,
+// the EL already produced the exact value, the parent gas limit is unknown,
+// or the payload's gas usage exceeds the required limit.
+func (b *PayloadBuilder) resolveGasLimitOverride(
+	ctx context.Context,
+	attrs *beacon.PayloadAttributesEvent,
+	beaconFork version.DataVersion,
+	targetGasLimit, payloadGasLimit, payloadGasUsed uint64,
+) uint64 {
+	if !b.cfg.Build.EnforceBidGasLimit || beaconFork < version.DataVersionGloas || targetGasLimit == 0 {
+		return 0
+	}
+
+	headTracker := b.chainSvc.GetHeadTracker()
+	if headTracker == nil {
+		return 0
+	}
+
+	_, parentGasLimit := headTracker.ResolveELParentMeta(ctx, attrs.ParentBlockRoot, attrs.ParentBlockHash)
+	if parentGasLimit == 0 {
+		return 0
+	}
+
+	expected := expectedBidGasLimit(parentGasLimit, targetGasLimit)
+	if expected == payloadGasLimit {
+		return 0
+	}
+
+	if payloadGasUsed > expected {
+		b.log.WithFields(logrus.Fields{
+			"slot":     attrs.ProposalSlot,
+			"expected": expected,
+			"built":    payloadGasLimit,
+			"gas_used": payloadGasUsed,
+		}).Error("Cannot enforce bid gas limit: payload gas usage exceeds the required limit")
+
+		return 0
+	}
+
+	b.log.WithFields(logrus.Fields{
+		"slot":     attrs.ProposalSlot,
+		"parent":   parentGasLimit,
+		"target":   targetGasLimit,
+		"built":    payloadGasLimit,
+		"enforced": expected,
+	}).Warn("Overriding payload gas limit to the bid-gossip-required value")
+
+	return expected
+}
+
+// AbortBuild aborts every active build for the given slot.
 func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.activeBuild != nil && b.activeBuild.slot == slot {
-		b.activeBuild.cancelFn()
-		b.activeBuild = nil
+	for key, build := range b.activeBuilds {
+		if key.slot == slot {
+			build.cancelFn()
+			delete(b.activeBuilds, key)
 
-		b.log.WithField("slot", slot).Debug("Build aborted")
+			b.log.WithField("slot", slot).Debug("Build aborted")
+		}
 	}
 }

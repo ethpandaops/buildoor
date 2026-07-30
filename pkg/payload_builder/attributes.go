@@ -61,13 +61,32 @@ func (s *Service) sanitizeAttributes(event *beacon.PayloadAttributesEvent) *beac
 
 	// The event claims a full parent whose payload the chain view knows was
 	// withheld: the referenced execution block was never revealed and cannot
-	// be built on. Redirect to the parent's own execution parent.
+	// be built on. Redirect to the parent's own execution parent. The
+	// expected withdrawals differ between the full and empty parent (they
+	// stay unchanged when the parent payload is withheld), so they are
+	// re-sourced from the parent block's own slot attributes when available.
 	if event.ParentBlockHash == parentBlock.ExecutionBlockHash &&
 		parentBlock.ExecutionBlockHash != parentBlock.FinalitySafeExecutionBlockHash &&
 		headTracker.GetPayloadStatus(parentBlock.Root) == chain.PayloadStatusEmpty {
 		corrected := *sanitized
 		corrected.ParentBlockHash = parentBlock.FinalitySafeExecutionBlockHash
 		corrected.ParentBlockNumber = 0
+
+		var parentSlotAttrs *beacon.PayloadAttributesEvent
+		if s.clClient != nil {
+			parentSlotAttrs = s.clClient.Events().GetLatestPayloadAttributes(parentBlock.Slot)
+		}
+
+		if parentSlotAttrs != nil {
+			corrected.Withdrawals = parentSlotAttrs.Withdrawals
+		} else {
+			s.log.WithFields(logrus.Fields{
+				"slot":        event.ProposalSlot,
+				"parent_slot": parentBlock.Slot,
+			}).Warn("No attributes for the parent block's slot, " +
+				"redirected build keeps the (possibly wrong) full-parent withdrawals")
+		}
+
 		sanitized = &corrected
 
 		s.log.WithFields(logrus.Fields{

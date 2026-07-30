@@ -42,6 +42,7 @@ func (s *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.Epoc
 }
 func (s *stubChainService) GetEpochStats(phase0.Epoch) *chain.EpochStats { return nil }
 func (s *stubChainService) GetHeadTracker() *chain.HeadTracker           { return s.headTracker }
+func (s *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker   { return nil }
 
 func newSkipTestService(t *testing.T, cfg *config.Config) (*Service, *action_plan.PlanService) {
 	t.Helper()

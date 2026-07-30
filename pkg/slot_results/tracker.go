@@ -406,15 +406,95 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
 	}
 
-	t.upsert(slot, func(result *SlotResult) {
-		result.Build = outcome
-	})
+	outcome.Candidate = string(payload.Candidate)
 
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
-		if err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload); err != nil {
+		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,
+			PayloadArtifactMeta{
+				Candidate:       string(payload.Candidate),
+				ParentBlockRoot: fmt.Sprintf("%#x", payload.Attributes.ParentBlockRoot),
+				ParentBlockHash: fmt.Sprintf("%#x", payload.Attributes.ParentBlockHash),
+				At:              payload.ReadyAt.UnixMilli(),
+			})
+		if err != nil {
 			t.log.WithError(err).WithField("slot", slot).Warn("Failed to store payload artifact")
+		} else {
+			outcome.ArtifactIdx = &idx
 		}
 	}
+
+	t.upsert(slot, func(result *SlotResult) {
+		upsertBuildOutcome(result, outcome)
+		result.Build = primaryBuildOutcome(result)
+	})
+}
+
+// buildCandidatePriority orders candidate keys from most to least canonical
+// for primary build selection.
+var buildCandidatePriority = map[string]int{
+	"parent_full":       0,
+	"parent_empty":      1,
+	"grandparent_full":  2,
+	"grandparent_empty": 3,
+}
+
+// upsertBuildOutcome inserts the outcome into the result's build list,
+// replacing an earlier entry of the same candidate parent (matched by the
+// attributes parent tuple, falling back to the candidate key).
+func upsertBuildOutcome(result *SlotResult, outcome *BuildOutcome) {
+	for i, existing := range result.Builds {
+		if buildOutcomesMatch(existing, outcome) {
+			result.Builds[i] = outcome
+			return
+		}
+	}
+
+	result.Builds = append(result.Builds, outcome)
+}
+
+// buildOutcomesMatch reports whether two outcomes describe the same candidate
+// build.
+func buildOutcomesMatch(a, b *BuildOutcome) bool {
+	if a.Attributes != nil && b.Attributes != nil {
+		return a.Attributes.ParentBlockRoot == b.Attributes.ParentBlockRoot &&
+			a.Attributes.ParentBlockHash == b.Attributes.ParentBlockHash
+	}
+
+	return a.Candidate == b.Candidate
+}
+
+// primaryBuildOutcome selects the result's primary build: the most canonical
+// ready candidate, then any ready build, then the newest entry.
+func primaryBuildOutcome(result *SlotResult) *BuildOutcome {
+	if len(result.Builds) == 0 {
+		return result.Build
+	}
+
+	var best *BuildOutcome
+
+	bestRank := len(buildCandidatePriority) + 1
+
+	for _, build := range result.Builds {
+		if build.Status != BuildStatusReady {
+			continue
+		}
+
+		rank, classified := buildCandidatePriority[build.Candidate]
+		if !classified {
+			rank = len(buildCandidatePriority)
+		}
+
+		if best == nil || rank < bestRank {
+			best = build
+			bestRank = rank
+		}
+	}
+
+	if best != nil {
+		return best
+	}
+
+	return result.Builds[len(result.Builds)-1]
 }
 
 // attributesSnapshot reduces a payload_attributes event to the stored
@@ -459,23 +539,50 @@ func fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedExecutionPayloa
 
 func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
 	t.upsert(event.Slot, func(result *SlotResult) {
-		// Never regress a ready/failed outcome to started (events may race).
+		outcome := &BuildOutcome{
+			Status:    BuildStatusStarted,
+			Candidate: event.Candidate,
+			At:        event.StartedAt,
+		}
+
+		// Track per-candidate progress; a candidate already past started
+		// (ready/failed) is never regressed.
+		for _, existing := range result.Builds {
+			if existing.Candidate == event.Candidate && existing.Status != BuildStatusStarted {
+				return
+			}
+		}
+
+		upsertBuildOutcome(result, outcome)
+
+		// Never regress the primary ready/failed outcome to started (events
+		// may race).
 		if result.Build != nil && result.Build.Status != BuildStatusWaitingAttributes &&
 			result.Build.Status != BuildStatusNoAttributes {
 			return
 		}
 
-		result.Build = &BuildOutcome{Status: BuildStatusStarted, At: event.StartedAt}
+		result.Build = outcome
 	})
 }
 
 func (t *Tracker) handleBuildFailed(event *payload_builder.PayloadBuildFailedEvent) {
 	t.upsert(event.Slot, func(result *SlotResult) {
-		result.Build = &BuildOutcome{
-			Status: BuildStatusFailed,
-			Error:  event.Error,
-			At:     event.FailedAt,
+		outcome := &BuildOutcome{
+			Status:    BuildStatusFailed,
+			Candidate: event.Candidate,
+			Error:     event.Error,
+			At:        event.FailedAt,
 		}
+
+		upsertBuildOutcome(result, outcome)
+
+		// Another candidate's ready payload keeps the primary slot outcome.
+		if result.Build != nil && result.Build.Status == BuildStatusReady {
+			return
+		}
+
+		result.Build = outcome
 	})
 }
 

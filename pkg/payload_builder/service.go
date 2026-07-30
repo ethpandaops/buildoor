@@ -67,11 +67,11 @@ type Service struct {
 
 	// Build tracking
 	scheduledBuildMu sync.Mutex
-	// Parent tuple each slot's scheduled/started build is based on. A later
-	// attributes event for the same slot with a DIFFERENT parent (reorg,
-	// Gloas full/empty flip) aborts the in-flight build and reschedules;
-	// events repeating the same parent are ignored.
-	scheduledBuilds   map[phase0.Slot]beacon.AttrParentKey
+	// Per-slot build pass state: the first attributes event schedules the
+	// slot's build pass (which resolves the candidate set at fire time);
+	// every started candidate build is tracked by its parent tuple so late
+	// variants activate additional builds instead of duplicating.
+	slotBuilds        map[phase0.Slot]*slotBuildState
 	skipFiredSlots    map[phase0.Slot]bool // Slots a BuildSkippedEvent was fired for (dedup per slot)
 	attrFallbackArmed map[phase0.Slot]bool // Slots a missing-attributes fallback check is armed for
 
@@ -126,7 +126,7 @@ func NewService(
 		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
-		scheduledBuilds:        make(map[phase0.Slot]beacon.AttrParentKey, 16),
+		slotBuilds:             make(map[phase0.Slot]*slotBuildState, 16),
 		skipFiredSlots:         make(map[phase0.Slot]bool, 16),
 		attrFallbackArmed:      make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
@@ -435,38 +435,87 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		return
 	}
 
-	// Deduplicate against the parent tuple the slot's build is already
-	// scheduled (or running) for: the same parent again is a no-op, a
-	// different parent means the chain moved (reorg / payload-miss flip) and
-	// the build must be redone on the new parent.
-	eventKey := beacon.AttrParentKeyOf(event)
-
+	// The first attributes event schedules the slot's build pass; the pass
+	// resolves the full candidate set (all variants received by then) at
+	// fire time. Later events before the pass just accumulate in the variant
+	// cache; events after the pass may activate an additional candidate
+	// build for a parent the pass did not cover.
 	s.scheduledBuildMu.Lock()
-	scheduledKey, alreadyScheduled := s.scheduledBuilds[event.ProposalSlot]
+	state := s.slotBuilds[event.ProposalSlot]
 
-	if alreadyScheduled && scheduledKey == eventKey {
+	if state == nil {
+		state = newSlotBuildState()
+		s.slotBuilds[event.ProposalSlot] = state
+	}
+
+	if !state.passScheduled {
+		state.passScheduled = true
+		state.buildStartMs = frozen.Build.BuildStartTimeMs
 		s.scheduledBuildMu.Unlock()
+
+		s.scheduleBuildForSlot(event.ProposalSlot, frozen.Build.BuildStartTimeMs)
+
 		return
 	}
 
-	s.scheduledBuilds[event.ProposalSlot] = eventKey
+	buildStartMs := state.buildStartMs
 	s.scheduledBuildMu.Unlock()
 
-	if alreadyScheduled {
-		s.log.WithFields(logrus.Fields{
-			"slot":       event.ProposalSlot,
-			"old_parent": fmt.Sprintf("%x", scheduledKey.Hash[:8]),
-			"new_parent": fmt.Sprintf("%x", eventKey.Hash[:8]),
-		}).Warn("Build parent changed after scheduling, rebuilding on the new parent")
+	buildTime := s.chainSvc.SlotToTime(event.ProposalSlot).
+		Add(time.Duration(buildStartMs) * time.Millisecond)
+	if time.Now().After(buildTime) {
+		s.maybeLateBuild(event.ProposalSlot, event)
+	}
+}
 
-		// Abort a build that may already be running on the stale parent; the
-		// rescheduled build below replaces it (and its cached payload).
-		if s.payloadBuilder != nil {
-			s.payloadBuilder.AbortBuild(event.ProposalSlot)
+// slotBuildState tracks a slot's build pass and its started candidate builds.
+type slotBuildState struct {
+	passScheduled bool
+	buildStartMs  int64
+	started       map[beacon.AttrParentKey]bool
+	readyFired    bool // OnSlotBuilt/stat accounting fired (once per slot)
+}
+
+func newSlotBuildState() *slotBuildState {
+	return &slotBuildState{started: make(map[beacon.AttrParentKey]bool, 4)}
+}
+
+// maybeLateBuild activates a candidate build for an attributes variant that
+// arrived after the slot's build pass already ran: the chain moved (reorg,
+// payload-miss flip, late reveal) and the new parent still deserves a payload
+// if the slot has not ended and the candidate policy allows it.
+func (s *Service) maybeLateBuild(slot phase0.Slot, event *beacon.PayloadAttributesEvent) {
+	event = s.sanitizeAttributes(event)
+
+	s.scheduledBuildMu.Lock()
+	state := s.slotBuilds[slot]
+	alreadyStarted := state != nil && state.started[beacon.AttrParentKeyOf(event)]
+	s.scheduledBuildMu.Unlock()
+
+	if alreadyStarted || time.Now().After(s.slotEndTime(slot)) {
+		return
+	}
+
+	candidateKey := s.classifyCandidate(event)
+	if candidateKey != "" {
+		mode := s.cfg.Build.CandidateMode(string(candidateKey))
+		if mode == config.CandidateModeNever {
+			s.log.WithFields(logrus.Fields{
+				"slot":      slot,
+				"candidate": candidateKey,
+			}).Debug("Suppressing late candidate build (policy: never)")
+
+			return
 		}
 	}
 
-	s.scheduleBuildForSlot(event.ProposalSlot, frozen.Build.BuildStartTimeMs)
+	s.log.WithFields(logrus.Fields{
+		"slot":        slot,
+		"candidate":   candidateKey,
+		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+	}).Info("New build parent after the slot's build pass, building additional candidate")
+
+	go s.executeCandidateBuild(slot, &buildTarget{candidate: candidateKey, attrs: event})
 }
 
 // fireBuildSkipped emits a BuildSkippedEvent (once per slot) when the skip is
@@ -672,63 +721,120 @@ func (s *Service) scheduleBuildForSlot(slot phase0.Slot, buildStartMs int64) {
 	})
 }
 
-// executeBuildForSlot fetches the latest cached payload_attributes for the
-// given slot and performs payload building.
+// executeBuildForSlot runs the slot's build pass: resolve the candidate set
+// (configured policy + chain view + received attribute variants) and build
+// every selected target — sequentially from most speculative to most
+// canonical (so the EL head ends on the canonical chain), or concurrently
+// when parallel builds are enabled.
 func (s *Service) executeBuildForSlot(slot phase0.Slot) {
-	event := s.clClient.Events().GetLatestPayloadAttributes(slot)
-	if event == nil {
+	targets := s.resolveBuildTargets(slot)
+	if len(targets) == 0 {
 		s.log.WithField("slot", slot).Warn(
-			"No cached payload attributes for slot, skipping build",
+			"No build targets for slot (no attributes and nothing synthesizable), skipping build",
 		)
+
 		return
 	}
 
-	s.log.WithFields(logrus.Fields{
-		"slot":        event.ProposalSlot,
-		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
-	}).Info("Starting payload build")
+	if s.cfg.Build.Parallel {
+		var wg sync.WaitGroup
 
-	// Validate the attributes against the chain view and correct known
-	// client inconsistencies (unrevealed parent payload references, missing
-	// parent block numbers) before anything derives from them.
-	event = s.sanitizeAttributes(event)
+		for _, target := range targets {
+			wg.Add(1)
+
+			go func(target *buildTarget) {
+				defer wg.Done()
+				s.executeCandidateBuild(slot, target)
+			}(target)
+		}
+
+		wg.Wait()
+
+		return
+	}
+
+	for _, target := range targets {
+		s.executeCandidateBuild(slot, target)
+	}
+}
+
+// executeCandidateBuild builds one candidate payload for the slot (deduped by
+// parent tuple), applies the frozen plan's build tweaks and transform, and
+// emits the payload.
+func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
+	s.scheduledBuildMu.Lock()
+	state := s.slotBuilds[slot]
+
+	if state == nil {
+		state = newSlotBuildState()
+		s.slotBuilds[slot] = state
+	}
+
+	tuple := beacon.AttrParentKeyOf(target.attrs)
+	if state.started[tuple] {
+		s.scheduledBuildMu.Unlock()
+		return
+	}
+
+	state.started[tuple] = true
+	s.scheduledBuildMu.Unlock()
 
 	// The frozen plan (idempotent Freeze) decides whether to build this slot's
 	// payload on the grandparent execution payload (a parent-reorg test). When
 	// so, we build from an effective attributes copy whose parent fields point
 	// at the grandparent, so the build, the stored payload and the bid all
 	// agree on the parent.
-	event = s.effectiveBuildAttributes(slot, event)
+	event := s.effectiveBuildAttributes(slot, target.attrs)
+
+	s.log.WithFields(logrus.Fields{
+		"slot":        slot,
+		"candidate":   target.candidate,
+		"derived":     target.derived,
+		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+	}).Info("Starting payload build")
 
 	// Notify subscribers that building has started so the build can be rendered
 	// as in-progress before the payload is ready.
 	s.buildStartedDispatcher.Fire(&PayloadBuildStartedEvent{
 		Slot:      slot,
+		Candidate: string(target.candidate),
 		StartedAt: time.Now(),
 	})
 
-	// Size the build deadline to the configured build time plus a margin for the
+	// Size the build deadline to the target's build time plus a margin for the
 	// engine getPayload and finality lookups, so a long PayloadBuildTime doesn't
 	// make the getPayload call time out spuriously.
-	buildTimeout := time.Duration(s.cfg.PayloadBuildTime)*time.Millisecond + buildCallTimeout
+	buildTimeMs := s.candidateBuildTime(target)
+	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
 	ctx, cancel := context.WithTimeout(s.ctx, buildTimeout)
+
 	defer cancel()
 
-	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event)
+	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs)
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error(
-			"Failed to build payload from attributes",
-		)
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot":      slot,
+			"candidate": target.candidate,
+		}).Error("Failed to build payload from attributes")
 
 		// Notify subscribers so the in-progress build is marked failed rather than
 		// left rendered as perpetually building.
 		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
-			Slot:     slot,
-			Error:    err.Error(),
-			FailedAt: time.Now(),
+			Slot:      slot,
+			Candidate: string(target.candidate),
+			Error:     err.Error(),
+			FailedAt:  time.Now(),
 		})
 
 		return
+	}
+
+	// Classify the payload by the parent it was actually built on (the plan's
+	// parent-reorg tweak may have redirected it).
+	if event == target.attrs {
+		payloadEvent.Candidate = target.candidate
+	} else {
+		payloadEvent.Candidate = s.classifyCandidate(payloadEvent.Attributes)
 	}
 
 	// Apply the slot's frozen payload transform (if any) before the payload
@@ -737,9 +843,10 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed")
 
 		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
-			Slot:     slot,
-			Error:    err.Error(),
-			FailedAt: time.Now(),
+			Slot:      slot,
+			Candidate: string(target.candidate),
+			Error:     err.Error(),
+			FailedAt:  time.Now(),
 		})
 
 		return
@@ -869,7 +976,9 @@ func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEven
 	// Building is now triggered by payload_attributes events.
 }
 
-// emitPayloadReady stores the payload and emits the ready event.
+// emitPayloadReady stores the payload and emits the ready event. Per-slot
+// accounting (next_n schedule budget, slots-built stat) fires once per slot
+// regardless of how many candidate payloads it produced.
 func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 	// Store in cache
 	s.payloadCache.Store(payloadEvent)
@@ -879,18 +988,34 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 
 	s.log.WithFields(logrus.Fields{
 		"slot":              slot,
+		"candidate":         payloadEvent.Candidate,
 		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
 		"block_value":       payloadEvent.BlockValue,
 		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
 	}).Info("Payload built and dispatched")
 
-	// Mark slot as built (next_n schedule accounting + WebUI status).
-	s.planSvc.OnSlotBuilt(slot)
-	s.lastBuiltSlot.Store(uint64(slot))
+	s.scheduledBuildMu.Lock()
+	state := s.slotBuilds[slot]
 
-	s.incrementStat(func(stats *BuilderStats) {
-		stats.SlotsBuilt++
-	})
+	if state == nil {
+		state = newSlotBuildState()
+		s.slotBuilds[slot] = state
+	}
+
+	firstOfSlot := !state.readyFired
+	state.readyFired = true
+	s.scheduledBuildMu.Unlock()
+
+	if firstOfSlot {
+		// Mark slot as built (next_n schedule accounting + WebUI status).
+		s.planSvc.OnSlotBuilt(slot)
+
+		s.incrementStat(func(stats *BuilderStats) {
+			stats.SlotsBuilt++
+		})
+	}
+
+	s.lastBuiltSlot.Store(uint64(slot))
 
 	// Cleanup old data
 	if slot > 64 {
@@ -900,9 +1025,9 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 
 		// Cleanup old build tracking
 		s.scheduledBuildMu.Lock()
-		for oldSlot := range s.scheduledBuilds {
+		for oldSlot := range s.slotBuilds {
 			if oldSlot < cleanupSlot {
-				delete(s.scheduledBuilds, oldSlot)
+				delete(s.slotBuilds, oldSlot)
 			}
 		}
 		s.scheduledBuildMu.Unlock()

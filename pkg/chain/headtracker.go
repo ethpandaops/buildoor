@@ -263,6 +263,20 @@ func (h *HeadTracker) PrimeBlock(info *beacon.BlockInfo) {
 	h.storeBlock(info)
 }
 
+// PrimeHead seeds the tracker with an already-resolved head block (cached and
+// adopted as current head unless an equal-or-newer head is known). Live head
+// events take over from the first processed event.
+func (h *HeadTracker) PrimeHead(info *beacon.BlockInfo) {
+	h.storeBlock(info)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.head == nil || info.Slot >= h.head.Slot {
+		h.head = info
+	}
+}
+
 // GetBlock resolves a block by root through the shared ancestry cache,
 // fetching from the beacon node on a miss.
 func (h *HeadTracker) GetBlock(ctx context.Context, root phase0.Root) (*beacon.BlockInfo, error) {
