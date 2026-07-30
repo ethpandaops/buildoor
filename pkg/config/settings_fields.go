@@ -93,6 +93,8 @@ func Fields() []Field {
 		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *uint64 { return &c.EPBS.BidSubsidy }),
 		newField(KeyEPBSBidValueOverride, "epbs-bid-value-override", func(c *Config) *uint64 { return &c.EPBS.BidValueOverride }),
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
+		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
+		newField(KeyEPBSBidCandidateSwitch, "epbs-bid-candidate-switch", func(c *Config) *bool { return &c.EPBS.BidCandidateSwitch }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
 		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),
@@ -115,6 +117,8 @@ func Fields() []Field {
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
 		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
+		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
+		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),

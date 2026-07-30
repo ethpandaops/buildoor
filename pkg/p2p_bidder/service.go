@@ -232,6 +232,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		s.blsSigner,
 		s.propPrefsStore,
 		s.planSvc,
+		builderSvc.GetConfig(),
 		s.log,
 	)
 
@@ -272,6 +273,17 @@ func (s *Service) run() {
 	defer epochSub.Unsubscribe()
 	defer ticker.Stop()
 
+	// Head-change events reopen bidding for slots whose closing block was
+	// reorged out (a nil channel simply never fires).
+	var headChangeCh <-chan *chain.HeadChangeEvent
+
+	if headTracker := s.chainSvc.GetHeadTracker(); headTracker != nil {
+		headChangeSub := headTracker.SubscribeHeadChanges()
+		defer headChangeSub.Unsubscribe()
+
+		headChangeCh = headChangeSub.Channel()
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -283,10 +295,19 @@ func (s *Service) run() {
 		case event := <-bidSub.Channel():
 			s.handleBidEvent(event)
 
-		case _, ok := <-epochSub.Channel():
+		case epochStats, ok := <-epochSub.Channel():
 			if ok {
 				s.RefreshRegistrationState()
+
+				// Prune per-slot bid state that left the retention window.
+				if firstSlot := epochStats.Epoch * phase0.Epoch(s.chainSvc.GetChainSpec().SlotsPerEpoch); firstSlot > 64 {
+					s.scheduler.Cleanup(phase0.Slot(firstSlot) - 64)
+					s.bidTracker.Cleanup(phase0.Slot(firstSlot) - 64)
+				}
 			}
+
+		case change := <-headChangeCh:
+			s.scheduler.OnHeadChange(s.ctx, change)
 
 		case <-ticker.C:
 			// The enable policy is per slot: the scheduler resolves it from

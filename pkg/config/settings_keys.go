@@ -18,6 +18,8 @@ const (
 	KeyEPBSBidSubsidy        = "epbs.bid_subsidy"
 	KeyEPBSBidValueOverride  = "epbs.bid_value_override"
 	KeyEPBSHeadVoteThreshold = "epbs.head_vote_threshold_pct"
+	KeyEPBSBidCandidate       = "epbs.bid_candidate"
+	KeyEPBSBidCandidateSwitch = "epbs.bid_candidate_switch"
 
 	KeyRevealEnabled             = "reveal.enabled"
 	KeyRevealGateMode            = "reveal.gate_mode"
@@ -40,6 +42,8 @@ const (
 	KeyExtraData               = "extra_data"
 	KeyBuilderAPISubsidy       = "builder_api.block_value_subsidy_gwei"
 	KeyBuilderAPIValueOverride = "builder_api.value_override_gwei"
+	KeyBuilderAPIServeCandidates = "builder_api.serve_candidates"
+	KeyBuilderAPIOnDemandBuild   = "builder_api.on_demand_build"
 
 	KeySlotResultRetentionEpochs   = "slot_result_retention_epochs"
 	KeySlotArtifactRetentionEpochs = "slot_artifact_retention_epochs"

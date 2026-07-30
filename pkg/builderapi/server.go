@@ -150,6 +150,12 @@ func (s *Server) SetRevealService(rs *payload_bidder.RevealService) {
 	s.epbs.SetRevealService(rs)
 }
 
+// SetOnDemandBuilder wires the on-demand payload builder used by the
+// post-Gloas dialect to serve bid requests for unbuilt (but legal) parents.
+func (s *Server) SetOnDemandBuilder(builder epbsapi.OnDemandPayloadBuilder) {
+	s.epbs.SetOnDemandBuilder(builder)
+}
+
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events on
 // both dialect handlers.
 func (s *Server) SetEventBroadcaster(b EventBroadcaster) {

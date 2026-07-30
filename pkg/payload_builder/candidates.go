@@ -334,6 +334,78 @@ func (s *Service) findLatestVariantWithParentRoot(
 	return nil
 }
 
+// onDemandPollInterval paces waiting for an in-flight build when an
+// on-demand request races the slot's regular build pass.
+const onDemandPollInterval = 50 * time.Millisecond
+
+// BuildCandidateOnDemand returns the slot's payload for the given parent
+// tuple, building it on the fly when no candidate covers it yet (used by the
+// Builder API to serve a proposer requesting a legal but unbuilt parent).
+// Bounded by ctx; a tuple whose attributes cannot be resolved (unknown to the
+// chain view and no received variant) fails.
+func (s *Service) BuildCandidateOnDemand(
+	ctx context.Context, slot phase0.Slot, parentRoot phase0.Root, parentHash phase0.Hash32,
+) (*Payload, error) {
+	tuple := beacon.AttrParentKey{Root: parentRoot, Hash: parentHash}
+
+	if payload := s.payloadCache.GetVariant(slot, tuple); payload != nil {
+		return payload, nil
+	}
+
+	target := s.resolveOnDemandTarget(slot, tuple)
+	if target == nil {
+		return nil, fmt.Errorf("cannot resolve build attributes for parent %#x/%#x", parentRoot, parentHash)
+	}
+
+	// Synchronous build; a concurrent build of the same tuple (regular pass)
+	// makes this a no-op and the wait below picks up its result.
+	s.executeCandidateBuild(slot, target)
+
+	for {
+		if payload := s.payloadCache.GetVariant(slot, tuple); payload != nil {
+			return payload, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("on-demand build did not complete: %w", ctx.Err())
+		case <-time.After(onDemandPollInterval):
+		}
+	}
+}
+
+// resolveOnDemandTarget constructs the build target for an explicitly
+// requested parent tuple: a received attribute variant when present,
+// otherwise synthesis for a chain-view candidate matching the tuple.
+func (s *Service) resolveOnDemandTarget(slot phase0.Slot, tuple beacon.AttrParentKey) *buildTarget {
+	if variant := s.clClient.Events().GetPayloadAttributesVariant(slot, tuple); variant != nil {
+		sanitized := s.sanitizeAttributes(variant)
+		if beacon.AttrParentKeyOf(sanitized) == tuple {
+			return &buildTarget{candidate: s.classifyCandidate(sanitized), attrs: sanitized}
+		}
+	}
+
+	for _, candidate := range s.resolveChainCandidates(slot) {
+		if candidate.ParentBlockRoot != tuple.Root || candidate.ParentBlockHash != tuple.Hash {
+			continue
+		}
+
+		attrs, err := s.synthesizeCandidateAttributes(slot, candidate)
+		if err != nil {
+			s.log.WithError(err).WithFields(logrus.Fields{
+				"slot":      slot,
+				"candidate": candidate.Key,
+			}).Info("Cannot synthesize attributes for on-demand build")
+
+			return nil
+		}
+
+		return &buildTarget{candidate: candidate.Key, attrs: attrs, derived: true}
+	}
+
+	return nil
+}
+
 // candidateBuildTime returns the EL build time for a target: speculative
 // candidates may use a shorter configured build time.
 func (s *Service) candidateBuildTime(target *buildTarget) uint64 {

@@ -61,6 +61,8 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
+	rootCmd.PersistentFlags().String("builder-api-serve-candidates", defaults.BuilderAPI.ServeCandidates, "Which built candidate payloads bid requests are answered from: all, canonical_only, or a comma-separated candidate key list")
+	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
@@ -89,6 +91,8 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
+	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
+	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
 	// Payload build candidates (reorg / payload-miss preparedness)
 	rootCmd.PersistentFlags().String("build-candidate-parent-full", defaults.Build.CandidateParentFull, "Build the normal candidate on the head block and its payload: auto, always or never")
@@ -192,6 +196,8 @@ func initConfig() error {
 			RequireRequestAuth:    v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
+			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
+			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
 		},
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
@@ -214,6 +220,8 @@ func initConfig() error {
 			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
+			BidCandidate:         v.GetString("epbs-bid-candidate"),
+			BidCandidateSwitch:   v.GetBool("epbs-bid-candidate-switch"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),

@@ -171,7 +171,7 @@ func TestBidTracker_GetHighestCompetitorBid(t *testing.T) {
 				tracker.TrackBid(bid, bid.BuilderIndex == tt.ourBuilderIdx)
 			}
 
-			value, ok := tracker.GetHighestCompetitorBid(tt.slot, tt.ourBuilderIdx)
+			value, ok := tracker.GetHighestCompetitorBid(tt.slot, tt.ourBuilderIdx, phase0.Hash32{})
 			assert.Equal(t, tt.wantOK, ok, "competitor bid known")
 			assert.Equal(t, tt.wantValue, value, "highest competitor value")
 		})

@@ -95,6 +95,7 @@ type Handler struct {
 	planSvc *action_plan.PlanService
 
 	revealSvc      *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
+	onDemandBuilder OnDemandPayloadBuilder                                            // SetOnDemandBuilder (nil-checked)
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
 	prefsStore     *BuilderPreferencesStore                                           // created in NewHandler
 	broadcaster    BlockBroadcaster                                                   // SetBlockBroadcaster
@@ -209,6 +210,20 @@ func (h *Handler) GetBuilderPreferencesStore() *BuilderPreferencesStore {
 // payload envelopes at the configured reveal time.
 func (h *Handler) SetRevealService(rs *payload_bidder.RevealService) {
 	h.revealSvc = rs
+}
+
+// OnDemandPayloadBuilder builds a payload for a specific parent tuple on
+// request (implemented by payload_builder.Service). Used to answer bid
+// requests for legal parents no candidate build covered.
+type OnDemandPayloadBuilder interface {
+	BuildCandidateOnDemand(ctx context.Context, slot phase0.Slot,
+		parentRoot phase0.Root, parentHash phase0.Hash32) (*payload_builder.Payload, error)
+}
+
+// SetOnDemandBuilder wires the on-demand payload builder used when a bid
+// request asks for a legal parent tuple without a built candidate.
+func (h *Handler) SetOnDemandBuilder(builder OnDemandPayloadBuilder) {
+	h.onDemandBuilder = builder
 }
 
 // SetProposerPreferencesStore wires the per-slot proposer preferences store

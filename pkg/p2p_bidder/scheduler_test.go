@@ -45,6 +45,8 @@ type stubChainService struct {
 	fork        version.DataVersion
 }
 
+func (s *stubChainService) GetHeadTracker() *chain.HeadTracker { return nil }
+
 func newStubChainService() *stubChainService {
 	return &stubChainService{
 		spec: &chain.ChainSpec{
@@ -163,7 +165,7 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 	cache := payload_builder.NewPayloadCache(8)
 
 	scheduler := NewScheduler(chainSvc, bidCreator, bidTracker,
-		cache, svc, blsSigner, prefs, planSvc, log)
+		cache, svc, blsSigner, prefs, planSvc, cfg, log)
 
 	events := svc.SubscribeBidSubmissions(16, false)
 	t.Cleanup(events.Unsubscribe)
@@ -576,4 +578,85 @@ func TestBidCreatorReturnsBidOnSubmitFailure(t *testing.T) {
 			assert.Equal(t, version.DataVersionGloas, signedBid.Version)
 		})
 	}
+}
+
+// newCandidatePayload builds a test payload classified as the given candidate
+// with a distinct parent tuple and block hash.
+func newCandidatePayload(slot phase0.Slot, key chain.CandidateKey, marker byte) *payload_builder.Payload {
+	return &payload_builder.Payload{
+		Attributes: &beacon.PayloadAttributesEvent{
+			ProposalSlot:    slot,
+			ParentBlockRoot: phase0.Root{marker},
+			ParentBlockHash: phase0.Hash32{marker},
+		},
+		Candidate: key,
+		ExecutionPayload: &eth2all.ExecutionPayload{
+			Version:   version.DataVersionGloas,
+			BlockHash: phase0.Hash32{marker, 0xbb},
+			GasLimit:  30_000_000,
+		},
+		BlockHash:  phase0.Hash32{marker, 0xbb},
+		BlockValue: gweiToWei(1000),
+		ReadyAt:    time.Now(),
+	}
+}
+
+func TestSchedulerBidCandidateSelection(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
+	h.cache.Store(full)
+	h.cache.Store(empty)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	// A forced candidate key bids exactly that payload.
+	h.cfg.EPBS.BidCandidate = "parent_empty"
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	event := h.nextEvent()
+	require.NotNil(t, event)
+	assert.EqualValues(t, empty.BlockHash, event.BlockHash, "forced candidate must be bid")
+	require.Nil(t, h.nextEvent(), "only one candidate must be bid")
+}
+
+func TestSchedulerBidCandidateAll(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.cfg.EPBS.BidCandidate = "all"
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
+	require.NotNil(t, h.nextEvent(), "second candidate bid expected")
+	require.Nil(t, h.nextEvent())
+
+	// The single-bid dedup is per payload: a second tick bids nothing new.
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	require.Nil(t, h.nextEvent())
+}
+
+func TestSchedulerAutoCandidateSticky(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
+	h.cache.Store(empty)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	// Auto (no head tracker in the stub): primary payload wins and the
+	// choice sticks on the slot state.
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	event := h.nextEvent()
+	require.NotNil(t, event)
+	assert.EqualValues(t, empty.BlockHash, event.BlockHash)
+
+	h.scheduler.mu.Lock()
+	state := h.scheduler.getSlotState(testSlot)
+	h.scheduler.mu.Unlock()
+	assert.True(t, state.BidCandidateSet)
+	assert.Equal(t, chain.CandidateParentEmpty, state.BidCandidate)
 }

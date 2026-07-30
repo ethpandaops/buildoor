@@ -1,6 +1,8 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
+import "strings"
+
 // ValidatorRangesConfig configures how to load validator index → client name mappings.
 // If both are set, URL takes precedence.
 type ValidatorRangesConfig struct {
@@ -114,6 +116,41 @@ type BuilderAPIConfig struct {
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
+
+	// ServeCandidates controls which built candidate payloads bid requests may
+	// be answered from: "all" (default; serve whichever candidate matches the
+	// requested parent), "canonical_only" (only parent_full and unclassified
+	// payloads), or a comma-separated list of candidate keys.
+	ServeCandidates string `yaml:"serve_candidates" json:"serve_candidates"`
+
+	// OnDemandBuild builds a payload on the fly when a bid request asks for a
+	// legal parent tuple no candidate covers yet (bounded by the request's
+	// response budget).
+	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
+}
+
+// ServeCandidateAllowed reports whether the configured serve policy allows
+// answering from a payload classified as the given candidate key ("" =
+// unclassified, always allowed under "all" and "canonical_only").
+func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
+	switch c.ServeCandidates {
+	case "", "all":
+		return true
+	case "canonical_only":
+		return key == "" || key == "parent_full"
+	default:
+		if key == "" {
+			return false
+		}
+
+		for _, allowed := range strings.Split(c.ServeCandidates, ",") {
+			if strings.TrimSpace(allowed) == key {
+				return true
+			}
+		}
+
+		return false
+	}
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
@@ -152,6 +189,20 @@ type EPBSConfig struct {
 	// block value. BidIncrease still applies per subsequent bid. Per-slot action
 	// plans override this per slot.
 	BidValueOverride uint64 `yaml:"bid_value_override" json:"bid_value_override"`
+
+	// BidCandidate selects which built candidate payload the p2p bids commit
+	// to: "auto" (default; match the chain view's current head and payload
+	// status), a specific candidate key (parent_full, parent_empty,
+	// grandparent_full, grandparent_empty), or "all" (gossip a bid for every
+	// built candidate — deliberate multi-parent bidding for gossip testing;
+	// most nodes propagate only a builder's first bid per slot).
+	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
+
+	// BidCandidateSwitch allows the auto selection to switch to a different
+	// candidate mid-slot when the chain view changes. Default off: the first
+	// gossiped candidate sticks (the gossip first-seen rule makes a switched
+	// bid unlikely to propagate anyway).
+	BidCandidateSwitch bool `yaml:"bid_candidate_switch" json:"bid_candidate_switch"`
 
 	// HeadVoteThresholdPct is the head-vote participation threshold in percent
 	// (0-100) the vote tracker reports against: crossing it fires an immediate
