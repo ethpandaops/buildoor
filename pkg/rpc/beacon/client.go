@@ -275,6 +275,15 @@ type BlockInfo struct {
 	FinalitySafeExecutionBlockHash phase0.Hash32
 	ParentRoot                     phase0.Root
 	StateRoot                      phase0.Root
+	// Gas limit the block committed to: the embedded payload's gas limit
+	// pre-Gloas, the bid's gas limit from Gloas on (the envelope check
+	// enforces payload.gas_limit == bid.gas_limit, so the values agree
+	// whenever the payload is revealed).
+	GasLimit uint64
+	// Execution block number of the committed payload. Only known pre-Gloas
+	// (the payload is embedded in the block); zero from Gloas on, where the
+	// number requires the revealed envelope.
+	ExecutionBlockNumber uint64
 }
 
 // FinalityInfo contains finality checkpoint execution block hashes.
@@ -324,6 +333,8 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get finality-safe execution block hash: %w", err)
 	}
 
+	gasLimit, blockNumber := agnosticExecutionGasLimitAndNumber(msg)
+
 	return &BlockInfo{
 		Slot:                           msg.Slot,
 		Root:                           root,
@@ -331,7 +342,32 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		FinalitySafeExecutionBlockHash: finalitySafeHash,
 		ParentRoot:                     msg.ParentRoot,
 		StateRoot:                      msg.StateRoot,
+		GasLimit:                       gasLimit,
+		ExecutionBlockNumber:           blockNumber,
 	}, nil
+}
+
+// agnosticExecutionGasLimitAndNumber extracts the committed gas limit and (where
+// knowable) the execution block number from a fork-agnostic beacon block.
+// Pre-Gloas both come from the embedded payload; from Gloas on the gas limit is
+// on the bid (present even when the payload was withheld) and the number is
+// unknown without the envelope, so it stays zero.
+func agnosticExecutionGasLimitAndNumber(msg *all.BeaconBlock) (gasLimit, blockNumber uint64) {
+	body := msg.Body
+
+	if msg.Version >= version.DataVersionGloas {
+		if body.SignedExecutionPayloadBid != nil && body.SignedExecutionPayloadBid.Message != nil {
+			return body.SignedExecutionPayloadBid.Message.GasLimit, 0
+		}
+
+		return 0, 0
+	}
+
+	if body.ExecutionPayload == nil {
+		return 0, 0
+	}
+
+	return body.ExecutionPayload.GasLimit, body.ExecutionPayload.BlockNumber
 }
 
 // agnosticExecutionBlockHash extracts the execution block hash from a

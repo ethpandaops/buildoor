@@ -43,6 +43,34 @@ type headEventJSON struct {
 	CurrentDutyDependentRoot  string `json:"current_duty_dependent_root"`
 }
 
+// ChainReorgEvent represents a chain_reorg event from the beacon node.
+// Emitted when fork choice switches the head to a block that is not a
+// descendant of the previous head. Not all clients emit this reliably, so
+// consumers must treat it as a hint and derive reorgs from head-event
+// parent-root discontinuities as the primary mechanism.
+type ChainReorgEvent struct {
+	Slot                phase0.Slot
+	Depth               uint64
+	OldHeadBlock        phase0.Root
+	NewHeadBlock        phase0.Root
+	OldHeadState        phase0.Root
+	NewHeadState        phase0.Root
+	Epoch               phase0.Epoch
+	ExecutionOptimistic bool
+}
+
+// chainReorgEventJSON is used for JSON unmarshaling of chain_reorg events.
+type chainReorgEventJSON struct {
+	Slot                string `json:"slot"`
+	Depth               string `json:"depth"`
+	OldHeadBlock        string `json:"old_head_block"`
+	NewHeadBlock        string `json:"new_head_block"`
+	OldHeadState        string `json:"old_head_state"`
+	NewHeadState        string `json:"new_head_state"`
+	Epoch               string `json:"epoch"`
+	ExecutionOptimistic bool   `json:"execution_optimistic"`
+}
+
 // BidEvent represents an execution payload bid event.
 type BidEvent struct {
 	Slot               phase0.Slot
@@ -191,6 +219,7 @@ type bidEventJSON struct {
 type EventStream struct {
 	client                        *Client
 	headDispatcher                *utils.Dispatcher[*HeadEvent]
+	chainReorgDispatcher          *utils.Dispatcher[*ChainReorgEvent]
 	bidDispatcher                 *utils.Dispatcher[*BidEvent]
 	payloadDispatcher             *utils.Dispatcher[*PayloadAvailableEvent]
 	payloadAttributesDispatcher   *utils.Dispatcher[*PayloadAttributesEvent]
@@ -213,6 +242,7 @@ func NewEventStream(client *Client) *EventStream {
 	return &EventStream{
 		client:                        client,
 		headDispatcher:                &utils.Dispatcher[*HeadEvent]{},
+		chainReorgDispatcher:          &utils.Dispatcher[*ChainReorgEvent]{},
 		bidDispatcher:                 &utils.Dispatcher[*BidEvent]{},
 		payloadDispatcher:             &utils.Dispatcher[*PayloadAvailableEvent]{},
 		payloadAttributesDispatcher:   &utils.Dispatcher[*PayloadAttributesEvent]{},
@@ -236,9 +266,10 @@ func (e *EventStream) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	// Start separate goroutines for each topic
-	e.wg.Add(6)
+	e.wg.Add(7)
 
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
+	go e.runTopicLoop(streamCtx, "chain_reorg", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "payload_attributes", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_bid", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "execution_payload_available", 30*time.Second)
@@ -265,6 +296,11 @@ func (e *EventStream) Stop() {
 // SubscribeHead returns a subscription for head events.
 func (e *EventStream) SubscribeHead() *utils.Subscription[*HeadEvent] {
 	return e.headDispatcher.Subscribe(16, false)
+}
+
+// SubscribeChainReorgs returns a subscription for chain_reorg events.
+func (e *EventStream) SubscribeChainReorgs() *utils.Subscription[*ChainReorgEvent] {
+	return e.chainReorgDispatcher.Subscribe(16, false)
 }
 
 // SubscribeBids returns a subscription for bid events.
@@ -471,6 +507,21 @@ func (e *EventStream) handleEvent(eventType, data string) {
 
 		e.headDispatcher.Fire(event)
 
+	case "chain_reorg":
+		var raw chainReorgEventJSON
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to parse chain reorg event JSON")
+			return
+		}
+
+		event, err := parseChainReorgEvent(&raw)
+		if err != nil {
+			e.client.log.WithError(err).WithField("data", data).Warn("Failed to convert chain reorg event")
+			return
+		}
+
+		e.chainReorgDispatcher.Fire(event)
+
 	case "execution_payload_bid":
 		var raw bidEventJSON
 		if err := json.Unmarshal([]byte(data), &raw); err != nil {
@@ -606,6 +657,55 @@ func parseHeadEvent(raw *headEventJSON) (*HeadEvent, error) {
 		ExecutionOptimistic:       raw.ExecutionOptimistic,
 		PreviousDutyDependentRoot: prevDuty,
 		CurrentDutyDependentRoot:  currDuty,
+	}, nil
+}
+
+// parseChainReorgEvent converts a raw JSON chain_reorg event to the typed ChainReorgEvent.
+func parseChainReorgEvent(raw *chainReorgEventJSON) (*ChainReorgEvent, error) {
+	slot, err := strconv.ParseUint(raw.Slot, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid slot: %w", err)
+	}
+
+	depth, err := strconv.ParseUint(raw.Depth, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid depth: %w", err)
+	}
+
+	epoch, err := strconv.ParseUint(raw.Epoch, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid epoch: %w", err)
+	}
+
+	oldHeadBlock, err := parseRoot(raw.OldHeadBlock)
+	if err != nil {
+		return nil, fmt.Errorf("invalid old_head_block: %w", err)
+	}
+
+	newHeadBlock, err := parseRoot(raw.NewHeadBlock)
+	if err != nil {
+		return nil, fmt.Errorf("invalid new_head_block: %w", err)
+	}
+
+	oldHeadState, err := parseRoot(raw.OldHeadState)
+	if err != nil {
+		return nil, fmt.Errorf("invalid old_head_state: %w", err)
+	}
+
+	newHeadState, err := parseRoot(raw.NewHeadState)
+	if err != nil {
+		return nil, fmt.Errorf("invalid new_head_state: %w", err)
+	}
+
+	return &ChainReorgEvent{
+		Slot:                phase0.Slot(slot),
+		Depth:               depth,
+		OldHeadBlock:        oldHeadBlock,
+		NewHeadBlock:        newHeadBlock,
+		OldHeadState:        oldHeadState,
+		NewHeadState:        newHeadState,
+		Epoch:               phase0.Epoch(epoch),
+		ExecutionOptimistic: raw.ExecutionOptimistic,
 	}, nil
 }
 

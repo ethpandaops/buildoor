@@ -55,6 +55,10 @@ type ChainSpec struct {
 
 	// ePBS parameters
 	PtcSize uint64
+	// PAYLOAD_DUE_BPS: the builder payload reveal deadline as basis points of
+	// the slot duration (Gloas). A block whose payload has not been seen by
+	// this offset is treated as empty by payload timeliness voting.
+	PayloadDueBps uint64
 
 	// Deposit contract
 	DepositContractAddress *common.Address
@@ -239,6 +243,12 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 	// Parse ePBS parameters
 	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
 		s.PtcSize = v
+	}
+
+	if v, err := parseSpecUint64(specData, "PAYLOAD_DUE_BPS"); err == nil {
+		s.PayloadDueBps = v
+	} else {
+		s.PayloadDueBps = 5000
 	}
 
 	// Parse deposit contract address

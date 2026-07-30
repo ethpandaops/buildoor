@@ -103,6 +103,9 @@ func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger, _ := newHookedLogger()
 			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+			// Seed both slot-5 branches into the shared ancestry cache (as
+			// head events would).
+			chainSvc.primeHeadTracker(logger, winBlock, competing5)
 			builderSvc := newTestBuilderSvc(chainSvc)
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
 
@@ -114,9 +117,6 @@ func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
 
 			tracker.processBlockInfo(winBlock)
 			require.Contains(t, tracker.trackedWins, phase0.Slot(5), "win must be tracked")
-			// Seed the competing branch into the ancestry cache (as a head
-			// event would).
-			tracker.blockCache[competing5.Root] = competing5
 
 			tracker.processBlockInfo(tt.followUp)
 
@@ -135,31 +135,34 @@ func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
 
 func TestInclusionTracker_ReorgRevisesVerdict(t *testing.T) {
 	logger, hook := newHookedLogger()
+
+	ourHash := phase0.Hash32{0xab}
+	ourRoot := phase0.Root{0x05}
+	winBlock := &beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash}
+	onChain6 := &beacon.BlockInfo{
+		Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
+		FinalitySafeExecutionBlockHash: ourHash,
+	}
+	competing5 := &beacon.BlockInfo{
+		Slot: 5, Root: phase0.Root{0x55}, ExecutionBlockHash: phase0.Hash32{0x55},
+	}
+
 	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	chainSvc.primeHeadTracker(logger, winBlock, onChain6, competing5)
 	builderSvc := newTestBuilderSvc(chainSvc)
 	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
 
 	statusSub := tracker.SubscribePayloadStatus(8, false)
 	defer statusSub.Unsubscribe()
 
-	ourHash := phase0.Hash32{0xab}
-	ourRoot := phase0.Root{0x05}
 	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
 	builderSvc.GetPayloadCache().Store(payload)
 
 	// Win at slot 5, canonical follow-up at slot 6.
-	tracker.processBlockInfo(&beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash})
-
-	onChain6 := &beacon.BlockInfo{
-		Slot: 6, Root: phase0.Root{0x06}, ParentRoot: ourRoot,
-		FinalitySafeExecutionBlockHash: ourHash,
-	}
+	tracker.processBlockInfo(winBlock)
 	tracker.processBlockInfo(onChain6)
 
 	// Reorg: a competing slot-5 block and a slot-6 head on top of it.
-	competing5 := &beacon.BlockInfo{
-		Slot: 5, Root: phase0.Root{0x55}, ExecutionBlockHash: phase0.Hash32{0x55},
-	}
 	tracker.processBlockInfo(competing5)
 	tracker.processBlockInfo(&beacon.BlockInfo{
 		Slot: 6, Root: phase0.Root{0x66}, ParentRoot: competing5.Root,
@@ -195,16 +198,20 @@ func TestInclusionTracker_PaymentStateLogging(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger, hook := newHookedLogger()
-			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
-			builderSvc := newTestBuilderSvc(chainSvc)
-			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
 
 			ourHash := phase0.Hash32{0xab}
 			ourRoot := phase0.Root{0x05}
+			winBlock := &beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash}
+
+			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+			chainSvc.primeHeadTracker(logger, winBlock)
+			builderSvc := newTestBuilderSvc(chainSvc)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+
 			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
 			builderSvc.GetPayloadCache().Store(payload)
 
-			tracker.processBlockInfo(&beacon.BlockInfo{Slot: 5, Root: ourRoot, ExecutionBlockHash: ourHash})
+			tracker.processBlockInfo(winBlock)
 
 			if tt.revealed {
 				payload.MarkRevealed(payload_builder.RevealRecord{
