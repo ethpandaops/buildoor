@@ -98,6 +98,7 @@ type SlotStartEvent struct {
 // the payload is ready, so the WebUI can render the build as in-progress.
 type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
 	StartedAt int64  `json:"started_at"`
 }
 
@@ -123,14 +124,16 @@ type PayloadAttributesStreamEvent struct {
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
 // can mark the in-progress build as failed.
 type PayloadBuildFailedStreamEvent struct {
-	Slot     uint64 `json:"slot"`
-	Error    string `json:"error"`
-	FailedAt int64  `json:"failed_at"`
+	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
+	Error     string `json:"error"`
+	FailedAt  int64  `json:"failed_at"`
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
 type PayloadReadyStreamEvent struct {
 	Slot            uint64 `json:"slot"`
+	Candidate       string `json:"candidate,omitempty"`
 	BlockHash       string `json:"block_hash"`
 	ParentBlockHash string `json:"parent_block_hash"`
 	BlockValue      string `json:"block_value"`
@@ -1029,6 +1032,7 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildStartedStreamEvent{
 			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
 			StartedAt: event.StartedAt.UnixMilli(),
 		},
 	})
@@ -1061,9 +1065,10 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.Pay
 		Type:      EventTypePayloadBuildFailed,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildFailedStreamEvent{
-			Slot:     uint64(event.Slot),
-			Error:    event.Error,
-			FailedAt: event.FailedAt.UnixMilli(),
+			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
+			Error:     event.Error,
+			FailedAt:  event.FailedAt.UnixMilli(),
 		},
 	})
 }
@@ -1073,6 +1078,7 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.Pay
 func payloadReadyStreamEvent(slot phase0.Slot, event *payload_builder.Payload) PayloadReadyStreamEvent {
 	data := PayloadReadyStreamEvent{
 		Slot:            uint64(slot),
+		Candidate:       string(event.Candidate),
 		BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
 		ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
 		BlockValue:      event.BlockValue.String(),

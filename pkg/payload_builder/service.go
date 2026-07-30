@@ -498,7 +498,7 @@ func (s *Service) maybeLateBuild(slot phase0.Slot, event *beacon.PayloadAttribut
 
 	candidateKey := s.classifyCandidate(event)
 	if candidateKey != "" {
-		mode := s.cfg.Build.CandidateMode(string(candidateKey))
+		mode := s.candidateMode(slot, candidateKey)
 		if mode == config.CandidateModeNever {
 			s.log.WithFields(logrus.Fields{
 				"slot":      slot,

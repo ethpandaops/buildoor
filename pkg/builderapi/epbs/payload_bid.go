@@ -19,6 +19,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -238,7 +239,8 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	var parentRoot phase0.Root
 	copy(parentRoot[:], parentRootBytes)
 
-	event, matchErr := h.matchPayloadForParent(r.Context(), slot, parentRoot, parentHash)
+	event, matchErr := h.matchPayloadForParent(r.Context(), slot, parentRoot, parentHash,
+		frozenSettings.ServeCandidates)
 	if matchErr != nil {
 		if matchErr.status == http.StatusNoContent {
 			log.WithField("reason", matchErr.reason).
@@ -426,9 +428,14 @@ type bidMatchError struct {
 // fail with 400.
 func (h *Handler) matchPayloadForParent(
 	ctx context.Context, slot phase0.Slot, parentRoot phase0.Root, parentHash phase0.Hash32,
+	servePolicy string,
 ) (*payload_builder.Payload, *bidMatchError) {
+	if servePolicy == "" {
+		servePolicy = h.cfg.ServeCandidates
+	}
+
 	if payload := h.payloadCache.GetVariant(slot, beacon.AttrParentKey{Root: parentRoot, Hash: parentHash}); payload != nil {
-		if !h.cfg.ServeCandidateAllowed(string(payload.Candidate)) {
+		if !config.ServeCandidateAllowed(servePolicy, string(payload.Candidate)) {
 			return nil, &bidMatchError{status: http.StatusNoContent,
 				reason: "candidate " + string(payload.Candidate) + " excluded by serve policy"}
 		}
@@ -460,7 +467,7 @@ func (h *Handler) matchPayloadForParent(
 				reason: "on-demand build failed: " + err.Error()}
 		}
 
-		if !h.cfg.ServeCandidateAllowed(string(payload.Candidate)) {
+		if !config.ServeCandidateAllowed(servePolicy, string(payload.Candidate)) {
 			return nil, &bidMatchError{status: http.StatusNoContent,
 				reason: "candidate " + string(payload.Candidate) + " excluded by serve policy"}
 		}

@@ -163,6 +163,42 @@ export function useEventStream(): UseEventStreamResult {
       }));
     };
 
+    // Candidate builds: rank for primary selection (most canonical first;
+    // unclassified last) and per-candidate list upsert.
+    const candidateRank = (candidate?: string): number => {
+      switch (candidate) {
+        case 'parent_full': return 0;
+        case 'parent_empty': return 1;
+        case 'grandparent_full': return 2;
+        case 'grandparent_empty': return 3;
+        default: return 4;
+      }
+    };
+
+    const updateCandidateBuild = (
+      slot: number,
+      candidate: string,
+      patch: Partial<import('../types').CandidateBuild>,
+      primaryUpdates?: (state: SlotState) => Partial<SlotState>
+    ) => {
+      setSlotStates(prev => {
+        const state = prev[slot] || { slot };
+        const list = state.candidateBuilds ? [...state.candidateBuilds] : [];
+        const idx = list.findIndex(b => b.candidate === candidate);
+
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...patch, candidate: candidate as import('../types').CandidateKey };
+        } else {
+          list.push({ candidate: candidate as import('../types').CandidateKey, ...patch });
+        }
+
+        const merged: SlotState = { ...state, slot, candidateBuilds: list };
+        const extra = primaryUpdates ? primaryUpdates(merged) : undefined;
+
+        return { ...prev, [slot]: extra ? { ...merged, ...extra } : merged };
+      });
+    };
+
     const handleEvent = (event: { type: string; timestamp: number; seq?: number; data: unknown }) => {
       // Drop already-processed events from a reconnect replay. Events
       // without a seq (per-client initial-state snapshots) always pass.
@@ -288,20 +324,35 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_build_started': {
-          const data = event.data as { slot: number; started_at: number };
-          addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);
-          updateSlotState(data.slot, { payloadBuildStartedAt: data.started_at });
+          const data = event.data as { slot: number; candidate?: string; started_at: number };
+          addEvent('payload_build_started',
+            `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
+            event.timestamp);
+          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at },
+            state => ({
+              // The earliest candidate start drives the primary build line.
+              payloadBuildStartedAt: state.payloadBuildStartedAt !== undefined
+                ? Math.min(state.payloadBuildStartedAt, data.started_at)
+                : data.started_at
+            }));
           break;
         }
 
         case 'payload_build_failed': {
-          const data = event.data as { slot: number; error: string; failed_at: number };
-          addEvent('payload_build_failed', `Payload build failed for slot ${data.slot}: ${data.error}`, event.timestamp);
-          updateSlotState(data.slot, {
-            payloadBuildFailed: true,
-            payloadBuildFailedAt: data.failed_at,
-            payloadBuildError: data.error
-          });
+          const data = event.data as { slot: number; candidate?: string; error: string; failed_at: number };
+          addEvent('payload_build_failed',
+            `Payload build failed for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}: ${data.error}`,
+            event.timestamp);
+          updateCandidateBuild(data.slot, data.candidate ?? '',
+            { failed: true, failedAt: data.failed_at, error: data.error },
+            state => (state.payloadReady
+              // Another candidate already delivered — keep the primary intact.
+              ? {}
+              : {
+                  payloadBuildFailed: true,
+                  payloadBuildFailedAt: data.failed_at,
+                  payloadBuildError: data.error
+                }));
           break;
         }
 
@@ -309,14 +360,28 @@ export function useEventStream(): UseEventStreamResult {
           // block_value is the EL's MEV value as a wei decimal string; convert to
           // gwei so it matches the gwei-based formatGwei display used elsewhere.
           const data = event.data as {
-            slot: number; block_hash: string; block_value: string; ready_at: number;
+            slot: number; candidate?: string; block_hash: string; block_value: string; ready_at: number;
             block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
-          updateSlotState(data.slot, {
+          updateCandidateBuild(data.slot, data.candidate ?? '', {
+            readyAt: data.ready_at,
+            failed: false,
+            blockHash: data.block_hash,
+            blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0
+          }, state => {
+            // A less canonical candidate never displaces the primary payload.
+            if (state.payloadReady &&
+                candidateRank(data.candidate) > candidateRank(state.payloadCandidate)) {
+              return {};
+            }
+
+            return {
             payloadReady: true,
+            payloadBuildFailed: false,
+            payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
@@ -334,6 +399,7 @@ export function useEventStream(): UseEventStreamResult {
               numBlobs: data.num_blobs,
               numExecRequests: data.num_exec_requests
             }
+            };
           });
           break;
         }

@@ -129,11 +129,11 @@ type BuilderAPIConfig struct {
 	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
 }
 
-// ServeCandidateAllowed reports whether the configured serve policy allows
+// ServeCandidateAllowed reports whether the given serve policy allows
 // answering from a payload classified as the given candidate key ("" =
 // unclassified, always allowed under "all" and "canonical_only").
-func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
-	switch c.ServeCandidates {
+func ServeCandidateAllowed(policy, key string) bool {
+	switch policy {
 	case "", "all":
 		return true
 	case "canonical_only":
@@ -143,7 +143,7 @@ func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
 			return false
 		}
 
-		for _, allowed := range strings.Split(c.ServeCandidates, ",") {
+		for _, allowed := range strings.Split(policy, ",") {
 			if strings.TrimSpace(allowed) == key {
 				return true
 			}
@@ -151,6 +151,11 @@ func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
 
 		return false
 	}
+}
+
+// ServeCandidateAllowed applies the config's own serve policy.
+func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
+	return ServeCandidateAllowed(c.ServeCandidates, key)
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.

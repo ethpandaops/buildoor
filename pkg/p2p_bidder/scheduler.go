@@ -224,7 +224,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Select the candidate payload(s) to bid on. The selection runs at bid
 	// time — after builds finished and with the freshest chain view.
-	payloads := s.selectBidPayloads(slot)
+	payloads := s.selectBidPayloads(slot, bidSettings)
 	if len(payloads) == 0 {
 		return
 	}
@@ -275,8 +275,15 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 // per the live bid-candidate setting: a specific candidate, every built
 // candidate ("all"), or the auto selection matching the chain view (sticky
 // per slot unless candidate switching is enabled).
-func (s *Scheduler) selectBidPayloads(slot phase0.Slot) []*payload_builder.Payload {
-	mode := s.cfg.EPBS.BidCandidate
+func (s *Scheduler) selectBidPayloads(
+	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings,
+) []*payload_builder.Payload {
+	// The frozen per-slot selection wins; the live config covers snapshots
+	// frozen before the setting existed.
+	mode := bidSettings.BidCandidate
+	if mode == "" {
+		mode = s.cfg.EPBS.BidCandidate
+	}
 
 	switch {
 	case mode == "all":

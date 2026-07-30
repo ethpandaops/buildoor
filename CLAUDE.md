@@ -198,6 +198,43 @@ npm run clean
      still-open slots (`> currentSlot`, not yet frozen) — past slots keep their
      recorded history instead of being described by today's rules.
 
+0b. **Chain view / head tracker** (`pkg/chain/headtracker.go`) — buildoor's own
+   canonical-chain oracle: current head, bounded block-by-root ancestry cache
+   (shared with the inclusion tracker), per-block Gloas payload reveal status
+   (payload-available events + child-block evidence + PAYLOAD_DUE fallback),
+   reorg detection (head-change events with depth/common-ancestor; the beacon
+   `chain_reorg` SSE topic is subscribed as a cross-check), and build-parent
+   candidate resolution. Also: epoch-stats refetch when a head event's duty
+   dependent root proves a reorg crossed the epoch boundary.
+
+0c. **Build candidates** — a slot may build SEVERAL payloads, one per parent
+   tuple (candidate keys: `parent_full`, `parent_empty` = Gloas payload miss,
+   `grandparent_full` = deliberate reorg of the head block,
+   `grandparent_empty`). Policy per key: `auto` (chain signals: parent payload
+   reveal status, head-vote weakness below `build.auto_weak_head_pct`) /
+   `always` / `never` via `build.candidate_*` settings, per-slot overridable
+   through the action plan's `build.candidates` map (resolved into
+   `FrozenPlan.Build.CandidateModes`). Attributes are cached per
+   (slot, parent_root, parent_hash) variant — last-writer-wins per variant —
+   sanitized against the chain view (Grandine's wrong miss-case parent is
+   corrected, missing parent numbers backfilled) and synthesized for uncovered
+   candidates (empty-parent withdrawals from the parent slot's attributes;
+   grandparent candidates re-target the parent slot's attributes, refused
+   across epoch boundaries). Sequential builds run speculative candidates
+   first, canonical last (`build.parallel` opts into concurrent engine
+   builds). Consumers select at request time: p2p bids per
+   `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
+   `epbs.bid_candidate_switch`; `all` = deliberate multi-parent gossip),
+   builder-api serves whichever candidate matches the requested parent
+   (`builder_api.serve_candidates` policy, optional
+   `builder_api.on_demand_build`). Reveals re-bind (rebuilt, re-signed
+   envelope) when a won payload is re-included under a different block root
+   (`reveal.rebind_on_reorg`); orphaned wins dispute pending payments and
+   clear won markers until the block returns. Flag-gated
+   `build.enforce_bid_gas_limit` adjusts built payloads to the exact
+   bid-gossip-legal gas limit (EL parent gas limit stepped toward the
+   proposer target).
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events

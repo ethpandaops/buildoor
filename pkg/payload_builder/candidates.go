@@ -68,7 +68,7 @@ func (s *Service) resolveBuildTargets(slot phase0.Slot) []*buildTarget {
 			continue
 		}
 
-		mode := s.cfg.Build.CandidateMode(string(key))
+		mode := s.candidateMode(slot, key)
 		if mode == config.CandidateModeNever || mode == "" {
 			continue
 		}
@@ -113,7 +113,7 @@ func (s *Service) resolveBuildTargets(slot phase0.Slot) []*buildTarget {
 
 		target := &buildTarget{attrs: event}
 		if candidate := candidateByTuple[tuple]; candidate != nil {
-			if s.cfg.Build.CandidateMode(string(candidate.Key)) == config.CandidateModeNever {
+			if s.candidateMode(slot, candidate.Key) == config.CandidateModeNever {
 				s.log.WithFields(logrus.Fields{
 					"slot":      slot,
 					"candidate": candidate.Key,
@@ -130,6 +130,20 @@ func (s *Service) resolveBuildTargets(slot phase0.Slot) []*buildTarget {
 	}
 
 	return targets
+}
+
+// candidateMode returns the slot's effective build mode for a candidate key:
+// the frozen plan's resolved candidate policy (global config merged with the
+// slot's plan overrides), falling back to the live config when the frozen
+// snapshot carries none.
+func (s *Service) candidateMode(slot phase0.Slot, key chain.CandidateKey) string {
+	if frozen := s.planSvc.Freeze(slot); frozen.Build != nil && frozen.Build.CandidateModes != nil {
+		if mode, ok := frozen.Build.CandidateModes[string(key)]; ok {
+			return mode
+		}
+	}
+
+	return s.cfg.Build.CandidateMode(string(key))
 }
 
 // resolveChainCandidates fetches the chain view's build-parent candidates for

@@ -706,6 +706,16 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
     bulk ? 'unchanged' : effectivePlan?.build?.reorg_parent_payload ? 'on' : 'off'
   );
 
+  // Per-candidate build policy overrides ('' = inherit the global policy).
+  // Single-slot editing only: a bulk category replace would clobber unrelated
+  // build settings on every targeted slot.
+  const [buildCandidates, setBuildCandidates] = useState<Record<string, string>>(() => ({
+    parent_full: (!bulk && effectivePlan?.build?.candidates?.parent_full) || '',
+    parent_empty: (!bulk && effectivePlan?.build?.candidates?.parent_empty) || '',
+    grandparent_full: (!bulk && effectivePlan?.build?.candidates?.grandparent_full) || '',
+    grandparent_empty: (!bulk && effectivePlan?.build?.candidates?.grandparent_empty) || '',
+  }));
+
   // Transforms (modeless jq expressions). In bulk mode we start empty and only
   // send the ones the operator fills in.
   const [transforms, setTransforms] = useState<TransformState>(() => ({
@@ -795,8 +805,29 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
       }
     }
 
-    // Build (modeless single flag), resolved as a fine-grained set path.
-    if (buildReorg !== 'unchanged') {
+    // Build (modeless). Candidate policy overrides need a full category
+    // replace (map-valued member); the plain reorg flag alone keeps the
+    // fine-grained set path (bulk mode only edits the flag).
+    const candidateEntries = Object.entries(buildCandidates).filter(([, mode]) => mode !== '');
+    const initialCandidates = initialPlan?.build?.candidates ?? {};
+    const candidatesChanged = isSingle && (
+      candidateEntries.length !== Object.keys(initialCandidates).length ||
+      candidateEntries.some(([key, mode]) => initialCandidates[key] !== mode)
+    );
+
+    if (candidatesChanged) {
+      const buildObj: Record<string, unknown> = {};
+      const wantReorg = buildReorg === 'on';
+
+      if (wantReorg) buildObj.reorg_parent_payload = true;
+
+      if (candidateEntries.length > 0) {
+        buildObj.candidates = Object.fromEntries(candidateEntries);
+      }
+
+      updateRec['build'] = Object.keys(buildObj).length > 0 ? buildObj : null;
+      hasChange = true;
+    } else if (buildReorg !== 'unchanged') {
       const initialReorg = initialPlan?.build?.reorg_parent_payload === true;
       const wantOn = buildReorg === 'on';
       // In single mode skip a no-op; in bulk always write so every targeted
@@ -945,6 +976,35 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     disabled={formDisabled}
                     onChange={setBuildReorg}
                   />
+                  {!bulk && (
+                    <div className="mb-3">
+                      <div className="section-header mb-1">Build candidates</div>
+                      <div className="form-text mt-0 mb-1">
+                        Which candidate payloads the slot builds (parent/grandparent block,
+                        full/empty parent payload). Inherit uses the global policy.
+                      </div>
+                      {Object.entries(buildCandidates).map(([key, mode]) => (
+                        <div className="row g-2 align-items-center mb-1" key={key}>
+                          <div className="col-6 small text-secondary">{key}</div>
+                          <div className="col-6">
+                            <select
+                              className="form-select form-select-sm"
+                              value={mode}
+                              disabled={formDisabled}
+                              onChange={(e) => setBuildCandidates(prev => ({
+                                ...prev, [key]: e.target.value
+                              }))}
+                            >
+                              <option value="">inherit</option>
+                              <option value="auto">auto</option>
+                              <option value="always">always</option>
+                              <option value="never">never</option>
+                            </select>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="mb-3">
                     <div className="section-header mb-1">Recurring rules</div>
                     <div className="form-check">

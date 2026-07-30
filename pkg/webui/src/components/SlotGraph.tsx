@@ -186,6 +186,47 @@ const buildHeadVotesPaths = (
   };
 };
 
+
+// One fixed color per build-parent candidate key, consistent across the UI
+// (parent_full keeps the classic build color).
+const CANDIDATE_COLORS: Record<string, string> = {
+  parent_full: '#61e392',
+  parent_empty: '#e6a23c',
+  grandparent_full: '#a78bfa',
+  grandparent_empty: '#8a8f98'
+};
+
+const CANDIDATE_LABELS: Record<string, string> = {
+  parent_full: 'parent (full)',
+  parent_empty: 'parent (empty payload)',
+  grandparent_full: 'grandparent (reorg)',
+  grandparent_empty: 'grandparent (empty payload)'
+};
+
+const candidateColor = (candidate?: string): string | undefined =>
+  candidate ? CANDIDATE_COLORS[candidate] : undefined;
+
+const candidateLabel = (candidate?: string): string =>
+  (candidate && CANDIDATE_LABELS[candidate]) || 'unclassified';
+
+// candidateListPopover renders the per-candidate build list for the badge and
+// mini-bar popovers.
+const candidateListPopover = (
+  builds: import('../types').CandidateBuild[],
+  slotStartTime: number
+): PopoverData => ({
+  title: 'Build Candidates',
+  items: builds.map(build => ({
+    label: candidateLabel(build.candidate),
+    value: build.failed
+      ? `failed: ${build.error ?? 'unknown error'}`
+      : build.readyAt !== undefined
+        ? `ready +${build.readyAt - slotStartTime}ms` +
+          (build.blockHash ? ` · ${build.blockHash.substring(0, 12)}…` : '')
+        : 'building…'
+  }))
+});
+
 export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
   state,
@@ -304,6 +345,18 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const expectedBuildEndAt = typeof payloadBuildTime === 'number'
     ? slotStartTime + buildStartMs + payloadBuildTime
     : undefined;
+
+  // Candidate builds: the primary payload keeps the classic build line; every
+  // other candidate renders as a thin colored mini-bar below it, and a badge
+  // with a popover lists them all. One fixed color per candidate key,
+  // consistent across the UI.
+  const candidateBuilds = state.candidateBuilds ?? [];
+  const multiCandidate = candidateBuilds.length > 1;
+  const primaryCandidate = state.payloadCandidate
+    ?? (candidateBuilds.length === 1 ? candidateBuilds[0].candidate : undefined);
+  const secondaryBuilds = multiCandidate
+    ? candidateBuilds.filter(b => b.candidate !== primaryCandidate)
+    : [];
 
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
@@ -540,8 +593,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               totalRange={totalRange}
               endAt={buildEndAt}
               expectedEndAt={expectedBuildEndAt}
+              lineColor={candidateColor(primaryCandidate)}
               onClick={(e) => showPopover(e, {
-                title: 'Build Delay',
+                title: `Build Delay${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
                 items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
@@ -554,6 +608,43 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     ]
               })}
             />
+          )}
+
+          {/* Non-primary candidate builds: thin stacked mini-bars under the
+              primary build line, colored by candidate (no labels — the badge
+              popover carries the detail). */}
+          {genesisTime > 0 && secondaryBuilds.map((build, idx) => {
+            const startAt = build.startedAt ?? (slotStartTime + buildStartMs);
+            const endAt = build.readyAt ?? build.failedAt ?? Date.now();
+            const startPct = Math.max(0, calculatePosition(startAt - slotStartTime, rangeStart, totalRange));
+            const endPct = Math.min(100, calculatePosition(endAt - slotStartTime, rangeStart, totalRange));
+            if (endPct <= startPct) return null;
+
+            return (
+              <div
+                key={`cand-${build.candidate}-${idx}`}
+                className="candidate-mini-bar"
+                style={{
+                  left: `${startPct}%`,
+                  width: `${endPct - startPct}%`,
+                  bottom: `${2 + idx * 4}px`,
+                  backgroundColor: candidateColor(build.candidate),
+                  opacity: build.failed ? 0.35 : 0.85
+                }}
+                onClick={(e) => showPopover(e, candidateListPopover(candidateBuilds, slotStartTime))}
+              />
+            );
+          })}
+
+          {/* Candidate badge: click for the per-candidate build list. */}
+          {multiCandidate && buildStartX < 100 && (
+            <div
+              className="candidate-badge"
+              style={{ left: `${Math.max(0, buildStartX)}%` }}
+              onClick={(e) => showPopover(e, candidateListPopover(candidateBuilds, slotStartTime))}
+            >
+              {`\u29c9${candidateBuilds.length}`}
+            </div>
           )}
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
