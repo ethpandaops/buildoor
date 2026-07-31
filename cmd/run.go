@@ -406,7 +406,7 @@ and begins building blocks according to configuration.`,
 		// subscriptions never miss an event; SetPersistence migrates any
 		// legacy won_blocks namespace into slot results.
 		resultTracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc,
-			builderSvc, epbsSvc, revealSvc, inclusionTracker, logger)
+			builderSvc, epbsSvc, revealSvc, inclusionTracker, keyRegistry, logger)
 		resultTracker.SetPersistence(ctx, stateDB)
 
 		if err := resultTracker.Start(ctx); err != nil {
@@ -471,7 +471,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

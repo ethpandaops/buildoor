@@ -262,6 +262,30 @@ func (m *Manager) CheckAndTopup(ctx context.Context, key *builder_keys.Key) erro
 	return nil
 }
 
+// TopupKey submits a top-up deposit for the key regardless of its current
+// balance — the operator asked for it explicitly. amountGwei of 0 uses the
+// configured top-up amount.
+func (m *Manager) TopupKey(ctx context.Context, key *builder_keys.Key, amountGwei uint64) error {
+	if amountGwei == 0 {
+		amountGwei = m.cfg.TopupAmount
+	}
+
+	if err := m.depositSvc.CreateTopup(ctx, key, amountGwei); err != nil {
+		return err
+	}
+
+	m.registry.MarkToppedUp(key.KeyIndex(), m.chainSvc.GetCurrentEpoch())
+
+	if tracker := m.GetPaymentTracker(); tracker != nil {
+		tracker.AddDeposit(key.KeyIndex(), amountGwei)
+	}
+
+	m.fireEvent("balance_topup", fmt.Sprintf(
+		"Key #%d topped up by %d gwei", key.KeyIndex(), amountGwei), "success")
+
+	return nil
+}
+
 // InitiateExit submits a builder exit request for the given key via the builder
 // exit system contract.
 func (m *Manager) InitiateExit(ctx context.Context, key *builder_keys.Key) error {

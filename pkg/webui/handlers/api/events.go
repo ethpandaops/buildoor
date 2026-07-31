@@ -13,6 +13,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -43,6 +44,7 @@ const (
 	EventTypeSlotState                   EventType = "slot_state"
 	EventTypePayloadAvailable            EventType = "payload_available"
 	EventTypeBuilderInfo                 EventType = "builder_info"
+	EventTypeBuilderKeys                 EventType = "builder_keys"
 	EventTypeHeadVotes                   EventType = "head_votes"
 	EventTypeVoteCoverage                EventType = "vote_coverage"
 	EventTypeRevealStarted               EventType = "reveal_started"
@@ -306,7 +308,9 @@ func fillEnvelopeDetail(detail *EnvelopeDetail, envelope *eth2all.SignedExecutio
 	}
 }
 
-// BuilderInfoEvent contains builder identity and balance information.
+// BuilderInfoEvent contains builder identity and balance information. The
+// identity fields describe the primary key; the fleet totals summarise every
+// managed key (they equal the primary's values on a single-key deployment).
 type BuilderInfoEvent struct {
 	BuilderPubkey     string `json:"builder_pubkey"`
 	BuilderIndex      uint64 `json:"builder_index"`
@@ -319,6 +323,21 @@ type BuilderInfoEvent struct {
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
+
+	// Fleet summary of the managed builder key set.
+	KeyCount             uint64 `json:"key_count"`
+	KeyTarget            uint64 `json:"key_target"`
+	KeysActive           uint64 `json:"keys_active"`
+	TotalBalance         uint64 `json:"total_balance_gwei"`
+	TotalPendingPayments uint64 `json:"total_pending_payments_gwei"`
+	TotalEffective       uint64 `json:"total_effective_gwei"`
+}
+
+// BuilderKeysStreamEvent is the full managed key set, pushed on every change so
+// the keys view stays live without polling.
+type BuilderKeysStreamEvent struct {
+	Keys      []*builder_keys.State  `json:"keys"`
+	Aggregate builder_keys.Aggregate `json:"aggregate"`
 }
 
 // HeadVotesStreamEvent is sent when head vote participation changes.
@@ -484,10 +503,11 @@ type BuilderAPISubmitBlockDeliveredEvent struct {
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
 	builderSvc    *payload_builder.Service
-	epbsSvc       *p2p_bidder.Service // Optional ePBS service for bid events
-	lifecycleMgr  *lifecycle.Manager  // Optional lifecycle manager for balance info
-	chainSvc      chain.Service       // Optional chain service for head vote tracking
-	builderAPISvc *builderapi.Server  // Optional Builder API server
+	epbsSvc       *p2p_bidder.Service    // Optional ePBS service for bid events
+	lifecycleMgr  *lifecycle.Manager     // Optional lifecycle manager for balance info
+	keys          *builder_keys.Registry // Managed builder key set
+	chainSvc      chain.Service          // Optional chain service for head vote tracking
+	builderAPISvc *builderapi.Server     // Optional Builder API server
 
 	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
 	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
@@ -534,6 +554,7 @@ func NewEventStreamManager(
 	builderSvc *payload_builder.Service,
 	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
+	keys *builder_keys.Registry,
 	chainSvc chain.Service,
 	builderAPISvc *builderapi.Server,
 	revealSvc *payload_bidder.RevealService,
@@ -548,6 +569,7 @@ func NewEventStreamManager(
 		builderSvc:       builderSvc,
 		epbsSvc:          epbsSvc,
 		lifecycleMgr:     lifecycleMgr,
+		keys:             keys,
 		chainSvc:         chainSvc,
 		builderAPISvc:    builderAPISvc,
 		revealSvc:        revealSvc,
@@ -659,6 +681,18 @@ func (m *EventStreamManager) Start() {
 		resultUpdateChan = resultUpdateSub.Channel()
 	}
 
+	// Subscribe to builder key set changes (if lifecycle management available).
+	// Lossy delivery is fine: every event carries the complete key set, so a
+	// dropped one is superseded by the next.
+	var keyChangeSub *utils.Subscription[*builder_keys.ChangeEvent]
+
+	var keyChangeChan <-chan *builder_keys.ChangeEvent
+
+	if registry := m.keyRegistry(); registry != nil {
+		keyChangeSub = registry.SubscribeChanges(8, false)
+		keyChangeChan = keyChangeSub.Channel()
+	}
+
 	// Subscribe to head vote + subnet coverage updates (if chain service available)
 	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
 
@@ -733,6 +767,10 @@ func (m *EventStreamManager) Start() {
 
 		if resultUpdateSub != nil {
 			defer resultUpdateSub.Unsubscribe()
+		}
+
+		if keyChangeSub != nil {
+			defer keyChangeSub.Unsubscribe()
 		}
 
 		// Slot tracking ticker
@@ -838,6 +876,21 @@ func (m *EventStreamManager) Start() {
 					Type:      EventTypeSlotResultUpdated,
 					Timestamp: time.Now().UnixMilli(),
 					Data:      event,
+				})
+
+			case event, ok := <-keyChangeChan:
+				if !ok {
+					keyChangeChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeBuilderKeys,
+					Timestamp: time.Now().UnixMilli(),
+					Data: BuilderKeysStreamEvent{
+						Keys:      event.States,
+						Aggregate: event.Aggregate,
+					},
 				})
 
 			case event, ok := <-revealChan:
@@ -1552,7 +1605,42 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		info.EffectiveBalance = info.CLBalance - info.PendingPayments
 	}
 
+	// Fleet totals. On a single-key deployment these equal the primary key's
+	// values above; they diverge as soon as the target count grows.
+	if registry := m.keyRegistry(); registry != nil {
+		aggregate := registry.Aggregate()
+		info.KeyCount = uint64(len(registry.Keys()))
+		info.KeyTarget = aggregate.Target
+		info.KeysActive = aggregate.Active
+		info.TotalBalance = aggregate.TotalBalance
+		info.TotalPendingPayments = aggregate.TotalPendingPayments
+		info.TotalEffective = aggregate.TotalEffective
+	}
+
 	return info
+}
+
+// keyRegistry returns the managed builder key set (nil only when the WebUI runs
+// without one).
+func (m *EventStreamManager) keyRegistry() *builder_keys.Registry {
+	return m.keys
+}
+
+// BroadcastBuilderKeys pushes the current managed key set to all clients.
+func (m *EventStreamManager) BroadcastBuilderKeys() {
+	registry := m.keyRegistry()
+	if registry == nil {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderKeys,
+		Timestamp: time.Now().UnixMilli(),
+		Data: BuilderKeysStreamEvent{
+			Keys:      registry.States(),
+			Aggregate: registry.Aggregate(),
+		},
+	})
 }
 
 func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
@@ -1696,6 +1784,20 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		},
 	}) {
 		return
+	}
+
+	// Send the managed builder key set
+	if registry := m.keyRegistry(); registry != nil {
+		if !send(&StreamEvent{
+			Type:      EventTypeBuilderKeys,
+			Timestamp: time.Now().UnixMilli(),
+			Data: BuilderKeysStreamEvent{
+				Keys:      registry.States(),
+				Aggregate: registry.Aggregate(),
+			},
+		}) {
+			return
+		}
 	}
 
 	// Send service status
