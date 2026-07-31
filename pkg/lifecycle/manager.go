@@ -251,12 +251,15 @@ func (m *Manager) CheckAndTopup(ctx context.Context, key *builder_keys.Key) erro
 		return nil
 	}
 
-	if err := m.balanceSvc.CheckAndTopup(ctx, key); err != nil {
+	amount, err := m.balanceSvc.CheckAndTopup(ctx, key)
+	if err != nil {
 		return err
 	}
 
-	if tracker := m.GetPaymentTracker(); tracker != nil {
-		tracker.AddDeposit(key.KeyIndex(), m.cfg.TopupAmount)
+	if amount > 0 {
+		if tracker := m.GetPaymentTracker(); tracker != nil {
+			tracker.AddDeposit(key.KeyIndex(), amount)
+		}
 	}
 
 	return nil

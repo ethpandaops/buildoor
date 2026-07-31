@@ -96,15 +96,17 @@ func (s *BalanceService) NeedsTopup(key *builder_keys.Key) (bool, uint64, error)
 	return true, topupAmount, nil
 }
 
-// CheckAndTopup tops the key up when its balance is below the threshold.
-func (s *BalanceService) CheckAndTopup(ctx context.Context, key *builder_keys.Key) error {
+// CheckAndTopup tops the key up when its balance is below the threshold. It
+// returns the amount deposited in gwei, or 0 when no top-up was needed — the
+// caller credits exactly that to the live balance rather than guessing it.
+func (s *BalanceService) CheckAndTopup(ctx context.Context, key *builder_keys.Key) (uint64, error) {
 	needsTopup, amount, err := s.NeedsTopup(key)
 	if err != nil {
-		return fmt.Errorf("failed to check if topup needed: %w", err)
+		return 0, fmt.Errorf("failed to check if topup needed: %w", err)
 	}
 
 	if !needsTopup {
-		return nil
+		return 0, nil
 	}
 
 	s.log.WithFields(logrus.Fields{
@@ -113,10 +115,10 @@ func (s *BalanceService) CheckAndTopup(ctx context.Context, key *builder_keys.Ke
 	}).Info("Balance below threshold, topping up")
 
 	if err := s.depositSvc.CreateTopup(ctx, key, amount); err != nil {
-		return fmt.Errorf("failed to create topup: %w", err)
+		return 0, fmt.Errorf("failed to create topup: %w", err)
 	}
 
 	s.registry.MarkToppedUp(key.KeyIndex(), s.chainSvc.GetCurrentEpoch())
 
-	return nil
+	return amount, nil
 }

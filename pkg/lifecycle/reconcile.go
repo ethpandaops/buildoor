@@ -240,7 +240,8 @@ func (m *Manager) topupNextKey(ctx context.Context) bool {
 		m.fireEvent("balance_topup", fmt.Sprintf(
 			"Key #%d below threshold, topping up %d gwei", key.KeyIndex(), amount), "info")
 
-		if err := m.balanceSvc.CheckAndTopup(ctx, key); err != nil {
+		deposited, err := m.balanceSvc.CheckAndTopup(ctx, key)
+		if err != nil {
 			if isDepositDeferred(err) {
 				// Queue fee too high or contract not active — delay this top-up
 				// to the next pass instead of failing.
@@ -257,11 +258,11 @@ func (m *Manager) topupNextKey(ctx context.Context) bool {
 
 		// Immediately reflect the topup in the live balance (no finalization delay)
 		if tracker := m.GetPaymentTracker(); tracker != nil {
-			tracker.AddDeposit(key.KeyIndex(), amount)
+			tracker.AddDeposit(key.KeyIndex(), deposited)
 		}
 
 		m.fireEvent("balance_topup", fmt.Sprintf(
-			"Key #%d topped up by %d gwei", key.KeyIndex(), amount), "success")
+			"Key #%d topped up by %d gwei", key.KeyIndex(), deposited), "success")
 
 		return true
 	}
