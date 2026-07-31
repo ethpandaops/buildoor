@@ -165,6 +165,20 @@ type schedulerHarness struct {
 	events    *utils.Subscription[*BidSubmissionEvent]
 }
 
+// agePayloadBid moves a payload's last bid past any interval so the next
+// evaluation re-bids it.
+func (h *schedulerHarness) agePayloadBid(blockHash phase0.Hash32) {
+	h.scheduler.mu.Lock()
+	defer h.scheduler.mu.Unlock()
+
+	state := h.scheduler.getSlotState(testSlot)
+	state.LastBidTime = time.Now().Add(-time.Second)
+
+	if bidState, ok := state.PayloadBids[blockHash]; ok {
+		bidState.lastBid = time.Now().Add(-time.Second)
+	}
+}
+
 func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 	t.Helper()
 
@@ -185,7 +199,10 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
-	registry := newTestKeyRegistry(t, testBuilderIndex)
+	// Several keys by default: a key is spent once it has bid a slot, so tests
+	// that re-bid or bid several candidates need more than one.
+	registry := newTestKeyRegistry(t, testBuilderIndex, testBuilderIndex+1,
+		testBuilderIndex+2, testBuilderIndex+3)
 
 	prefs := memstore.New[phase0.Slot, *gloasspec.SignedProposerPreferences]()
 
@@ -515,16 +532,13 @@ func TestSchedulerIntervalIncreaseAndCompetitorHigh(t *testing.T) {
 	assert.Equal(t, uint64(500), *event.CompetitorHighGwei, "our own 1000 gwei bid must be excluded")
 
 	// Age the last bid past the interval, then re-bid with the increase.
-	h.scheduler.mu.Lock()
-	h.scheduler.slotStates[testSlot].LastBidTime = time.Now().Add(-time.Second)
-	h.scheduler.slotStates[testSlot].BidPayloads[phase0.Hash32{0xbb}] = time.Now().Add(-time.Second)
-	h.scheduler.mu.Unlock()
+	h.agePayloadBid(phase0.Hash32{0xbb})
 
 	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
 
 	event = h.nextEvent()
 	require.NotNil(t, event)
-	assert.Equal(t, uint64(110), event.Value, "re-bid adds BidCount * increase")
+	assert.Equal(t, uint64(110), event.Value, "re-bid adds the payload's bid count * increase")
 	assert.Equal(t, 2, event.BidCount)
 }
 
@@ -543,10 +557,7 @@ func TestSchedulerOverflowClampsInsteadOfWrapping(t *testing.T) {
 	assert.Equal(t, uint64(math.MaxUint64), event.Value)
 
 	// Re-bid: MaxUint64 + 1*10 must clamp, not wrap to 9.
-	h.scheduler.mu.Lock()
-	h.scheduler.slotStates[testSlot].LastBidTime = time.Now().Add(-time.Second)
-	h.scheduler.slotStates[testSlot].BidPayloads[phase0.Hash32{0xbb}] = time.Now().Add(-time.Second)
-	h.scheduler.mu.Unlock()
+	h.agePayloadBid(phase0.Hash32{0xbb})
 
 	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
 	event = h.nextEvent()
@@ -745,27 +756,50 @@ func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
 	require.NotEqual(t, first.SignedBid.Message.BuilderIndex, second.SignedBid.Message.BuilderIndex,
 		"each candidate must be bid from a distinct builder key")
 
-	// The pairing is sticky: an interval re-bid must come from the same key, or
-	// it would be a fresh first-seen bid and the original lower bid would stay
-	// the one that propagated.
+	// Both keys are now spent for the slot: the third key is what an escalated
+	// re-bid has to use, because a spent key's next bid is ignored by gossip.
 	h.scheduler.mu.Lock()
-	committed := make(map[phase0.Hash32]uint64, 2)
-	for hash, keyIndex := range h.scheduler.getSlotState(testSlot).PayloadKeys {
-		committed[hash] = keyIndex
+	spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+	h.scheduler.mu.Unlock()
+
+	require.Equal(t, 2, spent)
+}
+
+// An escalated re-bid of the SAME payload must come from a key that has not bid
+// this slot yet: the gossip rules ignore a builder's later bids, so re-bidding
+// from the same key means the higher value never reaches the network.
+func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":50,"bid_increase":10}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Store(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	seen := make(map[uint64]struct{}, 3)
+
+	for range 3 {
+		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+		event := h.nextEvent()
+		require.NotNil(t, event)
+		require.NotNil(t, event.SignedBid)
+
+		builderIndex := uint64(event.SignedBid.Message.BuilderIndex)
+		_, repeated := seen[builderIndex]
+		require.False(t, repeated, "builder %d bid the slot twice", builderIndex)
+
+		seen[builderIndex] = struct{}{}
+
+		h.agePayloadBid(payload.BlockHash)
 	}
-	h.scheduler.mu.Unlock()
 
-	require.Len(t, committed, 2)
-	require.NotEqual(t, committed[full.BlockHash], committed[empty.BlockHash])
-
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
-
-	h.scheduler.mu.Lock()
-	after := h.scheduler.getSlotState(testSlot).PayloadKeys
-	h.scheduler.mu.Unlock()
-
-	require.Equal(t, committed[full.BlockHash], after[full.BlockHash])
-	require.Equal(t, committed[empty.BlockHash], after[empty.BlockHash])
+	// The fleet is exhausted: a fourth attempt has no key left that could
+	// propagate, so it bids nothing rather than repeating a spent key.
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	require.Nil(t, h.nextEvent())
 }
 
 // bid_keys_per_slot caps how many distinct keys bid a slot, so an operator can

@@ -23,6 +23,16 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
+// payloadBidState is one payload's own bidding progress within a slot.
+type payloadBidState struct {
+	// lastBid gates the bid interval.
+	lastBid time.Time
+	// count is how often this payload has been bid, driving the value
+	// escalation. It is per payload so several candidates neither throttle each
+	// other nor inherit each other's escalation step.
+	count int
+}
+
 // SlotState tracks the bidding state for a single slot.
 type SlotState struct {
 	LastBidTime      time.Time
@@ -32,22 +42,23 @@ type SlotState struct {
 	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
 	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
 	NoKeyWarnedFor   bool        // No-ready-key skip already reported for this slot
-	// BidPayloads tracks the last bid time per payload: interval throttling
-	// and single-bid dedup are PER PAYLOAD, so multi-candidate bidding
-	// ("all") does not starve the other candidates behind one payload's
+
+	// PayloadBids tracks each payload's own bid progress, so multi-candidate
+	// bidding ("all") does not starve the other candidates behind one payload's
 	// interval gate.
-	BidPayloads map[phase0.Hash32]time.Time
+	PayloadBids map[phase0.Hash32]*payloadBidState
 
 	// BidCandidate is the candidate the auto selection committed to on the
 	// first bid of the slot (sticky unless candidate switching is enabled).
 	BidCandidate    chain.CandidateKey
 	BidCandidateSet bool
 
-	// PayloadKeys pins which builder key bids each payload. The pairing is
-	// sticky for the slot: an interval re-bid from a different key would be a
-	// fresh first-seen bid, leaving the original key's lower bid as the one
-	// that actually propagated.
-	PayloadKeys map[phase0.Hash32]uint64
+	// UsedKeys holds the keys that already gossiped a bid for this slot. The
+	// gossip rules ignore every bid a builder makes after its first for a slot,
+	// so a key is SPENT once one of its bids reached the network — every later
+	// bid, including an escalated re-bid of the very same payload, has to come
+	// from a key that has not bid yet or it never propagates.
+	UsedKeys map[uint64]struct{}
 
 	// Frozen is the slot's immutable action-plan snapshot, resolved on the
 	// first scheduler evaluation of the slot (nil until then).
@@ -279,7 +290,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	for _, payload := range payloads {
-		key := s.assignBidKey(slot, bidSettings, payload)
+		key := s.claimBidKey(slot, bidSettings, payload)
 		if key == nil {
 			continue
 		}
@@ -363,45 +374,35 @@ func (s *Scheduler) selectBidPayloads(
 	return []*payload_builder.Payload{payload}
 }
 
-// assignBidKey returns the builder key that bids the given payload in this
-// slot, selecting one on first use and keeping it for every later bid on that
-// payload.
+// claimBidKey reserves a builder key for one bid on the given payload, or
+// returns nil when the slot has no key left to spend.
 //
-// Each key bids at most once per slot: the gossip rules ignore a builder's
-// later bids for a slot, so a key already committed to another candidate is
-// excluded. That pairing is what turns several built candidates into several
-// bids that actually propagate.
-func (s *Scheduler) assignBidKey(
+// The gossip rules ignore every bid a builder makes after its first for a slot,
+// so a key is spent as soon as one of its bids reaches the network. Every later
+// bid therefore needs a key that has not bid yet — including an escalated re-bid
+// of the very same payload, which is exactly what makes the escalation reach the
+// network instead of being dropped as already known.
+//
+// The key is claimed here rather than after the submission because the
+// submission is a network call taking tens of milliseconds while the scheduler
+// ticks every 10ms: the ticks landing mid-flight would otherwise pick the same
+// key again. releaseBidKey hands it back when the submission never made it out.
+func (s *Scheduler) claimBidKey(
 	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, payload *payload_builder.Payload,
 ) *builder_keys.Key {
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
-	if keyIndex, ok := state.PayloadKeys[payload.BlockHash]; ok {
-		s.mu.Unlock()
-
-		key, err := s.registry.Key(keyIndex)
-		if err != nil {
-			s.log.WithError(err).WithField("key_index", keyIndex).
-				Error("Committed bid key is no longer derivable")
-
-			return nil
-		}
-
-		return key
-	}
-
-	// Cap the number of distinct keys bidding this slot. Unset means one key
-	// per selected candidate payload.
-	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.PayloadKeys)) >= limit {
+	// Cap how many keys one slot may spend. Unset means every ready key.
+	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
 		s.mu.Unlock()
 
 		return nil
 	}
 
-	committed := make(map[uint64]struct{}, len(state.PayloadKeys))
-	for _, keyIndex := range state.PayloadKeys {
-		committed[keyIndex] = struct{}{}
+	spent := make(map[uint64]struct{}, len(state.UsedKeys))
+	for keyIndex := range state.UsedKeys {
+		spent[keyIndex] = struct{}{}
 	}
 
 	s.mu.Unlock()
@@ -412,20 +413,8 @@ func (s *Scheduler) assignBidKey(
 		Strategy:     bidSettings.KeyStrategy,
 		RequiredGwei: required,
 		Count:        1,
-		Exclude:      committed,
+		Exclude:      spent,
 	})
-
-	if len(selected) == 0 && len(committed) > 0 {
-		// Fewer keys than candidates: reuse an already-committed key rather
-		// than dropping the bid. Only the key's first bid propagates under the
-		// gossip rules, but bidding several candidates from one key is a
-		// deliberate testing scenario (bid_candidate: all).
-		selected = s.registry.SelectForBid(slot, builder_keys.SelectRequest{
-			Strategy:     bidSettings.KeyStrategy,
-			RequiredGwei: required,
-			Count:        1,
-		})
-	}
 
 	if len(selected) == 0 {
 		s.mu.Lock()
@@ -436,11 +425,11 @@ func (s *Scheduler) assignBidKey(
 
 		if !alreadyWarned {
 			s.log.WithFields(logrus.Fields{
-				"slot":           slot,
-				"committed_keys": len(committed),
-				"required_gwei":  required,
-				"strategy":       builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
-			}).Warn("No active builder key for slot — bid skipped")
+				"slot":          slot,
+				"spent_keys":    len(spent),
+				"required_gwei": required,
+				"strategy":      builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
+			}).Info("Every builder key has bid this slot — no further bid can propagate")
 		}
 
 		return nil
@@ -451,14 +440,36 @@ func (s *Scheduler) assignBidKey(
 	s.mu.Lock()
 	state = s.getSlotState(slot)
 
-	if state.PayloadKeys == nil {
-		state.PayloadKeys = make(map[phase0.Hash32]uint64, 2)
+	if state.UsedKeys == nil {
+		state.UsedKeys = make(map[uint64]struct{}, 4)
 	}
 
-	state.PayloadKeys[payload.BlockHash] = key.KeyIndex()
+	// Re-check the cap: a concurrent tick may have claimed the last allowed key
+	// while this one was selecting.
+	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	if _, taken := state.UsedKeys[key.KeyIndex()]; taken {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	state.UsedKeys[key.KeyIndex()] = struct{}{}
 	s.mu.Unlock()
 
 	return key
+}
+
+// releaseBidKey returns a claimed key to the slot's pool after a submission that
+// never reached the network: nothing was gossiped, so the key is not spent.
+func (s *Scheduler) releaseBidKey(slot phase0.Slot, key *builder_keys.Key) {
+	s.mu.Lock()
+	delete(s.getSlotState(slot).UsedKeys, key.KeyIndex())
+	s.mu.Unlock()
 }
 
 // baseBidValue is the bid value before the per-re-bid increase: what a key must
@@ -522,10 +533,10 @@ func (s *Scheduler) trySubmitBid(
 
 	// Check bid interval (per payload, so "all" mode candidates do not
 	// throttle each other)
-	lastBid, alreadyBid := state.BidPayloads[payload.BlockHash]
+	bidState, alreadyBid := state.PayloadBids[payload.BlockHash]
 
 	if bidSettings.IntervalMs > 0 {
-		if alreadyBid && time.Since(lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
+		if alreadyBid && time.Since(bidState.lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
 			s.mu.Unlock()
 			return
 		}
@@ -551,26 +562,33 @@ func (s *Scheduler) trySubmitBid(
 		bidBase = s.addGweiClamped(slot, bidBase, bidSettings.SubsidyGwei)
 	}
 
-	// Re-bid increase applies in interval mode regardless of the base source.
+	// Re-bid increase applies in interval mode, counted per payload so several
+	// candidates do not inherit each other's escalation step.
 	bidValue := bidBase
-	if bidSettings.IntervalMs > 0 && state.BidCount > 0 {
-		increase := s.mulGweiClamped(slot, uint64(state.BidCount), bidSettings.IncreaseGwei) //nolint:gosec // BidCount >= 0
+	if bidSettings.IntervalMs > 0 && alreadyBid && bidState.count > 0 {
+		increase := s.mulGweiClamped(slot, uint64(bidState.count), bidSettings.IncreaseGwei) //nolint:gosec // count >= 0
 		bidValue = s.addGweiClamped(slot, bidValue, increase)
 	}
 
 	// Claim the payload's bid slot BEFORE releasing the lock. The submission
 	// below is a network call taking tens of milliseconds while the scheduler
 	// ticks every 10ms: marking the payload only afterwards lets the next ticks
-	// pass this very check and gossip the same bid again, which the beacon node
-	// rejects as already known and which burns the key's one bid for the slot.
+	// pass this very check and bid it again in parallel.
 	state.LastBidTime = now
 	state.LastBidHash = payload.BlockHash
 
-	if state.BidPayloads == nil {
-		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
+	if state.PayloadBids == nil {
+		state.PayloadBids = make(map[phase0.Hash32]*payloadBidState, 2)
 	}
 
-	state.BidPayloads[payload.BlockHash] = now
+	if bidState == nil {
+		bidState = &payloadBidState{}
+		state.PayloadBids[payload.BlockHash] = bidState
+	}
+
+	bidState.lastBid = now
+	bidState.count++
+
 	state.BidCount++
 	bidCount := state.BidCount
 
@@ -611,6 +629,10 @@ func (s *Scheduler) trySubmitBid(
 
 	if err != nil {
 		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
+
+		// Nothing reached the network, so the key was not spent: hand it back so
+		// the next attempt for this slot can use it.
+		s.releaseBidKey(slot, key)
 
 		// Constructed-but-not-submitted bids carry the signed bid object so
 		// consumers can record exactly what was built.
