@@ -370,7 +370,17 @@ func (s *Service) IsActive() bool {
 
 // SetRegistrationPending marks the builder as having a deposit in flight.
 // Called by the lifecycle manager when a deposit is submitted.
+//
+// A deposit only says something about the key it funds. Once any key of the
+// fleet is active the builder can bid, so a deposit for some other key must not
+// pull the reported state back to pending — the scheduler gates bidding on it,
+// and a fleet ramping toward its target deposits continuously, which would
+// otherwise suppress bidding for the whole ramp.
 func (s *Service) SetRegistrationPending() {
+	if s.registry != nil && s.registry.AnyActive() {
+		return
+	}
+
 	s.registrationState.Store(RegistrationStatePending)
 	s.log.Info("Builder deposit submitted, waiting for beacon chain inclusion")
 }

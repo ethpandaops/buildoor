@@ -27,15 +27,12 @@ import (
 type payloadBidState struct {
 	// lastBid gates the bid interval.
 	lastBid time.Time
-	// count is how often this payload has been bid, for reporting.
+	// count is how often this payload has been bid. It also drives the value
+	// escalation: every bid lands one increase above the last, since gossip only
+	// forwards the highest bid seen for a (slot, parent) tuple and bids sharing
+	// a value cannot all propagate. It is per payload so several candidates do
+	// not inherit each other's escalation.
 	count int
-	// steps is how many interval steps this payload has been through, driving
-	// the value escalation. It counts STEPS, not bids: the bids of one step go
-	// out concurrently and reach the beacon node in arbitrary order, so giving
-	// them different values makes them race — every bid that lands after a
-	// higher one is rejected as too low. Escalation belongs between steps.
-	// It is per payload so several candidates do not inherit each other's step.
-	steps int
 }
 
 // SlotState tracks the bidding state for a single slot.
@@ -579,11 +576,17 @@ func (s *Scheduler) planBidStep(
 
 	planned := make([]plannedBid, 0, 4)
 
-	// One value for the whole step: its bids are concurrent, so escalating
-	// within it would only make them race each other at the beacon node.
-	value := s.bidValueFor(slot, bidSettings, payload, bidState)
-
+	// Every bid gets its own value, one increase above the last. Gossip only
+	// forwards a bid that is the highest seen for the (slot, parent) tuple, so
+	// bids sharing a value cannot all propagate however many keys sign them —
+	// all but the first to arrive are dropped as too low.
 	for range bidSettings.EffectiveKeysPerStep() {
+		s.mu.Lock()
+		escalations := bidState.count
+		s.mu.Unlock()
+
+		value := s.bidValueFor(slot, bidSettings, payload, escalations)
+
 		key := s.claimBidKey(slot, bidSettings, value)
 		if key == nil {
 			break
@@ -597,12 +600,6 @@ func (s *Scheduler) planBidStep(
 		s.mu.Unlock()
 
 		planned = append(planned, plannedBid{key: key, value: value, bidCount: bidCount})
-	}
-
-	if len(planned) > 0 {
-		s.mu.Lock()
-		bidState.steps++
-		s.mu.Unlock()
 	}
 
 	if len(planned) == 0 {
@@ -625,14 +622,15 @@ func (s *Scheduler) planBidStep(
 // ValueGwei, when set, is an absolute base (per-slot custom value or the global
 // bid value override, resolved at freeze time) replacing the
 // max(blockValue, BidMinAmount) + BidSubsidy formula. The subsidy pads the
-// formula bid so it clears the proposer BN's local-build threshold. The increase
-// escalates per bid on this payload, so several candidates neither inherit each
-// other's step nor bid the same value twice from different keys.
+// formula bid so it clears the proposer BN's local-build threshold.
+//
+// escalations is how many bids this payload already has, so every bid lands one
+// increase above the last and each one can be the new highest for the tuple.
 func (s *Scheduler) bidValueFor(
 	slot phase0.Slot,
 	bidSettings *action_plan.ResolvedBidSettings,
 	payload *payload_builder.Payload,
-	bidState *payloadBidState,
+	escalations int,
 ) uint64 {
 	var value uint64
 
@@ -643,12 +641,8 @@ func (s *Scheduler) bidValueFor(
 		value = s.addGweiClamped(slot, value, bidSettings.SubsidyGwei)
 	}
 
-	s.mu.Lock()
-	steps := bidState.steps
-	s.mu.Unlock()
-
-	if steps > 0 {
-		increase := s.mulGweiClamped(slot, uint64(steps), bidSettings.IncreaseGwei) //nolint:gosec // steps >= 0
+	if escalations > 0 {
+		increase := s.mulGweiClamped(slot, uint64(escalations), bidSettings.IncreaseGwei) //nolint:gosec // escalations > 0
 		value = s.addGweiClamped(slot, value, increase)
 	}
 

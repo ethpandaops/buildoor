@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -905,10 +906,9 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 
 // With the per-step count unset a single evaluation spends the whole fleet at
 // once — a slot bid from every active key in parallel instead of one key per
-// interval tick. The bids of a step all carry the SAME value: they go out
-// concurrently and reach the beacon node in arbitrary order, so escalating
-// within the step would make them race and every bid landing after a higher one
-// would be rejected as too low.
+// interval tick. Each of those bids carries its own escalated value: gossip
+// forwards only the highest bid seen for a (slot, parent) tuple, so bids sharing
+// a value cannot all propagate no matter how many keys sign them.
 func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
@@ -936,12 +936,16 @@ func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	require.Nil(t, h.nextEvent(), "the fleet is spent after one step")
 	require.Len(t, builders, 3, "each bid must come from a distinct key")
 
-	assert.Equal(t, []uint64{100, 100, 100}, values, "one step bids one value from every key")
+	// Dispatched concurrently, so the report order is arbitrary.
+	slices.Sort(values)
+
+	assert.Equal(t, []uint64{100, 110, 120}, values,
+		"every key bids one increment above the previous bid")
 }
 
 // The escalation runs BETWEEN steps: the next step's keys all bid one increment
 // above the last step's.
-func TestSchedulerEscalatesBetweenSteps(t *testing.T) {
+func TestSchedulerEscalatesEveryBid(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13, 14)
 
@@ -961,8 +965,13 @@ func TestSchedulerEscalatesBetweenSteps(t *testing.T) {
 	second := []uint64{h.nextEvent().Value, h.nextEvent().Value}
 	require.Nil(t, h.nextEvent())
 
-	assert.Equal(t, []uint64{100, 100}, first, "the first step bids the base value")
-	assert.Equal(t, []uint64{110, 110}, second, "the next step bids one increment higher")
+	// The bids of one step are dispatched concurrently, so they can be reported
+	// in either order; what matters is the set of values.
+	slices.Sort(first)
+	slices.Sort(second)
+
+	assert.Equal(t, []uint64{100, 110}, first, "each bid escalates over the previous one")
+	assert.Equal(t, []uint64{120, 130}, second, "escalation continues across steps")
 }
 
 // The per-step count bounds one evaluation; the rest of the fleet waits for the
