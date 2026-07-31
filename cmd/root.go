@@ -98,7 +98,8 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
 	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = one key per built candidate)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = no cap beyond the fleet)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every remaining key at once)")
 	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
 	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
@@ -241,6 +242,7 @@ func initConfig() error {
 			BidCandidateSwitch:   v.GetBool("epbs-bid-candidate-switch"),
 			KeyStrategy:          v.GetString("epbs-key-strategy"),
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
+			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),

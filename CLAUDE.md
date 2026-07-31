@@ -503,8 +503,14 @@ Key config sections:
   reactivated). All but the discovery gap are mutable via
   `builder_keys.*` settings keys
 - **Key selection**: `--epbs-key-strategy` (round_robin | single | random |
-  least_used), `--epbs-bid-keys-per-slot` (0 = one key per built candidate),
-  `--builder-api-key-strategy` (empty = follow the ePBS strategy)
+  least_used), `--epbs-bid-keys-per-slot` (cap per slot, 0 = no cap beyond the
+  fleet), `--epbs-bid-keys-per-step` (keys bidding a payload per interval step,
+  each one increment higher; 1 = walk the fleet up the ladder, 0 = spend every
+  remaining key at once), `--builder-api-key-strategy` (empty = follow the ePBS
+  strategy). A key is SPENT once one of its bids reaches the network — the
+  gossip rules ignore a builder's later bids for a slot — so every bid, an
+  escalated re-bid of the same payload included, takes a key that has not bid
+  yet, and the submissions of one step go out concurrently
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`

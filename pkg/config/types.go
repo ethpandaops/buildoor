@@ -262,10 +262,16 @@ type EPBSConfig struct {
 	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
 
 	// BidKeysPerSlot caps how many distinct builder keys bid a slot. 0 means
-	// one key per selected candidate payload; 1 reproduces single-key
-	// behaviour (one gossiped bid per slot) regardless of how many candidates
-	// were built.
+	// no cap beyond the fleet itself; 1 reproduces single-key behaviour (one
+	// gossiped bid per slot) regardless of how many candidates were built.
 	BidKeysPerSlot uint64 `yaml:"bid_keys_per_slot" json:"bid_keys_per_slot"`
+
+	// BidKeysPerStep is how many keys bid a payload per interval step, each
+	// one value-increment higher than the last. 1 (default) walks the fleet up
+	// the interval ladder one key at a time; 0 spends every remaining key at
+	// once, so a whole slot can be bid from all active keys in parallel as
+	// soon as the bid window opens.
+	BidKeysPerStep uint64 `yaml:"bid_keys_per_step" json:"bid_keys_per_step"`
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first

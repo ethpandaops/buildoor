@@ -22,6 +22,7 @@ const (
 	KeyEPBSBidCandidateSwitch = "epbs.bid_candidate_switch"
 	KeyEPBSKeyStrategy        = "epbs.key_strategy"
 	KeyEPBSBidKeysPerSlot     = "epbs.bid_keys_per_slot"
+	KeyEPBSBidKeysPerStep     = "epbs.bid_keys_per_step"
 
 	KeyRevealEnabled             = "reveal.enabled"
 	KeyRevealGateMode            = "reveal.gate_mode"

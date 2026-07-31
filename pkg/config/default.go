@@ -43,6 +43,7 @@ func DefaultConfig() *Config {
 			HeadVoteThresholdPct: 60,        // Gloas builder payment quorum (6/10)
 			BidCandidate:         "auto",
 			KeyStrategy:          "round_robin",
+			BidKeysPerStep:       1,
 		},
 		Build: BuildConfig{
 			CandidateParentFull:       CandidateModeAlways,

@@ -97,6 +97,7 @@ func Fields() []Field {
 		newField(KeyEPBSBidCandidateSwitch, "epbs-bid-candidate-switch", func(c *Config) *bool { return &c.EPBS.BidCandidateSwitch }),
 		newField(KeyEPBSKeyStrategy, "epbs-key-strategy", func(c *Config) *string { return &c.EPBS.KeyStrategy }),
 		newField(KeyEPBSBidKeysPerSlot, "epbs-bid-keys-per-slot", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerSlot }),
+		newField(KeyEPBSBidKeysPerStep, "epbs-bid-keys-per-step", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerStep }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
 		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -891,4 +892,64 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 	h.scheduler.mu.Unlock()
 
 	assert.Equal(t, 1, spent, "only the tick that actually bid may spend a key")
+}
+
+// With the per-step count unset a single evaluation spends the whole fleet at
+// once, each key one increment higher — a slot bid from every active key in
+// parallel instead of one key per interval tick.
+func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_value_gwei":100,"bid_increase":10,"bid_keys_per_step":0}`)
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	values := make([]uint64, 0, 3)
+	builders := make(map[uint64]struct{}, 3)
+
+	for range 3 {
+		event := h.nextEvent()
+		require.NotNil(t, event)
+		require.NotNil(t, event.SignedBid)
+
+		values = append(values, event.Value)
+		builders[uint64(event.SignedBid.Message.BuilderIndex)] = struct{}{}
+	}
+
+	require.Nil(t, h.nextEvent(), "the fleet is spent after one step")
+	require.Len(t, builders, 3, "each bid must come from a distinct key")
+
+	slices.Sort(values)
+	assert.Equal(t, []uint64{100, 110, 120}, values, "each key bids one increment higher")
+}
+
+// The per-step count bounds one evaluation; the rest of the fleet waits for the
+// next interval step.
+func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_interval":50,"bid_keys_per_step":2}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Store(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	require.NotNil(t, h.nextEvent())
+	require.NotNil(t, h.nextEvent())
+	require.Nil(t, h.nextEvent(), "the step spends at most two keys")
+
+	h.agePayloadBid(payload.BlockHash)
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+
+	require.NotNil(t, h.nextEvent(), "the next step spends the last key")
+	require.Nil(t, h.nextEvent())
 }
