@@ -704,14 +704,28 @@ func (s *Scheduler) submitBid(
 	}
 
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
-
 		// A rejection means the beacon node saw the bid and turned it down, so
 		// the key stays spent: retrying it unchanged only repeats the rejection.
 		// Only a submission that never reached the node hands its key back.
-		if !beacon.BidRejected(err) {
+		rejected := beacon.BidRejected(err)
+		if !rejected {
 			s.releaseBidKey(slot, planned.key)
 		}
+
+		// Rejections are the normal outcome of bidding a whole fleet: the node
+		// keeps only the best bid per parent, so every key beyond the first to
+		// arrive at a given value is turned down. Logging those at error level
+		// buries the transport failures that actually need attention — the
+		// per-attempt record on the slot result keeps them all inspectable.
+		logLevel := logrus.ErrorLevel
+		if rejected {
+			logLevel = logrus.DebugLevel
+		}
+
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot": slot,
+			"key":  planned.key.String(),
+		}).Log(logLevel, "Failed to submit bid")
 
 		// Constructed-but-not-submitted bids carry the signed bid object so
 		// consumers can record exactly what was built.
