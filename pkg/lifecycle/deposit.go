@@ -49,6 +49,9 @@ func isDepositDeferred(err error) bool {
 // depositGasLimit is the gas limit for builder deposit transactions.
 const depositGasLimit = 1000000
 
+// depositConfirmTimeout bounds how long a deposit transaction may take to confirm.
+const depositConfirmTimeout = 5 * time.Minute
+
 // DepositService handles builder deposits and top-ups via the EIP-8282 builder
 // deposit system contract. It is key-agnostic: every operation names the builder
 // key it acts on, so one service serves the whole managed key set.
@@ -117,23 +120,92 @@ func (s *DepositService) IsBuilderRegistered(key *builder_keys.Key) (bool, *Buil
 func (s *DepositService) CreateDeposit(
 	ctx context.Context, key *builder_keys.Key, amountGwei uint64,
 ) error {
+	fee, err := s.resolveDepositFee(ctx)
+	if err != nil {
+		return err
+	}
+
+	request, err := s.depositRequest(key, amountGwei, fee)
+	if err != nil {
+		return err
+	}
+
+	return s.sendDepositTransaction(ctx, request)
+}
+
+// CreateDeposits submits deposits for several keys as one batch and returns the
+// per-key errors (nil for the keys that landed). Batching matters because every
+// deposit is serialized on the same funding key: bringing a fleet up one
+// confirmed transaction at a time costs a block per key.
+//
+// The queue fee is read once for the whole batch — it is a property of the
+// contract, not of a key — so a fee over the operator's limit defers the whole
+// batch with a single error rather than per key.
+func (s *DepositService) CreateDeposits(
+	ctx context.Context, keys []*builder_keys.Key, amountGwei uint64,
+) ([]error, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	fee, err := s.resolveDepositFee(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	errs := make([]error, len(keys))
+	requests := make([]wallet.TxRequest, 0, len(keys))
+	// requestKeys maps each built request back to its key, since keys whose
+	// request failed to build are not submitted.
+	requestKeys := make([]int, 0, len(keys))
+
+	for i, key := range keys {
+		request, err := s.depositRequest(key, amountGwei, fee)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+
+		requests = append(requests, request)
+		requestKeys = append(requestKeys, i)
+	}
+
+	for _, result := range s.wallet.SendBatchAndConfirm(ctx, requests, depositConfirmTimeout) {
+		keyIndex := requestKeys[result.Index]
+
+		if result.Err != nil {
+			errs[keyIndex] = fmt.Errorf("deposit transaction failed: %w", result.Err)
+			continue
+		}
+
+		s.log.WithFields(logrus.Fields{
+			"key":          keys[keyIndex].String(),
+			"tx_hash":      result.Receipt.TxHash.Hex(),
+			"block_number": result.Receipt.BlockNumber.Uint64(),
+		}).Info("Deposit transaction confirmed")
+	}
+
+	return errs, nil
+}
+
+// depositRequest builds the signed deposit calldata and transaction parameters
+// for one key. It performs no I/O beyond the chain-spec reads, so a batch can
+// build every request before sending any of them.
+func (s *DepositService) depositRequest(
+	key *builder_keys.Key, amountGwei uint64, fee *big.Int,
+) (wallet.TxRequest, error) {
 	pubkey := key.Pubkey()
 
 	// Refuse deposits for an exited builder entry: they cannot reactivate it and
 	// are withdrawn back to the wallet, minus gas and the queue fee. A fresh
 	// registration (pubkey absent from the registry) passes this check.
 	if chain.HasBuilderExited(s.chainSvc.GetBuilderByPubkey(pubkey)) {
-		return ErrBuilderExited
+		return wallet.TxRequest{}, ErrBuilderExited
 	}
-
-	s.log.WithFields(logrus.Fields{
-		"key":         key.String(),
-		"amount_gwei": amountGwei,
-	}).Info("Creating builder deposit")
 
 	withdrawalCredentials := BuilderWithdrawalCredentials(s.wallet.Address())
 
-	// Step 1: Compute the builder-deposit signing root (DOMAIN_BUILDER_DEPOSIT,
+	// Compute the builder-deposit signing root (DOMAIN_BUILDER_DEPOSIT,
 	// GENESIS_FORK_VERSION) and sign it as a proof-of-possession.
 	signingRoot, err := signer.ComputeBuilderDepositSigningRoot(
 		pubkey,
@@ -142,27 +214,20 @@ func (s *DepositService) CreateDeposit(
 		s.chainSvc.GetGenesis().GenesisForkVersion,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to compute signing root: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to compute signing root: %w", err)
 	}
 
 	signature, err := key.BLSSigner().Sign(signingRoot[:])
 	if err != nil {
-		return fmt.Errorf("failed to sign deposit: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to sign deposit: %w", err)
 	}
 
-	// Step 2: Build the raw 184-byte request calldata.
 	calldata, err := BuildBuilderDepositCalldata(pubkey[:], withdrawalCredentials[:], amountGwei, signature[:])
 	if err != nil {
-		return fmt.Errorf("failed to build deposit calldata: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to build deposit calldata: %w", err)
 	}
 
-	// Step 3: Resolve the queue fee and enforce the operator's fee limit.
-	fee, err := s.resolveDepositFee(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Step 4: msg.value = stake (wei) + queue fee (wei).
+	// msg.value = stake (wei) + queue fee (wei).
 	value := new(big.Int).Add(GweiToWei(amountGwei), fee)
 
 	s.log.WithFields(logrus.Fields{
@@ -174,7 +239,12 @@ func (s *DepositService) CreateDeposit(
 		"value_wei":        value.String(),
 	}).Info("Builder deposit prepared")
 
-	return s.sendDepositTransaction(ctx, calldata, value)
+	return wallet.TxRequest{
+		To:       BuilderDepositContractAddress,
+		Value:    value,
+		Data:     calldata,
+		GasLimit: depositGasLimit,
+	}, nil
 }
 
 // CreateTopup creates and sends a top-up transaction (an additional deposit).
@@ -217,18 +287,19 @@ func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error
 	return fee, nil
 }
 
-// sendDepositTransaction sends the deposit transaction to the builder deposit contract.
+// sendDepositTransaction sends one deposit transaction to the builder deposit
+// contract.
 //
 // SendAndConfirm sources a fresh nonce and resolves nonce conflicts/displacement, so
 // several instances can share this funding key safely.
-func (s *DepositService) sendDepositTransaction(ctx context.Context, calldata []byte, value *big.Int) error {
+func (s *DepositService) sendDepositTransaction(ctx context.Context, request wallet.TxRequest) error {
 	receipt, err := s.wallet.SendAndConfirm(
 		ctx,
-		BuilderDepositContractAddress,
-		value,
-		calldata,
-		depositGasLimit,
-		5*time.Minute,
+		request.To,
+		request.Value,
+		request.Data,
+		request.GasLimit,
+		depositConfirmTimeout,
 	)
 	if err != nil {
 		return fmt.Errorf("deposit transaction failed: %w", err)

@@ -192,28 +192,45 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		m.depositPendingCallback()
 	}
 
-	// Deposits go through the single funding wallet, so they are submitted one
-	// after another. A failure stops the batch and the rest is retried next epoch.
-	for _, key := range remaining {
-		if !m.walletCanFund(ctx, amount) {
-			return false
-		}
+	//nolint:gosec // the target key count is bounded by the derivation cap
+	if !m.walletCanFund(ctx, amount*uint64(len(remaining))) {
+		return false
+	}
 
-		if err := m.earlyDepositSvc.CreateEarlyDeposit(ctx, key, amount); err != nil {
-			m.log.WithError(err).WithField("key", key.String()).
+	// The deposits go out as one batch: they do not race each other, they sit in
+	// the pending-deposit queue together and the fork transition converts them all.
+	errs, err := m.earlyDepositSvc.CreateEarlyDeposits(ctx, remaining, amount)
+	if err != nil {
+		m.log.WithError(err).Warn("Early onboarding deposits failed, retrying next epoch")
+		m.fireEvent("early_onboard", fmt.Sprintf("Early deposits failed: %v, retrying", err), "warning")
+
+		return false
+	}
+
+	submitted := 0
+
+	for i, key := range remaining {
+		if errs[i] != nil {
+			m.log.WithError(errs[i]).WithField("key", key.String()).
 				Warn("Early onboarding deposit failed, retrying next epoch")
 			m.fireEvent("early_onboard", fmt.Sprintf(
-				"Early deposit for key #%d failed: %v, retrying", key.KeyIndex(), err), "warning")
+				"Early deposit for key #%d failed: %v, retrying", key.KeyIndex(), errs[i]), "warning")
 
-			return false // retry the rest on the next epoch
+			continue
 		}
 
 		m.registry.MarkDepositSubmitted(key.KeyIndex())
+
+		submitted++
+	}
+
+	if submitted == 0 {
+		return false // nothing landed; retry the whole batch next epoch
 	}
 
 	m.fireEvent("early_onboard", fmt.Sprintf(
 		"%d early deposits confirmed, waiting for fork transition and registration",
-		len(remaining)), "success")
+		submitted), "success")
 	m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
 
 	return true

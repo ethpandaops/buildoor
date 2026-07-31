@@ -170,13 +170,37 @@ func (w *Wallet) Sync(ctx context.Context) error {
 	return nil
 }
 
-// BuildTransaction creates a new unsigned transaction.
+// BuildTransaction creates a new unsigned transaction with a freshly read nonce.
 func (w *Wallet) BuildTransaction(
 	ctx context.Context,
 	to common.Address,
 	value *big.Int,
 	data []byte,
 	gasLimit uint64,
+) (*types.Transaction, error) {
+	nonce, err := w.nextNonce(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	w.log.WithFields(logrus.Fields{
+		"address": w.address.Hex(),
+		"nonce":   nonce,
+	}).Debug("Fetched next nonce from RPC for transaction build")
+
+	return w.buildTransactionWithNonce(ctx, to, value, data, gasLimit, nonce)
+}
+
+// buildTransactionWithNonce creates an unsigned transaction at an explicit nonce.
+// Batch submissions assign consecutive nonces themselves: reading one per
+// transaction would hand every transaction of a round the same nonce.
+func (w *Wallet) buildTransactionWithNonce(
+	ctx context.Context,
+	to common.Address,
+	value *big.Int,
+	data []byte,
+	gasLimit uint64,
+	nonce uint64,
 ) (*types.Transaction, error) {
 	// Ensure chain ID is available
 	if w.chainID == nil {
@@ -205,24 +229,6 @@ func (w *Wallet) BuildTransaction(
 	gasFeeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	gasFeeCap.Add(gasFeeCap, gasTipCap)
 
-	// Always read the next free nonce straight from the node on every build — never
-	// cached or tracked internally.
-	//
-	// Use max(pending, latest): normally the pending nonce already includes in-flight
-	// mempool txs and is >= latest. But ethrex has been observed returning a pending
-	// nonce *below* the latest (confirmed) nonce, which would make us stamp an
-	// already-used nonce and get "nonce too low". The latest nonce is the authoritative
-	// floor, so taking the larger of the two is correct on every client.
-	nonce, err := w.nextNonce(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	w.log.WithFields(logrus.Fields{
-		"address": w.address.Hex(),
-		"nonce":   nonce,
-	}).Debug("Fetched next nonce from RPC for transaction build")
-
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   w.chainID,
 		Nonce:     nonce,
@@ -237,10 +243,11 @@ func (w *Wallet) BuildTransaction(
 	return tx, nil
 }
 
-// nextNonce returns the next usable nonce by reading the node fresh: the larger of the
-// pending nonce and the latest (confirmed) nonce. The latest nonce is an authoritative
-// floor that protects against clients (e.g. ethrex) whose pending nonce can lag below
-// it; the pending nonce covers legitimate in-flight mempool txs on correct clients.
+// nextNonce returns the next usable nonce by reading the node fresh — never cached or
+// tracked internally: the larger of the pending nonce and the latest (confirmed) nonce.
+// The latest nonce is an authoritative floor that protects against clients (e.g. ethrex)
+// whose pending nonce can lag below it; the pending nonce covers legitimate in-flight
+// mempool txs on correct clients.
 func (w *Wallet) nextNonce(ctx context.Context) (uint64, error) {
 	pending, err := w.rpcClient.GetNonce(ctx, w.address)
 	if err != nil {

@@ -48,6 +48,39 @@ func (r *Registry) NextExitCandidate() *Key {
 	return nil
 }
 
+// MarkDepositPending claims a key for a deposit that is being submitted, so a
+// batch picking several candidates in a row does not pick the same key twice and
+// a concurrent pass does not deposit for it again. Release it with
+// ReleaseDepositPending when the submission never reached the chain, or confirm
+// it with MarkDepositSubmitted.
+func (r *Registry) MarkDepositPending(keyIndex uint64) {
+	r.mu.Lock()
+
+	if runtime, ok := r.runtimes[keyIndex]; ok {
+		runtime.depositPendingUntil = time.Now().Add(depositPendingTTL)
+	}
+
+	r.mu.Unlock()
+
+	r.setTracked(keyIndex, true)
+	r.Refresh()
+}
+
+// ReleaseDepositPending clears the in-flight marker of a key whose deposit never
+// reached the chain, so it becomes a candidate again immediately instead of
+// waiting out the TTL.
+func (r *Registry) ReleaseDepositPending(keyIndex uint64) {
+	r.mu.Lock()
+
+	if runtime, ok := r.runtimes[keyIndex]; ok {
+		runtime.depositPendingUntil = time.Time{}
+	}
+
+	r.mu.Unlock()
+
+	r.Refresh()
+}
+
 // MarkDepositSubmitted records a confirmed deposit transaction for a key: it
 // bumps the persisted use count (the key has consumed a deposit generation) and
 // holds the key in the depositing state until the beacon state catches up.

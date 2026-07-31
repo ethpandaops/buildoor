@@ -33,6 +33,16 @@ type fakeBackend struct {
 	known    map[common.Hash]int
 	accepted int
 
+	// sentNoncesLog records the nonce of every accepted tx, in send order.
+	sentNoncesLog []uint64
+
+	// dropNonce, when non-zero, models another instance taking that exact nonce
+	// slot: our tx there is accepted, then disappears before inclusion while the
+	// account nonce moves past it.
+	dropNonce uint64
+	// displacedNonces holds the hashes whose slot was taken by dropNonce.
+	displacedNonces []common.Hash
+
 	// displaceFirstN: the first N accepted txs are dropped before inclusion — their
 	// first receipt poll returns not-found and removes them from the pool, modelling
 	// another instance replacing our tx at the same nonce.
@@ -104,6 +114,11 @@ func (f *fakeBackend) SendTransaction(_ context.Context, tx *types.Transaction) 
 	f.accepted++
 	f.known[tx.Hash()] = f.accepted
 	f.lastNonce = tx.Nonce()
+	f.sentNoncesLog = append(f.sentNoncesLog, tx.Nonce())
+
+	if f.dropNonce != 0 && tx.Nonce() == f.dropNonce {
+		f.displacedNonces = append(f.displacedNonces, tx.Hash())
+	}
 
 	if tx.Nonce()+1 > f.pendingNonce {
 		f.pendingNonce = tx.Nonce() + 1
@@ -120,6 +135,15 @@ func (f *fakeBackend) GetTransactionReceipt(_ context.Context, txHash common.Has
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	for _, displaced := range f.displacedNonces {
+		if displaced == txHash {
+			// The foreign tx took the slot: ours is gone and can never land.
+			delete(f.known, txHash)
+
+			return nil, errNotFound
+		}
+	}
+
 	idx, ok := f.known[txHash]
 	if !ok {
 		return nil, errNotFound
@@ -131,6 +155,14 @@ func (f *fakeBackend) GetTransactionReceipt(_ context.Context, txHash common.Has
 	}
 
 	return &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(100)}, nil
+}
+
+// sentNonces returns the nonces of every accepted tx, in send order.
+func (f *fakeBackend) sentNonces() []uint64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]uint64(nil), f.sentNoncesLog...)
 }
 
 func (f *fakeBackend) IsTxKnown(_ context.Context, txHash common.Hash) (bool, error) {

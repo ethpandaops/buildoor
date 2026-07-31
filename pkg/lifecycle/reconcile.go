@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
+	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
 const (
@@ -113,7 +116,7 @@ func (m *Manager) reconcileOnce(ctx context.Context) bool {
 
 	switch {
 	case managed < target && m.cfg.BuilderKeys.AutoDeposit:
-		return m.depositNextKey(ctx, target, managed)
+		return m.depositKeysToTarget(ctx, target, managed)
 
 	case managed > target && m.cfg.BuilderKeys.AutoExit:
 		return m.exitSurplusKey(ctx, target, managed)
@@ -122,11 +125,25 @@ func (m *Manager) reconcileOnce(ctx context.Context) bool {
 	return m.topupNextKey(ctx)
 }
 
-// depositNextKey deposits for the lowest-index key eligible for one, bringing
-// the fleet closer to the target.
-func (m *Manager) depositNextKey(ctx context.Context, target, managed uint64) bool {
-	key := m.registry.NextDepositCandidate()
-	if key == nil {
+// depositKeysToTarget deposits for the lowest-index keys eligible for one,
+// closing the whole gap to the target in a single batch.
+func (m *Manager) depositKeysToTarget(ctx context.Context, target, managed uint64) bool {
+	shortfall := min(target-managed, uint64(wallet.MaxBatchSize))
+
+	keys := make([]*builder_keys.Key, 0, shortfall)
+	// The registry returns the lowest eligible key, so each pick must be marked
+	// in flight before asking for the next one.
+	for range shortfall {
+		key := m.registry.NextDepositCandidate()
+		if key == nil {
+			break
+		}
+
+		keys = append(keys, key)
+		m.registry.MarkDepositPending(key.KeyIndex())
+	}
+
+	if len(keys) == 0 {
 		m.log.WithFields(logrus.Fields{
 			"target":  target,
 			"managed": managed,
@@ -137,42 +154,76 @@ func (m *Manager) depositNextKey(ctx context.Context, target, managed uint64) bo
 
 	amount := m.cfg.DepositAmount
 
-	if !m.walletCanFund(ctx, amount) {
+	//nolint:gosec // the batch size is bounded by wallet.MaxBatchSize
+	if !m.walletCanFund(ctx, amount*uint64(len(keys))) {
+		m.releaseDepositPending(keys)
+
 		return false
 	}
 
 	m.log.WithFields(logrus.Fields{
-		"key":     key.String(),
+		"keys":    len(keys),
 		"target":  target,
 		"managed": managed,
-	}).Info("Depositing builder key to reach the target count")
+	}).Info("Depositing builder keys to reach the target count")
 	m.fireEvent("deposit", fmt.Sprintf(
-		"Depositing builder key #%d (%d gwei) — %d of %d keys managed",
-		key.KeyIndex(), amount, managed, target), "info")
+		"Depositing %d builder key(s) (%d gwei each) — %d of %d keys managed",
+		len(keys), amount, managed, target), "info")
 
 	if m.depositPendingCallback != nil {
 		m.depositPendingCallback()
 	}
 
-	if err := m.depositSvc.CreateDeposit(ctx, key, amount); err != nil {
+	errs, err := m.depositSvc.CreateDeposits(ctx, keys, amount)
+	if err != nil {
+		m.releaseDepositPending(keys)
+
 		if isDepositDeferred(err) {
 			// Queue fee too high or contract not active yet — retry later. This
 			// is also the automatic backoff when a large ramp pushes the fee up.
-			m.log.WithError(err).Info("Builder key deposit deferred")
-			m.fireEvent("deposit", fmt.Sprintf("Deposit deferred: %v", err), "info")
+			m.log.WithError(err).Info("Builder key deposits deferred")
+			m.fireEvent("deposit", fmt.Sprintf("Deposits deferred: %v", err), "info")
 		} else {
-			m.log.WithError(err).WithField("key", key.String()).Warn("Builder key deposit failed")
-			m.fireEvent("deposit", fmt.Sprintf("Deposit for key #%d failed: %v", key.KeyIndex(), err), "error")
+			m.log.WithError(err).Warn("Builder key deposits failed")
+			m.fireEvent("deposit", fmt.Sprintf("Deposits failed: %v", err), "error")
 		}
 
 		return false
 	}
 
-	m.registry.MarkDepositSubmitted(key.KeyIndex())
+	submitted := 0
+
+	for i, key := range keys {
+		if errs[i] != nil {
+			m.registry.ReleaseDepositPending(key.KeyIndex())
+			m.log.WithError(errs[i]).WithField("key", key.String()).Warn("Builder key deposit failed")
+			m.fireEvent("deposit", fmt.Sprintf(
+				"Deposit for key #%d failed: %v", key.KeyIndex(), errs[i]), "error")
+
+			continue
+		}
+
+		m.registry.MarkDepositSubmitted(key.KeyIndex())
+
+		submitted++
+	}
+
+	if submitted == 0 {
+		return false
+	}
+
 	m.fireEvent("deposit", fmt.Sprintf(
-		"Deposit for key #%d confirmed, waiting for beacon chain inclusion", key.KeyIndex()), "success")
+		"%d deposit(s) confirmed, waiting for beacon chain inclusion", submitted), "success")
 
 	return true
+}
+
+// releaseDepositPending clears the in-flight marker of keys whose batch never
+// reached the chain, so the next pass can pick them again.
+func (m *Manager) releaseDepositPending(keys []*builder_keys.Key) {
+	for _, key := range keys {
+		m.registry.ReleaseDepositPending(key.KeyIndex())
+	}
 }
 
 // exitSurplusKey exits the highest-index key that can be exited, bringing the

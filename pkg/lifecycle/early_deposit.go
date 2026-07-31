@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
@@ -84,18 +84,66 @@ func (s *EarlyDepositService) HasPendingDeposit(key *builder_keys.Key) bool {
 	return false
 }
 
-// CreateEarlyDeposit builds, signs and sends a validator deposit for the given key via
-// the regular deposit contract. The deposit uses 0xB0 (BUILDER_WITHDRAWAL_PREFIX) withdrawal
-// credentials pointing at the funding wallet and is signed with the validator deposit
-// domain over GENESIS_FORK_VERSION.
-func (s *EarlyDepositService) CreateEarlyDeposit(
-	ctx context.Context, key *builder_keys.Key, amountGwei uint64,
-) error {
-	depositContract := s.chainSvc.GetChainSpec().DepositContractAddress
-	if depositContract == nil {
-		return ErrNoDepositContract
+// CreateEarlyDeposits builds, signs and sends validator deposits for the given keys
+// as one batch, returning the per-key errors (nil for the keys that landed).
+//
+// The deposits use 0xB0 (BUILDER_WITHDRAWAL_PREFIX) withdrawal credentials pointing at
+// the funding wallet and are signed with the validator deposit domain over
+// GENESIS_FORK_VERSION. They do not race each other: they sit in the pending-deposit
+// queue together and the Gloas transition converts them all.
+func (s *EarlyDepositService) CreateEarlyDeposits(
+	ctx context.Context, keys []*builder_keys.Key, amountGwei uint64,
+) ([]error, error) {
+	if len(keys) == 0 {
+		return nil, nil
 	}
 
+	depositContract := s.chainSvc.GetChainSpec().DepositContractAddress
+	if depositContract == nil {
+		return nil, ErrNoDepositContract
+	}
+
+	errs := make([]error, len(keys))
+	requests := make([]wallet.TxRequest, 0, len(keys))
+	// requestKeys maps each built request back to its key, since keys whose
+	// request failed to build are not submitted.
+	requestKeys := make([]int, 0, len(keys))
+
+	for i, key := range keys {
+		request, err := s.earlyDepositRequest(key, amountGwei, *depositContract)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+
+		requests = append(requests, request)
+		requestKeys = append(requestKeys, i)
+	}
+
+	for _, result := range s.wallet.SendBatchAndConfirm(ctx, requests, depositConfirmTimeout) {
+		keyIndex := requestKeys[result.Index]
+
+		if result.Err != nil {
+			errs[keyIndex] = fmt.Errorf("early deposit transaction failed: %w", result.Err)
+			continue
+		}
+
+		s.log.WithFields(logrus.Fields{
+			"key":          keys[keyIndex].String(),
+			"tx_hash":      result.Receipt.TxHash.Hex(),
+			"block_number": result.Receipt.BlockNumber.Uint64(),
+		}).Info("Early deposit transaction confirmed")
+	}
+
+	return errs, nil
+}
+
+// earlyDepositRequest builds the signed deposit calldata and transaction
+// parameters for one key. It performs no I/O, so a batch can build every request
+// before sending any of them.
+func (s *EarlyDepositService) earlyDepositRequest(
+	key *builder_keys.Key, amountGwei uint64, depositContract common.Address,
+) (wallet.TxRequest, error) {
 	pubkey := key.Pubkey()
 	withdrawalCredentials := ValidatorWithdrawalCredentials(s.wallet.Address())
 	genesisForkVersion := s.chainSvc.GetGenesis().GenesisForkVersion
@@ -103,17 +151,17 @@ func (s *EarlyDepositService) CreateEarlyDeposit(
 	// Sign the deposit message with the validator deposit domain (DOMAIN_DEPOSIT).
 	signingRoot, err := signer.ComputeDepositSigningRoot(pubkey, withdrawalCredentials, amountGwei, genesisForkVersion)
 	if err != nil {
-		return fmt.Errorf("failed to compute deposit signing root: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to compute deposit signing root: %w", err)
 	}
 
 	signature, err := key.BLSSigner().Sign(signingRoot[:])
 	if err != nil {
-		return fmt.Errorf("failed to sign early deposit: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to sign early deposit: %w", err)
 	}
 
 	depositDataRoot, err := signer.ComputeDepositDataRoot(pubkey, withdrawalCredentials, amountGwei, signature)
 	if err != nil {
-		return fmt.Errorf("failed to compute deposit data root: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to compute deposit data root: %w", err)
 	}
 
 	calldata, err := s.depositABI.Pack(
@@ -124,7 +172,7 @@ func (s *EarlyDepositService) CreateEarlyDeposit(
 		[32]byte(depositDataRoot),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to encode deposit calldata: %w", err)
+		return wallet.TxRequest{}, fmt.Errorf("failed to encode deposit calldata: %w", err)
 	}
 
 	value := GweiToWei(amountGwei)
@@ -138,15 +186,10 @@ func (s *EarlyDepositService) CreateEarlyDeposit(
 		"value_wei":        value.String(),
 	}).Info("Early builder deposit prepared (regular deposit contract)")
 
-	receipt, err := s.wallet.SendAndConfirm(ctx, *depositContract, value, calldata, depositGasLimit, 5*time.Minute)
-	if err != nil {
-		return fmt.Errorf("early deposit transaction failed: %w", err)
-	}
-
-	s.log.WithFields(logrus.Fields{
-		"tx_hash":      receipt.TxHash.Hex(),
-		"block_number": receipt.BlockNumber.Uint64(),
-	}).Info("Early deposit transaction confirmed")
-
-	return nil
+	return wallet.TxRequest{
+		To:       depositContract,
+		Value:    value,
+		Data:     calldata,
+		GasLimit: depositGasLimit,
+	}, nil
 }
