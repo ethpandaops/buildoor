@@ -125,6 +125,11 @@ func Fields() []Field {
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),
 		newField(KeySlotArtifactCaptureEnabled, "slot-artifact-capture-enabled", func(c *Config) *bool { return &c.SlotArtifactCaptureEnabled }),
 
+		newField(KeyBuilderKeysTargetCount, "builder-keys-target", func(c *Config) *uint64 { return &c.BuilderKeys.TargetCount }),
+		newField(KeyBuilderKeysMaxIndex, "builder-keys-max-index", func(c *Config) *uint64 { return &c.BuilderKeys.MaxIndex }),
+		newField(KeyBuilderKeysAutoDeposit, "builder-keys-auto-deposit", func(c *Config) *bool { return &c.BuilderKeys.AutoDeposit }),
+		newField(KeyBuilderKeysAutoExit, "builder-keys-auto-exit", func(c *Config) *bool { return &c.BuilderKeys.AutoExit }),
+
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
 		newField(KeyTopupAmount, "topup-amount", func(c *Config) *uint64 { return &c.TopupAmount }),

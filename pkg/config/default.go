@@ -14,6 +14,13 @@ func DefaultConfig() *Config {
 			BlockValueSubsidyGwei: 100000, // 100k Gwei
 			ServeCandidates:       "all",
 		},
+		BuilderKeys: BuilderKeysConfig{
+			TargetCount:  1, // single key by default: index 0 is the entry key
+			MaxIndex:     1000,
+			DiscoveryGap: 100,
+			AutoDeposit:  true,
+			AutoExit:     true,
+		},
 		DepositAmount:               50000000000, // 50 ETH in Gwei
 		TopupThreshold:              10000000000, // 10 ETH in Gwei
 		TopupAmount:                 50000000000, // 50 ETH in Gwei

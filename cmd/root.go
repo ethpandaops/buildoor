@@ -65,6 +65,11 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
+	rootCmd.PersistentFlags().Uint64("builder-keys-target", defaults.BuilderKeys.TargetCount, "Number of builder keys to keep registered and funded (derived from the entry key; index 0 is the entry key itself)")
+	rootCmd.PersistentFlags().Uint64("builder-keys-max-index", defaults.BuilderKeys.MaxIndex, "Highest internal builder key index that may be derived")
+	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -199,6 +204,13 @@ func initConfig() error {
 			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
 			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
 			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
+		},
+		BuilderKeys: config.BuilderKeysConfig{
+			TargetCount:  v.GetUint64("builder-keys-target"),
+			MaxIndex:     v.GetUint64("builder-keys-max-index"),
+			DiscoveryGap: v.GetUint64("builder-keys-discovery-gap"),
+			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
+			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
