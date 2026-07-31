@@ -268,10 +268,11 @@ func TestKeyStringIdentifiesTheDerivationIndex(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("#1/%x", pubkey[:4]), key.String())
 }
 
-// Exits pick the highest index that can actually exit: the beacon chain silently
-// ignores an exit request while the builder still owes a payment, so a key with
-// pending payments must be skipped rather than burning the queue fee.
-func TestRegistryExitCandidateSkipsPendingPayments(t *testing.T) {
+// The beacon chain silently ignores an exit request while the builder still owes
+// a payment, so a key with pending payments is not exitable — and the exit waits
+// for it rather than skipping down to a lower key, which would burn a usable key
+// while leaving the surplus one in place.
+func TestRegistryExitCandidateWaitsOnPendingPayments(t *testing.T) {
 	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 4, DiscoveryGap: 1, MaxIndex: 32})
 
 	active := func(state *State) {
@@ -292,9 +293,8 @@ func TestRegistryExitCandidateSkipsPendingPayments(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	candidate := registry.NextExitCandidate()
-	require.NotNil(t, candidate)
-	require.Equal(t, uint64(1), candidate.KeyIndex())
+	require.Nil(t, registry.NextExitCandidate(),
+		"a lower key must not be exited in place of the highest one")
 
 	// Once it settles, it is the one to go.
 	_, err = registry.PrimeKeyState(2, func(state *State) {
@@ -303,7 +303,7 @@ func TestRegistryExitCandidateSkipsPendingPayments(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	candidate = registry.NextExitCandidate()
+	candidate := registry.NextExitCandidate()
 	require.NotNil(t, candidate)
 	require.Equal(t, uint64(2), candidate.KeyIndex())
 }
@@ -355,4 +355,37 @@ func TestStatusClassification(t *testing.T) {
 	for status, want := range depositable {
 		require.Equal(t, want, status.Depositable(), "Depositable(%s)", status)
 	}
+}
+
+// Keys still on their way to active are the real surplus after a target cut:
+// exiting a lower, usable key in their place burns a key we just paid for and
+// leaves the fleet no smaller once they register.
+func TestRegistryExitCandidateWaitsOnInFlightKeys(t *testing.T) {
+	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 3, DiscoveryGap: 1, MaxIndex: 32})
+
+	for keyIndex := range uint64(2) {
+		_, err := registry.PrimeKeyState(keyIndex, func(state *State) {
+			state.Status = StatusActive
+			state.HasBuilderIndex = true
+			state.BuilderIndex = state.KeyIndex + 10
+		})
+		require.NoError(t, err)
+	}
+
+	_, err := registry.PrimeKeyState(2, func(state *State) { state.Status = StatusPending })
+	require.NoError(t, err)
+
+	require.Nil(t, registry.NextExitCandidate(), "wait for the in-flight key instead of exiting a usable one")
+
+	// Once it activates, it is the one to go.
+	_, err = registry.PrimeKeyState(2, func(state *State) {
+		state.Status = StatusActive
+		state.HasBuilderIndex = true
+		state.BuilderIndex = 12
+	})
+	require.NoError(t, err)
+
+	candidate := registry.NextExitCandidate()
+	require.NotNil(t, candidate)
+	require.Equal(t, uint64(2), candidate.KeyIndex())
 }

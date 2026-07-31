@@ -558,13 +558,29 @@ func (s *Scheduler) trySubmitBid(
 		bidValue = s.addGweiClamped(slot, bidValue, increase)
 	}
 
+	// Claim the payload's bid slot BEFORE releasing the lock. The submission
+	// below is a network call taking tens of milliseconds while the scheduler
+	// ticks every 10ms: marking the payload only afterwards lets the next ticks
+	// pass this very check and gossip the same bid again, which the beacon node
+	// rejects as already known and which burns the key's one bid for the slot.
+	state.LastBidTime = now
+	state.LastBidHash = payload.BlockHash
+
+	if state.BidPayloads == nil {
+		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
+	}
+
+	state.BidPayloads[payload.BlockHash] = now
+	state.BidCount++
+	bidCount := state.BidCount
+
 	s.mu.Unlock()
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
 		"key":          key.String(),
 		"bid_value":    bidValue,
-		"bid_count":    state.BidCount,
+		"bid_count":    bidCount,
 		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
@@ -576,20 +592,6 @@ func (s *Scheduler) trySubmitBid(
 	}
 
 	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, key, payload, bidValue, bidTransform)
-
-	// Update state regardless of success - we don't want to spam on failure
-	s.mu.Lock()
-	state.LastBidTime = now
-	state.LastBidHash = payload.BlockHash
-
-	if state.BidPayloads == nil {
-		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
-	}
-
-	state.BidPayloads[payload.BlockHash] = now
-	state.BidCount++
-	bidCount := state.BidCount
-	s.mu.Unlock()
 
 	event := &BidSubmissionEvent{
 		Slot:      slot,

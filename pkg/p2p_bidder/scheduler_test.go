@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,13 +73,33 @@ func (s *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion {
 
 // mockBidSubmitter records submitted bids and can be told to fail.
 type mockBidSubmitter struct {
+	mu        sync.Mutex
 	submitted []*eth2all.SignedExecutionPayloadBid
 	err       error
+	inFlight  int
+
+	// beforeSubmit, when set, runs while a submission is in flight — it models
+	// the network call the scheduler's tick can race against.
+	beforeSubmit func()
 }
 
 func (m *mockBidSubmitter) SubmitExecutionPayloadBid(
 	_ context.Context, bid *eth2all.SignedExecutionPayloadBid,
 ) error {
+	m.mu.Lock()
+	hook := m.beforeSubmit
+	m.inFlight++
+	m.mu.Unlock()
+
+	if hook != nil {
+		hook()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.inFlight--
+
 	if m.err != nil {
 		return m.err
 	}
@@ -86,6 +107,22 @@ func (m *mockBidSubmitter) SubmitExecutionPayloadBid(
 	m.submitted = append(m.submitted, bid)
 
 	return nil
+}
+
+// count returns how many bids were submitted successfully.
+func (m *mockBidSubmitter) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.submitted)
+}
+
+// pending returns how many submissions are currently in flight.
+func (m *mockBidSubmitter) pending() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.inFlight
 }
 
 // newSchedulerTestPayload builds a minimal Gloas payload sufficient for bid
@@ -748,4 +785,46 @@ func TestSchedulerBidKeysPerSlotCap(t *testing.T) {
 
 	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
 	require.Nil(t, h.nextEvent(), "the key cap must stop the second candidate")
+}
+
+// The scheduler ticks every 10ms while a bid submission is a network call taking
+// tens of milliseconds. A payload's bid slot must therefore be claimed before the
+// submission, not after it: otherwise the ticks that land mid-flight pass the
+// interval check and gossip the same bid again — which the beacon node rejects as
+// already known and which burns the key's one bid for the slot.
+func TestSchedulerDoesNotReBidDuringSubmission(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	// Interval mode, so only the in-flight claim can stop a second submission.
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":500}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Store(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	// Block the submission so a concurrent tick runs while it is in flight.
+	release := make(chan struct{})
+	h.submitter.beforeSubmit = func() { <-release }
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+
+		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	}()
+
+	// Give the first submission time to reach the blocked submitter, then tick
+	// again exactly as the 10ms scheduler would.
+	require.Eventually(t, func() bool { return h.submitter.pending() > 0 }, time.Second, 5*time.Millisecond)
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1010)
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1020)
+
+	close(release)
+	wg.Wait()
+
+	assert.Equal(t, 1, h.submitter.count(), "only one bid may be submitted while one is in flight")
 }

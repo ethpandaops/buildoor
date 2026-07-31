@@ -32,16 +32,33 @@ func (r *Registry) NextDepositCandidate() *Key {
 	return nil
 }
 
-// NextExitCandidate returns the highest-index active key that can be exited: it
-// must have no pending payments, because the beacon chain silently ignores an
-// exit request while a builder still owes one. Returns nil when no key qualifies.
+// NextExitCandidate returns the highest-index key that can be exited: active on
+// chain and free of pending payments, since the beacon chain silently ignores an
+// exit request while a builder still owes one.
+//
+// It returns nil while a higher-index key is still on its way to active. Those
+// in-flight keys are the actual surplus — exiting a lower, usable key in their
+// place would burn a key we just paid for and leave the fleet no smaller once
+// they register.
 func (r *Registry) NextExitCandidate() *Key {
 	keys := r.Keys()
 
 	for i := len(keys) - 1; i >= 0; i-- {
 		state := keys[i].State()
-		if state.Status == StatusActive && state.PendingPayments == 0 {
-			return keys[i]
+
+		switch state.Status {
+		case StatusDepositing, StatusPending:
+			return nil
+		case StatusActive:
+			if state.PendingPayments == 0 {
+				return keys[i]
+			}
+
+			// The payment settles within a couple of epochs; waiting keeps the
+			// exit order intact instead of skipping down to a lower key.
+			return nil
+		case StatusUnused, StatusExiting, StatusExited, StatusWithdrawn:
+			// Never exitable; keep looking further down.
 		}
 	}
 
