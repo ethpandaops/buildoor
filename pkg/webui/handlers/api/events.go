@@ -174,13 +174,17 @@ type BidSubmittedEvent struct {
 	Warning   string `json:"warning,omitempty"`
 
 	// Full bid message properties (blob commitments aggregated to a count).
-	ExecutionPayment   uint64 `json:"execution_payment,omitempty"`
-	FeeRecipient       string `json:"fee_recipient,omitempty"`
-	GasLimit           uint64 `json:"gas_limit,omitempty"`
-	BuilderIndex       uint64 `json:"builder_index,omitempty"`
-	ParentBlockHash    string `json:"parent_block_hash,omitempty"`
-	ParentBlockRoot    string `json:"parent_block_root,omitempty"`
-	NumBlobCommitments int    `json:"num_blob_commitments,omitempty"`
+	ExecutionPayment uint64 `json:"execution_payment,omitempty"`
+	FeeRecipient     string `json:"fee_recipient,omitempty"`
+	GasLimit         uint64 `json:"gas_limit,omitempty"`
+	BuilderIndex     uint64 `json:"builder_index,omitempty"`
+	// KeyIndex is the managed builder key that signed the bid. With several
+	// keys bidding one slot, the builder index alone does not say which of ours
+	// it was.
+	KeyIndex           *uint64 `json:"key_index,omitempty"`
+	ParentBlockHash    string  `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot    string  `json:"parent_block_root,omitempty"`
+	NumBlobCommitments int     `json:"num_blob_commitments,omitempty"`
 }
 
 // HeadReceivedEvent is sent when a head event is received.
@@ -1233,6 +1237,14 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmi
 		data.FeeRecipient = fmt.Sprintf("0x%x", bid.FeeRecipient)
 		data.GasLimit = bid.GasLimit
 		data.BuilderIndex = uint64(bid.BuilderIndex)
+
+		if registry := m.keyRegistry(); registry != nil {
+			if key := registry.ByBuilderIndex(uint64(bid.BuilderIndex)); key != nil {
+				keyIndex := key.KeyIndex()
+				data.KeyIndex = &keyIndex
+			}
+		}
+
 		data.ParentBlockHash = fmt.Sprintf("0x%x", bid.ParentBlockHash[:])
 		data.ParentBlockRoot = fmt.Sprintf("0x%x", bid.ParentBlockRoot[:])
 		data.NumBlobCommitments = len(bid.BlobKZGCommitments)
@@ -1302,10 +1314,14 @@ func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
 }
 
 func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
-	// Determine if this is our own bid. The beacon node echoes our submitted bid
-	// back over the SSE stream, so without this it would be shown as an external
-	// bid. Match on builder index, the same way the ePBS service classifies bids.
-	isOurs := m.epbsSvc != nil && event.BuilderIndex == m.epbsSvc.GetBuilderIndex()
+	// Determine if this is our own bid. The beacon node echoes our submitted bids
+	// back over the SSE stream, so without this they would be shown as external
+	// bids. Every managed key counts: with a fleet, a slot's bids carry several
+	// different builder indices, all of them ours.
+	isOurs := false
+	if registry := m.keyRegistry(); registry != nil {
+		isOurs = registry.ByBuilderIndex(event.BuilderIndex) != nil
+	}
 
 	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeBidEvent,

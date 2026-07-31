@@ -116,6 +116,71 @@ export interface BuilderInfo {
   wallet_balance_wei?: string;
   deposit_epoch: number;
   withdrawable_epoch: number;
+  // Fleet summary of the managed builder key set. Equal to the fields above on
+  // a single-key deployment.
+  key_count: number;
+  key_target: number;
+  keys_active: number;
+  total_balance_gwei: number;
+  total_pending_payments_gwei: number;
+  total_effective_gwei: number;
+}
+
+export type BuilderKeyStatus =
+  | 'unused'
+  | 'depositing'
+  | 'pending'
+  | 'active'
+  | 'exiting'
+  | 'exited'
+  | 'withdrawn';
+
+export interface BuilderKeyState {
+  key_index: number;
+  pubkey: string;
+  status: BuilderKeyStatus;
+  builder_index: number;
+  has_builder_index: boolean;
+  balance_gwei: number;
+  pending_payments_gwei: number;
+  balance_adjustment_gwei: number;
+  effective_balance_gwei: number;
+  deposit_epoch: number;
+  withdrawable_epoch: number;
+  use_count: number;
+  last_deposit_at?: number;
+  last_exit_at?: number;
+  last_topup_epoch?: number;
+  bids_submitted: number;
+  bids_won: number;
+}
+
+export interface BuilderKeysAggregate {
+  target: number;
+  managed: number;
+  unused: number;
+  depositing: number;
+  pending: number;
+  active: number;
+  exiting: number;
+  exited: number;
+  withdrawn: number;
+  total_balance_gwei: number;
+  total_pending_payments_gwei: number;
+  total_effective_gwei: number;
+}
+
+export interface BuilderKeysSettings {
+  target_count: number;
+  max_index: number;
+  auto_deposit: boolean;
+  auto_exit: boolean;
+}
+
+export interface BuilderKeysResponse {
+  keys: BuilderKeyState[];
+  aggregate: BuilderKeysAggregate;
+  settings: BuilderKeysSettings;
 }
 
 export interface SlotStartEvent {
@@ -139,6 +204,8 @@ export interface BidSubmittedEvent {
   timestamp: number;
   success: boolean;
   error?: string;
+  builder_index?: number;
+  key_index?: number;
 }
 
 export interface HeadReceivedEvent {
@@ -418,6 +485,9 @@ export interface OurBid {
   feeRecipient?: string;
   gasLimit?: number;
   builderIndex?: number;
+  // The managed builder key that signed the bid: with several keys bidding one
+  // slot, the builder index alone does not say which of ours it was.
+  keyIndex?: number;
   parentBlockHash?: string;
   parentBlockRoot?: string;
   numBlobCommitments?: number;
@@ -793,6 +863,7 @@ export interface SlotBidAttempt {
   fee_recipient?: string;
   gas_limit?: number;
   builder_index?: number;
+  key_index?: number;
   num_blob_commitments?: number;
   error?: string;
   at: string;

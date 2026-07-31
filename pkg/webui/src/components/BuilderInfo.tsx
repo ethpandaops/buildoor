@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import type { BuilderInfo as BuilderInfoType, ServiceStatus, Config } from '../types';
 import { CopyableHash } from './CopyableHash';
+import { useBuilderKeyActions } from '../hooks/useBuilderKeys';
+import { setView } from '../stores/viewStore';
 
 interface BuilderInfoProps {
   builderInfo: BuilderInfoType | null;
@@ -28,13 +30,25 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const [editingLifecycle, setEditingLifecycle] = useState(false);
   const [lcThreshold, setLcThreshold] = useState('');
   const [lcAmount, setLcAmount] = useState('');
-  const [exitState, setExitState] = useState<'idle' | 'confirm' | 'submitting' | 'done' | 'error'>('idle');
-  const [exitError, setExitError] = useState('');
+  const [editingTarget, setEditingTarget] = useState(false);
+  const [targetInput, setTargetInput] = useState('');
+  const [targetError, setTargetError] = useState('');
+  const keyActions = useBuilderKeyActions();
 
   const lifecycleAvailable = serviceStatus?.lifecycle_available ?? false;
   const lifecycleEnabled = serviceStatus?.lifecycle_enabled ?? false;
   const registrationState = serviceStatus?.epbs_registration_state;
-  const canExit = registrationState === 'registered' || registrationState === 'pending_finalization';
+  // A managed fleet reports totals; a single key reports its own values, which
+  // are the same numbers.
+  const keyCount = builderInfo?.key_count ?? 0;
+  const keyTarget = builderInfo?.key_target ?? 0;
+  const isFleet = keyCount > 1 || keyTarget > 1;
+
+  useEffect(() => {
+    if (!editingTarget && keyTarget > 0) {
+      setTargetInput(String(keyTarget));
+    }
+  }, [keyTarget, editingTarget]);
 
   const startEditingLifecycle = () => {
     setLcThreshold(config ? String(config.topup_threshold / 1e9) : '');
@@ -64,25 +78,18 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
     }
   };
 
-  const handleExit = async () => {
-    if (!isLoggedIn) return;
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = await getAuthHeader();
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
+  const handleTargetSave = async () => {
+    const target = parseInt(targetInput, 10);
+    if (!Number.isFinite(target) || target < 1) {
+      setTargetError('target must be at least 1');
+      return;
     }
-    setExitState('submitting');
-    try {
-      const resp = await fetch('/api/lifecycle/exit', { method: 'POST', headers });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => null);
-        throw new Error(body?.error || `HTTP ${resp.status}`);
-      }
-      setExitState('done');
-    } catch (err) {
-      console.error('Failed to submit builder exit:', err);
-      setExitError(err instanceof Error ? err.message : String(err));
-      setExitState('error');
+
+    const result = await keyActions.setTarget(target);
+    setTargetError(result.ok ? '' : (result.error ?? 'failed to set target'));
+
+    if (result.ok) {
+      setEditingTarget(false);
     }
   };
 
@@ -124,6 +131,14 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
     <div className="card mb-3">
       <div className="card-header d-flex align-items-center">
         <h5 className="mb-0 me-2">Builder Info</h5>
+        {isFleet && (
+          <span
+            className="badge bg-info me-2"
+            title="Active builder keys / target key count"
+          >
+            {builderInfo?.keys_active ?? 0} / {keyTarget} keys
+          </span>
+        )}
         {lifecycleAvailable && (
           <>
             {lifecycleEnabled ? (
@@ -196,6 +211,67 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </td>
             </tr>
 
+            {/* Target key count. A fleet is maintained against it: raising it
+                deposits new keys, lowering it exits surplus ones. */}
+            {lifecycleAvailable && (
+              <tr>
+                <td className="text-muted">Target keys:</td>
+                <td className="text-end">
+                  {!editingTarget ? (
+                    <>
+                      {keyTarget}
+                      {isLoggedIn && (
+                        <button
+                          className="btn btn-sm btn-outline-primary ms-1 py-0 px-1"
+                          style={{ fontSize: '10px', lineHeight: '14px' }}
+                          onClick={() => {
+                            setTargetInput(String(keyTarget));
+                            setTargetError('');
+                            setEditingTarget(true);
+                          }}
+                        >
+                          <i className="fas fa-pencil-alt"></i>
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="d-flex justify-content-end align-items-center gap-1">
+                      <input
+                        type="number"
+                        min={1}
+                        className="form-control form-control-sm"
+                        style={{ fontSize: '11px', width: '4.5rem' }}
+                        value={targetInput}
+                        onChange={(e) => setTargetInput(e.target.value)}
+                      />
+                      <button className="btn btn-sm btn-primary py-0 px-1" onClick={handleTargetSave}>
+                        Save
+                      </button>
+                      <button
+                        className="btn btn-sm btn-secondary py-0 px-1"
+                        onClick={() => setEditingTarget(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            )}
+            {editingTarget && parseInt(targetInput, 10) < keyTarget && (
+              <tr>
+                <td colSpan={2} className="small text-warning">
+                  Lowering the target exits surplus keys, highest index first. An exited builder
+                  key can never be reactivated.
+                </td>
+              </tr>
+            )}
+            {targetError && (
+              <tr>
+                <td colSpan={2} className="small text-danger">{targetError}</td>
+              </tr>
+            )}
+
             {/* Wallet Info (if lifecycle enabled) */}
             {builderInfo.lifecycle_enabled && builderInfo.wallet_address && (
               <tr>
@@ -213,10 +289,10 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
 
             {/* CL Balance */}
             <tr>
-              <td className="text-muted">CL Balance:</td>
+              <td className="text-muted">{isFleet ? 'CL Balance (all keys):' : 'CL Balance:'}</td>
               <td className="text-end">
                 <span className="text-primary fw-bold">
-                  {formatGwei(builderInfo.cl_balance_gwei)} ETH
+                  {formatGwei(isFleet ? builderInfo.total_balance_gwei : builderInfo.cl_balance_gwei)} ETH
                 </span>
               </td>
             </tr>
@@ -225,18 +301,23 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             <tr>
               <td className="text-muted">Pending Payments:</td>
               <td className="text-end text-warning">
-                {builderInfo.pending_payments_gwei > 0
-                  ? `-${formatGwei(builderInfo.pending_payments_gwei)} ETH`
-                  : '0 ETH'}
+                {(() => {
+                  const pending = isFleet
+                    ? builderInfo.total_pending_payments_gwei
+                    : builderInfo.pending_payments_gwei;
+                  return pending > 0 ? `-${formatGwei(pending)} ETH` : '0 ETH';
+                })()}
               </td>
             </tr>
 
             {/* Effective Balance (shown when pending payments reduce it) */}
-            {builderInfo.pending_payments_gwei > 0 && (
+            {(isFleet ? builderInfo.total_pending_payments_gwei : builderInfo.pending_payments_gwei) > 0 && (
               <tr>
                 <td className="text-muted">Effective Balance:</td>
                 <td className="text-end text-success fw-bold">
-                  {formatGwei(builderInfo.effective_balance_gwei)} ETH
+                  {formatGwei(
+                    isFleet ? builderInfo.total_effective_gwei : builderInfo.effective_balance_gwei,
+                  )} ETH
                 </td>
               </tr>
             )}
@@ -343,43 +424,20 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
           </tbody>
         </table>
 
-        {/* Builder exit (irreversible: submits an exit request to the builder
-            exit system contract; the exit then proceeds through the exit queue) */}
-        {lifecycleAvailable && isLoggedIn && (canExit || exitState === 'done') && (
+        {/* Per-key operations (deposit, top-up, exit) live on the Builder Keys
+            page: with a fleet, "exit the builder" has no single meaning. */}
+        {lifecycleAvailable && (
           <div className="border-top pt-2 mt-1 text-end">
-            {exitState === 'idle' && (
-              <button
-                className="btn btn-sm btn-outline-danger"
-                onClick={() => setExitState('confirm')}
-                title="Submit a builder exit request through the exit queue"
-              >
-                <i className="fas fa-sign-out-alt me-1"></i>Exit Builder
-              </button>
-            )}
-            {exitState === 'confirm' && (
-              <div className="d-flex align-items-center justify-content-end gap-2">
-                <span className="small text-danger">Exit builder from the builder set?</span>
-                <button className="btn btn-sm btn-danger" onClick={handleExit}>Confirm Exit</button>
-                <button className="btn btn-sm btn-secondary" onClick={() => setExitState('idle')}>Cancel</button>
-              </div>
-            )}
-            {exitState === 'submitting' && (
-              <span className="small text-muted">
-                <i className="fas fa-spinner fa-spin me-1"></i>Submitting exit transaction...
-              </span>
-            )}
-            {exitState === 'done' && (
-              <span className="small text-success">
-                <i className="fas fa-check me-1"></i>Exit submitted — waiting for the exit queue
-              </span>
-            )}
-            {exitState === 'error' && (
-              <div className="d-flex align-items-center justify-content-end gap-2">
-                <span className="small text-danger">Exit failed: {exitError}</span>
-                <button className="btn btn-sm btn-outline-danger" onClick={handleExit}>Retry</button>
-                <button className="btn btn-sm btn-secondary" onClick={() => setExitState('idle')}>Dismiss</button>
-              </div>
-            )}
+            <a
+              href="/builder-keys"
+              className="btn btn-sm btn-outline-primary"
+              onClick={(e) => {
+                e.preventDefault();
+                setView('builder-keys');
+              }}
+            >
+              <i className="fas fa-key me-1"></i>Manage keys
+            </a>
           </div>
         )}
       </div>
