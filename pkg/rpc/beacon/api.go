@@ -31,10 +31,10 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.Sig
 }
 
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope using the
-// stateless flow (SignedExecutionPayloadEnvelopeContents body, Eth-Execution-Payload-Blinded
-// false). The stateful/blinded flow only works when the beacon node cached the full envelope
-// from its own block production (produceBlockV4); buildoor builds payloads externally, so the
-// beacon node never has them cached and the stateless form is the only valid one.
+// stateless flow (SignedExecutionPayloadEnvelopeContents body, Eth-Blob-Data-Included true).
+// The stateful flow only works when the beacon node cached the blob data from its own block
+// production (produceBlockV4); buildoor builds payloads externally, so the beacon node never
+// has them cached and the stateless form is the only valid one.
 //
 // The consensus version header and body encoding (SSZ or JSON per the client's content
 // negotiation) are derived from the envelope's Version by go-eth2-client.
