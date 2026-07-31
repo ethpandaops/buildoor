@@ -447,7 +447,13 @@ and begins building blocks according to configuration.`,
 
 			if lifecycleMgr != nil {
 				lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
+				// A target key count change must act now, not at the next
+				// reconcile tick.
+				lifecycleMgr.Reconcile()
 			}
+
+			// The derived key set follows the target/derivation settings.
+			keyRegistry.Refresh()
 		})
 
 		// 15. Start WebUI/API server (if configured)

@@ -267,3 +267,92 @@ func TestKeyStringIdentifiesTheDerivationIndex(t *testing.T) {
 	pubkey := key.Pubkey()
 	require.Equal(t, fmt.Sprintf("#1/%x", pubkey[:4]), key.String())
 }
+
+// Exits pick the highest index that can actually exit: the beacon chain silently
+// ignores an exit request while the builder still owes a payment, so a key with
+// pending payments must be skipped rather than burning the queue fee.
+func TestRegistryExitCandidateSkipsPendingPayments(t *testing.T) {
+	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 4, DiscoveryGap: 1, MaxIndex: 32})
+
+	active := func(state *State) {
+		state.Status = StatusActive
+		state.HasBuilderIndex = true
+		state.BuilderIndex = state.KeyIndex + 10
+	}
+
+	for keyIndex := range uint64(3) {
+		_, err := registry.PrimeKeyState(keyIndex, active)
+		require.NoError(t, err)
+	}
+
+	// The highest key still owes a payment.
+	_, err := registry.PrimeKeyState(2, func(state *State) {
+		active(state)
+		state.PendingPayments = 500
+	})
+	require.NoError(t, err)
+
+	candidate := registry.NextExitCandidate()
+	require.NotNil(t, candidate)
+	require.Equal(t, uint64(1), candidate.KeyIndex())
+
+	// Once it settles, it is the one to go.
+	_, err = registry.PrimeKeyState(2, func(state *State) {
+		active(state)
+		state.PendingPayments = 0
+	})
+	require.NoError(t, err)
+
+	candidate = registry.NextExitCandidate()
+	require.NotNil(t, candidate)
+	require.Equal(t, uint64(2), candidate.KeyIndex())
+}
+
+// Deposits reuse the lowest withdrawn index instead of extending the set, which
+// is what keeps the highest derivation index bounded across target ramps.
+func TestRegistryDepositCandidateReusesWithdrawnKeys(t *testing.T) {
+	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 3, DiscoveryGap: 1, MaxIndex: 32})
+
+	for keyIndex := range uint64(3) {
+		_, err := registry.PrimeKeyState(keyIndex, func(state *State) {
+			state.Status = StatusActive
+			state.HasBuilderIndex = true
+			state.BuilderIndex = state.KeyIndex + 10
+		})
+		require.NoError(t, err)
+	}
+
+	// With every key in use the next deposit extends the set.
+	require.Equal(t, uint64(3), registry.NextDepositCandidate().KeyIndex())
+
+	// Once key 1 leaves the registry it becomes the preferred candidate again.
+	_, err := registry.PrimeKeyState(1, func(state *State) {
+		state.Status = StatusWithdrawn
+		state.HasBuilderIndex = false
+		state.UseCount = 1
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(1), registry.NextDepositCandidate().KeyIndex())
+}
+
+func TestStatusClassification(t *testing.T) {
+	managed := map[Status]bool{
+		StatusUnused: false, StatusDepositing: true, StatusPending: true,
+		StatusActive: true, StatusExiting: false, StatusExited: false,
+		StatusWithdrawn: false,
+	}
+	depositable := map[Status]bool{
+		StatusUnused: true, StatusDepositing: false, StatusPending: false,
+		StatusActive: false, StatusExiting: false, StatusExited: false,
+		StatusWithdrawn: true,
+	}
+
+	for status, want := range managed {
+		require.Equal(t, want, status.Managed(), "Managed(%s)", status)
+	}
+
+	for status, want := range depositable {
+		require.Equal(t, want, status.Depositable(), "Depositable(%s)", status)
+	}
+}

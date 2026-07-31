@@ -159,7 +159,51 @@ func TestSimulateDepositSurvives(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := simulateDepositSurvives(tt.queue, tt.ourAmount, tt.dbtc, tt.churn, tt.maxPerEpoch, tt.transitions)
+			got := simulateDepositSurvives(tt.queue, []uint64{tt.ourAmount},
+				tt.dbtc, tt.churn, tt.maxPerEpoch, tt.transitions)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// Onboarding several keys appends several entries: the batch survives to the
+// fork exactly when its LAST entry does, so a batch that fits the drain budget
+// while a longer one does not must be judged separately.
+func TestSimulateDepositSurvives_Batch(t *testing.T) {
+	const (
+		deposit32 = 32 * gwei
+		maxPer    = 16
+	)
+
+	tests := []struct {
+		name       string
+		ourAmounts []uint64
+		churn      uint64
+		want       bool
+	}{
+		{
+			name:       "empty batch trivially survives",
+			ourAmounts: nil,
+			churn:      deposit32,
+			want:       true,
+		},
+		{
+			name:       "batch smaller than the drain budget is consumed",
+			ourAmounts: repeatAmounts(2, deposit32),
+			churn:      4 * deposit32,
+			want:       false,
+		},
+		{
+			name:       "batch larger than the drain budget survives at its tail",
+			ourAmounts: repeatAmounts(6, deposit32),
+			churn:      4 * deposit32,
+			want:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := simulateDepositSurvives(nil, tt.ourAmounts, 0, tt.churn, maxPer, 1)
 			assert.Equal(t, tt.want, got)
 		})
 	}

@@ -459,7 +459,7 @@ func (h *APIHandler) PostTopup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.lifecycleMgr.CheckAndTopup(context.Background()); err != nil {
+	if err := h.lifecycleMgr.CheckAndTopup(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
 		h.audit(r, token, "lifecycle.topup", "", nil, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
 
