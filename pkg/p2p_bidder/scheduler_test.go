@@ -682,3 +682,70 @@ func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
 	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
 	require.Nil(t, h.nextEvent())
 }
+
+// With several managed keys, each built candidate is bid from a DIFFERENT key.
+// That is what makes the bids propagate: the gossip rules ignore every bid after
+// a builder's first for a slot, so one key can only ever land one of them.
+func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
+	h.cache.Store(full)
+	h.cache.Store(empty)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.cfg.EPBS.BidCandidate = "all"
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	first := h.nextEvent()
+	require.NotNil(t, first)
+	second := h.nextEvent()
+	require.NotNil(t, second)
+	require.Nil(t, h.nextEvent())
+
+	require.NotEqual(t, first.SignedBid.Message.BuilderIndex, second.SignedBid.Message.BuilderIndex,
+		"each candidate must be bid from a distinct builder key")
+
+	// The pairing is sticky: an interval re-bid must come from the same key, or
+	// it would be a fresh first-seen bid and the original lower bid would stay
+	// the one that propagated.
+	h.scheduler.mu.Lock()
+	committed := make(map[phase0.Hash32]uint64, 2)
+	for hash, keyIndex := range h.scheduler.getSlotState(testSlot).PayloadKeys {
+		committed[hash] = keyIndex
+	}
+	h.scheduler.mu.Unlock()
+
+	require.Len(t, committed, 2)
+	require.NotEqual(t, committed[full.BlockHash], committed[empty.BlockHash])
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+
+	h.scheduler.mu.Lock()
+	after := h.scheduler.getSlotState(testSlot).PayloadKeys
+	h.scheduler.mu.Unlock()
+
+	require.Equal(t, committed[full.BlockHash], after[full.BlockHash])
+	require.Equal(t, committed[empty.BlockHash], after[empty.BlockHash])
+}
+
+// bid_keys_per_slot caps how many distinct keys bid a slot, so an operator can
+// keep the single-bid behaviour even with several candidates built.
+func TestSchedulerBidKeysPerSlotCap(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_candidate":"all","bid_keys_per_slot":1}`)
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+
+	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
+	require.Nil(t, h.nextEvent(), "the key cap must stop the second candidate")
+}

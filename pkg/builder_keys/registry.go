@@ -736,24 +736,39 @@ func (r *Registry) SubscribeChanges(capacity int, blocking bool) *utils.Subscrip
 	return r.changes.Subscribe(capacity, blocking)
 }
 
-// RecordBid counts a submitted bid against a key (selection input + UI).
+// RecordBid counts a submitted bid against a key. The counter feeds the
+// least-used selection strategy and the UI, so it is published to the key's
+// state snapshot immediately rather than at the next refresh — selection
+// happens many times per slot, refreshes once per epoch.
 func (r *Registry) RecordBid(keyIndex uint64) {
-	r.mu.Lock()
-
-	if runtime, ok := r.runtimes[keyIndex]; ok {
-		runtime.bidsSubmitted++
-	}
-
-	r.mu.Unlock()
+	r.bumpCounters(keyIndex, 1, 0)
 }
 
 // RecordWin counts a won slot against a key.
 func (r *Registry) RecordWin(keyIndex uint64) {
+	r.bumpCounters(keyIndex, 0, 1)
+}
+
+// bumpCounters advances a key's rolling counters in both the runtime (which
+// survives refreshes) and the published state snapshot.
+func (r *Registry) bumpCounters(keyIndex, bids, wins uint64) {
 	r.mu.Lock()
 
-	if runtime, ok := r.runtimes[keyIndex]; ok {
-		runtime.bidsWon++
+	runtime, ok := r.runtimes[keyIndex]
+	if !ok {
+		r.mu.Unlock()
+		return
 	}
+
+	runtime.bidsSubmitted += bids
+	runtime.bidsWon += wins
+
+	key := runtime.key
+	state := *key.State()
+	state.BidsSubmitted = runtime.bidsSubmitted
+	state.BidsWon = runtime.bidsWon
+
+	key.state.Store(&state)
 
 	r.mu.Unlock()
 }

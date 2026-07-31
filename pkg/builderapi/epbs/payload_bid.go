@@ -301,15 +301,22 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	tctx, cancel := context.WithTimeout(r.Context(), transformTimeout)
 	defer cancel()
 
-	bidKey := h.registry.Primary()
-
-	builderIndex, registered := bidKey.BuilderIndex()
-	if !registered {
-		log.Warn("getExecutionPayloadBid: returning 204 — selected builder key is not registered")
+	bidKey := h.bidKey(bidKeyTarget{
+		slot:       slot,
+		parentHash: event.Attributes.ParentBlockHash,
+		parentRoot: event.Attributes.ParentBlockRoot,
+	}, frozenSettings.KeyStrategy, uint64(valueAfterSubsidy))
+	if bidKey == nil {
+		log.WithField("value_gwei", uint64(valueAfterSubsidy)).
+			Warn("getExecutionPayloadBid: returning 204 — no builder key ready to cover the bid")
+		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),
+			bidStatusFailed, "no builder key ready to cover the bid")
 		w.WriteHeader(http.StatusNoContent)
 
 		return
 	}
+
+	builderIndex, _ := bidKey.BuilderIndex()
 
 	signedBid, err := payload_bidder.BuildSignedBid(tctx, event, payload_bidder.BidParams{
 		BuilderIndex:     builderIndex,

@@ -172,6 +172,12 @@ type BuilderAPIConfig struct {
 	// legal parent tuple no candidate covers yet (bounded by the request's
 	// response budget).
 	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
+
+	// KeyStrategy selects which managed builder key signs served bids. Unlike
+	// p2p gossip there is no first-seen rule here, but the choice is sticky per
+	// (slot, parent tuple) so a polling proposer keeps seeing the same builder.
+	// Empty falls back to the ePBS key strategy.
+	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
 }
 
 // ServeCandidateAllowed reports whether the given serve policy allows
@@ -247,6 +253,19 @@ type EPBSConfig struct {
 	// built candidate — deliberate multi-parent bidding for gossip testing;
 	// most nodes propagate only a builder's first bid per slot).
 	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
+
+	// KeyStrategy selects which managed builder key signs each of a slot's
+	// bids: round_robin (default), single, random or least_used. Each key bids
+	// at most once per slot — the gossip rules ignore a builder's later bids —
+	// so with several built candidates the strategy decides which keys cover
+	// them.
+	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
+
+	// BidKeysPerSlot caps how many distinct builder keys bid a slot. 0 means
+	// one key per selected candidate payload; 1 reproduces single-key
+	// behaviour (one gossiped bid per slot) regardless of how many candidates
+	// were built.
+	BidKeysPerSlot uint64 `yaml:"bid_keys_per_slot" json:"bid_keys_per_slot"`
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first

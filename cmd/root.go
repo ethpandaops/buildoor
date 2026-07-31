@@ -97,6 +97,9 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
+	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = one key per built candidate)")
+	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
 	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
 	// Payload build candidates (reorg / payload-miss preparedness)
@@ -204,6 +207,7 @@ func initConfig() error {
 			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
 			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
 			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
+			KeyStrategy:           v.GetString("builder-api-key-strategy"),
 		},
 		BuilderKeys: config.BuilderKeysConfig{
 			TargetCount:  v.GetUint64("builder-keys-target"),
@@ -235,6 +239,8 @@ func initConfig() error {
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 			BidCandidate:         v.GetString("epbs-bid-candidate"),
 			BidCandidateSwitch:   v.GetBool("epbs-bid-candidate-switch"),
+			KeyStrategy:          v.GetString("epbs-key-strategy"),
+			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),

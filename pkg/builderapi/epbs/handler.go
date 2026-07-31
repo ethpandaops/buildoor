@@ -106,6 +106,13 @@ type Handler struct {
 	lastBidMu sync.Mutex
 	lastBids  map[phase0.Slot]recordedBid // dedupe of repeated identical bid records
 
+	// bidKeyMu guards bidKeys, which pins the builder key each (slot, parent
+	// tuple) is served from. There is no gossip first-seen rule here, but a
+	// polling proposer must keep seeing the same builder rather than a new
+	// index per request.
+	bidKeyMu sync.Mutex
+	bidKeys  map[bidKeyTarget]uint64
+
 	enabled        atomic.Bool
 	bidsRequested  atomic.Uint64 // count of getExecutionPayloadBid requests received
 	blocksAccepted atomic.Uint64 // count of accepted signed beacon blocks
@@ -127,7 +134,61 @@ func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc c
 		registry:     registry,
 		prefsStore:   NewBuilderPreferencesStore(),
 		lastBids:     make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
+		bidKeys:      make(map[bidKeyTarget]uint64, maxRecordedBidSlots),
 	}
+}
+
+// bidKeyTarget identifies what a served bid commits to, so repeated polls for
+// the same slot and parent are answered from the same builder key.
+type bidKeyTarget struct {
+	slot       phase0.Slot
+	parentHash phase0.Hash32
+	parentRoot phase0.Root
+}
+
+// bidKey returns the builder key to serve a bid for the given target from,
+// selecting one on first request and reusing it afterwards. It returns nil when
+// no key is ready to cover the value.
+func (h *Handler) bidKey(target bidKeyTarget, strategy string, requiredGwei uint64) *builder_keys.Key {
+	h.bidKeyMu.Lock()
+	defer h.bidKeyMu.Unlock()
+
+	if keyIndex, ok := h.bidKeys[target]; ok {
+		if key, err := h.registry.Key(keyIndex); err == nil && key.State().Ready(requiredGwei) {
+			return key
+		}
+
+		// The committed key can no longer cover the bid (payment settled, exit
+		// initiated); fall through and pick another.
+		delete(h.bidKeys, target)
+	}
+
+	selected := h.registry.SelectForBid(target.slot, builder_keys.SelectRequest{
+		Strategy:     strategy,
+		RequiredGwei: requiredGwei,
+		Count:        1,
+	})
+
+	if len(selected) == 0 {
+		return nil
+	}
+
+	h.bidKeys[target] = selected[0].KeyIndex()
+
+	// Bound the map: only the current and next slot are ever requested.
+	for len(h.bidKeys) > maxRecordedBidSlots {
+		oldest := target
+
+		for candidate := range h.bidKeys {
+			if candidate.slot < oldest.slot {
+				oldest = candidate
+			}
+		}
+
+		delete(h.bidKeys, oldest)
+	}
+
+	return selected[0]
 }
 
 // SetResultRecorder wires the optional per-slot result recorder.

@@ -31,6 +31,7 @@ type SlotState struct {
 	BidsClosed       bool        // Block received, no more bids possible
 	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
 	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
+	NoKeyWarnedFor   bool        // No-ready-key skip already reported for this slot
 	// BidPayloads tracks the last bid time per payload: interval throttling
 	// and single-bid dedup are PER PAYLOAD, so multi-candidate bidding
 	// ("all") does not starve the other candidates behind one payload's
@@ -41,6 +42,12 @@ type SlotState struct {
 	// first bid of the slot (sticky unless candidate switching is enabled).
 	BidCandidate    chain.CandidateKey
 	BidCandidateSet bool
+
+	// PayloadKeys pins which builder key bids each payload. The pairing is
+	// sticky for the slot: an interval re-bid from a different key would be a
+	// fresh first-seen bid, leaving the original key's lower bid as the one
+	// that actually propagated.
+	PayloadKeys map[phase0.Hash32]uint64
 
 	// Frozen is the slot's immutable action-plan snapshot, resolved on the
 	// first scheduler evaluation of the slot (nil until then).
@@ -272,8 +279,12 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	for _, payload := range payloads {
-		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings,
-			s.registry.Primary(), payload, prefsBypassed)
+		key := s.assignBidKey(slot, bidSettings, payload)
+		if key == nil {
+			continue
+		}
+
+		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, key, payload, prefsBypassed)
 	}
 }
 
@@ -350,6 +361,116 @@ func (s *Scheduler) selectBidPayloads(
 	s.mu.Unlock()
 
 	return []*payload_builder.Payload{payload}
+}
+
+// assignBidKey returns the builder key that bids the given payload in this
+// slot, selecting one on first use and keeping it for every later bid on that
+// payload.
+//
+// Each key bids at most once per slot: the gossip rules ignore a builder's
+// later bids for a slot, so a key already committed to another candidate is
+// excluded. That pairing is what turns several built candidates into several
+// bids that actually propagate.
+func (s *Scheduler) assignBidKey(
+	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, payload *payload_builder.Payload,
+) *builder_keys.Key {
+	s.mu.Lock()
+	state := s.getSlotState(slot)
+
+	if keyIndex, ok := state.PayloadKeys[payload.BlockHash]; ok {
+		s.mu.Unlock()
+
+		key, err := s.registry.Key(keyIndex)
+		if err != nil {
+			s.log.WithError(err).WithField("key_index", keyIndex).
+				Error("Committed bid key is no longer derivable")
+
+			return nil
+		}
+
+		return key
+	}
+
+	// Cap the number of distinct keys bidding this slot. Unset means one key
+	// per selected candidate payload.
+	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.PayloadKeys)) >= limit {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	committed := make(map[uint64]struct{}, len(state.PayloadKeys))
+	for _, keyIndex := range state.PayloadKeys {
+		committed[keyIndex] = struct{}{}
+	}
+
+	s.mu.Unlock()
+
+	required := baseBidValue(bidSettings, payload)
+
+	selected := s.registry.SelectForBid(slot, builder_keys.SelectRequest{
+		Strategy:     bidSettings.KeyStrategy,
+		RequiredGwei: required,
+		Count:        1,
+		Exclude:      committed,
+	})
+
+	if len(selected) == 0 && len(committed) > 0 {
+		// Fewer keys than candidates: reuse an already-committed key rather
+		// than dropping the bid. Only the key's first bid propagates under the
+		// gossip rules, but bidding several candidates from one key is a
+		// deliberate testing scenario (bid_candidate: all).
+		selected = s.registry.SelectForBid(slot, builder_keys.SelectRequest{
+			Strategy:     bidSettings.KeyStrategy,
+			RequiredGwei: required,
+			Count:        1,
+		})
+	}
+
+	if len(selected) == 0 {
+		s.mu.Lock()
+		state = s.getSlotState(slot)
+		alreadyWarned := state.NoKeyWarnedFor
+		state.NoKeyWarnedFor = true
+		s.mu.Unlock()
+
+		if !alreadyWarned {
+			s.log.WithFields(logrus.Fields{
+				"slot":           slot,
+				"committed_keys": len(committed),
+				"required_gwei":  required,
+				"strategy":       builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
+			}).Warn("No active builder key for slot — bid skipped")
+		}
+
+		return nil
+	}
+
+	key := selected[0]
+
+	s.mu.Lock()
+	state = s.getSlotState(slot)
+
+	if state.PayloadKeys == nil {
+		state.PayloadKeys = make(map[phase0.Hash32]uint64, 2)
+	}
+
+	state.PayloadKeys[payload.BlockHash] = key.KeyIndex()
+	s.mu.Unlock()
+
+	return key
+}
+
+// baseBidValue is the bid value before the per-re-bid increase: what a key must
+// be able to cover to be worth selecting.
+func baseBidValue(
+	bidSettings *action_plan.ResolvedBidSettings, payload *payload_builder.Payload,
+) uint64 {
+	if bidSettings.ValueGwei != nil {
+		return *bidSettings.ValueGwei
+	}
+
+	return max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei) + bidSettings.SubsidyGwei
 }
 
 // preferredPayload picks the built payload matching the chain view's current
@@ -441,6 +562,7 @@ func (s *Scheduler) trySubmitBid(
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
+		"key":          key.String(),
 		"bid_value":    bidValue,
 		"bid_count":    state.BidCount,
 		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
@@ -503,6 +625,8 @@ func (s *Scheduler) trySubmitBid(
 
 		return
 	}
+
+	s.registry.RecordBid(key.KeyIndex())
 
 	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{

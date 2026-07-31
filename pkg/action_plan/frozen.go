@@ -115,6 +115,14 @@ type ResolvedBidSettings struct {
 	// auto, all, or a specific candidate key.
 	BidCandidate string `json:"bid_candidate,omitempty"`
 
+	// KeyStrategy is the effective builder key selection strategy for the
+	// slot's bids.
+	KeyStrategy string `json:"key_strategy,omitempty"`
+
+	// BidKeysPerSlot caps how many distinct builder keys bid the slot
+	// (0 = one key per selected candidate payload).
+	BidKeysPerSlot uint64 `json:"bid_keys_per_slot,omitempty"`
+
 	// Forced marks that the plan activated bidding although the module is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
@@ -134,6 +142,10 @@ type ResolvedBuilderAPISettings struct {
 	// ServeCandidates is the effective serve-candidates policy for the slot
 	// (all, canonical_only, or a comma-separated candidate key list).
 	ServeCandidates string `json:"serve_candidates,omitempty"`
+
+	// KeyStrategy is the effective builder key selection strategy for the
+	// slot's served bids.
+	KeyStrategy string `json:"key_strategy,omitempty"`
 
 	// Forced marks that the plan activated serving although the module is
 	// globally disabled.
@@ -373,14 +385,16 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 	}
 
 	resolved := &ResolvedBidSettings{
-		StartMs:      cfg.EPBS.BidStartTime,
-		EndMs:        cfg.EPBS.BidEndTime,
-		IntervalMs:   cfg.EPBS.BidInterval,
-		MinGwei:      cfg.EPBS.BidMinAmount,
-		IncreaseGwei: cfg.EPBS.BidIncrease,
-		SubsidyGwei:  cfg.EPBS.BidSubsidy,
-		BidCandidate: cfg.EPBS.BidCandidate,
-		Forced:       forced,
+		StartMs:        cfg.EPBS.BidStartTime,
+		EndMs:          cfg.EPBS.BidEndTime,
+		IntervalMs:     cfg.EPBS.BidInterval,
+		MinGwei:        cfg.EPBS.BidMinAmount,
+		IncreaseGwei:   cfg.EPBS.BidIncrease,
+		SubsidyGwei:    cfg.EPBS.BidSubsidy,
+		BidCandidate:   cfg.EPBS.BidCandidate,
+		KeyStrategy:    cfg.EPBS.KeyStrategy,
+		BidKeysPerSlot: cfg.EPBS.BidKeysPerSlot,
+		Forced:         forced,
 	}
 
 	if cfg.EPBS.BidValueOverride > 0 {
@@ -406,6 +420,12 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 		if bid.BidCandidate != nil {
 			resolved.BidCandidate = *bid.BidCandidate
 		}
+
+		if bid.KeyStrategy != nil {
+			resolved.KeyStrategy = *bid.KeyStrategy
+		}
+
+		applyOverride(&resolved.BidKeysPerSlot, bid.BidKeysPerSlot)
 	}
 
 	return resolved
@@ -433,6 +453,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 	resolved := &ResolvedBuilderAPISettings{
 		SubsidyGwei:     cfg.BuilderAPI.BlockValueSubsidyGwei,
 		ServeCandidates: cfg.BuilderAPI.ServeCandidates,
+		KeyStrategy:     builderAPIKeyStrategy(cfg),
 		Forced:          forced,
 	}
 
@@ -453,9 +474,23 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		if api.ServeCandidates != nil {
 			resolved.ServeCandidates = *api.ServeCandidates
 		}
+
+		if api.KeyStrategy != nil {
+			resolved.KeyStrategy = *api.KeyStrategy
+		}
 	}
 
 	return resolved
+}
+
+// builderAPIKeyStrategy resolves the Builder API's key selection strategy,
+// which falls back to the ePBS one when left unset.
+func builderAPIKeyStrategy(cfg *config.Config) string {
+	if cfg.BuilderAPI.KeyStrategy != "" {
+		return cfg.BuilderAPI.KeyStrategy
+	}
+
+	return cfg.EPBS.KeyStrategy
 }
 
 func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {

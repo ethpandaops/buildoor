@@ -42,6 +42,7 @@ func DefaultConfig() *Config {
 			BidSubsidy:           100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
 			HeadVoteThresholdPct: 60,        // Gloas builder payment quorum (6/10)
 			BidCandidate:         "auto",
+			KeyStrategy:          "round_robin",
 		},
 		Build: BuildConfig{
 			CandidateParentFull:       CandidateModeAlways,
