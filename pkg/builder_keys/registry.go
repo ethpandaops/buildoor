@@ -28,6 +28,8 @@ const (
 	// back to unused/withdrawn so the reconciler retries instead of waiting
 	// forever on a deposit that never made it into the queue.
 	depositPendingTTL = 30 * time.Minute
+	// exitPendingTTL is the same grace period for a submitted exit request.
+	exitPendingTTL = 30 * time.Minute
 )
 
 // BalanceAdjuster supplies the local balance delta of a key: credits from
@@ -53,9 +55,14 @@ type keyRuntime struct {
 	// depositPendingUntil keeps the key in the depositing state after we
 	// submitted a deposit but before the beacon state shows it.
 	depositPendingUntil time.Time
-	lastTopupEpoch      phase0.Epoch
-	bidsSubmitted       uint64
-	bidsWon             uint64
+	// exitPendingUntil keeps the key in the exiting state after we submitted an
+	// exit request but before the beacon state shows the withdrawable epoch.
+	// Without it the key keeps reading active and the reconciler re-submits the
+	// exit every pass, paying the queue fee each time.
+	exitPendingUntil time.Time
+	lastTopupEpoch   phase0.Epoch
+	bidsSubmitted    uint64
+	bidsWon          uint64
 }
 
 // Registry is the single owner of the builder key set: derivation, per-key
@@ -466,6 +473,7 @@ func (r *Registry) refreshKey(key *Key, snapshot *chainState) (*State, bool) {
 	info := snapshot.builders[key.Pubkey()]
 	_, queued := snapshot.pendingDeposits[key.Pubkey()]
 	depositInFlight := queued || time.Now().Before(runtime.depositPendingUntil)
+	exitInFlight := time.Now().Before(runtime.exitPendingUntil)
 
 	r.mu.Unlock()
 
@@ -478,7 +486,7 @@ func (r *Registry) refreshKey(key *Key, snapshot *chainState) (*State, bool) {
 		state.WithdrawableEpoch = info.WithdrawableEpoch
 	}
 
-	state.Status = resolveStatus(info, depositInFlight, state.UseCount,
+	state.Status = resolveStatus(info, depositInFlight, exitInFlight, state.UseCount,
 		snapshot.currentEpoch, snapshot.finalizedEpoch)
 
 	if adjuster != nil {
@@ -506,16 +514,19 @@ func (r *Registry) refreshKey(key *Key, snapshot *chainState) (*State, bool) {
 }
 
 // resolveStatus decides a key's lifecycle position from its on-chain registry
-// entry, whether a deposit of ours is in flight, and how often the key has been
-// used before.
+// entry, whether an operation of ours is in flight, and how often the key has
+// been used before.
 //
-// The deposit-in-flight check must precede the usage check: a key whose first
-// deposit was just submitted already has a non-zero use count while its pubkey
-// is still absent from the registry, and reading that as "withdrawn" would let
-// the reconciler deposit for it a second time.
+// The in-flight checks must precede the on-chain ones. A key whose first deposit
+// was just submitted already has a non-zero use count while its pubkey is still
+// absent from the registry, and reading that as "withdrawn" would let the
+// reconciler deposit for it a second time. A key whose exit was just submitted
+// still reads active until the beacon state carries the withdrawable epoch,
+// which would have the reconciler re-submit the exit — paying the queue fee —
+// on every pass until then.
 func resolveStatus(
 	info *chain.BuilderInfo,
-	depositInFlight bool,
+	depositInFlight, exitInFlight bool,
 	useCount uint32,
 	currentEpoch phase0.Epoch,
 	finalizedEpoch uint64,
@@ -533,6 +544,8 @@ func resolveStatus(
 			return StatusExited
 		}
 
+		return StatusExiting
+	case exitInFlight:
 		return StatusExiting
 	case chain.IsBuilderActive(info, finalizedEpoch):
 		return StatusActive

@@ -131,6 +131,7 @@ func TestRegistryStatusResolution(t *testing.T) {
 		name            string
 		info            *chain.BuilderInfo
 		depositInFlight bool
+		exitInFlight    bool
 		useCount        uint32
 		want            Status
 	}{
@@ -147,11 +148,21 @@ func TestRegistryStatusResolution(t *testing.T) {
 		{name: "registered and finalized", info: active, want: StatusActive},
 		{name: "exit initiated", info: exiting, want: StatusExiting},
 		{name: "withdrawable epoch reached", info: exited, want: StatusExited},
+		{
+			// Until the beacon state carries the withdrawable epoch the key
+			// still reads active, and the reconciler would re-submit the exit —
+			// paying the queue fee — on every pass.
+			name:         "exit submitted but not yet on chain",
+			info:         active,
+			exitInFlight: true,
+			want:         StatusExiting,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := resolveStatus(test.info, test.depositInFlight, test.useCount, phase0.Epoch(25), finalized)
+			got := resolveStatus(test.info, test.depositInFlight, test.exitInFlight,
+				test.useCount, phase0.Epoch(25), finalized)
 			require.Equal(t, test.want, got)
 		})
 	}

@@ -148,17 +148,28 @@ func (r *Registry) MarkDepositSubmitted(keyIndex uint64) {
 	r.Refresh()
 }
 
-// MarkExitSubmitted records a submitted exit request for a key.
+// MarkExitSubmitted records a submitted exit request for a key and holds it in
+// the exiting state until the beacon state carries the withdrawable epoch.
+// Without that marker the key keeps reading active for the couple of epochs the
+// exit needs to appear, and the reconciler re-submits it — paying the queue fee
+// — on every pass.
 func (r *Registry) MarkExitSubmitted(keyIndex uint64) {
-	usage, ok := r.usage.Get(keyIndex)
-	if !ok || usage == nil {
-		return
+	now := time.Now()
+
+	if usage, ok := r.usage.Get(keyIndex); ok && usage != nil {
+		copied := *usage
+		copied.LastExitAt = now.UnixMilli()
+
+		r.usage.Put(keyIndex, &copied)
 	}
 
-	copied := *usage
-	copied.LastExitAt = time.Now().UnixMilli()
+	r.mu.Lock()
 
-	r.usage.Put(keyIndex, &copied)
+	if runtime, ok := r.runtimes[keyIndex]; ok {
+		runtime.exitPendingUntil = now.Add(exitPendingTTL)
+	}
+
+	r.mu.Unlock()
 
 	r.Refresh()
 }
