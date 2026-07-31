@@ -475,7 +475,7 @@ func TestHandleSubmitBeaconBlock_RecordsSubmissions(t *testing.T) {
 		blockHash := phase0.Hash32{0xab}
 		seedGloasPayload(env.handler, slot, blockHash)
 
-		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 		require.Equal(t, http.StatusAccepted, rec.Code)
 
 		calls := recorder.submissionCalls()
@@ -500,7 +500,7 @@ func TestHandleSubmitBeaconBlock_RecordsSubmissions(t *testing.T) {
 		blockHash := phase0.Hash32{0xab}
 		seedGloasPayload(env.handler, slot, blockHash)
 
-		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 
 		calls := recorder.submissionCalls()

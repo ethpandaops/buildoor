@@ -307,6 +307,10 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
+			// Effective balances (bid readiness, top-up decisions) must account
+			// for payments settled since the last epoch snapshot.
+			keyRegistry.SetBalanceAdjuster(paymentTracker)
+
 			revealSvc = payload_bidder.NewRevealService(cfg, keyRegistry,
 				clClient, chainSvc, builderSvc, paymentTracker, planSvc,
 				chainSvc.GetHeadVoteTracker(), logger)
@@ -316,7 +320,8 @@ and begins building blocks according to configuration.`,
 			defer revealSvc.Stop()
 		}
 
-		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, revealSvc, paymentTracker, logger)
+		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, keyRegistry,
+			revealSvc, paymentTracker, logger)
 
 		if err := inclusionTracker.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start inclusion tracker: %w", err)

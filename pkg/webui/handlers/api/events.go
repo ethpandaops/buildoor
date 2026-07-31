@@ -1524,7 +1524,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if m.payments != nil {
-			adjustment := m.payments.GetBalanceAdjustment()
+			adjustment := m.payments.GetBalanceAdjustment(m.epbsSvc.Registry().Primary().KeyIndex())
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0

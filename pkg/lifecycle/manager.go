@@ -707,7 +707,7 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 				} else {
 					// Immediately reflect the topup in the live balance (no finalization delay)
 					if tracker := m.GetPaymentTracker(); tracker != nil {
-						tracker.AddDeposit(amount)
+						tracker.AddDeposit(m.registry.Primary().KeyIndex(), amount)
 					}
 
 					m.fireEvent("balance_topup", fmt.Sprintf("Balance topped up by %d gwei", amount), "success")

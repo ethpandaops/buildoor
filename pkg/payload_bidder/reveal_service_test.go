@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -118,6 +119,7 @@ func (s *stubVoteSource) fire(slot phase0.Slot, root phase0.Root, pct float64) {
 
 // revealTestEnv bundles the wiring shared by the reveal service tests.
 type revealTestEnv struct {
+	registry   *builder_keys.Registry
 	cfg        *config.Config
 	chainSvc   *stubChainService
 	builderSvc *payload_builder.Service
@@ -160,6 +162,7 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 
 	return &revealTestEnv{
 		cfg:        cfg,
+		registry:   registry,
 		chainSvc:   chainSvc,
 		builderSvc: builderSvc,
 		payments:   payments,
@@ -207,10 +210,11 @@ func TestRevealService_RevealsAtDueTime(t *testing.T) {
 	blockRoot := phase0.Root{0x11}
 	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(2_000_000_000_000)) // 2000 gwei
 
-	env.payments.RecordWonBid(slot, 2000)
+	env.payments.RecordWonBid(0, slot, 2000)
 
 	env.svc.RequestReveal(&RevealRequest{
 		Payload:   payload,
+		Key:       env.key(t),
 		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: blockRoot, ParentRoot: phase0.Root{0x22}},
 		Transport: payload_builder.BidTransportBuilderAPI,
 	})
@@ -240,7 +244,7 @@ func TestRevealService_RevealsAtDueTime(t *testing.T) {
 
 	// The pending payment moved to a balance deduction.
 	assert.Equal(t, uint64(0), env.payments.GetTotalPendingPayments())
-	assert.Equal(t, int64(-2000), env.payments.GetBalanceAdjustment())
+	assert.Equal(t, int64(-2000), env.payments.GetBalanceAdjustment(0))
 
 	assert.Equal(t, uint64(1), env.builderSvc.GetStats().RevealsSuccess)
 }
@@ -260,11 +264,11 @@ func TestRevealService_DedupsBySlot(t *testing.T) {
 
 	// Two requests for the same slot from different transports.
 	env.svc.RequestReveal(&RevealRequest{
-		Payload: payload, BlockInfo: blockInfo,
+		Payload: payload, Key: env.key(t), BlockInfo: blockInfo,
 		Transport: payload_builder.BidTransportBuilderAPI,
 	})
 	env.svc.RequestReveal(&RevealRequest{
-		Payload: payload, BlockInfo: blockInfo,
+		Payload: payload, Key: env.key(t), BlockInfo: blockInfo,
 		Transport: payload_builder.BidTransportP2P,
 	})
 
@@ -305,10 +309,11 @@ func TestRevealService_RetriesThenGivesUp(t *testing.T) {
 	slot := phase0.Slot(1)
 	payload := newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1))
 
-	env.payments.RecordWonBid(slot, 42)
+	env.payments.RecordWonBid(0, slot, 42)
 
 	env.svc.RequestReveal(&RevealRequest{
 		Payload:   payload,
+		Key:       env.key(t),
 		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
 		Transport: payload_builder.BidTransportP2P,
 	})
@@ -356,6 +361,7 @@ func TestRevealService_SkipsStaleSlot(t *testing.T) {
 
 	env.svc.RequestReveal(&RevealRequest{
 		Payload:   payload,
+		Key:       env.key(t),
 		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
 		Transport: payload_builder.BidTransportP2P,
 	})
@@ -389,11 +395,11 @@ func TestRevealService_PlanSuppressedReveal(t *testing.T) {
 
 	// Two requests for the suppressed slot — the second must be a no-op too.
 	env.svc.RequestReveal(&RevealRequest{
-		Payload: payload, BlockInfo: blockInfo,
+		Payload: payload, Key: env.key(t), BlockInfo: blockInfo,
 		Transport: payload_builder.BidTransportBuilderAPI,
 	})
 	env.svc.RequestReveal(&RevealRequest{
-		Payload: payload, BlockInfo: blockInfo,
+		Payload: payload, Key: env.key(t), BlockInfo: blockInfo,
 		Transport: payload_builder.BidTransportP2P,
 	})
 
@@ -439,6 +445,7 @@ func TestRevealService_BypassDeadlinePublishesLate(t *testing.T) {
 
 	env.svc.RequestReveal(&RevealRequest{
 		Payload:   payload,
+		Key:       env.key(t),
 		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
 		Transport: payload_builder.BidTransportP2P,
 	})
@@ -455,10 +462,25 @@ func TestRevealService_BypassDeadlinePublishesLate(t *testing.T) {
 	require.NotNil(t, payload.Reveal(), "payload must be marked revealed")
 }
 
-// revealRequest builds a standard request for slot 1.
-func revealRequest(slot phase0.Slot, root phase0.Root) *RevealRequest {
+// key returns the key set's first key: every reveal must name the key whose bid
+// the block committed to, since the envelope is signed with it.
+func (e *revealTestEnv) key(t *testing.T) *builder_keys.Key {
+	t.Helper()
+
+	key, err := e.registry.Key(0)
+	require.NoError(t, err)
+
+	return key
+}
+
+// revealRequest builds a standard request for slot 1, bound to the key set's
+// first key (the envelope must be signed by whichever key's bid won).
+func revealRequest(t *testing.T, env *revealTestEnv, slot phase0.Slot, root phase0.Root) *RevealRequest {
+	t.Helper()
+
 	return &RevealRequest{
 		Payload:   newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1)),
+		Key:       env.key(t),
 		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: root, ParentRoot: phase0.Root{0x22}},
 		Transport: payload_builder.BidTransportP2P,
 	}
@@ -477,7 +499,7 @@ func TestRevealService_VoteGateRevealsOnThreshold(t *testing.T) {
 
 	slot := phase0.Slot(1)
 	root := phase0.Root{0x11}
-	env.svc.RequestReveal(revealRequest(slot, root))
+	env.svc.RequestReveal(revealRequest(t, env, slot, root))
 
 	// Below the threshold: nothing may publish.
 	time.Sleep(150 * time.Millisecond)
@@ -509,7 +531,7 @@ func TestRevealService_VoteGateAlreadyMetAtSchedule(t *testing.T) {
 
 	// Participation is already above the threshold when the request arrives.
 	env.votes.fire(slot, root, 80)
-	env.svc.RequestReveal(revealRequest(slot, root))
+	env.svc.RequestReveal(revealRequest(t, env, slot, root))
 
 	require.Eventually(t, func() bool {
 		return env.publisher.callCount() == 1
@@ -525,7 +547,7 @@ func TestRevealService_VoteOrTimeFallsBackToTimeGate(t *testing.T) {
 	defer env.svc.Stop()
 
 	slot := phase0.Slot(1)
-	env.svc.RequestReveal(revealRequest(slot, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, slot, phase0.Root{0x11}))
 
 	// The threshold is never reached — the time gate publishes at 400ms.
 	time.Sleep(150 * time.Millisecond)
@@ -549,7 +571,7 @@ func TestRevealService_VoteAndTimeWaitsForBoth(t *testing.T) {
 
 	// Vote gate opens right away; the time gate must still hold the reveal.
 	env.votes.fire(slot, root, 90)
-	env.svc.RequestReveal(revealRequest(slot, root))
+	env.svc.RequestReveal(revealRequest(t, env, slot, root))
 
 	time.Sleep(250 * time.Millisecond)
 	require.Equal(t, 0, env.publisher.callCount(), "and-mode must wait for the time gate")
@@ -570,7 +592,7 @@ func TestRevealService_VoteGateTimeoutWithholds(t *testing.T) {
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
 
-	env.svc.RequestReveal(revealRequest(1, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, 1, phase0.Root{0x11}))
 
 	res := waitForResult(t, sub.Channel(), 3*time.Second)
 	assert.True(t, res.Skipped)
@@ -588,7 +610,7 @@ func TestRevealService_GloballyDisabled(t *testing.T) {
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
 
-	env.svc.RequestReveal(revealRequest(1, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, 1, phase0.Root{0x11}))
 
 	res := waitForResult(t, sub.Channel(), 2*time.Second)
 	assert.True(t, res.Skipped)
@@ -605,7 +627,7 @@ func TestRevealService_PlanCustomForcesDespiteGlobalDisable(t *testing.T) {
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
 
-	env.svc.RequestReveal(revealRequest(1, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, 1, phase0.Root{0x11}))
 
 	require.Eventually(t, func() bool {
 		return env.publisher.callCount() == 1
@@ -619,7 +641,7 @@ func TestRevealService_BroadcastValidationPassthrough(t *testing.T) {
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
 
-	env.svc.RequestReveal(revealRequest(1, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, 1, phase0.Root{0x11}))
 
 	require.Eventually(t, func() bool {
 		return env.publisher.callCount() == 1
@@ -640,7 +662,7 @@ func TestRevealService_RetryPolicyFromConfig(t *testing.T) {
 	require.NoError(t, env.svc.Start(context.Background()))
 	defer env.svc.Stop()
 
-	env.svc.RequestReveal(revealRequest(1, phase0.Root{0x11}))
+	env.svc.RequestReveal(revealRequest(t, env, 1, phase0.Root{0x11}))
 
 	require.Eventually(t, func() bool {
 		return env.publisher.callCount() == 2

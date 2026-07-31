@@ -38,7 +38,11 @@ type headVoteSource interface {
 // RevealRequest asks the RevealService to publish a payload's envelope at the
 // configured reveal time. Both flows submit these; the service dedupes by slot.
 type RevealRequest struct {
-	Payload   *payload_builder.Payload
+	Payload *payload_builder.Payload
+	// Key is the builder key whose bid the block committed to. The envelope
+	// must be signed by it and carry its builder index, or the reveal is
+	// rejected while the payment is still owed.
+	Key       *builder_keys.Key
 	BlockInfo *beacon.BlockInfo // root + parent root of the committing beacon block
 	Transport payload_builder.BidTransport
 }
@@ -583,7 +587,7 @@ func (s *RevealService) processDue(now time.Time) {
 		})
 
 		if s.payments != nil {
-			s.payments.MarkRevealed(slot)
+			s.payments.MarkRevealed(state.req.Key.KeyIndex(), slot)
 		}
 
 		s.builderSvc.IncrementRevealsSuccess()
@@ -718,7 +722,10 @@ func (s *RevealService) buildEnvelope(req *RevealRequest) (
 	ctx, cancel := context.WithTimeout(s.ctx, transformTimeout)
 	defer cancel()
 
-	revealKey := s.registry.Primary()
+	revealKey := req.Key
+	if revealKey == nil {
+		return nil, nil, nil, fmt.Errorf("reveal request for slot %d has no builder key", slot)
+	}
 
 	builderIndex, registered := revealKey.BuilderIndex()
 	if !registered {

@@ -106,7 +106,7 @@ func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
 			// head events would).
 			chainSvc.primeHeadTracker(logger, winBlock, competing5)
 			builderSvc := newTestBuilderSvc(chainSvc)
-			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, nil, logger)
 
 			statusSub := tracker.SubscribePayloadStatus(4, false)
 			defer statusSub.Unsubscribe()
@@ -149,7 +149,7 @@ func TestInclusionTracker_ReorgRevisesVerdict(t *testing.T) {
 	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
 	chainSvc.primeHeadTracker(logger, winBlock, onChain6, competing5)
 	builderSvc := newTestBuilderSvc(chainSvc)
-	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, nil, logger)
 
 	statusSub := tracker.SubscribePayloadStatus(8, false)
 	defer statusSub.Unsubscribe()
@@ -205,7 +205,7 @@ func TestInclusionTracker_PaymentStateLogging(t *testing.T) {
 			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
 			chainSvc.primeHeadTracker(logger, winBlock)
 			builderSvc := newTestBuilderSvc(chainSvc)
-			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, nil, logger)
 
 			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
 			builderSvc.GetPayloadCache().Store(payload)
@@ -256,7 +256,7 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 			revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
 				chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
 
-			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, revealSvc, payments, logger)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
 			includedSub := tracker.SubscribeIncluded(4, false)
 
 			defer includedSub.Unsubscribe()
@@ -333,7 +333,7 @@ func TestInclusionTracker_BuildWonBlockSource(t *testing.T) {
 			logger, _ := newHookedLogger()
 			chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
 			builderSvc := newTestBuilderSvc(chainSvc)
-			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, nil, logger)
+			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, nil, logger)
 
 			blockHash := phase0.Hash32{0xaa}
 			payload := newTestPayload(5, blockHash, big.NewInt(1_000_000_000_000))
@@ -410,14 +410,14 @@ func TestInclusionTracker_OrphanDisputesPaymentAndUnmarksWin(t *testing.T) {
 	chainSvc.primeHeadTracker(logger, winBlock, competing5, onChain6)
 	builderSvc := newTestBuilderSvc(chainSvc)
 	payments := NewPaymentTracker(chainSvc, logger)
-	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, nil, payments, logger)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, payments, logger)
 
 	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
 	builderSvc.GetPayloadCache().Store(payload)
 
 	// Win at slot 5: pending payment recorded... (payments require revealSvc
 	// too in checkForOurPayload, so record directly).
-	payments.RecordWonBid(5, 1000)
+	payments.RecordWonBid(0, 5, 1000)
 	tracker.processBlockInfo(winBlock)
 
 	require.Equal(t, uint64(1000), payments.GetTotalPendingPayments())
@@ -440,4 +440,72 @@ func TestInclusionTracker_OrphanDisputesPaymentAndUnmarksWin(t *testing.T) {
 	})
 	assert.Equal(t, uint64(1000), payments.GetTotalPendingPayments(),
 		"re-canonical win must restore the pending payment")
+}
+
+// The block's bid builder index — not the payload — decides which key owes the
+// payment and signs the reveal: several managed keys can bid the very same
+// payload, so the block hash alone cannot identify the winner.
+func TestInclusionTracker_BindsWinToTheBiddingKey(t *testing.T) {
+	logger, _ := newHookedLogger()
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	builderSvc := newTestBuilderSvc(chainSvc)
+	payments := NewPaymentTracker(chainSvc, logger)
+
+	// Two managed keys, registered under builder indices 4 and 9.
+	registry := newTestKeyRegistry(t, 4, 9)
+
+	cfg := &config.Config{}
+	revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
+		chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
+
+	blockHash := phase0.Hash32{0xab}
+	payload := newTestPayload(7, blockHash, big.NewInt(3_000_000_000_000)) // 3000 gwei
+	builderSvc.GetPayloadCache().Store(payload)
+
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot:               7,
+		ExecutionBlockHash: blockHash,
+		BuilderIndex:       9,
+		BuilderIndexKnown:  true,
+	})
+
+	// The payment lands on the second key, and the reveal is bound to it.
+	assert.Equal(t, uint64(0), payments.GetPendingPayments(0))
+	assert.Equal(t, uint64(3000), payments.GetPendingPayments(1))
+
+	require.Len(t, revealSvc.requests, 1)
+	req := <-revealSvc.requests
+	require.NotNil(t, req.Key)
+	assert.Equal(t, uint64(1), req.Key.KeyIndex())
+
+}
+
+// A block naming a builder index we do not own is refused outright rather than
+// bound to some other key of ours: signing that reveal would be worthless and
+// the payment would be misattributed.
+func TestInclusionTracker_RejectsForeignBuilderIndex(t *testing.T) {
+	logger, _ := newHookedLogger()
+	chainSvc := &stubChainService{currentFork: version.DataVersionGloas}
+	builderSvc := newTestBuilderSvc(chainSvc)
+	payments := NewPaymentTracker(chainSvc, logger)
+	registry := newTestKeyRegistry(t, 4, 9)
+
+	cfg := &config.Config{}
+	revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
+		chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
+	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
+
+	blockHash := phase0.Hash32{0xcd}
+	builderSvc.GetPayloadCache().Store(newTestPayload(8, blockHash, big.NewInt(1_000_000_000_000)))
+
+	tracker.processBlockInfo(&beacon.BlockInfo{
+		Slot:               8,
+		ExecutionBlockHash: blockHash,
+		BuilderIndex:       42,
+		BuilderIndexKnown:  true,
+	})
+
+	assert.Empty(t, revealSvc.requests, "a foreign builder index must not schedule a reveal")
+	assert.Equal(t, uint64(0), payments.GetTotalPendingPayments())
 }
