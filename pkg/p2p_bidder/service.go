@@ -244,6 +244,12 @@ func (s *Service) Stop() {
 
 	s.wg.Wait()
 
+	// Bid submissions run detached from the scheduler's tick, so they are
+	// awaited separately.
+	if s.scheduler != nil {
+		s.scheduler.Wait()
+	}
+
 	s.log.Info("p2p bidder service stopped")
 }
 

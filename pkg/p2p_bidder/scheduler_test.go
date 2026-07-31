@@ -166,6 +166,14 @@ type schedulerHarness struct {
 	events    *utils.Subscription[*BidSubmissionEvent]
 }
 
+// bidTick runs one scheduler evaluation of the test slot and waits for the bid
+// submissions it started: they are dispatched detached from the tick so a slow
+// beacon call cannot stall the scheduler.
+func (h *schedulerHarness) bidTick(msRelativeToSlot int64) {
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), msRelativeToSlot)
+	h.scheduler.Wait()
+}
+
 // agePayloadBid moves a payload's last bid past any interval so the next
 // evaluation re-bids it.
 func (h *schedulerHarness) agePayloadBid(blockHash phase0.Hash32) {
@@ -296,7 +304,7 @@ func TestSchedulerSuppressedSlotSkips(t *testing.T) {
 			}
 
 			h.preparePayload(testSlot, 100, false)
-			h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+			h.bidTick(1000)
 
 			assert.Empty(t, h.submitter.submitted, "no bid must be submitted for a suppressed slot")
 			assert.Nil(t, h.nextEvent(), "no event must fire for a suppressed slot")
@@ -315,7 +323,7 @@ func TestSchedulerForcedSlotBidsWhileDisabled(t *testing.T) {
 
 	h.applyBidPlan(t, testSlot, `{"mode":"custom"}`)
 	h.preparePayload(testSlot, 100, false)
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.Len(t, h.submitter.submitted, 1, "forced slot must bid despite global disable")
 
@@ -381,7 +389,7 @@ func TestSchedulerAbsoluteBidValue(t *testing.T) {
 
 			h.applyBidPlan(t, testSlot, tt.bidPlan)
 			h.preparePayload(testSlot, tt.blockValueGwei, false)
-			h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+			h.bidTick(1000)
 
 			require.Len(t, h.submitter.submitted, 1)
 			assert.Equal(t, phase0.Gwei(tt.wantValue), h.submitter.submitted[0].Message.Value)
@@ -414,7 +422,7 @@ func TestSchedulerSignedNegativeWindow(t *testing.T) {
 
 			h.applyBidPlan(t, testSlot, bidPlan)
 			h.preparePayload(testSlot, 100, false)
-			h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), tt.msRelativeToSlot)
+			h.bidTick(tt.msRelativeToSlot)
 
 			if tt.wantBid {
 				assert.Len(t, h.submitter.submitted, 1)
@@ -432,7 +440,7 @@ func TestSchedulerPrefsGate(t *testing.T) {
 		})
 
 		h.preparePayload(testSlot, 100, true)
-		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+		h.bidTick(1000)
 
 		assert.Empty(t, h.submitter.submitted)
 
@@ -444,7 +452,7 @@ func TestSchedulerPrefsGate(t *testing.T) {
 		assert.Empty(t, event.Status, "pre-construction skips carry no submission status")
 
 		// The skip is reported once per slot, not on every tick.
-		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1010)
+		h.bidTick(1010)
 		assert.Nil(t, h.nextEvent())
 	})
 
@@ -455,7 +463,7 @@ func TestSchedulerPrefsGate(t *testing.T) {
 
 		h.applyBidPlan(t, testSlot, `{"mode":"custom","ignore_missing_prefs":true}`)
 		h.preparePayload(testSlot, 100, true)
-		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+		h.bidTick(1000)
 
 		require.Len(t, h.submitter.submitted, 1, "bypass must bid without preferences")
 
@@ -476,7 +484,7 @@ func TestSchedulerConstructedEventOnSubmitFailure(t *testing.T) {
 
 	h.applyBidPlan(t, testSlot, `{"mode":"custom"}`)
 	h.preparePayload(testSlot, 100, false)
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	event := h.nextEvent()
 	require.NotNil(t, event)
@@ -499,7 +507,7 @@ func TestSchedulerGlobalDefaultsWithoutPlan(t *testing.T) {
 	h.cfg.EPBS.BidSubsidy = 7
 
 	h.preparePayload(testSlot, 100, false)
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.Len(t, h.submitter.submitted, 1)
 	assert.Equal(t, phase0.Gwei(107), h.submitter.submitted[0].Message.Value,
@@ -524,7 +532,7 @@ func TestSchedulerIntervalIncreaseAndCompetitorHigh(t *testing.T) {
 	h.scheduler.bidTracker.TrackBid(newTestBid(testSlot, 99, 500), false)
 	h.scheduler.bidTracker.TrackBid(newTestBid(testSlot, testBuilderIndex, 1000), true)
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	event := h.nextEvent()
 	require.NotNil(t, event)
@@ -535,7 +543,7 @@ func TestSchedulerIntervalIncreaseAndCompetitorHigh(t *testing.T) {
 	// Age the last bid past the interval, then re-bid with the increase.
 	h.agePayloadBid(phase0.Hash32{0xbb})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	h.bidTick(1100)
 
 	event = h.nextEvent()
 	require.NotNil(t, event)
@@ -552,7 +560,7 @@ func TestSchedulerOverflowClampsInsteadOfWrapping(t *testing.T) {
 		`{"mode":"custom","bid_value_gwei":18446744073709551615,"bid_interval":10,"bid_increase":10}`)
 	h.preparePayload(testSlot, 100, false)
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 	event := h.nextEvent()
 	require.NotNil(t, event)
 	assert.Equal(t, uint64(math.MaxUint64), event.Value)
@@ -560,7 +568,7 @@ func TestSchedulerOverflowClampsInsteadOfWrapping(t *testing.T) {
 	// Re-bid: MaxUint64 + 1*10 must clamp, not wrap to 9.
 	h.agePayloadBid(phase0.Hash32{0xbb})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	h.bidTick(1100)
 	event = h.nextEvent()
 	require.NotNil(t, event)
 	assert.Equal(t, uint64(math.MaxUint64), event.Value, "overflowing re-bid must clamp to MaxUint64")
@@ -661,7 +669,7 @@ func TestSchedulerBidCandidateSelection(t *testing.T) {
 
 	// A forced candidate key bids exactly that payload.
 	h.cfg.EPBS.BidCandidate = "parent_empty"
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	event := h.nextEvent()
 	require.NotNil(t, event)
@@ -677,14 +685,14 @@ func TestSchedulerBidCandidateAll(t *testing.T) {
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.cfg.EPBS.BidCandidate = "all"
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
 	require.NotNil(t, h.nextEvent(), "second candidate bid expected")
 	require.Nil(t, h.nextEvent())
 
 	// The single-bid dedup is per payload: a second tick bids nothing new.
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	h.bidTick(1100)
 	require.Nil(t, h.nextEvent())
 }
 
@@ -697,7 +705,7 @@ func TestSchedulerAutoCandidateSticky(t *testing.T) {
 
 	// Auto (no head tracker in the stub): primary payload wins and the
 	// choice sticks on the slot state.
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	event := h.nextEvent()
 	require.NotNil(t, event)
@@ -720,7 +728,7 @@ func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
 	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
 	require.NotNil(t, h.nextEvent(),
@@ -728,7 +736,7 @@ func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
 	require.Nil(t, h.nextEvent())
 
 	// Within the interval neither payload re-bids.
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	h.bidTick(1100)
 	require.Nil(t, h.nextEvent())
 }
 
@@ -746,7 +754,7 @@ func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.cfg.EPBS.BidCandidate = "all"
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	first := h.nextEvent()
 	require.NotNil(t, first)
@@ -782,7 +790,7 @@ func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
 	seen := make(map[uint64]struct{}, 3)
 
 	for range 3 {
-		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+		h.bidTick(1000)
 
 		event := h.nextEvent()
 		require.NotNil(t, event)
@@ -799,7 +807,7 @@ func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
 
 	// The fleet is exhausted: a fourth attempt has no key left that could
 	// propagate, so it bids nothing rather than repeating a spent key.
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 	require.Nil(t, h.nextEvent())
 }
 
@@ -816,7 +824,7 @@ func TestSchedulerBidKeysPerSlotCap(t *testing.T) {
 	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
 	require.Nil(t, h.nextEvent(), "the key cap must stop the second candidate")
@@ -860,6 +868,7 @@ func TestSchedulerDoesNotReBidDuringSubmission(t *testing.T) {
 
 	close(release)
 	wg.Wait()
+	h.scheduler.Wait()
 
 	assert.Equal(t, 1, h.submitter.count(), "only one bid may be submitted while one is in flight")
 }
@@ -878,11 +887,11 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	// One bid, then many ticks inside the interval.
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 	require.NotNil(t, h.nextEvent())
 
 	for range 10 {
-		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1010)
+		h.bidTick(1010)
 	}
 
 	require.Nil(t, h.nextEvent(), "ticks inside the interval must not bid")
@@ -907,7 +916,7 @@ func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	values := make([]uint64, 0, 3)
 	builders := make(map[uint64]struct{}, 3)
@@ -941,15 +950,49 @@ func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
 	h.cache.Store(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	h.bidTick(1000)
 
 	require.NotNil(t, h.nextEvent())
 	require.NotNil(t, h.nextEvent())
 	require.Nil(t, h.nextEvent(), "the step spends at most two keys")
 
 	h.agePayloadBid(payload.BlockHash)
-	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1100)
+	h.bidTick(1100)
 
 	require.NotNil(t, h.nextEvent(), "the next step spends the last key")
 	require.Nil(t, h.nextEvent())
+}
+
+// A submission in flight must not hold up the scheduler: the tick dispatches it
+// and returns, so the next step — and the next slot — is evaluated on time even
+// when a beacon call is slow.
+func TestSchedulerTickDoesNotWaitForSubmissions(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	release := make(chan struct{})
+	h.submitter.beforeSubmit = func() { <-release }
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the tick blocked on an in-flight submission")
+	}
+
+	// The submission is still in flight; releasing it lets shutdown drain.
+	require.Eventually(t, func() bool { return h.submitter.pending() > 0 },
+		time.Second, 5*time.Millisecond, "the submission must run detached from the tick")
+
+	close(release)
+	h.scheduler.Wait()
 }

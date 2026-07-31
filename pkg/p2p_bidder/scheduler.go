@@ -82,6 +82,16 @@ type Scheduler struct {
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
 	mu         sync.Mutex
+
+	// wg tracks in-flight bid submissions so shutdown can wait for them. They
+	// deliberately do NOT block the tick that started them.
+	wg sync.WaitGroup
+}
+
+// Wait blocks until every in-flight bid submission has finished. Called during
+// shutdown, after the context is cancelled.
+func (s *Scheduler) Wait() {
+	s.wg.Wait()
 }
 
 // NewScheduler creates a new scheduler. planSvc is the mandatory per-slot
@@ -290,23 +300,23 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	// Every planned bid is an independent key on an independent payload, so the
-	// submissions go out concurrently: serializing them would spread a slot's
-	// bids over tens of milliseconds each and waste the bid window.
-	var wg sync.WaitGroup
-
+	// submissions go out concurrently AND detached from this tick: a submission
+	// takes tens of milliseconds while the scheduler ticks every 10ms, so
+	// waiting on them here would stall the next step — and the next slot — for
+	// the duration of the slowest beacon call. All the state a later tick reads
+	// (the payload's interval claim, each key's claim) is already committed by
+	// planBidStep before any of these start.
 	for _, payload := range payloads {
 		for _, planned := range s.planBidStep(slot, now, bidSettings, payload) {
-			wg.Add(1)
+			s.wg.Add(1)
 
 			go func() {
-				defer wg.Done()
+				defer s.wg.Done()
 
 				s.submitBid(ctx, slot, msRelativeToSlot, bidSettings, planned, payload, prefsBypassed)
 			}()
 		}
 	}
-
-	wg.Wait()
 }
 
 // selectBidPayloads returns the built payload(s) the slot's bids commit to,
