@@ -28,7 +28,6 @@ const buildCallTimeout = 10 * time.Second
 // transformTimeout bounds how long an operator jq payload transform may run.
 const transformTimeout = 2 * time.Second
 
-
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
 //

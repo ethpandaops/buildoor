@@ -10,6 +10,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -23,43 +24,45 @@ type bidSubmitter interface {
 
 // BidCreator builds ePBS bids via the shared payload_bidder and gossips them
 // over p2p. It owns the p2p transport and the (caller-computed) bid economics;
-// the bid construction and signing live in payload_bidder.
+// the bid construction and signing live in payload_bidder. The builder identity
+// comes in per bid: which of the managed keys signs is a scheduler decision.
 type BidCreator struct {
-	signer       *payload_bidder.Signer
-	clClient     bidSubmitter
-	chainSvc     chain.Service
-	builderIndex uint64
-	log          logrus.FieldLogger
+	clClient bidSubmitter
+	chainSvc chain.Service
+	log      logrus.FieldLogger
 }
 
 // NewBidCreator creates a new bid creator.
 func NewBidCreator(
-	signer *payload_bidder.Signer,
 	clClient bidSubmitter,
 	chainSvc chain.Service,
-	builderIndex uint64,
 	log logrus.FieldLogger,
 ) *BidCreator {
 	return &BidCreator{
-		signer:       signer,
-		clClient:     clClient,
-		chainSvc:     chainSvc,
-		builderIndex: builderIndex,
-		log:          log.WithField("component", "bid-creator"),
+		clClient: clClient,
+		chainSvc: chainSvc,
+		log:      log.WithField("component", "bid-creator"),
 	}
 }
 
 // CreateAndSubmitBid builds, signs, and gossips a bid for the given payload at
-// the supplied value. The competitive bid value is decided by the scheduler;
-// the ePBS p2p path takes no execution payment. The constructed signed bid is
-// returned even when the network submission fails so callers can record the
-// exact object that was built; it is nil only when construction itself failed.
+// the supplied value, from the given builder key. The competitive bid value is
+// decided by the scheduler; the ePBS p2p path takes no execution payment. The
+// constructed signed bid is returned even when the network submission fails so
+// callers can record the exact object that was built; it is nil only when
+// construction itself failed.
 func (c *BidCreator) CreateAndSubmitBid(
 	ctx context.Context,
+	key *builder_keys.Key,
 	payload *payload_builder.Payload,
 	bidValue uint64,
 	bidTransform string,
 ) (*eth2all.SignedExecutionPayloadBid, error) {
+	builderIndex, registered := key.BuilderIndex()
+	if !registered {
+		return nil, fmt.Errorf("builder key %s is not registered on chain", key)
+	}
+
 	var feeRecipient bellatrix.ExecutionAddress
 
 	copy(feeRecipient[:], payload.FeeRecipient[:])
@@ -76,12 +79,13 @@ func (c *BidCreator) CreateAndSubmitBid(
 	}
 
 	signedBid, err := payload_bidder.BuildSignedBid(ctx, payload, payload_bidder.BidParams{
-		BuilderIndex:     c.builderIndex,
+		BuilderIndex:     builderIndex,
 		FeeRecipient:     feeRecipient,
 		Value:            phase0.Gwei(bidValue),
 		ExecutionPayment: 0,
 		Transform:        bidTransform,
-	}, c.signer, forkVersion, c.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	}, payload_bidder.NewSigner(key.BLSSigner()), forkVersion,
+		c.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build signed bid: %w", err)
 	}
@@ -90,7 +94,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 		"slot":              payload.Attributes.ProposalSlot,
 		"value":             bidValue,
 		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
-		"builder_index":     c.builderIndex,
+		"key":               key.String(),
+		"builder_index":     builderIndex,
 		"fee_recipient":     payload.FeeRecipient.Hex(),
 		"gas_limit":         payload.ExecutionPayload.GasLimit,
 		"parent_block_hash": fmt.Sprintf("%x", payload.Attributes.ParentBlockHash[:8]),
@@ -110,14 +115,4 @@ func (c *BidCreator) CreateAndSubmitBid(
 	logger.Info("Bid submitted")
 
 	return signedBid, nil
-}
-
-// SetBuilderIndex updates the builder index.
-func (c *BidCreator) SetBuilderIndex(index uint64) {
-	c.builderIndex = index
-}
-
-// GetBuilderIndex returns the current builder index.
-func (c *BidCreator) GetBuilderIndex() uint64 {
-	return c.builderIndex
 }

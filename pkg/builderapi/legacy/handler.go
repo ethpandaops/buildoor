@@ -14,11 +14,11 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // EventBroadcaster is the narrow WebUI event surface the legacy dialect needs
@@ -81,7 +81,7 @@ type Handler struct {
 	chainSvc        chain.Service
 	payloadCache    *payload_builder.PayloadCache
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
-	blsSigner       *signer.BLSSigner
+	registry        *builder_keys.Registry
 
 	// planSvc is the mandatory per-slot scheduling/settings authority: bid
 	// serving is decided exclusively by the slot's frozen plan.
@@ -106,7 +106,7 @@ type Handler struct {
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
-	blsSigner *signer.BLSSigner) *Handler {
+	registry *builder_keys.Registry) *Handler {
 	return &Handler{
 		cfg:             cfg,
 		log:             log.WithField("component", "builderapi-legacy"),
@@ -114,7 +114,7 @@ func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc c
 		planSvc:         planSvc,
 		payloadCache:    payloadCache,
 		validatorsStore: validatorsStore,
-		blsSigner:       blsSigner,
+		registry:        registry,
 		lastBids:        make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
 	}
 }

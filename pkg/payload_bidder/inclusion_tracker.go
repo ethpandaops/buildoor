@@ -254,7 +254,6 @@ func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
 	}
 }
 
-
 // applyVerdictSideEffects propagates a verdict change into the win and
 // payment bookkeeping: an orphaned winning block clears the payload's won
 // marker (so a re-inclusion is detected again) and disputes the pending

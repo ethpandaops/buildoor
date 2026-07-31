@@ -15,12 +15,12 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // SlotState tracks the bidding state for a single slot.
@@ -55,7 +55,7 @@ type Scheduler struct {
 	bidTracker     *BidTracker
 	payloadCache   *payload_builder.PayloadCache
 	service        *Service // Reference to parent service for firing events
-	blsSigner      *signer.BLSSigner
+	registry       *builder_keys.Registry
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	planSvc        *action_plan.PlanService // per-slot scheduling/settings authority
 	cfg            *config.Config           // shared config; mutable settings read live
@@ -77,7 +77,7 @@ func NewScheduler(
 	bidTracker *BidTracker,
 	payloadCache *payload_builder.PayloadCache,
 	service *Service,
-	blsSigner *signer.BLSSigner,
+	registry *builder_keys.Registry,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	planSvc *action_plan.PlanService,
 	cfg *config.Config,
@@ -89,7 +89,7 @@ func NewScheduler(
 		bidTracker:     bidTracker,
 		payloadCache:   payloadCache,
 		service:        service,
-		blsSigner:      blsSigner,
+		registry:       registry,
 		propPrefsStore: propPrefsStore,
 		planSvc:        planSvc,
 		cfg:            cfg,
@@ -177,8 +177,9 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 		return
 	}
 
-	// Don't bid if the builder is not active on-chain.
-	if !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
+	// Don't bid unless at least one managed key is active on chain; which key
+	// each bid is signed with is decided per bid.
+	if !s.registry.AnyActive() {
 		return
 	}
 
@@ -271,7 +272,8 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	for _, payload := range payloads {
-		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, payload, prefsBypassed)
+		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings,
+			s.registry.Primary(), payload, prefsBypassed)
 	}
 }
 
@@ -379,9 +381,12 @@ func (s *Scheduler) trySubmitBid(
 	now time.Time,
 	msRelativeToSlot int64,
 	bidSettings *action_plan.ResolvedBidSettings,
+	key *builder_keys.Key,
 	payload *payload_builder.Payload,
 	prefsBypassed bool,
 ) {
+	builderIndex, _ := key.BuilderIndex()
+
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
@@ -448,7 +453,7 @@ func (s *Scheduler) trySubmitBid(
 		bidTransform = state.Frozen.Transforms.Bid
 	}
 
-	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue, bidTransform)
+	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, key, payload, bidValue, bidTransform)
 
 	// Update state regardless of success - we don't want to spam on failure
 	s.mu.Lock()
@@ -476,8 +481,7 @@ func (s *Scheduler) trySubmitBid(
 		event.Warning = "no proposer preferences for slot — bid sent anyway (ignore_missing_prefs)"
 	}
 
-	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, s.bidCreator.GetBuilderIndex(),
-		payload.Attributes.ParentBlockHash); ok {
+	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, payload.Attributes.ParentBlockHash); ok {
 		event.CompetitorHighGwei = &high
 	}
 
@@ -503,7 +507,7 @@ func (s *Scheduler) trySubmitBid(
 	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{
 		Slot:            slot,
-		BuilderIndex:    s.bidCreator.builderIndex,
+		BuilderIndex:    builderIndex,
 		Value:           bidValue,
 		BlockHash:       payload.BlockHash,
 		ParentBlockHash: payload.Attributes.ParentBlockHash,

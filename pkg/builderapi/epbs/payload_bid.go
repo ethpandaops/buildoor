@@ -18,11 +18,10 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // GetExecutionPayloadBidResponse is the JSON envelope returned by
@@ -51,14 +50,14 @@ type GetExecutionPayloadBidResponse struct {
 func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
 
-	if h.payloadCache == nil || h.blsSigner == nil {
-		log.Warn("getExecutionPayloadBid: returning 204 — signer or payload cache unavailable")
+	if h.payloadCache == nil || h.registry == nil {
+		log.Warn("getExecutionPayloadBid: returning 204 — key registry or payload cache unavailable")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	if !chain.IsBuilderActive(h.chainSvc.GetBuilderByPubkey(h.blsSigner.PublicKey()), uint64(h.chainSvc.GetFinalizedEpoch())) {
-		log.Warn("getExecutionPayloadBid: returning 204 — builder not active on chain")
+	if !h.registry.AnyActive() {
+		log.Warn("getExecutionPayloadBid: returning 204 — no builder key active on chain")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -302,13 +301,24 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	tctx, cancel := context.WithTimeout(r.Context(), transformTimeout)
 	defer cancel()
 
+	bidKey := h.registry.Primary()
+
+	builderIndex, registered := bidKey.BuilderIndex()
+	if !registered {
+		log.Warn("getExecutionPayloadBid: returning 204 — selected builder key is not registered")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	signedBid, err := payload_bidder.BuildSignedBid(tctx, event, payload_bidder.BidParams{
-		BuilderIndex:     h.builderIndex.Load(),
+		BuilderIndex:     builderIndex,
 		FeeRecipient:     prefs.FeeRecipient,
 		Value:            value,
 		ExecutionPayment: executionPayment,
 		Transform:        bidTransform,
-	}, h.bidderSigner, bidForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	}, payload_bidder.NewSigner(bidKey.BLSSigner()), bidForkVersion,
+		h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")
 		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),

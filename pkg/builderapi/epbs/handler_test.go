@@ -37,7 +37,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -188,8 +187,7 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
 
 	cfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
 	cfg.Reveal = config.DefaultConfig().Reveal
@@ -211,12 +209,12 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
+		cfg, registry, publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
-		payload_builder.NewPayloadCache(10), blsSigner)
+		payload_builder.NewPayloadCache(10), registry)
 	h.SetBlockBroadcaster(broadcaster)
 	h.SetRevealService(revealSvc)
 	h.SetEnabled(true)

@@ -421,7 +421,7 @@ func (h *APIHandler) PostDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.lifecycleMgr.EnsureBuilderRegistered(context.Background()); err != nil {
+	if err := h.lifecycleMgr.EnsureBuilderRegistered(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
 		h.audit(r, token, "lifecycle.deposit", "", req, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
 
@@ -498,7 +498,7 @@ func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.lifecycleMgr.InitiateExit(context.Background()); err != nil {
+	if err := h.lifecycleMgr.InitiateExit(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
 		h.audit(r, token, "lifecycle.exit", "", nil, "error: "+err.Error())
 		writeError(w, http.StatusInternalServerError, err.Error())
 

@@ -113,6 +113,26 @@ func (r *Registry) MarkExitSubmitted(keyIndex uint64) {
 	r.Refresh()
 }
 
+// PrimeKeyState derives the key at the given index, applies mutate to a copy of
+// its state snapshot and publishes the result. It bypasses the chain refresh, so
+// it is only for tests and for priming a key before any beacon state is
+// available; the next Refresh overwrites whatever it set.
+func (r *Registry) PrimeKeyState(keyIndex uint64, mutate func(*State)) (*Key, error) {
+	key, err := r.Key(keyIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	state := *key.State()
+	mutate(&state)
+	key.state.Store(&state)
+
+	r.setTracked(keyIndex, true)
+	r.rebuildBuilderIndex()
+
+	return key, nil
+}
+
 // MarkToppedUp records the epoch of a submitted top-up, arming the per-key
 // cooldown that keeps a low balance from queueing duplicate deposits before the
 // pending one lands.

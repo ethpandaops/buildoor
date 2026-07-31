@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -38,7 +39,6 @@ const depositContractABI = `[{"name":"deposit","type":"function","stateMutabilit
 type EarlyDepositService struct {
 	cfg        *config.Config
 	chainSvc   chain.Service
-	signer     *signer.BLSSigner
 	wallet     *wallet.Wallet
 	depositABI abi.ABI
 	log        logrus.FieldLogger
@@ -48,7 +48,6 @@ type EarlyDepositService struct {
 func NewEarlyDepositService(
 	cfg *config.Config,
 	chainSvc chain.Service,
-	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
 ) (*EarlyDepositService, error) {
@@ -60,23 +59,22 @@ func NewEarlyDepositService(
 	return &EarlyDepositService{
 		cfg:        cfg,
 		chainSvc:   chainSvc,
-		signer:     blsSigner,
 		wallet:     w,
 		depositABI: depositABI,
 		log:        log.WithField("component", "early-deposit-service"),
 	}, nil
 }
 
-// HasPendingDeposit reports whether this builder's pubkey is already present in the
+// HasPendingDeposit reports whether the key's pubkey is already present in the
 // beacon state's pending_deposits queue. It is used after a restart to avoid submitting
 // a duplicate early deposit while a prior one is still waiting in the queue.
-func (s *EarlyDepositService) HasPendingDeposit() bool {
+func (s *EarlyDepositService) HasPendingDeposit(key *builder_keys.Key) bool {
 	stats := s.chainSvc.GetCurrentEpochStats()
 	if stats == nil {
 		return false
 	}
 
-	pubkey := s.signer.PublicKey()
+	pubkey := key.Pubkey()
 	for i := range stats.PendingDeposits {
 		if stats.PendingDeposits[i].Pubkey == pubkey {
 			return true
@@ -86,17 +84,19 @@ func (s *EarlyDepositService) HasPendingDeposit() bool {
 	return false
 }
 
-// CreateEarlyDeposit builds, signs and sends a validator deposit for this builder via
+// CreateEarlyDeposit builds, signs and sends a validator deposit for the given key via
 // the regular deposit contract. The deposit uses 0xB0 (BUILDER_WITHDRAWAL_PREFIX) withdrawal
 // credentials pointing at the funding wallet and is signed with the validator deposit
 // domain over GENESIS_FORK_VERSION.
-func (s *EarlyDepositService) CreateEarlyDeposit(ctx context.Context, amountGwei uint64) error {
+func (s *EarlyDepositService) CreateEarlyDeposit(
+	ctx context.Context, key *builder_keys.Key, amountGwei uint64,
+) error {
 	depositContract := s.chainSvc.GetChainSpec().DepositContractAddress
 	if depositContract == nil {
 		return ErrNoDepositContract
 	}
 
-	pubkey := s.signer.PublicKey()
+	pubkey := key.Pubkey()
 	withdrawalCredentials := ValidatorWithdrawalCredentials(s.wallet.Address())
 	genesisForkVersion := s.chainSvc.GetGenesis().GenesisForkVersion
 
@@ -106,7 +106,7 @@ func (s *EarlyDepositService) CreateEarlyDeposit(ctx context.Context, amountGwei
 		return fmt.Errorf("failed to compute deposit signing root: %w", err)
 	}
 
-	signature, err := s.signer.Sign(signingRoot[:])
+	signature, err := key.BLSSigner().Sign(signingRoot[:])
 	if err != nil {
 		return fmt.Errorf("failed to sign early deposit: %w", err)
 	}
@@ -130,6 +130,7 @@ func (s *EarlyDepositService) CreateEarlyDeposit(ctx context.Context, amountGwei
 	value := GweiToWei(amountGwei)
 
 	s.log.WithFields(logrus.Fields{
+		"key":              key.String(),
 		"pubkey":           fmt.Sprintf("0x%x", pubkey[:]),
 		"withdrawal_creds": fmt.Sprintf("0x%x", withdrawalCredentials[:]),
 		"deposit_contract": depositContract.Hex(),

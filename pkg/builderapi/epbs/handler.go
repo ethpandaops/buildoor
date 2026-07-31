@@ -17,12 +17,12 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // EventBroadcaster is the narrow WebUI event surface the post-Gloas dialect needs
@@ -87,25 +87,25 @@ type Handler struct {
 	log          logrus.FieldLogger
 	chainSvc     chain.Service
 	payloadCache *payload_builder.PayloadCache
-	bidderSigner *payload_bidder.Signer // shared Gloas bid signer (wraps blsSigner)
-	blsSigner    *signer.BLSSigner      // IsBuilderActive pubkey check
+	// registry is the managed builder key set: it decides which key signs each
+	// served bid and supplies the builder index that goes into it.
+	registry *builder_keys.Registry
 
 	// planSvc is the mandatory per-slot scheduling/settings authority: bid
 	// serving is decided exclusively by the slot's frozen plan.
 	planSvc *action_plan.PlanService
 
-	revealSvc      *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
-	onDemandBuilder OnDemandPayloadBuilder                                            // SetOnDemandBuilder (nil-checked)
-	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
-	prefsStore     *BuilderPreferencesStore                                           // created in NewHandler
-	broadcaster    BlockBroadcaster                                                   // SetBlockBroadcaster
-	events         EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
-	recorder       SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
+	revealSvc       *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
+	onDemandBuilder OnDemandPayloadBuilder                                             // SetOnDemandBuilder (nil-checked)
+	propPrefsStore  *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
+	prefsStore      *BuilderPreferencesStore                                           // created in NewHandler
+	broadcaster     BlockBroadcaster                                                   // SetBlockBroadcaster
+	events          EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
+	recorder        SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
 
 	lastBidMu sync.Mutex
 	lastBids  map[phase0.Slot]recordedBid // dedupe of repeated identical bid records
 
-	builderIndex   atomic.Uint64 // builder index used in Gloas bids; set after lifecycle registration
 	enabled        atomic.Bool
 	bidsRequested  atomic.Uint64 // count of getExecutionPayloadBid requests received
 	blocksAccepted atomic.Uint64 // count of accepted signed beacon blocks
@@ -117,15 +117,14 @@ type Handler struct {
 // (via Freeze) on every getExecutionPayloadBid request.
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
-	blsSigner *signer.BLSSigner) *Handler {
+	registry *builder_keys.Registry) *Handler {
 	return &Handler{
 		cfg:          cfg,
 		log:          log.WithField("component", "builderapi-epbs"),
 		chainSvc:     chainSvc,
 		planSvc:      planSvc,
 		payloadCache: payloadCache,
-		bidderSigner: payload_bidder.NewSigner(blsSigner),
-		blsSigner:    blsSigner,
+		registry:     registry,
 		prefsStore:   NewBuilderPreferencesStore(),
 		lastBids:     make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
 	}
@@ -243,12 +242,6 @@ func (h *Handler) SetBlockBroadcaster(b BlockBroadcaster) {
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.
 func (h *Handler) SetEventBroadcaster(b EventBroadcaster) {
 	h.events = b
-}
-
-// SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
-// Called from the lifecycle manager once registration is observed.
-func (h *Handler) SetBuilderIndex(index uint64) {
-	h.builderIndex.Store(index)
 }
 
 // SetEnabled sets the enabled state of the post-Gloas Builder API dialect.

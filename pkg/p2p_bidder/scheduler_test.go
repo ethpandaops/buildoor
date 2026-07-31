@@ -21,10 +21,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
-	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -150,22 +148,21 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
-	blsSigner, err := signer.NewBLSSigner(testBuilderPrivkey)
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, testBuilderIndex)
 
 	prefs := memstore.New[phase0.Slot, *gloasspec.SignedProposerPreferences]()
 
-	svc, err := NewService(nil, chainSvc, blsSigner, prefs, planSvc, log)
+	svc, err := NewService(nil, chainSvc, registry, prefs, planSvc, log)
 	require.NoError(t, err)
 	svc.SetEnabled(opts.serviceEnabled)
 
 	submitter := &mockBidSubmitter{}
-	bidCreator := NewBidCreator(payload_bidder.NewSigner(blsSigner), submitter, chainSvc, testBuilderIndex, log)
-	bidTracker := NewBidTracker(testBuilderIndex, log)
+	bidCreator := NewBidCreator(submitter, chainSvc, log)
+	bidTracker := NewBidTracker(registry, log)
 	cache := payload_builder.NewPayloadCache(8)
 
 	scheduler := NewScheduler(chainSvc, bidCreator, bidTracker,
-		cache, svc, blsSigner, prefs, planSvc, cfg, log)
+		cache, svc, registry, prefs, planSvc, cfg, log)
 
 	events := svc.SubscribeBidSubmissions(16, false)
 	t.Cleanup(events.Unsubscribe)
@@ -541,7 +538,9 @@ func TestBidCreatorReturnsBidOnSubmitFailure(t *testing.T) {
 
 	chainSvc := newStubChainService()
 
-	blsSigner, err := signer.NewBLSSigner(testBuilderPrivkey)
+	registry := newTestKeyRegistry(t, testBuilderIndex)
+
+	key, err := registry.Key(0)
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -562,12 +561,11 @@ func TestBidCreatorReturnsBidOnSubmitFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			submitter := &mockBidSubmitter{err: tt.submitErr}
-			creator := NewBidCreator(payload_bidder.NewSigner(blsSigner), submitter,
-				chainSvc, testBuilderIndex, log)
+			creator := NewBidCreator(submitter, chainSvc, log)
 
 			payload := newSchedulerTestPayload(testSlot, gweiToWei(100))
 
-			signedBid, err := creator.CreateAndSubmitBid(context.Background(), payload, 42, "")
+			signedBid, err := creator.CreateAndSubmitBid(context.Background(), key, payload, 42, "")
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {

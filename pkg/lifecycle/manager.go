@@ -12,11 +12,11 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
@@ -44,7 +44,7 @@ type Manager struct {
 	cfg             *config.Config
 	clClient        *beacon.Client
 	chainSvc        chain.Service
-	signer          *signer.BLSSigner
+	registry        *builder_keys.Registry
 	wallet          *wallet.Wallet
 	builderState    *BuilderState
 	stateMu         sync.RWMutex
@@ -72,7 +72,7 @@ func NewManager(
 	cfg *config.Config,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
-	blsSigner *signer.BLSSigner,
+	registry *builder_keys.Registry,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
 ) (*Manager, error) {
@@ -82,7 +82,7 @@ func NewManager(
 		cfg:          cfg,
 		clClient:     clClient,
 		chainSvc:     chainSvc,
-		signer:       blsSigner,
+		registry:     registry,
 		wallet:       w,
 		builderState: &BuilderState{},
 		log:          managerLog,
@@ -90,7 +90,7 @@ func NewManager(
 	}
 
 	// Initialize services
-	depositSvc, err := NewDepositService(cfg, chainSvc, blsSigner, w, managerLog)
+	depositSvc, err := NewDepositService(cfg, chainSvc, w, managerLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deposit service: %w", err)
 	}
@@ -99,7 +99,7 @@ func NewManager(
 
 	// Early deposit service (regular validator deposit contract, used to onboard the
 	// builder before the Gloas fork so there is no Builder-API-to-Gloas coverage gap).
-	earlyDepositSvc, err := NewEarlyDepositService(cfg, chainSvc, blsSigner, w, managerLog)
+	earlyDepositSvc, err := NewEarlyDepositService(cfg, chainSvc, w, managerLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create early deposit service: %w", err)
 	}
@@ -107,7 +107,7 @@ func NewManager(
 	m.earlyDepositSvc = earlyDepositSvc
 
 	// Exit service (builder exit system contract, sent from the funding wallet)
-	m.exitSvc = NewExitService(chainSvc, blsSigner, w, managerLog)
+	m.exitSvc = NewExitService(chainSvc, w, managerLog)
 
 	return m, nil
 }
@@ -177,15 +177,21 @@ func (m *Manager) GetBuilderState() *BuilderState {
 	return &state
 }
 
+// Registry returns the managed builder key set.
+func (m *Manager) Registry() *builder_keys.Registry {
+	return m.registry
+}
+
 // GetWallet returns the wallet instance.
 func (m *Manager) GetWallet() *wallet.Wallet {
 	return m.wallet
 }
 
-// EnsureBuilderRegistered checks if builder is registered and deposits if needed.
-// This is the synchronous version used by CLI commands (e.g. cmd/deposit.go).
-func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
-	isRegistered, state, err := m.depositSvc.IsBuilderRegistered(ctx)
+// EnsureBuilderRegistered checks whether the given builder key is registered and
+// deposits if needed. This is the synchronous version used by CLI commands
+// (e.g. cmd/deposit.go) and the lifecycle API.
+func (m *Manager) EnsureBuilderRegistered(ctx context.Context, key *builder_keys.Key) error {
+	isRegistered, state, err := m.depositSvc.IsBuilderRegistered(key)
 	if err != nil {
 		return fmt.Errorf("failed to check builder registration: %w", err)
 	}
@@ -217,7 +223,7 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 		m.depositPendingCallback()
 	}
 
-	if err := m.depositSvc.CreateDeposit(ctx, m.cfg.DepositAmount); err != nil {
+	if err := m.depositSvc.CreateDeposit(ctx, key, m.cfg.DepositAmount); err != nil {
 		if isDepositDeferred(err) {
 			// Fee too high or contract not active yet — delay, don't treat as failure.
 			m.fireEvent("deposit", fmt.Sprintf("Deposit deferred: %v", err), "info")
@@ -231,7 +237,7 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context) error {
 	m.fireEvent("deposit", "Deposit transaction confirmed, waiting for beacon chain inclusion", "success")
 
 	// Wait for registration
-	return m.WaitForRegistration(ctx, 5*time.Minute)
+	return m.WaitForRegistration(ctx, key, 5*time.Minute)
 }
 
 // CheckAndTopup checks balance and tops up if needed.
@@ -240,11 +246,12 @@ func (m *Manager) CheckAndTopup(ctx context.Context) error {
 		return nil
 	}
 
-	return m.balanceSvc.CheckAndTopup(ctx)
+	return m.balanceSvc.CheckAndTopup(ctx, m.registry.Primary())
 }
 
-// InitiateExit submits a builder exit request via the builder exit system contract.
-func (m *Manager) InitiateExit(ctx context.Context) error {
+// InitiateExit submits a builder exit request for the given key via the builder
+// exit system contract.
+func (m *Manager) InitiateExit(ctx context.Context, key *builder_keys.Key) error {
 	m.stateMu.RLock()
 	builderIndex := m.builderState.Index
 	isRegistered := m.builderState.IsRegistered
@@ -259,7 +266,7 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 	// Check the live chain entry, not the cached state: an already-exited builder
 	// fails is_active_builder on the beacon side, so a second request only wastes
 	// the queue fee.
-	info := m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey())
+	info := m.chainSvc.GetBuilderByPubkey(key.Pubkey())
 	if chain.HasBuilderExited(info) {
 		return fmt.Errorf("builder exit already initiated (withdrawable epoch %d)", info.WithdrawableEpoch)
 	}
@@ -273,7 +280,7 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 
 	m.fireEvent("exit", fmt.Sprintf("Submitting builder exit for builder index %d", builderIndex), "info")
 
-	if err := m.exitSvc.CreateExit(ctx); err != nil {
+	if err := m.exitSvc.CreateExit(ctx, key); err != nil {
 		m.fireEvent("exit", fmt.Sprintf("Exit failed: %v", err), "error")
 
 		return err
@@ -284,15 +291,17 @@ func (m *Manager) InitiateExit(ctx context.Context) error {
 	return nil
 }
 
-// WaitForRegistration waits for the builder to be registered.
-func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration) error {
+// WaitForRegistration waits for the given builder key to be registered.
+func (m *Manager) WaitForRegistration(
+	ctx context.Context, key *builder_keys.Key, timeout time.Duration,
+) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	ticker := time.NewTicker(m.chainSvc.GetChainSpec().SecondsPerSlot) // Check every slot
 	defer ticker.Stop()
 
-	pubkey := m.signer.PublicKey()
+	pubkey := key.Pubkey()
 
 	for {
 		select {
@@ -336,7 +345,7 @@ func (m *Manager) WaitForRegistration(ctx context.Context, timeout time.Duration
 // stores it for direct access.
 func (m *Manager) SetPaymentTracker(payments *payload_bidder.PaymentTracker) {
 	m.payments = payments
-	m.balanceSvc = NewBalanceService(m.cfg, m.clClient, m.depositSvc, payments, m.log)
+	m.balanceSvc = NewBalanceService(m.cfg, m.chainSvc, m.registry, m.depositSvc, m.log)
 }
 
 // GetPaymentTracker returns the shared payment tracker.
@@ -436,7 +445,7 @@ func (m *Manager) maybeEarlyOnboard(ctx context.Context) {
 		return
 	}
 
-	if m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey()) != nil {
+	if m.chainSvc.GetBuilderByPubkey(m.registry.Primary().Pubkey()) != nil {
 		return
 	}
 
@@ -477,7 +486,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		return false // paused; keep waiting until re-enabled
 	}
 
-	if info := m.chainSvc.GetBuilderByPubkey(m.signer.PublicKey()); info != nil {
+	if info := m.chainSvc.GetBuilderByPubkey(m.registry.Primary().Pubkey()); info != nil {
 		m.onRegistered(info.Index)
 
 		return true
@@ -491,7 +500,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 
 	// Restart safety: if our deposit is already in the pending queue, don't submit again;
 	// just wait for the fork transition to convert it into a builder.
-	if m.earlyDepositSvc.HasPendingDeposit() {
+	if m.earlyDepositSvc.HasPendingDeposit(m.registry.Primary()) {
 		m.log.Info("Early builder deposit already pending, waiting for registration")
 		m.fireEvent("early_onboard", "Early deposit already pending, waiting for registration", "info")
 		m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
@@ -547,7 +556,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		m.depositPendingCallback()
 	}
 
-	if err := m.earlyDepositSvc.CreateEarlyDeposit(ctx, amount); err != nil {
+	if err := m.earlyDepositSvc.CreateEarlyDeposit(ctx, m.registry.Primary(), amount); err != nil {
 		m.log.WithError(err).Warn("Early onboarding deposit failed, retrying next epoch")
 		m.fireEvent("early_onboard", fmt.Sprintf("Early deposit failed: %v, retrying", err), "warning")
 
@@ -571,7 +580,7 @@ func (m *Manager) waitForEarlyRegistration(ctx context.Context, forkEpoch, curre
 	epochsToWait := uint64(forkEpoch-currentEpoch) + earlyOnboardFinalizationMargin
 	timeout := max(time.Duration(epochsToWait*spec.SlotsPerEpoch)*spec.SecondsPerSlot, 5*time.Minute)
 
-	if err := m.WaitForRegistration(ctx, timeout); err != nil {
+	if err := m.WaitForRegistration(ctx, m.registry.Primary(), timeout); err != nil {
 		m.log.WithError(err).Warn("Builder not registered after early deposit; normal post-fork flow will retry")
 		m.fireEvent("early_onboard", "Builder not yet registered after early deposit; post-fork flow will retry", "warning")
 	}
@@ -626,7 +635,7 @@ func (m *Manager) ensureRegisteredWithRetry(ctx context.Context) {
 		default:
 		}
 
-		err := m.EnsureBuilderRegistered(ctx)
+		err := m.EnsureBuilderRegistered(ctx, m.registry.Primary())
 		if err == nil {
 			return
 		}
@@ -669,7 +678,7 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 				continue
 			}
 
-			needsTopup, amount, err := m.balanceSvc.NeedsTopup(ctx)
+			needsTopup, amount, err := m.balanceSvc.NeedsTopup(m.registry.Primary())
 			if err != nil {
 				if errors.Is(err, ErrBuilderExited) {
 					// Expected steady state after an exit; the one-time warning
@@ -685,7 +694,7 @@ func (m *Manager) runBalanceMonitor(ctx context.Context) {
 			if needsTopup {
 				m.fireEvent("balance_topup", fmt.Sprintf("Balance below threshold, topping up %d gwei", amount), "info")
 
-				if err := m.balanceSvc.CheckAndTopup(ctx); err != nil {
+				if err := m.balanceSvc.CheckAndTopup(ctx, m.registry.Primary()); err != nil {
 					if isDepositDeferred(err) {
 						// Queue fee too high or contract not active — delay this top-up
 						// to the next monitor tick instead of failing.
@@ -727,7 +736,7 @@ func (m *Manager) noticeExitOnce(withdrawableEpoch uint64) {
 
 // refreshBuilderState updates the cached builder state from the chain service.
 func (m *Manager) refreshBuilderState() {
-	pubkey := m.signer.PublicKey()
+	pubkey := m.registry.Primary().Pubkey()
 	info := m.chainSvc.GetBuilderByPubkey(pubkey)
 
 	if info == nil {

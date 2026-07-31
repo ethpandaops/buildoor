@@ -649,6 +649,28 @@ func (r *Registry) State(keyIndex uint64) *State {
 	return runtime.key.State()
 }
 
+// EffectiveBalance returns the key's live spendable balance in gwei: the latest
+// beacon snapshot combined with the current local adjustment, rather than the
+// adjustment captured at the last refresh. Bid readiness and top-up decisions
+// read this — a payment settled seconds ago must not still look spendable.
+func (r *Registry) EffectiveBalance(keyIndex uint64) uint64 {
+	state := r.State(keyIndex)
+	if state == nil {
+		return 0
+	}
+
+	r.mu.RLock()
+	adjuster := r.adjuster
+	r.mu.RUnlock()
+
+	live := *state
+	if adjuster != nil {
+		live.BalanceAdjustment = adjuster.GetBalanceAdjustment(keyIndex)
+	}
+
+	return effectiveBalance(&live)
+}
+
 // States returns a snapshot of every derived key's state, key-index ascending.
 func (r *Registry) States() []*State {
 	keys := r.Keys()

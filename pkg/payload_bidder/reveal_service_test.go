@@ -21,7 +21,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -139,8 +138,7 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
 
 	cfg := &config.Config{}
 	cfg.Reveal = config.DefaultConfig().Reveal
@@ -157,7 +155,7 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 	votes := newStubVoteSource()
 
-	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc,
+	svc := NewRevealService(cfg, registry, publisher, chainSvc, builderSvc,
 		payments, planSvc, votes, log)
 
 	return &revealTestEnv{

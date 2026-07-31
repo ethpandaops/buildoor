@@ -18,7 +18,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // newHookedLogger returns a logger capturing entries in a test hook while
@@ -250,12 +249,11 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 			builderSvc := newTestBuilderSvc(chainSvc)
 			payments := NewPaymentTracker(chainSvc, logger)
 
-			blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-			require.NoError(t, err)
+			registry := newTestKeyRegistry(t, 1)
 
 			// Not started: RequestReveal just queues on the buffered channel.
 			cfg := &config.Config{}
-			revealSvc := NewRevealService(cfg, NewSigner(blsSigner), &mockEnvelopePublisher{},
+			revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
 				chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
 
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, revealSvc, payments, logger)

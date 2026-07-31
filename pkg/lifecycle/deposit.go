@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -49,11 +50,11 @@ func isDepositDeferred(err error) bool {
 const depositGasLimit = 1000000
 
 // DepositService handles builder deposits and top-ups via the EIP-8282 builder
-// deposit system contract.
+// deposit system contract. It is key-agnostic: every operation names the builder
+// key it acts on, so one service serves the whole managed key set.
 type DepositService struct {
 	cfg      *config.Config
 	chainSvc chain.Service
-	signer   *signer.BLSSigner
 	wallet   *wallet.Wallet
 	log      logrus.FieldLogger
 }
@@ -62,7 +63,6 @@ type DepositService struct {
 func NewDepositService(
 	cfg *config.Config,
 	chainSvc chain.Service,
-	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
 ) (*DepositService, error) {
@@ -79,15 +79,15 @@ func NewDepositService(
 	return &DepositService{
 		cfg:      cfg,
 		chainSvc: chainSvc,
-		signer:   blsSigner,
 		wallet:   w,
 		log:      depositLog,
 	}, nil
 }
 
-// IsBuilderRegistered checks if the builder is registered on the beacon chain.
-func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *BuilderState, error) {
-	pubkey := s.signer.PublicKey()
+// IsBuilderRegistered checks if the given builder key is registered on the
+// beacon chain.
+func (s *DepositService) IsBuilderRegistered(key *builder_keys.Key) (bool, *BuilderState, error) {
+	pubkey := key.Pubkey()
 
 	info := s.chainSvc.GetBuilderByPubkey(pubkey)
 	if info == nil {
@@ -107,14 +107,17 @@ func (s *DepositService) IsBuilderRegistered(_ context.Context) (bool, *BuilderS
 	}, nil
 }
 
-// CreateDeposit creates and sends an EIP-8282 builder deposit transaction. It is
-// also used for top-ups (which are simply additional deposits for the same pubkey).
+// CreateDeposit creates and sends an EIP-8282 builder deposit transaction for the
+// given key. It is also used for top-ups (which are simply additional deposits
+// for the same pubkey).
 //
 // Before submitting it reads the contract's current per-request queue fee and, when
 // DepositMaxFeeGwei is set, returns ErrDepositFeeTooHigh if the fee exceeds the limit
 // so the caller can delay and retry. The transaction value is stake + queue fee.
-func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) error {
-	pubkey := s.signer.PublicKey()
+func (s *DepositService) CreateDeposit(
+	ctx context.Context, key *builder_keys.Key, amountGwei uint64,
+) error {
+	pubkey := key.Pubkey()
 
 	// Refuse deposits for an exited builder entry: they cannot reactivate it and
 	// are withdrawn back to the wallet, minus gas and the queue fee. A fresh
@@ -123,7 +126,11 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 		return ErrBuilderExited
 	}
 
-	s.log.WithField("amount_gwei", amountGwei).Info("Creating builder deposit")
+	s.log.WithFields(logrus.Fields{
+		"key":         key.String(),
+		"amount_gwei": amountGwei,
+	}).Info("Creating builder deposit")
+
 	withdrawalCredentials := BuilderWithdrawalCredentials(s.wallet.Address())
 
 	// Step 1: Compute the builder-deposit signing root (DOMAIN_BUILDER_DEPOSIT,
@@ -138,7 +145,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 		return fmt.Errorf("failed to compute signing root: %w", err)
 	}
 
-	signature, err := s.signer.Sign(signingRoot[:])
+	signature, err := key.BLSSigner().Sign(signingRoot[:])
 	if err != nil {
 		return fmt.Errorf("failed to sign deposit: %w", err)
 	}
@@ -159,6 +166,7 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 	value := new(big.Int).Add(GweiToWei(amountGwei), fee)
 
 	s.log.WithFields(logrus.Fields{
+		"key":              key.String(),
 		"pubkey":           fmt.Sprintf("0x%x", pubkey[:]),
 		"withdrawal_creds": fmt.Sprintf("0x%x", withdrawalCredentials[:]),
 		"amount_gwei":      amountGwei,
@@ -170,10 +178,15 @@ func (s *DepositService) CreateDeposit(ctx context.Context, amountGwei uint64) e
 }
 
 // CreateTopup creates and sends a top-up transaction (an additional deposit).
-func (s *DepositService) CreateTopup(ctx context.Context, amountGwei uint64) error {
-	s.log.WithField("amount_gwei", amountGwei).Info("Creating builder top-up")
+func (s *DepositService) CreateTopup(
+	ctx context.Context, key *builder_keys.Key, amountGwei uint64,
+) error {
+	s.log.WithFields(logrus.Fields{
+		"key":         key.String(),
+		"amount_gwei": amountGwei,
+	}).Info("Creating builder top-up")
 
-	return s.CreateDeposit(ctx, amountGwei)
+	return s.CreateDeposit(ctx, key, amountGwei)
 }
 
 // resolveDepositFee reads the builder deposit contract's current queue fee and
