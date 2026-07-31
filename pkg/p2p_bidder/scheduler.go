@@ -290,12 +290,7 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	}
 
 	for _, payload := range payloads {
-		key := s.claimBidKey(slot, bidSettings, payload)
-		if key == nil {
-			continue
-		}
-
-		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, key, payload, prefsBypassed)
+		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, payload, prefsBypassed)
 	}
 }
 
@@ -388,7 +383,7 @@ func (s *Scheduler) selectBidPayloads(
 // ticks every 10ms: the ticks landing mid-flight would otherwise pick the same
 // key again. releaseBidKey hands it back when the submission never made it out.
 func (s *Scheduler) claimBidKey(
-	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, payload *payload_builder.Payload,
+	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, bidValue uint64,
 ) *builder_keys.Key {
 	s.mu.Lock()
 	state := s.getSlotState(slot)
@@ -407,11 +402,9 @@ func (s *Scheduler) claimBidKey(
 
 	s.mu.Unlock()
 
-	required := baseBidValue(bidSettings, payload)
-
 	selected := s.registry.SelectForBid(slot, builder_keys.SelectRequest{
 		Strategy:     bidSettings.KeyStrategy,
-		RequiredGwei: required,
+		RequiredGwei: bidValue,
 		Count:        1,
 		Exclude:      spent,
 	})
@@ -425,10 +418,9 @@ func (s *Scheduler) claimBidKey(
 
 		if !alreadyWarned {
 			s.log.WithFields(logrus.Fields{
-				"slot":          slot,
-				"spent_keys":    len(spent),
-				"required_gwei": required,
-				"strategy":      builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
+				"slot":       slot,
+				"spent_keys": len(spent),
+				"strategy":   builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
 			}).Info("Every builder key has bid this slot — no further bid can propagate")
 		}
 
@@ -472,16 +464,26 @@ func (s *Scheduler) releaseBidKey(slot phase0.Slot, key *builder_keys.Key) {
 	s.mu.Unlock()
 }
 
-// baseBidValue is the bid value before the per-re-bid increase: what a key must
-// be able to cover to be worth selecting.
-func baseBidValue(
-	bidSettings *action_plan.ResolvedBidSettings, payload *payload_builder.Payload,
-) uint64 {
-	if bidSettings.ValueGwei != nil {
-		return *bidSettings.ValueGwei
+// releasePayloadBid undoes a payload's bid claim when the attempt never got as
+// far as a key, so the next tick re-evaluates it instead of waiting out an
+// interval it never used.
+func (s *Scheduler) releasePayloadBid(
+	slot phase0.Slot, blockHash phase0.Hash32, bidState *payloadBidState,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state := s.getSlotState(slot)
+	state.BidCount--
+
+	if bidState.count <= 1 {
+		delete(state.PayloadBids, blockHash)
+
+		return
 	}
 
-	return max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei) + bidSettings.SubsidyGwei
+	bidState.count--
+	bidState.lastBid = time.Time{}
 }
 
 // preferredPayload picks the built payload matching the chain view's current
@@ -513,12 +515,9 @@ func (s *Scheduler) trySubmitBid(
 	now time.Time,
 	msRelativeToSlot int64,
 	bidSettings *action_plan.ResolvedBidSettings,
-	key *builder_keys.Key,
 	payload *payload_builder.Payload,
 	prefsBypassed bool,
 ) {
-	builderIndex, _ := key.BuilderIndex()
-
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
@@ -593,6 +592,17 @@ func (s *Scheduler) trySubmitBid(
 	bidCount := state.BidCount
 
 	s.mu.Unlock()
+
+	// Claim a key only once the bid is actually due: claiming before the gate
+	// above would spend a key on every scheduler tick that returns early.
+	key := s.claimBidKey(slot, bidSettings, bidValue)
+	if key == nil {
+		s.releasePayloadBid(slot, payload.BlockHash, bidState)
+
+		return
+	}
+
+	builderIndex, _ := key.BuilderIndex()
 
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,

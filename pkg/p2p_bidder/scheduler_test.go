@@ -862,3 +862,33 @@ func TestSchedulerDoesNotReBidDuringSubmission(t *testing.T) {
 
 	assert.Equal(t, 1, h.submitter.count(), "only one bid may be submitted while one is in flight")
 }
+
+// A tick that finds nothing due must not consume a key. The scheduler ticks
+// every 10ms while the bid interval is far longer, so claiming a key before the
+// interval gate spends the whole fleet within a few ticks and leaves the slot
+// unable to bid at all.
+func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":5000}`)
+
+	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	// One bid, then many ticks inside the interval.
+	h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1000)
+	require.NotNil(t, h.nextEvent())
+
+	for range 10 {
+		h.scheduler.checkSlotForBidding(context.Background(), testSlot, time.Now(), 1010)
+	}
+
+	require.Nil(t, h.nextEvent(), "ticks inside the interval must not bid")
+
+	h.scheduler.mu.Lock()
+	spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+	h.scheduler.mu.Unlock()
+
+	assert.Equal(t, 1, spent, "only the tick that actually bid may spend a key")
+}
