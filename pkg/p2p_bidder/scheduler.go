@@ -27,10 +27,15 @@ import (
 type payloadBidState struct {
 	// lastBid gates the bid interval.
 	lastBid time.Time
-	// count is how often this payload has been bid, driving the value
-	// escalation. It is per payload so several candidates neither throttle each
-	// other nor inherit each other's escalation step.
+	// count is how often this payload has been bid, for reporting.
 	count int
+	// steps is how many interval steps this payload has been through, driving
+	// the value escalation. It counts STEPS, not bids: the bids of one step go
+	// out concurrently and reach the beacon node in arbitrary order, so giving
+	// them different values makes them race — every bid that lands after a
+	// higher one is rejected as too low. Escalation belongs between steps.
+	// It is per payload so several candidates do not inherit each other's step.
+	steps int
 }
 
 // SlotState tracks the bidding state for a single slot.
@@ -574,9 +579,11 @@ func (s *Scheduler) planBidStep(
 
 	planned := make([]plannedBid, 0, 4)
 
-	for range bidSettings.EffectiveKeysPerStep() {
-		value := s.bidValueFor(slot, bidSettings, payload, bidState)
+	// One value for the whole step: its bids are concurrent, so escalating
+	// within it would only make them race each other at the beacon node.
+	value := s.bidValueFor(slot, bidSettings, payload, bidState)
 
+	for range bidSettings.EffectiveKeysPerStep() {
 		key := s.claimBidKey(slot, bidSettings, value)
 		if key == nil {
 			break
@@ -590,6 +597,12 @@ func (s *Scheduler) planBidStep(
 		s.mu.Unlock()
 
 		planned = append(planned, plannedBid{key: key, value: value, bidCount: bidCount})
+	}
+
+	if len(planned) > 0 {
+		s.mu.Lock()
+		bidState.steps++
+		s.mu.Unlock()
 	}
 
 	if len(planned) == 0 {
@@ -631,11 +644,11 @@ func (s *Scheduler) bidValueFor(
 	}
 
 	s.mu.Lock()
-	count := bidState.count
+	steps := bidState.steps
 	s.mu.Unlock()
 
-	if count > 0 {
-		increase := s.mulGweiClamped(slot, uint64(count), bidSettings.IncreaseGwei) //nolint:gosec // count >= 0
+	if steps > 0 {
+		increase := s.mulGweiClamped(slot, uint64(steps), bidSettings.IncreaseGwei) //nolint:gosec // steps >= 0
 		value = s.addGweiClamped(slot, value, increase)
 	}
 
@@ -693,9 +706,12 @@ func (s *Scheduler) submitBid(
 	if err != nil {
 		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
 
-		// Nothing reached the network, so the key was not spent: hand it back so
-		// the next attempt for this slot can use it.
-		s.releaseBidKey(slot, planned.key)
+		// A rejection means the beacon node saw the bid and turned it down, so
+		// the key stays spent: retrying it unchanged only repeats the rejection.
+		// Only a submission that never reached the node hands its key back.
+		if !beacon.BidRejected(err) {
+			s.releaseBidKey(slot, planned.key)
+		}
 
 		// Constructed-but-not-submitted bids carry the signed bid object so
 		// consumers can record exactly what was built.

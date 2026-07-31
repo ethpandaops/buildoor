@@ -6,11 +6,11 @@ import (
 	"errors"
 	"math"
 	"math/big"
-	"slices"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ethpandaops/go-eth2-client/api"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -904,8 +904,11 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 }
 
 // With the per-step count unset a single evaluation spends the whole fleet at
-// once, each key one increment higher — a slot bid from every active key in
-// parallel instead of one key per interval tick.
+// once — a slot bid from every active key in parallel instead of one key per
+// interval tick. The bids of a step all carry the SAME value: they go out
+// concurrently and reach the beacon node in arbitrary order, so escalating
+// within the step would make them race and every bid landing after a higher one
+// would be rejected as too low.
 func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
@@ -933,8 +936,33 @@ func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	require.Nil(t, h.nextEvent(), "the fleet is spent after one step")
 	require.Len(t, builders, 3, "each bid must come from a distinct key")
 
-	slices.Sort(values)
-	assert.Equal(t, []uint64{100, 110, 120}, values, "each key bids one increment higher")
+	assert.Equal(t, []uint64{100, 100, 100}, values, "one step bids one value from every key")
+}
+
+// The escalation runs BETWEEN steps: the next step's keys all bid one increment
+// above the last step's.
+func TestSchedulerEscalatesBetweenSteps(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13, 14)
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_value_gwei":100,"bid_increase":10,"bid_interval":50,"bid_keys_per_step":2}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Store(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.bidTick(1000)
+	first := []uint64{h.nextEvent().Value, h.nextEvent().Value}
+	require.Nil(t, h.nextEvent())
+
+	h.agePayloadBid(payload.BlockHash)
+	h.bidTick(1100)
+	second := []uint64{h.nextEvent().Value, h.nextEvent().Value}
+	require.Nil(t, h.nextEvent())
+
+	assert.Equal(t, []uint64{100, 100}, first, "the first step bids the base value")
+	assert.Equal(t, []uint64{110, 110}, second, "the next step bids one increment higher")
 }
 
 // The per-step count bounds one evaluation; the rest of the fleet waits for the
@@ -995,4 +1023,49 @@ func TestSchedulerTickDoesNotWaitForSubmissions(t *testing.T) {
 
 	close(release)
 	h.scheduler.Wait()
+}
+
+// A bid the beacon node rejected was seen and turned down on merit, so its key
+// stays spent — retrying it unchanged only repeats the rejection, and at fleet
+// scale that spins through every key. A submission that never reached the node
+// still hands its key back.
+func TestSchedulerKeepsRejectedKeysSpent(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantSpent  int
+		wantResubs bool
+	}{
+		{
+			name:      "rejected by the beacon node",
+			err:       api.Error{Method: "POST", StatusCode: 400, Data: []byte("BID_TOO_LOW")},
+			wantSpent: 1,
+		},
+		{
+			name:      "never reached the beacon node",
+			err:       errors.New("connection refused"),
+			wantSpent: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+			h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+			h.submitter.err = test.err
+
+			h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_keys_per_step":1}`)
+
+			h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+			h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+			h.bidTick(1000)
+
+			h.scheduler.mu.Lock()
+			spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+			h.scheduler.mu.Unlock()
+
+			assert.Equal(t, test.wantSpent, spent)
+		})
+	}
 }
