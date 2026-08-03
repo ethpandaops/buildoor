@@ -90,14 +90,7 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
               return (
                 <React.Fragment key={key.key_index}>
                   <tr>
-                    <td>
-                      {key.key_index}
-                      {key.key_index === 0 && (
-                        <span className="badge bg-secondary ms-1" title="The configured entry key">
-                          entry
-                        </span>
-                      )}
-                    </td>
+                    <td>{key.key_index}</td>
                     <td className="font-monospace small">
                       <CopyableHash value={key.pubkey} chars={8} />
                     </td>
