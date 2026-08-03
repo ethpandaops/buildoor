@@ -472,7 +472,6 @@ func (s *RevealService) schedule(req *RevealRequest) {
 	}).Debug("Scheduled payload reveal")
 }
 
-
 // shouldRebind decides whether a second reveal request for an already
 // scheduled slot replaces the schedule: only when re-binding is enabled, the
 // request targets a different beacon block, and the previously bound block is

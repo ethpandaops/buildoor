@@ -94,13 +94,13 @@ type Handler struct {
 	// serving is decided exclusively by the slot's frozen plan.
 	planSvc *action_plan.PlanService
 
-	revealSvc      *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
-	onDemandBuilder OnDemandPayloadBuilder                                            // SetOnDemandBuilder (nil-checked)
-	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
-	prefsStore     *BuilderPreferencesStore                                           // created in NewHandler
-	broadcaster    BlockBroadcaster                                                   // SetBlockBroadcaster
-	events         EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
-	recorder       SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
+	revealSvc       *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
+	onDemandBuilder OnDemandPayloadBuilder                                             // SetOnDemandBuilder (nil-checked)
+	propPrefsStore  *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
+	prefsStore      *BuilderPreferencesStore                                           // created in NewHandler
+	broadcaster     BlockBroadcaster                                                   // SetBlockBroadcaster
+	events          EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
+	recorder        SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
 
 	lastBidMu sync.Mutex
 	lastBids  map[phase0.Slot]recordedBid // dedupe of repeated identical bid records

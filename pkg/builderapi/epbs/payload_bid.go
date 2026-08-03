@@ -21,8 +21,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // GetExecutionPayloadBidResponse is the JSON envelope returned by
