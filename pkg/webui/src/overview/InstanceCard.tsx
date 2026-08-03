@@ -112,6 +112,75 @@ const Row: React.FC<RowProps> = ({ label, children, mono, title }) => (
   </>
 );
 
+// BuilderSummary renders the instance's builder identity. A managed fleet is
+// shown as a count with the individual keys behind a disclosure, since listing
+// every pubkey inline makes the card unreadable once an instance runs hundreds
+// of them. Instances predating the managed key set send no `builders` object,
+// so the single primary key is rendered instead.
+const BuilderSummary: React.FC<{ data: OverviewResponse }> = ({ data }) => {
+  const registeredBadge = (
+    <span
+      className={`ms-2 badge ${
+        data.is_registered
+          ? 'bg-success-subtle text-success-emphasis'
+          : 'bg-warning-subtle text-warning-emphasis'
+      }`}
+    >
+      {data.is_registered ? 'registered' : 'unregistered'}
+    </span>
+  );
+
+  const builders = data.builders;
+
+  if (!builders) {
+    // Legacy instance: one key, reported at the top level.
+    if (!data.builder_pubkey) return <span className="text-muted">–</span>;
+
+    return (
+      <>
+        <CopyableHash value={data.builder_pubkey} chars={8} />
+        {typeof data.builder_index === 'number' && (
+          <span className="text-muted ms-2">idx {data.builder_index}</span>
+        )}
+        {registeredBadge}
+      </>
+    );
+  }
+
+  const keys = builders.keys ?? [];
+
+  return (
+    <>
+      <span className="fw-semibold">{builders.active}</span>
+      <span className="text-muted"> / {builders.count} active</span>
+      {builders.target > 0 && builders.target !== builders.count && (
+        <span className="text-muted" title="configured target"> (target {builders.target})</span>
+      )}
+      {registeredBadge}
+
+      {keys.length > 0 && (
+        <details className="mt-1">
+          <summary className="small text-secondary" style={{ cursor: 'pointer' }}>
+            {keys.length} {keys.length === 1 ? 'key' : 'keys'}
+          </summary>
+          <div className="mt-1 small" style={{ maxHeight: '14rem', overflowY: 'auto' }}>
+            {keys.map((key) => (
+              <div key={key.key_index} className="d-flex align-items-center gap-2 py-1 border-bottom">
+                <span className="text-secondary" style={{ minWidth: '2.5rem' }}>#{key.key_index}</span>
+                <CopyableHash value={key.pubkey} chars={6} />
+                <span className="text-muted" style={{ minWidth: '4rem' }}>
+                  {key.has_builder_index ? `idx ${key.builder_index}` : '–'}
+                </span>
+                <span className="text-secondary">{key.status}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </>
+  );
+};
+
 interface Props {
   host: OverviewHost;
   status: InstanceStatus;
@@ -181,26 +250,8 @@ export const InstanceCard: React.FC<Props> = ({ host, status }) => {
                     )}
                   </Row>
 
-                  <Row label="Builder" mono>
-                    {data.builder_pubkey ? (
-                      <>
-                        <CopyableHash value={data.builder_pubkey} chars={8} />
-                        {typeof data.builder_index === 'number' && (
-                          <span className="text-muted ms-2">idx {data.builder_index}</span>
-                        )}
-                        <span
-                          className={`ms-2 badge ${
-                            data.is_registered
-                              ? 'bg-success-subtle text-success-emphasis'
-                              : 'bg-warning-subtle text-warning-emphasis'
-                          }`}
-                        >
-                          {data.is_registered ? 'registered' : 'unregistered'}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-muted">–</span>
-                    )}
+                  <Row label="Builders" mono>
+                    <BuilderSummary data={data} />
                   </Row>
 
                   {data.version && (
