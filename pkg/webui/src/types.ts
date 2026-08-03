@@ -72,6 +72,10 @@ export interface EPBSConfig {
   bid_interval: number;
   bid_subsidy: number;
   payload_build_delay?: number;
+  bid_candidate?: string;
+  key_strategy?: string;
+  bid_keys_per_slot?: number;
+  bid_keys_per_step?: number;
 }
 
 export interface ServiceStatus {
