@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
 import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
-import { Popover, PopoverData } from './Popover';
+import { Popover, PopoverData, type PopoverItem } from './Popover';
 import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
@@ -186,6 +186,144 @@ const buildHeadVotesPaths = (
   };
 };
 
+
+// One fixed color per build-parent candidate key, consistent across the UI
+// (parent_full keeps the classic build color).
+const CANDIDATE_COLORS: Record<string, string> = {
+  parent_full: '#61e392',
+  parent_empty: '#e6a23c',
+  grandparent_full: '#a78bfa',
+  grandparent_empty: '#8a8f98'
+};
+
+const CANDIDATE_LABELS: Record<string, string> = {
+  parent_full: 'parent (full)',
+  parent_empty: 'parent (empty payload)',
+  grandparent_full: 'grandparent (reorg)',
+  grandparent_empty: 'grandparent (empty payload)'
+};
+
+const candidateColor = (candidate?: string): string | undefined =>
+  candidate ? CANDIDATE_COLORS[candidate] : undefined;
+
+const candidateLabel = (candidate?: string): string =>
+  (candidate && CANDIDATE_LABELS[candidate]) || 'unclassified';
+
+
+
+// Short tab labels and ordering for the per-candidate payload tabs.
+const CANDIDATE_SHORT: Record<string, string> = {
+  parent_full: 'parent',
+  parent_empty: 'parent (empty)',
+  grandparent_full: 'grandparent',
+  grandparent_empty: 'grandparent (empty)'
+};
+
+const CANDIDATE_ORDER: Record<string, number> = {
+  parent_full: 0,
+  parent_empty: 1,
+  grandparent_full: 2,
+  grandparent_empty: 3
+};
+
+const candidateShortLabel = (candidate?: string): string =>
+  (candidate && CANDIDATE_SHORT[candidate]) || 'unclassified';
+
+const candidateOrder = (candidate?: string): number =>
+  (candidate ? CANDIDATE_ORDER[candidate] : undefined) ?? 9;
+
+// candidatePayloadItems renders one candidate payload's rows for its tab in
+// the payload-created popover.
+const candidatePayloadItems = (
+  build: import('../types').CandidateBuild,
+  slotStartTime: number
+): PopoverItem[] => {
+  if (build.failed) {
+    return [
+      { label: 'Status', value: 'build failed' },
+      { label: 'Error', value: build.error ?? 'unknown error' }
+    ];
+  }
+
+  if (build.readyAt === undefined) {
+    return [{ label: 'Status', value: 'building…' }];
+  }
+
+  const d = build.detail;
+
+  return [
+    { label: 'Ready', value: `${build.readyAt - slotStartTime}ms` },
+    ...(build.blockHash
+      ? [{ label: 'Block Hash', value: truncateHashStr(build.blockHash), copyValue: build.blockHash }]
+      : []),
+    ...parentRows(build.parentBlockRoot, build.parentSlot, build.parentBlockHash, build.parentBlockNumber),
+    ...(build.blockValueGwei !== undefined
+      ? [{ label: 'Block Value', value: formatGwei(build.blockValueGwei) }]
+      : []),
+    ...(d?.blockNumber !== undefined ? [{ label: 'Block #', value: `${d.blockNumber}` }] : []),
+    ...(d?.gasUsed !== undefined
+      ? [{
+          label: 'Gas',
+          value: `${d.gasUsed.toLocaleString()} / ${(d.gasLimit ?? 0).toLocaleString()}`
+        }]
+      : []),
+    ...(d
+      ? [{
+          label: 'Contents',
+          value: `${d.numTransactions ?? 0} txs, ${d.numBlobs ?? 0} blobs, ` +
+            `${d.numWithdrawals ?? 0} wdrls, ${d.numExecRequests ?? 0} reqs`
+        }]
+      : [])
+  ];
+};
+
+// candidateRows labels which built candidate payload an event committed to,
+// matched by the payload's block hash.
+const candidateRows = (
+  builds: import('../types').CandidateBuild[],
+  blockHash?: string
+): PopoverItem[] => {
+  if (!blockHash || builds.length < 2) {
+    return [];
+  }
+
+  const match = builds.find(
+    (build) => build.blockHash && build.blockHash.toLowerCase() === blockHash.toLowerCase()
+  );
+
+  return match ? [{ label: 'Payload', value: candidateShortLabel(match.candidate) }] : [];
+};
+
+// parentRows renders the parent tuple a payload was built on: the beacon
+// parent (root + its slot) and the execution parent (hash + its block
+// number), so the payload's position in the chain is readable.
+const parentRows = (
+  parentRoot?: string,
+  parentSlot?: number,
+  parentHash?: string,
+  parentNumber?: number
+): PopoverItem[] => [
+  ...(parentRoot
+    ? [{
+        label: parentSlot !== undefined ? `Parent Block (slot ${parentSlot})` : 'Parent Block',
+        value: truncateHashStr(parentRoot),
+        copyValue: parentRoot
+      }]
+    : []),
+  ...(parentHash
+    ? [{
+        label: parentNumber ? `Parent Payload (#${parentNumber})` : 'Parent Payload',
+        value: truncateHashStr(parentHash),
+        copyValue: parentHash
+      }]
+    : [])
+];
+
+// truncateHashStr shortens a hash for popover display (module scope twin of
+// the component-local helper).
+const truncateHashStr = (hash: string, len = 16): string =>
+  hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
+
 export const SlotGraph: React.FC<SlotGraphProps> = ({
   slot,
   state,
@@ -305,6 +443,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     ? slotStartTime + buildStartMs + payloadBuildTime
     : undefined;
 
+  // Candidate builds: the primary payload keeps the classic build line; every
+  // other candidate renders as a thin colored mini-bar below it, and a badge
+  // with a popover lists them all. One fixed color per candidate key,
+  // consistent across the UI.
+  const candidateBuilds = state.candidateBuilds ?? [];
+  const multiCandidate = candidateBuilds.length > 1;
+  const primaryCandidate = state.payloadCandidate
+    ?? (candidateBuilds.length === 1 ? candidateBuilds[0].candidate : undefined);
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
     return hash.substring(0, len) + '...';
@@ -540,8 +686,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               totalRange={totalRange}
               endAt={buildEndAt}
               expectedEndAt={expectedBuildEndAt}
+              lineColor={candidateColor(primaryCandidate)}
               onClick={(e) => showPopover(e, {
-                title: 'Build Delay',
+                title: `Build Delay${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
                 items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
@@ -555,6 +702,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               })}
             />
           )}
+
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
@@ -622,17 +770,33 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             `payload-attributes-${i}`
           ))}
 
-          {/* Payload created */}
+          {/* Payload created — one tab per built candidate payload */}
           {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
-              title: 'Payload Created',
+              title: multiCandidate ? 'Payloads Created' : 'Payload Created',
               wide: true,
               artifact: {
                 url: `/api/buildoor/slot-results/${slot}/payload`,
                 filename: `slot-${slot}-payload.ssz`
               },
+              tabs: multiCandidate
+                ? [...candidateBuilds]
+                    .sort((a, b) => candidateOrder(a.candidate) - candidateOrder(b.candidate))
+                    .map(build => ({
+                      key: build.candidate || 'unclassified',
+                      label: candidateShortLabel(build.candidate),
+                      color: candidateColor(build.candidate),
+                      items: candidatePayloadItems(build, slotStartTime),
+                      artifact: build.candidate
+                        ? {
+                            url: `/api/buildoor/slot-results/${slot}/payload?candidate=${build.candidate}`,
+                            filename: `slot-${slot}-payload-${build.candidate}.ssz`
+                          }
+                        : undefined
+                    }))
+                : undefined,
               items: [
                 { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
                 ...(state.payloadBlockHash ? [{
@@ -644,6 +808,13 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   label: 'Block Value',
                   value: formatGwei(state.payloadBlockValue)
                 }] : []),
+                ...(() => {
+                  const primary = candidateBuilds.find(b => b.candidate === primaryCandidate)
+                    ?? candidateBuilds[0];
+
+                  return parentRows(primary?.parentBlockRoot, primary?.parentSlot,
+                    primary?.parentBlockHash, primary?.parentBlockNumber);
+                })(),
                 ...(state.payloadDetail?.blockNumber !== undefined ? [{
                   label: 'Block #',
                   value: `${state.payloadDetail.blockNumber}`
@@ -753,7 +924,12 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     }
                   ] : [])
                 ] : []),
-                ...(won ? [{ label: 'Result', value: 'Our payload was included in this block' }] : [])
+                ...(won
+                  ? [
+                      { label: 'Result', value: 'Our payload was included in this block' },
+                      ...candidateRows(candidateBuilds, state.payloadBlockHash)
+                    ]
+                  : [])
               ]
             };
             return (
@@ -896,6 +1072,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                       value: truncateHash(bid.blockHash),
                       copyValue: bid.blockHash
                     }] : []),
+                    ...candidateRows(candidateBuilds, bid.blockHash),
                     ...(bid.parentBlockHash ? [{
                       label: 'Parent Hash',
                       value: truncateHash(bid.parentBlockHash),
@@ -1053,7 +1230,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     label: 'Block Hash',
                     value: truncateHash(state.getHeaderBlockHash),
                     copyValue: state.getHeaderBlockHash
-                  }] : [])
+                  }] : []),
+                  ...candidateRows(candidateBuilds, state.getHeaderBlockHash)
                 ]
               },
               'builder-api-get-header'
@@ -1099,7 +1277,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                     label: 'Block Hash',
                     value: truncateHash(state.getBidBlockHash),
                     copyValue: state.getBidBlockHash
-                  }] : [])
+                  }] : []),
+                  ...candidateRows(candidateBuilds, state.getBidBlockHash)
                 ]
               },
               'builder-api-get-bid'

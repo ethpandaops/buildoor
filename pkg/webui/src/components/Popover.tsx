@@ -6,9 +6,22 @@ export interface PopoverItem {
   copyValue?: string; // Full value to copy (if different from display value)
 }
 
+// A popover tab: one variant of the same event (e.g. the payload built for
+// each build-parent candidate), with its own rows and artifact.
+export interface PopoverTab {
+  key: string;
+  label: string;
+  color?: string;
+  items: PopoverItem[];
+  artifact?: { url: string; filename: string };
+}
+
 export interface PopoverData {
   title: string;
   items: PopoverItem[];
+  // Optional tabs rendered above the rows; the active tab replaces items
+  // and artifact. The first tab is selected initially.
+  tabs?: PopoverTab[];
   // Use the wide popover variant (long values like extra data / content
   // summaries would otherwise line-break).
   wide?: boolean;
@@ -44,6 +57,12 @@ interface PopoverProps {
 export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children }) => {
   const popoverRef = useRef<HTMLDivElement>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState(0);
+
+  const tabs = data.tabs;
+  const active = tabs?.[Math.min(activeTab, tabs.length - 1)];
+  const items = active?.items ?? data.items;
+  const artifact = active?.artifact ?? data.artifact;
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -80,9 +99,26 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
       onClick={(e) => e.stopPropagation()}
     >
       <div className="popover-title">{data.title}</div>
+      {tabs && tabs.length > 1 && (
+        <div className="popover-tabs">
+          {tabs.map((tab, index) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={`popover-tab${index === Math.min(activeTab, tabs.length - 1) ? ' active' : ''}`}
+              onClick={() => setActiveTab(index)}
+            >
+              {tab.color && (
+                <span className="popover-tab-dot" style={{ backgroundColor: tab.color }} />
+              )}
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
       <table className="popover-table">
         <tbody>
-          {data.items.map((item, index) => (
+          {items.map((item, index) => (
             <tr key={index}>
               <td className="popover-label">{item.label}</td>
               <td className="popover-value">
@@ -105,10 +141,10 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
           ))}
         </tbody>
       </table>
-      {data.artifact && (
+      {artifact && (
         <div className="popover-artifacts d-flex gap-1">
           <a
-            href={data.artifact.url}
+            href={artifact.url}
             target="_blank"
             rel="noreferrer"
             className="btn btn-outline-secondary ap-artifact-btn"
@@ -119,7 +155,7 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
             type="button"
             className="btn btn-outline-secondary ap-artifact-btn"
             onClick={() => {
-              downloadSSZ(data.artifact!.url, data.artifact!.filename)
+              downloadSSZ(artifact.url, artifact.filename)
                 .catch((err) => console.error('artifact download failed:', err));
             }}
           >

@@ -691,3 +691,58 @@ func TestResolveRevealSettings(t *testing.T) {
 		}
 	})
 }
+
+func TestFrozenCandidateSettings(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EPBSEnabled = true
+	cfg.APIPort = 8080
+	cfg.BuilderAPIEnabled = true
+
+	log := logrus.New()
+	log.SetLevel(logrus.PanicLevel)
+
+	svc := NewPlanService(cfg, newStubChain(), log)
+
+	// Without a plan: the frozen snapshot carries the complete global
+	// candidate policy and the global bid/serve selections.
+	frozen := svc.Freeze(2000)
+	require.NotNil(t, frozen.Build.CandidateModes)
+	assert.Equal(t, config.CandidateModeAlways, frozen.Build.CandidateModes["parent_full"])
+	assert.Equal(t, config.CandidateModeAuto, frozen.Build.CandidateModes["parent_empty"])
+	assert.Equal(t, config.CandidateModeNever, frozen.Build.CandidateModes["grandparent_empty"])
+	require.NotNil(t, frozen.Bid)
+	assert.Equal(t, "auto", frozen.Bid.BidCandidate)
+	require.NotNil(t, frozen.BuilderAPI)
+	assert.Equal(t, "all", frozen.BuilderAPI.ServeCandidates)
+
+	// Plan overrides merge into the frozen snapshot.
+	_, err := svc.ApplyUpdates([]*PlanUpdate{{
+		Slots: []uint64{2100},
+		Build: json.RawMessage(`{"candidates":{"grandparent_full":"always","parent_empty":"never"}}`),
+		Bid:   json.RawMessage(`{"mode":"custom","bid_candidate":"parent_empty"}`),
+		BuilderAPI: json.RawMessage(
+			`{"mode":"custom","serve_candidates":"canonical_only"}`),
+	}}, "test")
+	require.NoError(t, err)
+
+	frozen = svc.Freeze(2100)
+	assert.Equal(t, config.CandidateModeAlways, frozen.Build.CandidateModes["grandparent_full"])
+	assert.Equal(t, config.CandidateModeNever, frozen.Build.CandidateModes["parent_empty"])
+	assert.Equal(t, config.CandidateModeAlways, frozen.Build.CandidateModes["parent_full"],
+		"unoverridden keys inherit the global policy")
+	assert.Equal(t, "parent_empty", frozen.Bid.BidCandidate)
+	assert.Equal(t, "canonical_only", frozen.BuilderAPI.ServeCandidates)
+
+	// Invalid candidate values are rejected.
+	_, err = svc.ApplyUpdates([]*PlanUpdate{{
+		Slots: []uint64{2200},
+		Build: json.RawMessage(`{"candidates":{"parent_full":"sometimes"}}`),
+	}}, "test")
+	require.Error(t, err)
+
+	_, err = svc.ApplyUpdates([]*PlanUpdate{{
+		Slots: []uint64{2200},
+		Bid:   json.RawMessage(`{"mode":"custom","bid_candidate":"bogus"}`),
+	}}, "test")
+	require.Error(t, err)
+}

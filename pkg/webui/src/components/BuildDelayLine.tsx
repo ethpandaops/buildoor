@@ -11,6 +11,8 @@ interface BuildDelayLineProps {
   // Base CSS class; "<className>-active" is appended while in progress.
   // Defaults to the payload build span style.
   className?: string;
+  // Overrides the line color (build candidate identity).
+  lineColor?: string;
 }
 
 // BuildDelayLine renders the payload build span on the slot timeline.
@@ -27,7 +29,8 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   endAt,
   expectedEndAt,
   onClick,
-  className = 'build-delay-line'
+  className = 'build-delay-line',
+  lineColor
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number>(0);
@@ -81,6 +84,7 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
     <div
       ref={ref}
       className={`${className}${stateClass}`}
+      style={lineColor ? { backgroundColor: lineColor } : undefined}
       onClick={onClick}
     />
   );

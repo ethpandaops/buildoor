@@ -95,6 +95,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/action-plan/test-transform", apiHandler.TestTransform).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/buildoor/slot-results", apiHandler.GetSlotResults).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payload", apiHandler.GetSlotPayloadArtifact).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payload/{index:[0-9]+}", apiHandler.GetSlotPayloadArtifactByIndex).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids", apiHandler.GetSlotBidArtifacts).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids/{index}", apiHandler.GetSlotBidArtifact).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/envelope", apiHandler.GetSlotEnvelopeArtifact).Methods(http.MethodGet)

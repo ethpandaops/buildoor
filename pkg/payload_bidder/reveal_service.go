@@ -334,13 +334,23 @@ func (s *RevealService) schedule(req *RevealRequest) {
 
 	slot := req.Payload.Attributes.ProposalSlot
 
-	if _, exists := s.pending[slot]; exists {
-		s.log.WithFields(logrus.Fields{
-			"slot":      slot,
-			"transport": req.Transport,
-		}).Debug("Duplicate reveal request for slot, ignoring")
+	if existing, exists := s.pending[slot]; exists {
+		if !s.shouldRebind(slot, existing, req) {
+			s.log.WithFields(logrus.Fields{
+				"slot":      slot,
+				"transport": req.Transport,
+			}).Debug("Duplicate reveal request for slot, ignoring")
 
-		return
+			return
+		}
+
+		s.log.WithFields(logrus.Fields{
+			"slot":     slot,
+			"old_root": fmt.Sprintf("%#x", existing.req.BlockInfo.Root[:8]),
+			"new_root": fmt.Sprintf("%#x", req.BlockInfo.Root[:8]),
+		}).Warn("Re-binding reveal to a different beacon block (reorg): rebuilding the envelope")
+
+		delete(s.pending, slot)
 	}
 
 	frozen := s.planSvc.Freeze(slot)
@@ -460,6 +470,46 @@ func (s *RevealService) schedule(req *RevealRequest) {
 		"vote_met":  state.voteGateMet,
 		"due_in":    time.Until(state.nextAttempt),
 	}).Debug("Scheduled payload reveal")
+}
+
+// shouldRebind decides whether a second reveal request for an already
+// scheduled slot replaces the schedule: only when re-binding is enabled, the
+// request targets a different beacon block, and the previously bound block is
+// no longer canonical (our payload was re-included under a sibling root after
+// a reorg). The rebuilt envelope is re-signed for the new root — the envelope
+// signature covers the beacon block root, so the old one cannot be reused.
+func (s *RevealService) shouldRebind(slot phase0.Slot, existing *revealState, req *RevealRequest) bool {
+	if !s.cfg.Reveal.RebindOnReorg {
+		return false
+	}
+
+	if existing.req == nil || existing.req.BlockInfo == nil {
+		return false
+	}
+
+	oldRoot := existing.req.BlockInfo.Root
+	if req.BlockInfo.Root == oldRoot {
+		return false
+	}
+
+	// Confirm the old block actually left the canonical chain when the chain
+	// view can tell; the request itself (fired from a head observation of the
+	// new block) is the fallback evidence.
+	if headTracker := s.chainSvc.GetHeadTracker(); headTracker != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+		defer cancel()
+
+		if headTracker.IsCanonical(ctx, oldRoot) {
+			s.log.WithFields(logrus.Fields{
+				"slot":     slot,
+				"old_root": fmt.Sprintf("%#x", oldRoot[:8]),
+			}).Warn("Ignoring reveal re-bind request: the bound block is still canonical")
+
+			return false
+		}
+	}
+
+	return true
 }
 
 // processDue publishes every pending reveal whose attempt time has come and

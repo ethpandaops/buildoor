@@ -77,7 +77,11 @@ func (t *BidTracker) GetHighestBid(slot phase0.Slot) *TrackedBid {
 // GetHighestCompetitorBid returns the highest tracked bid value (gwei) for
 // the slot excluding our own builder index, and whether any competitor bid is
 // known. Unlike GetHighestBid it can never report our own bid back to us.
-func (t *BidTracker) GetHighestCompetitorBid(slot phase0.Slot, ourBuilderIndex uint64) (uint64, bool) {
+// A non-zero parentHash restricts the comparison to bids committing to the
+// same execution parent (bids on other forks are not competing).
+func (t *BidTracker) GetHighestCompetitorBid(
+	slot phase0.Slot, ourBuilderIndex uint64, parentHash phase0.Hash32,
+) (uint64, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -92,6 +96,10 @@ func (t *BidTracker) GetHighestCompetitorBid(slot phase0.Slot, ourBuilderIndex u
 
 	for builderIndex, tracked := range slotBids.Bids {
 		if builderIndex == ourBuilderIndex || tracked.IsOurs {
+			continue
+		}
+
+		if parentHash != (phase0.Hash32{}) && tracked.Bid.ParentBlockHash != parentHash {
 			continue
 		}
 

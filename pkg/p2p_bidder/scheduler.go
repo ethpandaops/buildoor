@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -27,8 +28,19 @@ type SlotState struct {
 	LastBidTime      time.Time
 	LastBidHash      phase0.Hash32
 	BidCount         int
-	BidsClosed       bool // Block received, no more bids possible
-	NoPrefsWarnedFor bool // Missing-preferences skip already reported for this slot
+	BidsClosed       bool        // Block received, no more bids possible
+	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
+	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
+	// BidPayloads tracks the last bid time per payload: interval throttling
+	// and single-bid dedup are PER PAYLOAD, so multi-candidate bidding
+	// ("all") does not starve the other candidates behind one payload's
+	// interval gate.
+	BidPayloads map[phase0.Hash32]time.Time
+
+	// BidCandidate is the candidate the auto selection committed to on the
+	// first bid of the slot (sticky unless candidate switching is enabled).
+	BidCandidate    chain.CandidateKey
+	BidCandidateSet bool
 
 	// Frozen is the slot's immutable action-plan snapshot, resolved on the
 	// first scheduler evaluation of the slot (nil until then).
@@ -46,6 +58,7 @@ type Scheduler struct {
 	blsSigner      *signer.BLSSigner
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	planSvc        *action_plan.PlanService // per-slot scheduling/settings authority
+	cfg            *config.Config           // shared config; mutable settings read live
 	log            logrus.FieldLogger
 
 	// Simple state tracking per slot
@@ -55,7 +68,9 @@ type Scheduler struct {
 
 // NewScheduler creates a new scheduler. planSvc is the mandatory per-slot
 // action plan service: every bid setting the scheduler acts on comes from its
-// frozen slot snapshots, never from the live config.
+// frozen slot snapshots, never from the live config — except the bid
+// candidate selection, which is deliberately live (the whole point is
+// choosing at bid time, after the plan froze).
 func NewScheduler(
 	chainSvc chain.Service,
 	bidCreator *BidCreator,
@@ -65,6 +80,7 @@ func NewScheduler(
 	blsSigner *signer.BLSSigner,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	planSvc *action_plan.PlanService,
+	cfg *config.Config,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
@@ -76,6 +92,7 @@ func NewScheduler(
 		blsSigner:      blsSigner,
 		propPrefsStore: propPrefsStore,
 		planSvc:        planSvc,
+		cfg:            cfg,
 		slotStates:     make(map[phase0.Slot]*SlotState),
 		log:            log.WithField("component", "scheduler"),
 	}
@@ -100,7 +117,42 @@ func (s *Scheduler) OnHeadEvent(event *beacon.HeadEvent) {
 	slotState := s.getSlotState(event.Slot)
 	if !slotState.BidsClosed {
 		slotState.BidsClosed = true
+		slotState.ClosedByRoot = event.Block
 		s.log.WithField("slot", event.Slot).Debug("Bidding closed for slot (block received)")
+	}
+}
+
+// OnHeadChange reopens bidding for slots whose closing block was reorged out:
+// with the block gone, the slot's proposer opportunity is live again for the
+// rest of its bid window.
+func (s *Scheduler) OnHeadChange(ctx context.Context, change *chain.HeadChangeEvent) {
+	if change.ReorgDepth == 0 || change.Old == nil {
+		return
+	}
+
+	headTracker := s.chainSvc.GetHeadTracker()
+	if headTracker == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for slot, state := range s.slotStates {
+		if !state.BidsClosed || state.ClosedByRoot == (phase0.Root{}) {
+			continue
+		}
+
+		if headTracker.IsCanonical(ctx, state.ClosedByRoot) {
+			continue
+		}
+
+		state.BidsClosed = false
+		state.ClosedByRoot = phase0.Root{}
+
+		s.log.WithFields(logrus.Fields{
+			"slot": slot,
+		}).Info("Reopening bidding for slot (closing block was reorged out)")
 	}
 }
 
@@ -174,9 +226,10 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
-	// Get payload from builder cache
-	payload := s.payloadCache.Get(slot)
-	if payload == nil {
+	// Select the candidate payload(s) to bid on. The selection runs at bid
+	// time — after builds finished and with the freshest chain view.
+	payloads := s.selectBidPayloads(slot, bidSettings)
+	if len(payloads) == 0 {
 		return
 	}
 
@@ -200,14 +253,14 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		if !alreadyWarned {
 			s.log.WithFields(logrus.Fields{
 				"slot":       slot,
-				"block_hash": fmt.Sprintf("%x", payload.BlockHash[:8]),
+				"block_hash": fmt.Sprintf("%x", payloads[0].BlockHash[:8]),
 			}).Warn("No proposer preferences for slot — skipping bids " +
 				"(cache refills from gossip within ~1 epoch after a restart)")
 
 			if s.service != nil {
 				s.service.FireBidSubmission(&BidSubmissionEvent{
 					Slot:      slot,
-					BlockHash: payload.BlockHash,
+					BlockHash: payloads[0].BlockHash,
 					Success:   false,
 					Warning:   "no proposer preferences for slot — bid skipped",
 				})
@@ -217,27 +270,142 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
+	for _, payload := range payloads {
+		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, payload, prefsBypassed)
+	}
+}
+
+// selectBidPayloads returns the built payload(s) the slot's bids commit to,
+// per the live bid-candidate setting: a specific candidate, every built
+// candidate ("all"), or the auto selection matching the chain view (sticky
+// per slot unless candidate switching is enabled).
+func (s *Scheduler) selectBidPayloads(
+	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings,
+) []*payload_builder.Payload {
+	// The frozen per-slot selection wins; the live config covers snapshots
+	// frozen before the setting existed.
+	mode := bidSettings.BidCandidate
+	if mode == "" {
+		mode = s.cfg.EPBS.BidCandidate
+	}
+
+	switch {
+	case mode == "all":
+		return s.payloadCache.GetSlotPayloads(slot)
+
+	case mode != "" && mode != "auto":
+		if !chain.IsValidCandidateKey(mode) {
+			s.log.WithField("bid_candidate", mode).
+				Warn("Unknown bid candidate setting, falling back to auto selection")
+			break
+		}
+
+		if payload := s.payloadCache.GetCandidate(slot, chain.CandidateKey(mode)); payload != nil {
+			return []*payload_builder.Payload{payload}
+		}
+
+		return nil
+	}
+
+	s.mu.Lock()
+	state := s.getSlotState(slot)
+	chosen, chosenSet := state.BidCandidate, state.BidCandidateSet
+	s.mu.Unlock()
+
+	if chosenSet && !s.cfg.EPBS.BidCandidateSwitch {
+		// Sticky: keep bidding the committed candidate (the gossip first-seen
+		// rule makes a switched bid unlikely to propagate anyway); fall back
+		// to the primary payload when that candidate produced none.
+		if payload := s.payloadCache.GetCandidate(slot, chosen); payload != nil {
+			return []*payload_builder.Payload{payload}
+		}
+
+		if payload := s.payloadCache.Get(slot); payload != nil {
+			return []*payload_builder.Payload{payload}
+		}
+
+		return nil
+	}
+
+	payload := s.preferredPayload(slot)
+	if payload == nil {
+		return nil
+	}
+
+	s.mu.Lock()
+	state = s.getSlotState(slot)
+
+	if state.BidCandidateSet && state.BidCandidate != payload.Candidate {
+		s.log.WithFields(logrus.Fields{
+			"slot": slot,
+			"from": state.BidCandidate,
+			"to":   payload.Candidate,
+		}).Warn("Switching bid candidate mid-slot (chain view changed)")
+	}
+
+	state.BidCandidate = payload.Candidate
+	state.BidCandidateSet = true
+	s.mu.Unlock()
+
+	return []*payload_builder.Payload{payload}
+}
+
+// preferredPayload picks the built payload matching the chain view's current
+// head and its payload status, falling back to the cache's primary payload.
+func (s *Scheduler) preferredPayload(slot phase0.Slot) *payload_builder.Payload {
+	headTracker := s.chainSvc.GetHeadTracker()
+	if headTracker != nil {
+		if head := headTracker.CurrentHead(); head != nil && head.Slot < slot {
+			hash := head.ExecutionBlockHash
+			if headTracker.GetPayloadStatus(head.Root) == chain.PayloadStatusEmpty {
+				hash = head.FinalitySafeExecutionBlockHash
+			}
+
+			key := beacon.AttrParentKey{Root: head.Root, Hash: hash}
+			if payload := s.payloadCache.GetVariant(slot, key); payload != nil {
+				return payload
+			}
+		}
+	}
+
+	return s.payloadCache.Get(slot)
+}
+
+// trySubmitBid runs the per-payload bid checks (window close, interval,
+// single-bid dedup), computes the bid value and submits.
+func (s *Scheduler) trySubmitBid(
+	ctx context.Context,
+	slot phase0.Slot,
+	now time.Time,
+	msRelativeToSlot int64,
+	bidSettings *action_plan.ResolvedBidSettings,
+	payload *payload_builder.Payload,
+	prefsBypassed bool,
+) {
 	s.mu.Lock()
 	state := s.getSlotState(slot)
 
 	// Check if we should bid
 	// - Not if bidding is closed (block already received)
 	// - Not if we bid too recently (respect interval)
-	// - Not if payload hasn't changed and we already bid (single bid mode)
+	// - Not if we already bid this payload (single bid mode)
 	if state.BidsClosed {
 		s.mu.Unlock()
 		return
 	}
 
-	// Check bid interval
+	// Check bid interval (per payload, so "all" mode candidates do not
+	// throttle each other)
+	lastBid, alreadyBid := state.BidPayloads[payload.BlockHash]
+
 	if bidSettings.IntervalMs > 0 {
-		if time.Since(state.LastBidTime) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
+		if alreadyBid && time.Since(lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
 			s.mu.Unlock()
 			return
 		}
 	} else {
-		// Single bid mode - only bid if payload changed or never bid
-		if state.BidCount > 0 && state.LastBidHash == payload.BlockHash {
+		// Single bid mode - only bid payloads we have not bid yet.
+		if alreadyBid {
 			s.mu.Unlock()
 			return
 		}
@@ -286,6 +454,12 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 	s.mu.Lock()
 	state.LastBidTime = now
 	state.LastBidHash = payload.BlockHash
+
+	if state.BidPayloads == nil {
+		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
+	}
+
+	state.BidPayloads[payload.BlockHash] = now
 	state.BidCount++
 	bidCount := state.BidCount
 	s.mu.Unlock()
@@ -302,7 +476,8 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		event.Warning = "no proposer preferences for slot — bid sent anyway (ignore_missing_prefs)"
 	}
 
-	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, s.bidCreator.GetBuilderIndex()); ok {
+	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, s.bidCreator.GetBuilderIndex(),
+		payload.Attributes.ParentBlockHash); ok {
 		event.CompetitorHighGwei = &high
 	}
 
@@ -327,10 +502,12 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 
 	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{
-		Slot:         slot,
-		BuilderIndex: s.bidCreator.builderIndex,
-		Value:        bidValue,
-		BlockHash:    payload.BlockHash,
+		Slot:            slot,
+		BuilderIndex:    s.bidCreator.builderIndex,
+		Value:           bidValue,
+		BlockHash:       payload.BlockHash,
+		ParentBlockHash: payload.Attributes.ParentBlockHash,
+		ParentBlockRoot: payload.Attributes.ParentBlockRoot,
 	}, true)
 
 	// Fire bid success event

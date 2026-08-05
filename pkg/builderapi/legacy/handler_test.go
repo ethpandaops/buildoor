@@ -71,6 +71,7 @@ func (m *stubChainService) GetEpochStats(phase0.Epoch) *chain.EpochStats { retur
 
 func (m *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.EpochStats] { return nil }
 func (m *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker                  { return nil }
+func (m *stubChainService) GetHeadTracker() *chain.HeadTracker                          { return nil }
 func (m *stubChainService) GetFinalizedEpoch() phase0.Epoch                             { return 0 }
 
 func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo            { return nil }

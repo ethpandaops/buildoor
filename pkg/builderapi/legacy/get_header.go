@@ -130,23 +130,24 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event := h.payloadCache.Get(slot)
-	if event == nil {
-		log.WithField("slot", slotU64).Info(
-			"getHeader: returning 204 — no cached payload for slot")
-		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusFailed, "no cached payload for slot")
-		w.WriteHeader(http.StatusNoContent)
+	// The slot may hold several candidate payloads (reorg preparedness): serve
+	// whichever one matches the requested parent hash.
+	var event *payload_builder.Payload
 
-		return
+	for _, candidate := range h.payloadCache.GetSlotPayloads(slot) {
+		if candidate.Attributes.ParentBlockHash == parentHash {
+			event = candidate
+			break
+		}
 	}
-	if event.Attributes.ParentBlockHash != parentHash {
+
+	if event == nil {
 		log.WithFields(logrus.Fields{
 			"slot":                slotU64,
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
-		}).Info("getHeader: returning 204 — cached payload parent hash does not match request")
+		}).Info("getHeader: returning 204 — no cached payload for requested parent")
 		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusFailed,
-			"cached payload parent hash does not match request")
+			"no cached payload for requested parent")
 		w.WriteHeader(http.StatusNoContent)
 
 		return

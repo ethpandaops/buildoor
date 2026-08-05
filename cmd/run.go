@@ -379,6 +379,7 @@ and begins building blocks according to configuration.`,
 
 			if revealSvc != nil {
 				builderAPISrv.SetRevealService(revealSvc)
+				builderAPISrv.SetOnDemandBuilder(builderSvc)
 			}
 
 			if propPrefSvc != nil {

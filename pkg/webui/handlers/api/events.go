@@ -98,6 +98,7 @@ type SlotStartEvent struct {
 // the payload is ready, so the WebUI can render the build as in-progress.
 type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
 	StartedAt int64  `json:"started_at"`
 }
 
@@ -123,18 +124,26 @@ type PayloadAttributesStreamEvent struct {
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
 // can mark the in-progress build as failed.
 type PayloadBuildFailedStreamEvent struct {
-	Slot     uint64 `json:"slot"`
-	Error    string `json:"error"`
-	FailedAt int64  `json:"failed_at"`
+	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
+	Error     string `json:"error"`
+	FailedAt  int64  `json:"failed_at"`
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
 type PayloadReadyStreamEvent struct {
-	Slot            uint64 `json:"slot"`
-	BlockHash       string `json:"block_hash"`
-	ParentBlockHash string `json:"parent_block_hash"`
-	BlockValue      string `json:"block_value"`
-	ReadyAt         int64  `json:"ready_at"`
+	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
+	BlockHash string `json:"block_hash"`
+	// Parent tuple this payload was built on: the execution parent (hash and,
+	// where known, its block number) and the beacon parent (root and its
+	// slot), so the UI can show what the payload actually extends.
+	ParentBlockHash   string `json:"parent_block_hash"`
+	ParentBlockNumber uint64 `json:"parent_block_number,omitempty"`
+	ParentBlockRoot   string `json:"parent_block_root,omitempty"`
+	ParentSlot        uint64 `json:"parent_slot,omitempty"`
+	BlockValue        string `json:"block_value"`
+	ReadyAt           int64  `json:"ready_at"`
 
 	// Full built-payload properties (list fields aggregated to counts).
 	BlockNumber     uint64 `json:"block_number,omitempty"`
@@ -1029,6 +1038,7 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildStartedStreamEvent{
 			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
 			StartedAt: event.StartedAt.UnixMilli(),
 		},
 	})
@@ -1061,23 +1071,44 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.Pay
 		Type:      EventTypePayloadBuildFailed,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildFailedStreamEvent{
-			Slot:     uint64(event.Slot),
-			Error:    event.Error,
-			FailedAt: event.FailedAt.UnixMilli(),
+			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
+			Error:     event.Error,
+			FailedAt:  event.FailedAt.UnixMilli(),
 		},
 	})
 }
 
 // payloadReadyStreamEvent assembles the full payload_ready wire event from a
 // built payload (list fields aggregated to counts).
-func payloadReadyStreamEvent(slot phase0.Slot, event *payload_builder.Payload) PayloadReadyStreamEvent {
+func (m *EventStreamManager) payloadReadyStreamEvent(
+	slot phase0.Slot, event *payload_builder.Payload,
+) PayloadReadyStreamEvent {
 	data := PayloadReadyStreamEvent{
-		Slot:            uint64(slot),
-		BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-		ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
-		BlockValue:      event.BlockValue.String(),
-		ReadyAt:         event.ReadyAt.UnixMilli(),
-		FeeRecipient:    event.FeeRecipient.Hex(),
+		Slot:              uint64(slot),
+		Candidate:         string(event.Candidate),
+		BlockHash:         fmt.Sprintf("0x%x", event.BlockHash[:]),
+		ParentBlockHash:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
+		ParentBlockNumber: event.Attributes.ParentBlockNumber,
+		ParentBlockRoot:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockRoot[:]),
+		BlockValue:        event.BlockValue.String(),
+		ReadyAt:           event.ReadyAt.UnixMilli(),
+		FeeRecipient:      event.FeeRecipient.Hex(),
+	}
+
+	// The beacon parent's slot makes the payload's position in the chain
+	// readable; cache-only so event assembly never blocks.
+	if m.chainSvc != nil {
+		if tracker := m.chainSvc.GetHeadTracker(); tracker != nil {
+			if parent, ok := tracker.LookupBlock(event.Attributes.ParentBlockRoot); ok {
+				data.ParentSlot = uint64(parent.Slot)
+
+				if data.ParentBlockNumber == 0 &&
+					parent.ExecutionBlockHash == event.Attributes.ParentBlockHash {
+					data.ParentBlockNumber = parent.ExecutionBlockNumber
+				}
+			}
+		}
 	}
 
 	if ep := event.ExecutionPayload; ep != nil {
@@ -1113,7 +1144,7 @@ func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) 
 	m.broadcastForSlot(slot, &StreamEvent{
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      payloadReadyStreamEvent(slot, event),
+		Data:      m.payloadReadyStreamEvent(slot, event),
 	})
 
 	// Update slot state

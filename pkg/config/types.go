@@ -1,6 +1,8 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
+import "strings"
+
 // ValidatorRangesConfig configures how to load validator index → client name mappings.
 // If both are set, URL takes precedence.
 type ValidatorRangesConfig struct {
@@ -44,6 +46,7 @@ type Config struct {
 	Schedule          ScheduleConfig   `yaml:"schedule" json:"schedule"`
 	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
 	Reveal            RevealConfig     `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build             BuildConfig      `yaml:"build" json:"build"`   // Payload build candidate policy
 	Debug             bool             `yaml:"debug" json:"debug"`
 	Pprof             bool             `yaml:"pprof" json:"pprof"`
 	PayloadBuildTime  uint64           `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
@@ -113,6 +116,46 @@ type BuilderAPIConfig struct {
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
+
+	// ServeCandidates controls which built candidate payloads bid requests may
+	// be answered from: "all" (default; serve whichever candidate matches the
+	// requested parent), "canonical_only" (only parent_full and unclassified
+	// payloads), or a comma-separated list of candidate keys.
+	ServeCandidates string `yaml:"serve_candidates" json:"serve_candidates"`
+
+	// OnDemandBuild builds a payload on the fly when a bid request asks for a
+	// legal parent tuple no candidate covers yet (bounded by the request's
+	// response budget).
+	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
+}
+
+// ServeCandidateAllowed reports whether the given serve policy allows
+// answering from a payload classified as the given candidate key ("" =
+// unclassified, always allowed under "all" and "canonical_only").
+func ServeCandidateAllowed(policy, key string) bool {
+	switch policy {
+	case "", "all":
+		return true
+	case "canonical_only":
+		return key == "" || key == "parent_full"
+	default:
+		if key == "" {
+			return false
+		}
+
+		for _, allowed := range strings.Split(policy, ",") {
+			if strings.TrimSpace(allowed) == key {
+				return true
+			}
+		}
+
+		return false
+	}
+}
+
+// ServeCandidateAllowed applies the config's own serve policy.
+func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
+	return ServeCandidateAllowed(c.ServeCandidates, key)
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
@@ -152,6 +195,20 @@ type EPBSConfig struct {
 	// plans override this per slot.
 	BidValueOverride uint64 `yaml:"bid_value_override" json:"bid_value_override"`
 
+	// BidCandidate selects which built candidate payload the p2p bids commit
+	// to: "auto" (default; match the chain view's current head and payload
+	// status), a specific candidate key (parent_full, parent_empty,
+	// grandparent_full, grandparent_empty), or "all" (gossip a bid for every
+	// built candidate — deliberate multi-parent bidding for gossip testing;
+	// most nodes propagate only a builder's first bid per slot).
+	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
+
+	// BidCandidateSwitch allows the auto selection to switch to a different
+	// candidate mid-slot when the chain view changes. Default off: the first
+	// gossiped candidate sticks (the gossip first-seen rule makes a switched
+	// bid unlikely to propagate anyway).
+	BidCandidateSwitch bool `yaml:"bid_candidate_switch" json:"bid_candidate_switch"`
+
 	// HeadVoteThresholdPct is the head-vote participation threshold in percent
 	// (0-100) the vote tracker reports against: crossing it fires an immediate
 	// update with threshold_met set. 0 disables threshold checking. The default
@@ -159,6 +216,84 @@ type EPBSConfig struct {
 	// (BUILDER_PAYMENT_THRESHOLD_NUMERATOR/DENOMINATOR = 6/10) — the
 	// participation level at which the builder's payment actually settles.
 	HeadVoteThresholdPct uint64 `yaml:"head_vote_threshold_pct" json:"head_vote_threshold_pct"`
+}
+
+// Candidate build modes: whether a build-parent candidate is built for a slot.
+const (
+	// CandidateModeAuto builds the candidate when live chain signals suggest
+	// it may be needed (parent payload reveal status, parent block weakness).
+	CandidateModeAuto = "auto"
+	// CandidateModeAlways builds the candidate every scheduled slot.
+	CandidateModeAlways = "always"
+	// CandidateModeNever suppresses the candidate.
+	CandidateModeNever = "never"
+)
+
+// NormalizedCandidateMode returns the candidate mode, falling back to the
+// given default for unknown values (UI overrides are free-form strings).
+func NormalizedCandidateMode(mode, fallback string) string {
+	switch mode {
+	case CandidateModeAuto, CandidateModeAlways, CandidateModeNever:
+		return mode
+	default:
+		return fallback
+	}
+}
+
+// BuildConfig defines which build-parent candidates are built per slot and how
+// the engine builds are sequenced. Candidates name the parent tuple a payload
+// extends: the head block ("parent") or its parent ("grandparent", a
+// deliberate reorg), each on the committed payload ("full") or on the payload
+// it built upon ("empty", the Gloas payload-miss case).
+type BuildConfig struct {
+	// CandidateParentFull: the normal build on the head block and its payload.
+	CandidateParentFull string `yaml:"candidate_parent_full" json:"candidate_parent_full"`
+	// CandidateParentEmpty: build on the head block but on its execution
+	// parent (head payload treated as withheld). Gloas only.
+	CandidateParentEmpty string `yaml:"candidate_parent_empty" json:"candidate_parent_empty"`
+	// CandidateGrandparentFull: build on the head block's parent (reorg).
+	CandidateGrandparentFull string `yaml:"candidate_grandparent_full" json:"candidate_grandparent_full"`
+	// CandidateGrandparentEmpty: reorg combined with a withheld grandparent
+	// payload. Gloas only.
+	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
+
+	// Parallel runs the selected candidate builds concurrently against the
+	// EL, each with its own payload ID (default). Disable it to serialize
+	// them — the canonical candidate builds first so it keeps its scheduled
+	// start, and the speculative ones follow.
+	Parallel bool `yaml:"parallel" json:"parallel"`
+
+	// SpeculativeBuildTimeMs, when non-zero, is the EL build time granted to
+	// speculative (non-parent_full) candidates instead of PayloadBuildTime.
+	SpeculativeBuildTimeMs uint64 `yaml:"speculative_build_time_ms" json:"speculative_build_time_ms"`
+
+	// AutoWeakHeadPct is the head-vote participation (percent) below which
+	// the head block counts as contested and auto-mode grandparent
+	// candidates arm. 0 disables the weak-head signal.
+	AutoWeakHeadPct uint64 `yaml:"auto_weak_head_pct" json:"auto_weak_head_pct"`
+
+	// EnforceBidGasLimit adjusts the built payload's gas limit to the exact
+	// value the bid gossip rules require (EL parent gas limit stepped toward
+	// the proposer's target) when the EL ignored the target. Disabled by
+	// default: the override rewrites the block header after building.
+	EnforceBidGasLimit bool `yaml:"enforce_bid_gas_limit" json:"enforce_bid_gas_limit"`
+}
+
+// CandidateMode returns the normalized mode configured for the given
+// candidate key ("" for unknown keys).
+func (c *BuildConfig) CandidateMode(key string) string {
+	switch key {
+	case "parent_full":
+		return NormalizedCandidateMode(c.CandidateParentFull, CandidateModeAlways)
+	case "parent_empty":
+		return NormalizedCandidateMode(c.CandidateParentEmpty, CandidateModeAuto)
+	case "grandparent_full":
+		return NormalizedCandidateMode(c.CandidateGrandparentFull, CandidateModeAuto)
+	case "grandparent_empty":
+		return NormalizedCandidateMode(c.CandidateGrandparentEmpty, CandidateModeNever)
+	default:
+		return ""
+	}
 }
 
 // Reveal gate modes: how the reveal moment of a won slot is decided.
@@ -217,6 +352,12 @@ type RevealConfig struct {
 
 	// RetryIntervalMs is the wait between failed publish attempts.
 	RetryIntervalMs int64 `yaml:"retry_interval_ms" json:"retry_interval_ms"`
+
+	// RebindOnReorg re-binds a slot's reveal to a different beacon block when
+	// the block the reveal was scheduled for is reorged out and our payload is
+	// re-included under a sibling root: the envelope is rebuilt and re-signed
+	// for the new root (the payload bytes are unchanged).
+	RebindOnReorg bool `yaml:"rebind_on_reorg" json:"rebind_on_reorg"`
 }
 
 // NormalizedGateMode returns the gate mode, falling back to RevealGateTime

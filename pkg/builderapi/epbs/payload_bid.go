@@ -19,8 +19,10 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // GetExecutionPayloadBidResponse is the JSON envelope returned by
@@ -237,35 +239,22 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	var parentRoot phase0.Root
 	copy(parentRoot[:], parentRootBytes)
 
-	event := h.payloadCache.Get(slot)
-	if event == nil {
-		log.Info("getExecutionPayloadBid: returning 204 — no cached payload for slot")
-		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed, "no cached payload for slot")
-		w.WriteHeader(http.StatusNoContent)
+	event, matchErr := h.matchPayloadForParent(r.Context(), slot, parentRoot, parentHash,
+		frozenSettings.ServeCandidates)
+	if matchErr != nil {
+		if matchErr.status == http.StatusNoContent {
+			log.WithField("reason", matchErr.reason).
+				Info("getExecutionPayloadBid: returning 204 — no payload for requested parent")
+			h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed, matchErr.reason)
+			w.WriteHeader(http.StatusNoContent)
 
-		return
-	}
+			return
+		}
 
-	if event.Attributes.ParentBlockHash != parentHash {
-		log.WithFields(logrus.Fields{
-			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
-		}).Info("getExecutionPayloadBid: 400 — parent_hash does not match cached payload")
-		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
-			"parent_hash does not match cached payload")
-		writeError(w, http.StatusBadRequest, "parent_hash does not match cached payload")
-
-		return
-	}
-
-	if event.Attributes.ParentBlockRoot != parentRoot {
-		log.WithFields(logrus.Fields{
-			"request_parent_root": "0x" + hex.EncodeToString(parentRoot[:]),
-			"cached_parent_root":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
-		}).Info("getExecutionPayloadBid: 400 — parent_root does not match cached payload")
-		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed,
-			"parent_root does not match cached payload")
-		writeError(w, http.StatusBadRequest, "parent_root does not match cached payload")
+		log.WithField("reason", matchErr.reason).
+			Info("getExecutionPayloadBid: 400 — invalid parent request")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusFailed, matchErr.reason)
+		writeError(w, matchErr.status, matchErr.reason)
 
 		return
 	}
@@ -419,4 +408,72 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 
 	h.recordBid(slot, fork.String(), blockHashHex, signedBid, totalValueGwei, executionPaymentGwei,
 		bidStatusServed, "")
+}
+
+// bidMatchError describes why no payload could be served for the requested
+// parent tuple.
+type bidMatchError struct {
+	status int
+	reason string
+}
+
+// matchPayloadForParent returns the built payload matching the requested
+// parent tuple. A slot may hold several candidate payloads (reorg /
+// payload-miss preparedness); the request's (parent_hash, parent_root) picks
+// the one the proposer's branch needs, subject to the serve-candidates
+// policy. When no candidate covers a chain-view-legal tuple and on-demand
+// building is enabled, the payload is built within the request's budget.
+// Requests for a tuple the chain view proves illegal (known beacon parent,
+// but a hash that is neither its committed payload nor its execution parent)
+// fail with 400.
+func (h *Handler) matchPayloadForParent(
+	ctx context.Context, slot phase0.Slot, parentRoot phase0.Root, parentHash phase0.Hash32,
+	servePolicy string,
+) (*payload_builder.Payload, *bidMatchError) {
+	if servePolicy == "" {
+		servePolicy = h.cfg.ServeCandidates
+	}
+
+	if payload := h.payloadCache.GetVariant(slot, beacon.AttrParentKey{Root: parentRoot, Hash: parentHash}); payload != nil {
+		if !config.ServeCandidateAllowed(servePolicy, string(payload.Candidate)) {
+			return nil, &bidMatchError{status: http.StatusNoContent,
+				reason: "candidate " + string(payload.Candidate) + " excluded by serve policy"}
+		}
+
+		return payload, nil
+	}
+
+	// Judge the requested tuple against the chain view: a known beacon parent
+	// only legally pairs with its committed payload hash (full) or its own
+	// execution parent (empty).
+	legal := true
+
+	if headTracker := h.chainSvc.GetHeadTracker(); headTracker != nil {
+		if parentBlock, err := headTracker.GetBlock(ctx, parentRoot); err == nil {
+			legal = parentHash == parentBlock.ExecutionBlockHash ||
+				parentHash == parentBlock.FinalitySafeExecutionBlockHash
+		}
+	}
+
+	if !legal {
+		return nil, &bidMatchError{status: http.StatusBadRequest,
+			reason: "parent_hash is neither the parent block's committed payload nor its execution parent"}
+	}
+
+	if h.cfg.OnDemandBuild && h.onDemandBuilder != nil {
+		payload, err := h.onDemandBuilder.BuildCandidateOnDemand(ctx, slot, parentRoot, parentHash)
+		if err != nil {
+			return nil, &bidMatchError{status: http.StatusNoContent,
+				reason: "on-demand build failed: " + err.Error()}
+		}
+
+		if !config.ServeCandidateAllowed(servePolicy, string(payload.Candidate)) {
+			return nil, &bidMatchError{status: http.StatusNoContent,
+				reason: "candidate " + string(payload.Candidate) + " excluded by serve policy"}
+		}
+
+		return payload, nil
+	}
+
+	return nil, &bidMatchError{status: http.StatusNoContent, reason: "no cached payload for requested parent"}
 }

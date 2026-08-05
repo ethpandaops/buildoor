@@ -21,11 +21,16 @@ import (
 type stubChainService struct {
 	chain.Service
 
-	spec *chain.ChainSpec
+	spec        *chain.ChainSpec
+	headTracker *chain.HeadTracker
 }
 
 func (s *stubChainService) GetChainSpec() *chain.ChainSpec { return s.spec }
 func (s *stubChainService) GetCurrentSlot() phase0.Slot    { return 100 }
+func (s *stubChainService) SlotToTime(phase0.Slot) time.Time {
+	// Far in the future: scheduled builds stay pending for the test lifetime.
+	return time.Now().Add(time.Hour)
+}
 func (s *stubChainService) GetEpochOfSlot(slot phase0.Slot) phase0.Epoch {
 	return phase0.Epoch(uint64(slot) / s.spec.SlotsPerEpoch)
 }
@@ -35,6 +40,9 @@ func (s *stubChainService) ActiveForkAtEpoch(_ phase0.Epoch) version.DataVersion
 func (s *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.EpochStats] {
 	return (&utils.Dispatcher[*chain.EpochStats]{}).Subscribe(1, false)
 }
+func (s *stubChainService) GetEpochStats(phase0.Epoch) *chain.EpochStats { return nil }
+func (s *stubChainService) GetHeadTracker() *chain.HeadTracker           { return s.headTracker }
+func (s *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker   { return nil }
 
 func newSkipTestService(t *testing.T, cfg *config.Config) (*Service, *action_plan.PlanService) {
 	t.Helper()

@@ -156,7 +156,64 @@ func TestInjectPayloadAttributes(t *testing.T) {
 		t.Fatal("expected the injected event to be dispatched")
 	}
 
-	// A second injection for the same slot is dropped (the cached event wins).
+	// A second injection for the same slot and parent tuple is dropped (the
+	// cached event wins).
 	require.False(t, stream.InjectPayloadAttributes(&PayloadAttributesEvent{ProposalSlot: 10}))
 	assert.Equal(t, synthesized, stream.GetLatestPayloadAttributes(10))
+}
+
+func TestPayloadAttributeVariants(t *testing.T) {
+	stream := NewEventStream(&Client{})
+
+	// Two events for the same slot with different parents: both variants are
+	// retained and the newest becomes the slot's latest.
+	fullParent := &PayloadAttributesEvent{
+		ProposalSlot:    20,
+		ParentBlockRoot: phase0.Root{0x01},
+		ParentBlockHash: phase0.Hash32{0xaa},
+	}
+	emptyParent := &PayloadAttributesEvent{
+		ProposalSlot:    20,
+		ParentBlockRoot: phase0.Root{0x01},
+		ParentBlockHash: phase0.Hash32{0xbb},
+	}
+
+	stream.cachePayloadAttributes(fullParent)
+	stream.cachePayloadAttributes(emptyParent)
+
+	assert.Equal(t, emptyParent, stream.GetLatestPayloadAttributes(20), "newest event wins as latest")
+	assert.Len(t, stream.GetPayloadAttributesVariants(20), 2)
+	assert.Equal(t, fullParent, stream.GetPayloadAttributesVariant(20, AttrParentKeyOf(fullParent)))
+	assert.Equal(t, emptyParent, stream.GetPayloadAttributesVariant(20, AttrParentKeyOf(emptyParent)))
+
+	// A newer event for an existing tuple replaces that variant (and the
+	// latest pointer).
+	fullParentUpdated := &PayloadAttributesEvent{
+		ProposalSlot:    20,
+		ParentBlockRoot: phase0.Root{0x01},
+		ParentBlockHash: phase0.Hash32{0xaa},
+		Timestamp:       99,
+	}
+	stream.cachePayloadAttributes(fullParentUpdated)
+
+	assert.Len(t, stream.GetPayloadAttributesVariants(20), 2)
+	assert.Equal(t, fullParentUpdated, stream.GetPayloadAttributesVariant(20, AttrParentKeyOf(fullParent)))
+	assert.Equal(t, fullParentUpdated, stream.GetLatestPayloadAttributes(20))
+
+	// An injected variant for a NEW tuple is added but does not steal the
+	// latest pointer from a node-received event.
+	derived := &PayloadAttributesEvent{
+		ProposalSlot:    20,
+		ParentBlockRoot: phase0.Root{0x02},
+		ParentBlockHash: phase0.Hash32{0xcc},
+	}
+	require.True(t, stream.InjectPayloadAttributes(derived))
+	assert.Len(t, stream.GetPayloadAttributesVariants(20), 3)
+	assert.Equal(t, fullParentUpdated, stream.GetLatestPayloadAttributes(20),
+		"injected variant must not become latest when node events exist")
+
+	// Cleanup drops the whole slot entry.
+	stream.CleanupPayloadAttributesCache(21)
+	assert.Nil(t, stream.GetLatestPayloadAttributes(20))
+	assert.Empty(t, stream.GetPayloadAttributesVariants(20))
 }

@@ -163,6 +163,42 @@ export function useEventStream(): UseEventStreamResult {
       }));
     };
 
+    // Candidate builds: rank for primary selection (most canonical first;
+    // unclassified last) and per-candidate list upsert.
+    const candidateRank = (candidate?: string): number => {
+      switch (candidate) {
+        case 'parent_full': return 0;
+        case 'parent_empty': return 1;
+        case 'grandparent_full': return 2;
+        case 'grandparent_empty': return 3;
+        default: return 4;
+      }
+    };
+
+    const updateCandidateBuild = (
+      slot: number,
+      candidate: string,
+      patch: Partial<import('../types').CandidateBuild>,
+      primaryUpdates?: (state: SlotState) => Partial<SlotState>
+    ) => {
+      setSlotStates(prev => {
+        const state = prev[slot] || { slot };
+        const list = state.candidateBuilds ? [...state.candidateBuilds] : [];
+        const idx = list.findIndex(b => b.candidate === candidate);
+
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...patch, candidate: candidate as import('../types').CandidateKey };
+        } else {
+          list.push({ candidate: candidate as import('../types').CandidateKey, ...patch });
+        }
+
+        const merged: SlotState = { ...state, slot, candidateBuilds: list };
+        const extra = primaryUpdates ? primaryUpdates(merged) : undefined;
+
+        return { ...prev, [slot]: extra ? { ...merged, ...extra } : merged };
+      });
+    };
+
     const handleEvent = (event: { type: string; timestamp: number; seq?: number; data: unknown }) => {
       // Drop already-processed events from a reconnect replay. Events
       // without a seq (per-client initial-state snapshots) always pass.
@@ -288,20 +324,36 @@ export function useEventStream(): UseEventStreamResult {
         }
 
         case 'payload_build_started': {
-          const data = event.data as { slot: number; started_at: number };
-          addEvent('payload_build_started', `Payload build started for slot ${data.slot}`, event.timestamp);
-          updateSlotState(data.slot, { payloadBuildStartedAt: data.started_at });
+          const data = event.data as { slot: number; candidate?: string; started_at: number };
+          addEvent('payload_build_started',
+            `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
+            event.timestamp);
+          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at },
+            state => (
+              // The primary line spans the primary candidate's own build; the
+              // first start seeds it until a payload becomes primary.
+              state.payloadBuildStartedAt === undefined
+                ? { payloadBuildStartedAt: data.started_at }
+                : {}
+            ));
           break;
         }
 
         case 'payload_build_failed': {
-          const data = event.data as { slot: number; error: string; failed_at: number };
-          addEvent('payload_build_failed', `Payload build failed for slot ${data.slot}: ${data.error}`, event.timestamp);
-          updateSlotState(data.slot, {
-            payloadBuildFailed: true,
-            payloadBuildFailedAt: data.failed_at,
-            payloadBuildError: data.error
-          });
+          const data = event.data as { slot: number; candidate?: string; error: string; failed_at: number };
+          addEvent('payload_build_failed',
+            `Payload build failed for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}: ${data.error}`,
+            event.timestamp);
+          updateCandidateBuild(data.slot, data.candidate ?? '',
+            { failed: true, failedAt: data.failed_at, error: data.error },
+            state => (state.payloadReady
+              // Another candidate already delivered — keep the primary intact.
+              ? {}
+              : {
+                  payloadBuildFailed: true,
+                  payloadBuildFailedAt: data.failed_at,
+                  payloadBuildError: data.error
+                }));
           break;
         }
 
@@ -309,31 +361,60 @@ export function useEventStream(): UseEventStreamResult {
           // block_value is the EL's MEV value as a wei decimal string; convert to
           // gwei so it matches the gwei-based formatGwei display used elsewhere.
           const data = event.data as {
-            slot: number; block_hash: string; block_value: string; ready_at: number;
+            slot: number; candidate?: string; block_hash: string; block_value: string; ready_at: number;
+            parent_block_hash?: string; parent_block_number?: number;
+            parent_block_root?: string; parent_slot?: number;
             block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
-          updateSlotState(data.slot, {
+          const detail = {
+            blockNumber: data.block_number,
+            feeRecipient: data.fee_recipient,
+            gasLimit: data.gas_limit,
+            gasUsed: data.gas_used,
+            baseFeePerGas: data.base_fee_per_gas,
+            extraData: data.extra_data,
+            blobGasUsed: data.blob_gas_used,
+            excessBlobGas: data.excess_blob_gas,
+            numTransactions: data.num_transactions,
+            numWithdrawals: data.num_withdrawals,
+            numBlobs: data.num_blobs,
+            numExecRequests: data.num_exec_requests
+          };
+
+          updateCandidateBuild(data.slot, data.candidate ?? '', {
+            readyAt: data.ready_at,
+            failed: false,
+            blockHash: data.block_hash,
+            blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0,
+            parentBlockHash: data.parent_block_hash,
+            parentBlockNumber: data.parent_block_number,
+            parentBlockRoot: data.parent_block_root,
+            parentSlot: data.parent_slot,
+            detail
+          }, state => {
+            // A less canonical candidate never displaces the primary payload.
+            if (state.payloadReady &&
+                candidateRank(data.candidate) > candidateRank(state.payloadCandidate)) {
+              return {};
+            }
+
+            // The primary line spans this candidate's own build, so the start
+            // moves with the primary rather than covering every candidate.
+            const own = state.candidateBuilds?.find(b => b.candidate === (data.candidate ?? ''));
+
+            return {
             payloadReady: true,
+            payloadBuildFailed: false,
+            payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
+            payloadBuildStartedAt: own?.startedAt ?? state.payloadBuildStartedAt,
             payloadCreatedAt: data.ready_at,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
-            payloadDetail: {
-              blockNumber: data.block_number,
-              feeRecipient: data.fee_recipient,
-              gasLimit: data.gas_limit,
-              gasUsed: data.gas_used,
-              baseFeePerGas: data.base_fee_per_gas,
-              extraData: data.extra_data,
-              blobGasUsed: data.blob_gas_used,
-              excessBlobGas: data.excess_blob_gas,
-              numTransactions: data.num_transactions,
-              numWithdrawals: data.num_withdrawals,
-              numBlobs: data.num_blobs,
-              numExecRequests: data.num_exec_requests
-            }
+            payloadDetail: detail
+            };
           });
           break;
         }

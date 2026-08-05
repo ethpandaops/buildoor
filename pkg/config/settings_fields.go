@@ -93,6 +93,8 @@ func Fields() []Field {
 		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *uint64 { return &c.EPBS.BidSubsidy }),
 		newField(KeyEPBSBidValueOverride, "epbs-bid-value-override", func(c *Config) *uint64 { return &c.EPBS.BidValueOverride }),
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
+		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
+		newField(KeyEPBSBidCandidateSwitch, "epbs-bid-candidate-switch", func(c *Config) *bool { return &c.EPBS.BidCandidateSwitch }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
 		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),
@@ -101,11 +103,23 @@ func Fields() []Field {
 		newField(KeyRevealBroadcastValidation, "reveal-broadcast-validation", func(c *Config) *string { return &c.Reveal.BroadcastValidation }),
 		newField(KeyRevealMaxAttempts, "reveal-max-attempts", func(c *Config) *uint64 { return &c.Reveal.MaxAttempts }),
 		newField(KeyRevealRetryInterval, "reveal-retry-interval", func(c *Config) *int64 { return &c.Reveal.RetryIntervalMs }),
+		newField(KeyRevealRebindOnReorg, "reveal-rebind-on-reorg", func(c *Config) *bool { return &c.Reveal.RebindOnReorg }),
+
+		newField(KeyBuildCandidateParentFull, "build-candidate-parent-full", func(c *Config) *string { return &c.Build.CandidateParentFull }),
+		newField(KeyBuildCandidateParentEmpty, "build-candidate-parent-empty", func(c *Config) *string { return &c.Build.CandidateParentEmpty }),
+		newField(KeyBuildCandidateGrandparentFull, "build-candidate-grandparent-full", func(c *Config) *string { return &c.Build.CandidateGrandparentFull }),
+		newField(KeyBuildCandidateGrandparentEmpty, "build-candidate-grandparent-empty", func(c *Config) *string { return &c.Build.CandidateGrandparentEmpty }),
+		newField(KeyBuildParallel, "build-parallel", func(c *Config) *bool { return &c.Build.Parallel }),
+		newField(KeyBuildSpeculativeBuildTime, "build-speculative-build-time", func(c *Config) *uint64 { return &c.Build.SpeculativeBuildTimeMs }),
+		newField(KeyBuildAutoWeakHeadPct, "build-auto-weak-head-pct", func(c *Config) *uint64 { return &c.Build.AutoWeakHeadPct }),
+		newField(KeyBuildEnforceBidGasLimit, "build-enforce-bid-gas-limit", func(c *Config) *bool { return &c.Build.EnforceBidGasLimit }),
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
 		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
+		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
+		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),
