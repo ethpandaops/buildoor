@@ -18,6 +18,10 @@ import (
 
 // ChainSpec holds chain specification parameters.
 type ChainSpec struct {
+	// SecondsPerSlot is the slot duration, taken from SLOT_DURATION_MS when the
+	// beacon node serves it (EIP-7782 networks keep serving a stale
+	// SECONDS_PER_SLOT preset default alongside it) and from SECONDS_PER_SLOT
+	// otherwise.
 	SecondsPerSlot time.Duration
 	SlotsPerEpoch  uint64
 
@@ -88,17 +92,27 @@ func ParseChainSpec(specData map[string]string, rawData map[string]json.RawMessa
 // GetChainSpec fetches the chain specification from the beacon node via direct HTTP.
 // This bypasses go-eth2-client's active check so it works before the node is fully ready.
 func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string]json.RawMessage) error {
-	secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
-	if !ok {
-		return fmt.Errorf("SECONDS_PER_SLOT not found")
-	}
+	// SLOT_DURATION_MS (EIP-7782) supersedes SECONDS_PER_SLOT; nodes on such
+	// networks still serve a stale SECONDS_PER_SLOT, so it is only a fallback.
+	if slotDurationMs, err := parseSpecUint64(specData, "SLOT_DURATION_MS"); err == nil {
+		if slotDurationMs == 0 {
+			return fmt.Errorf("invalid SLOT_DURATION_MS: 0")
+		}
 
-	secondsPerSlot, err := strconv.ParseUint(secondsPerSlotStr, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
-	}
+		s.SecondsPerSlot = time.Duration(slotDurationMs) * time.Millisecond
+	} else {
+		secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
+		if !ok {
+			return fmt.Errorf("SLOT_DURATION_MS or SECONDS_PER_SLOT not found")
+		}
 
-	s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
+		secondsPerSlot, err := strconv.ParseUint(secondsPerSlotStr, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
+		}
+
+		s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
+	}
 
 	slotsPerEpochStr, ok := specData["SLOTS_PER_EPOCH"]
 	if !ok {
