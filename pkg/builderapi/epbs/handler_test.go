@@ -301,6 +301,34 @@ func postBeaconBlock(h *Handler, body []byte) *httptest.ResponseRecorder {
 	return rec
 }
 
+// TestNewHandler_ResolvesBuilderIndexFromChainState guards against a builder
+// already registered on-chain before this process started signing every bid
+// with the zero-value index. NewHandler must resolve the real index from
+// chain state itself, without waiting for a lifecycle registration callback
+// that may never fire in this process.
+func TestNewHandler_ResolvesBuilderIndexFromChainState(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.PanicLevel)
+
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+
+	chainSvc := &stubChainService{
+		genesisTime:  time.Now().Add(-4 * time.Second),
+		slotDuration: 4 * time.Second,
+		currentFork:  version.DataVersionGloas,
+		builderInfo:  &chain.BuilderInfo{Index: 7},
+	}
+
+	cfg := &config.Config{}
+	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+
+	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc, payload_builder.NewPayloadCache(10), blsSigner)
+
+	assert.Equal(t, uint64(7), h.builderIndex.Load(),
+		"NewHandler must resolve the builder index from chain state, not leave it at the zero-value default")
+}
+
 // TestHandleSubmitBeaconBlock_Success broadcasts the block immediately,
 // returns 202 without publishing anything during the request, and reveals the
 // envelope exactly once via the RevealService after the reveal time.

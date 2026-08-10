@@ -105,7 +105,7 @@ type Handler struct {
 	lastBidMu sync.Mutex
 	lastBids  map[phase0.Slot]recordedBid // dedupe of repeated identical bid records
 
-	builderIndex   atomic.Uint64 // builder index used in Gloas bids; set after lifecycle registration
+	builderIndex   atomic.Uint64 // builder index used in Gloas bids; resolved at construction, refreshed on lifecycle registration
 	enabled        atomic.Bool
 	bidsRequested  atomic.Uint64 // count of getExecutionPayloadBid requests received
 	blocksAccepted atomic.Uint64 // count of accepted signed beacon blocks
@@ -118,7 +118,7 @@ type Handler struct {
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	blsSigner *signer.BLSSigner) *Handler {
-	return &Handler{
+	h := &Handler{
 		cfg:          cfg,
 		log:          log.WithField("component", "builderapi-epbs"),
 		chainSvc:     chainSvc,
@@ -129,6 +129,20 @@ func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc c
 		prefsStore:   NewBuilderPreferencesStore(),
 		lastBids:     make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
 	}
+
+	// Resolve the builder index from chain state up front, independent of
+	// lifecycle registration. Without this, a builder already registered
+	// on-chain before this process started would sign every bid with the
+	// zero-value index until (if ever) the lifecycle callback fires.
+	// SetBuilderIndex still overrides this on a live registration event.
+	if chainSvc != nil && blsSigner != nil {
+		if builderInfo := chainSvc.GetBuilderByPubkey(blsSigner.PublicKey()); builderInfo != nil {
+			h.builderIndex.Store(builderInfo.Index)
+			h.log.WithField("builder_index", builderInfo.Index).Info("Resolved builder index from chain state")
+		}
+	}
+
+	return h
 }
 
 // SetResultRecorder wires the optional per-slot result recorder.

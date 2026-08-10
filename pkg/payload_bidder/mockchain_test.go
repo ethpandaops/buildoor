@@ -29,6 +29,7 @@ type stubChainService struct {
 	currentEpoch phase0.Epoch
 	genesis      beacon.Genesis
 	headTracker  *chain.HeadTracker
+	builderInfo  *chain.BuilderInfo
 
 	epochStatsDispatch utils.Dispatcher[*chain.EpochStats]
 }
@@ -91,9 +92,11 @@ func (m *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker { return 
 func (m *stubChainService) GetHeadTracker() *chain.HeadTracker         { return m.headTracker }
 func (m *stubChainService) GetFinalizedEpoch() phase0.Epoch            { return 0 }
 
-func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo            { return nil }
-func (m *stubChainService) GetBuilderByPubkey(phase0.BLSPubKey) *chain.BuilderInfo { return nil }
-func (m *stubChainService) GetBuilders() []*chain.BuilderInfo                      { return nil }
+func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo { return nil }
+func (m *stubChainService) GetBuilderByPubkey(phase0.BLSPubKey) *chain.BuilderInfo {
+	return m.builderInfo
+}
+func (m *stubChainService) GetBuilders() []*chain.BuilderInfo { return nil }
 
 func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *phase0.BLSPubKey {
 	return nil

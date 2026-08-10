@@ -200,6 +200,16 @@ func NewRevealService(
 func (s *RevealService) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
+	// Resolve the builder index from chain state up front, independent of
+	// lifecycle registration. Without this, a builder already registered
+	// on-chain before this process started would sign every envelope with
+	// the zero-value index until (if ever) the lifecycle callback fires.
+	// SetBuilderIndex still overrides this on a live registration event.
+	if builderInfo := s.chainSvc.GetBuilderByPubkey(s.signer.PublicKey()); builderInfo != nil {
+		s.builderIndex.Store(builderInfo.Index)
+		s.log.WithField("builder_index", builderInfo.Index).Info("Resolved builder index from chain state")
+	}
+
 	s.wg.Add(1)
 
 	go s.run()

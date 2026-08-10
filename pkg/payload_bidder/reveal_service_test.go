@@ -196,6 +196,44 @@ func waitForResult(t *testing.T, ch <-chan *RevealResult, timeout time.Duration)
 	}
 }
 
+// TestRevealService_ResolvesBuilderIndexFromChainStateOnStart guards against
+// a builder already registered on-chain before this process started signing
+// every envelope with the zero-value index. Start must resolve the real
+// index from chain state itself, without waiting for a lifecycle
+// registration callback that may never fire in this process.
+func TestRevealService_ResolvesBuilderIndexFromChainStateOnStart(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.PanicLevel)
+
+	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+	require.NoError(t, err)
+
+	chainSvc := &stubChainService{
+		genesisTime:  time.Now().Add(-4 * time.Second),
+		slotDuration: 4 * time.Second,
+		currentFork:  version.DataVersionGloas,
+		builderInfo:  &chain.BuilderInfo{Index: 7},
+	}
+
+	builderSvc := newTestBuilderSvc(chainSvc)
+	payments := NewPaymentTracker(chainSvc, log)
+	publisher := &mockEnvelopePublisher{}
+	cfg := &config.Config{}
+	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	votes := newStubVoteSource()
+
+	svc := NewRevealService(cfg, NewSigner(blsSigner), publisher, chainSvc, builderSvc,
+		payments, planSvc, votes, log)
+
+	require.Equal(t, uint64(0), svc.builderIndex.Load(), "precondition: index unset before Start")
+
+	require.NoError(t, svc.Start(context.Background()))
+	defer svc.Stop()
+
+	assert.Equal(t, uint64(7), svc.builderIndex.Load(),
+		"Start must resolve the builder index from chain state, not leave it at the zero-value default")
+}
+
 func TestRevealService_RevealsAtDueTime(t *testing.T) {
 	env := newRevealTestEnv(t, 4*time.Second, 500)
 	sub := env.svc.SubscribeResults(4, false)

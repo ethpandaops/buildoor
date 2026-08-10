@@ -35,6 +35,11 @@ func NewSigner(blsSigner *signer.BLSSigner) *Signer {
 	return &Signer{blsSigner: blsSigner}
 }
 
+// PublicKey returns the builder's BLS public key.
+func (s *Signer) PublicKey() phase0.BLSPubKey {
+	return s.blsSigner.PublicKey()
+}
+
 // SignBid signs an execution payload bid. forkVersion must be the fork version
 // the consensus client verifies against (the Gloas fork version).
 func (s *Signer) SignBid(
