@@ -27,7 +27,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // recordedBidCall captures one RecordBuilderAPIBid invocation.
@@ -122,8 +121,8 @@ func newGetHeaderTestEnv(t *testing.T, enabled bool, blockValueWei *big.Int) *ge
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
 
 	cfg := &config.Config{
 		APIPort:           8080,
@@ -142,7 +141,7 @@ func newGetHeaderTestEnv(t *testing.T, enabled bool, blockValueWei *big.Int) *ge
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc, payload_builder.NewPayloadCache(10),
-		store, blsSigner)
+		store, registry)
 
 	recorder := &stubSlotResultRecorder{}
 	h.SetResultRecorder(recorder)

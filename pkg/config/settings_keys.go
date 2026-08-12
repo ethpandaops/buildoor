@@ -20,6 +20,9 @@ const (
 	KeyEPBSHeadVoteThreshold  = "epbs.head_vote_threshold_pct"
 	KeyEPBSBidCandidate       = "epbs.bid_candidate"
 	KeyEPBSBidCandidateSwitch = "epbs.bid_candidate_switch"
+	KeyEPBSKeyStrategy        = "epbs.key_strategy"
+	KeyEPBSBidKeysPerSlot     = "epbs.bid_keys_per_slot"
+	KeyEPBSBidKeysPerStep     = "epbs.bid_keys_per_step"
 
 	KeyRevealEnabled             = "reveal.enabled"
 	KeyRevealGateMode            = "reveal.gate_mode"
@@ -45,6 +48,7 @@ const (
 	KeyBuilderAPIValueOverride   = "builder_api.value_override_gwei"
 	KeyBuilderAPIServeCandidates = "builder_api.serve_candidates"
 	KeyBuilderAPIOnDemandBuild   = "builder_api.on_demand_build"
+	KeyBuilderAPIKeyStrategy     = "builder_api.key_strategy"
 
 	KeySlotResultRetentionEpochs   = "slot_result_retention_epochs"
 	KeySlotArtifactRetentionEpochs = "slot_artifact_retention_epochs"
@@ -53,6 +57,11 @@ const (
 	KeyDepositAmount  = "deposit_amount"
 	KeyTopupThreshold = "topup_threshold"
 	KeyTopupAmount    = "topup_amount"
+
+	KeyBuilderKeysTargetCount = "builder_keys.target_count"
+	KeyBuilderKeysMaxIndex    = "builder_keys.max_index"
+	KeyBuilderKeysAutoDeposit = "builder_keys.auto_deposit"
+	KeyBuilderKeysAutoExit    = "builder_keys.auto_exit"
 
 	KeyEPBSEnabled       = "epbs_enabled"
 	KeyBuilderAPIEnabled = "builder_api_enabled"

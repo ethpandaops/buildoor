@@ -1073,6 +1073,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                       copyValue: bid.blockHash
                     }] : []),
                     ...candidateRows(candidateBuilds, bid.blockHash),
+                    ...(bid.keyIndex !== undefined ? [{
+                      label: 'Builder Key',
+                      value: `#${bid.keyIndex}` +
+                        (bid.builderIndex !== undefined ? ` (builder ${bid.builderIndex})` : '')
+                    }] : []),
                     ...(bid.parentBlockHash ? [{
                       label: 'Parent Hash',
                       value: truncateHash(bid.parentBlockHash),

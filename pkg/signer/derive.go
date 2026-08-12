@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"strings"
 
 	"github.com/tyler-smith/go-bip39"
 	"golang.org/x/crypto/hkdf"
@@ -25,20 +26,77 @@ func builderKeyPath(index uint64) []uint64 {
 	return []uint64{12381, 3600, index, 0, 0}
 }
 
-// NewBuilderSigner builds a BLS signer from a builder key source: either a raw hex
-// private key or a BIP-39 mnemonic + account index. The mnemonic takes precedence
-// when set (callers are expected to enforce mutual exclusivity via config validation).
-func NewBuilderSigner(privkeyHex, mnemonic string, index uint64) (*BLSSigner, error) {
-	if mnemonic != "" {
-		derived, err := DeriveBLSPrivkeyHex(mnemonic, index)
-		if err != nil {
-			return nil, fmt.Errorf("failed to derive builder key from mnemonic: %w", err)
-		}
-
-		privkeyHex = derived
+// ResolveEntryPrivkey resolves the operator-supplied builder key source — either
+// a raw hex private key or a BIP-39 mnemonic + account index — to a 32-byte hex
+// private key. The mnemonic takes precedence when set (callers are expected to
+// enforce mutual exclusivity via config validation).
+//
+// The result is the entry key of the internal key set: see DeriveInternalKey.
+func ResolveEntryPrivkey(privkeyHex, mnemonic string, index uint64) (string, error) {
+	if mnemonic == "" {
+		return privkeyHex, nil
 	}
 
-	return NewBLSSigner(privkeyHex)
+	derived, err := DeriveBLSPrivkeyHex(mnemonic, index)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive builder key from mnemonic: %w", err)
+	}
+
+	return derived, nil
+}
+
+// NewBuilderSigner builds a BLS signer from a builder key source: either a raw hex
+// private key or a BIP-39 mnemonic + account index.
+func NewBuilderSigner(privkeyHex, mnemonic string, index uint64) (*BLSSigner, error) {
+	entry, err := ResolveEntryPrivkey(privkeyHex, mnemonic, index)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewBLSSigner(entry)
+}
+
+// DeriveInternalKey derives the internal builder key at the given index from an
+// entry key (the operator-supplied private key, or the one derived from the
+// mnemonic via DeriveBLSPrivkeyHex).
+//
+// Index 0 returns the entry key itself, so the first managed key is always the
+// one the operator configured. Higher indices apply one further EIP-2333
+// derivation level, i.e. derive_child_SK(entry_sk, index) — for a mnemonic entry
+// key that is the path m/12381/3600/{account}/0/0/{index}, one node deeper than
+// any other participant's account path. That depth is what makes the internal
+// key set collision-free with other builders sharing the same mnemonic: no
+// amount of walking the account index can reach a node below our own key.
+//
+// It returns the 32-byte secret key as a 64-character lowercase hex string
+// (no 0x prefix), matching the format accepted by NewBLSSigner.
+func DeriveInternalKey(entryPrivkeyHex string, index uint64) (string, error) {
+	entryPrivkeyHex = strings.TrimPrefix(entryPrivkeyHex, "0x")
+
+	entryBytes, err := hex.DecodeString(entryPrivkeyHex)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode entry private key hex: %w", err)
+	}
+
+	if len(entryBytes) != 32 {
+		return "", fmt.Errorf("entry private key must be 32 bytes, got %d", len(entryBytes))
+	}
+
+	if index == 0 {
+		return hex.EncodeToString(entryBytes), nil
+	}
+
+	// EIP-2333 encodes the child index as I2OSP(index, 4).
+	if index > math.MaxUint32 {
+		return "", fmt.Errorf("internal key index %d exceeds maximum %d", index, uint64(math.MaxUint32))
+	}
+
+	sk := deriveChildSK(new(big.Int).SetBytes(entryBytes), index)
+
+	skBytes := make([]byte, 32)
+	sk.FillBytes(skBytes)
+
+	return hex.EncodeToString(skBytes), nil
 }
 
 // DeriveBLSPrivkeyHex derives a builder BLS private key from a BIP-39 mnemonic

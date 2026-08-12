@@ -1,6 +1,11 @@
 definitions:
   action_plan.BidPlan:
     properties:
+      bid_candidate:
+        description: |-
+          BidCandidate overrides which built candidate payload this slot's p2p
+          bids commit to: auto, all, or a specific candidate key.
+        type: string
       bid_end_time:
         type: integer
       bid_increase:
@@ -8,6 +13,11 @@ definitions:
         type: integer
       bid_interval:
         description: ms, >= 0, 0 = single bid
+        type: integer
+      bid_keys_per_slot:
+        description: |-
+          BidKeysPerSlot overrides how many distinct builder keys may bid this
+          slot (0 = one key per selected candidate payload).
         type: integer
       bid_min_amount:
         description: gwei
@@ -28,11 +38,25 @@ definitions:
           IgnoreMissingPrefs bids with the payload's fee recipient when no gossip
           proposer preferences arrived for the slot, bypassing the skip gate.
         type: boolean
+      key_strategy:
+        description: |-
+          KeyStrategy overrides which managed builder key signs this slot's bids:
+          round_robin, single, random or least_used.
+        type: string
       mode:
         $ref: '#/definitions/action_plan.Mode'
     type: object
   action_plan.BuildPlan:
     properties:
+      candidates:
+        additionalProperties:
+          type: string
+        description: |-
+          Candidates overrides the global build-candidate policy for this slot:
+          candidate key (parent_full, parent_empty, grandparent_full,
+          grandparent_empty) -> mode (auto, always, never). Absent keys inherit
+          the global policy.
+        type: object
       reorg_parent_payload:
         description: |-
           ReorgParentPayload builds on the grandparent (n-2) execution payload
@@ -46,6 +70,11 @@ definitions:
     type: object
   action_plan.BuilderAPIPlan:
     properties:
+      key_strategy:
+        description: |-
+          KeyStrategy overrides which managed builder key signs this slot's served
+          bids: round_robin, single, random or least_used.
+        type: string
       mode:
         $ref: '#/definitions/action_plan.Mode'
       response_delay_ms:
@@ -53,6 +82,12 @@ definitions:
           ResponseDelayMs delays the bid response by this many milliseconds
           (context-cancellable, capped at one slot).
         type: integer
+      serve_candidates:
+        description: |-
+          ServeCandidates overrides which built candidate payloads bid requests
+          for this slot may be answered from: all, canonical_only, or a
+          comma-separated candidate key list.
+        type: string
       total_value_override_gwei:
         description: |-
           TotalValueOverrideGwei is the absolute total proposer-visible bid value
@@ -154,6 +189,16 @@ definitions:
     type: object
   action_plan.ResolvedBidSettings:
     properties:
+      bid_candidate:
+        description: |-
+          BidCandidate is the effective bid candidate selection for the slot:
+          auto, all, or a specific candidate key.
+        type: string
+      bid_keys_per_slot:
+        description: |-
+          BidKeysPerSlot caps how many distinct builder keys bid the slot
+          (0 = one key per selected candidate payload).
+        type: integer
       end_ms:
         type: integer
       forced:
@@ -168,6 +213,11 @@ definitions:
         type: integer
       interval_ms:
         type: integer
+      key_strategy:
+        description: |-
+          KeyStrategy is the effective builder key selection strategy for the
+          slot's bids.
+        type: string
       min_gwei:
         type: integer
       start_ms:
@@ -191,6 +241,14 @@ definitions:
           BuildStartTimeMs is the effective build start time, milliseconds
           relative to slot start (signed).
         type: integer
+      candidate_modes:
+        additionalProperties:
+          type: string
+        description: |-
+          CandidateModes is the effective build-candidate policy for the slot:
+          candidate key -> auto/always/never, merged from the global config and
+          the plan's build.candidates overrides.
+        type: object
       forced:
         description: |-
           Forced marks builds the plan pushed past the schedule (they never
@@ -222,6 +280,16 @@ definitions:
           Forced marks that the plan activated serving although the module is
           globally disabled.
         type: boolean
+      key_strategy:
+        description: |-
+          KeyStrategy is the effective builder key selection strategy for the
+          slot's served bids.
+        type: string
+      serve_candidates:
+        description: |-
+          ServeCandidates is the effective serve-candidates policy for the slot
+          (all, canonical_only, or a comma-separated candidate key list).
+        type: string
       subsidy_gwei:
         type: integer
       total_value_gwei:
@@ -445,6 +513,33 @@ definitions:
       enabled:
         type: boolean
       validator_count:
+        type: integer
+    type: object
+  api.BuilderKeyExitRequest:
+    properties:
+      lower_target:
+        type: boolean
+    type: object
+  api.BuilderKeysResponse:
+    properties:
+      aggregate:
+        $ref: '#/definitions/builder_keys.Aggregate'
+      keys:
+        items:
+          $ref: '#/definitions/builder_keys.State'
+        type: array
+      settings:
+        $ref: '#/definitions/api.BuilderKeysSettings'
+    type: object
+  api.BuilderKeysSettings:
+    properties:
+      auto_deposit:
+        type: boolean
+      auto_exit:
+        type: boolean
+      max_index:
+        type: integer
+      target_count:
         type: integer
     type: object
   api.BuilderPreferencesEntry:
@@ -750,6 +845,11 @@ definitions:
       status:
         type: string
     type: object
+  api.UpdateBuilderKeyTargetRequest:
+    properties:
+      target:
+        type: integer
+    type: object
   api.UpdateEPBSRequest:
     properties:
       bid_end_time:
@@ -799,6 +899,98 @@ definitions:
         description: Unix timestamp
         type: integer
     type: object
+  builder_keys.Aggregate:
+    properties:
+      active:
+        type: integer
+      depositing:
+        type: integer
+      exited:
+        type: integer
+      exiting:
+        type: integer
+      managed:
+        type: integer
+      pending:
+        type: integer
+      target:
+        type: integer
+      total_balance_gwei:
+        type: integer
+      total_effective_gwei:
+        type: integer
+      total_pending_payments_gwei:
+        type: integer
+      unused:
+        type: integer
+      withdrawn:
+        type: integer
+    type: object
+  builder_keys.State:
+    properties:
+      balance_adjustment_gwei:
+        type: integer
+      balance_gwei:
+        type: integer
+      bids_submitted:
+        type: integer
+      bids_won:
+        type: integer
+      builder_index:
+        description: |-
+          BuilderIndex is the on-chain registry index; only meaningful when
+          HasBuilderIndex is set (index 0 is a valid builder index).
+        type: integer
+      deposit_epoch:
+        type: integer
+      effective_balance_gwei:
+        description: |-
+          EffectiveBalance is the balance the key can actually bid against:
+          chain balance plus local adjustments minus pending payments.
+        type: integer
+      has_builder_index:
+        type: boolean
+      key_index:
+        type: integer
+      last_deposit_at:
+        type: integer
+      last_exit_at:
+        type: integer
+      last_topup_epoch:
+        description: LastTopupEpoch guards the per-key top-up cooldown (0 = never
+          topped up).
+        type: integer
+      pending_payments_gwei:
+        type: integer
+      pubkey:
+        description: PubkeyHex is the 0x-prefixed public key, for JSON consumers.
+        type: string
+      status:
+        $ref: '#/definitions/builder_keys.Status'
+      use_count:
+        description: UseCount is how many deposit generations this key has gone through.
+        type: integer
+      withdrawable_epoch:
+        type: integer
+    type: object
+  builder_keys.Status:
+    enum:
+    - unused
+    - depositing
+    - pending
+    - active
+    - exiting
+    - exited
+    - withdrawn
+    type: string
+    x-enum-varnames:
+    - StatusUnused
+    - StatusDepositing
+    - StatusPending
+    - StatusActive
+    - StatusExiting
+    - StatusExited
+    - StatusWithdrawn
   db.AuditLog:
     properties:
       action:
@@ -894,6 +1086,13 @@ definitions:
         type: string
       gas_limit:
         type: integer
+      key_index:
+        description: |-
+          KeyIndex is the internal builder key the bid was signed with, resolved
+          from BuilderIndex at record time. Recorded because a builder index is
+          reused by other builders after an exit, so the mapping is only reliable
+          while the bid is being made.
+        type: integer
       num_blob_commitments:
         type: integer
       parent_block_hash:
@@ -940,6 +1139,11 @@ definitions:
     type: object
   slot_results.BuildOutcome:
     properties:
+      artifact_idx:
+        description: |-
+          ArtifactIdx is the per-slot payload artifact index of this build's
+          captured payload (nil when no artifact was captured).
+        type: integer
       at:
         type: string
       attributes:
@@ -959,6 +1163,12 @@ definitions:
           withdrawals, execution requests) are aggregated to counts above/below.
         type: integer
       block_value_wei:
+        type: string
+      candidate:
+        description: |-
+          Candidate classifies which build-parent candidate this outcome belongs
+          to (parent_full, parent_empty, grandparent_full, grandparent_empty;
+          empty = unclassified or single-build slot).
         type: string
       error:
         type: string
@@ -1103,7 +1313,16 @@ definitions:
           $ref: '#/definitions/slot_results.BlockSubmission'
         type: array
       build:
-        $ref: '#/definitions/slot_results.BuildOutcome'
+        allOf:
+        - $ref: '#/definitions/slot_results.BuildOutcome'
+        description: |-
+          Build is the slot's primary build outcome (the most canonical ready
+          candidate, or the single lifecycle record). Builds lists every
+          candidate build the slot produced when more than one ran.
+      builds:
+        items:
+          $ref: '#/definitions/slot_results.BuildOutcome'
+        type: array
       dropped_attempts:
         additionalProperties:
           type: integer
@@ -1441,6 +1660,193 @@ paths:
       summary: Get Builder API status
       tags:
       - Buildoor
+  /api/buildoor/builder-keys:
+    get:
+      description: |-
+        Returns every managed builder key with its lifecycle status,
+        on-chain builder index, balances and usage history, plus fleet
+        aggregates and the mutable key-set settings.
+      operationId: getBuilderKeys
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuilderKeysResponse'
+        "404":
+          description: Lifecycle management not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get the managed builder key set
+      tags:
+      - Builder Keys
+  /api/buildoor/builder-keys/{index}/deposit:
+    post:
+      description: |-
+        Submits a builder deposit for the given key and waits for it to
+        register on the beacon chain.
+      operationId: depositBuilderKey
+      parameters:
+      - description: Internal builder key index
+        in: path
+        name: index
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid key index or deposit failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Deposit for a builder key
+      tags:
+      - Builder Keys
+  /api/buildoor/builder-keys/{index}/exit:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Submits a builder exit request for the given key. Irreversible:
+        an exited key cannot be reactivated until its registry entry is
+        reused by another builder's deposit. With lower_target the
+        target key count is decremented in the same write, so the
+        reconciler does not deposit a replacement.
+      operationId: exitBuilderKey
+      parameters:
+      - description: Internal builder key index
+        in: path
+        name: index
+        required: true
+        type: integer
+      - description: Exit options
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/api.BuilderKeyExitRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid key index
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Key cannot be exited yet
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Exit a builder key
+      tags:
+      - Builder Keys
+  /api/buildoor/builder-keys/{index}/topup:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Submits a top-up deposit for the given key when its balance is
+        below the configured threshold.
+      operationId: topupBuilderKey
+      parameters:
+      - description: Internal builder key index
+        in: path
+        name: index
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Invalid key index or top-up failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Top up a builder key
+      tags:
+      - Builder Keys
+  /api/buildoor/builder-keys/target:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        Sets how many builder keys are kept registered and funded.
+        Raising it deposits new keys; lowering it exits surplus keys
+        when auto-exit is on — an exited key can never be reactivated.
+      operationId: updateBuilderKeyTarget
+      parameters:
+      - description: Target key count
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateBuilderKeyTargetRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.BuilderKeysResponse'
+        "400":
+          description: Invalid request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Set the target builder key count
+      tags:
+      - Builder Keys
   /api/buildoor/builder-preferences:
     get:
       description: Returns all builder preferences currently in the cache, submitted
@@ -1733,6 +2139,11 @@ paths:
         name: slot
         required: true
         type: integer
+      - description: Build-parent candidate key (parent_full, parent_empty, grandparent_full,
+          grandparent_empty)
+        in: query
+        name: candidate
+        type: string
       produces:
       - application/json
       - application/octet-stream
@@ -1761,6 +2172,56 @@ paths:
               type: string
             type: object
       summary: Get the built execution payload of a slot
+      tags:
+      - ActionPlan
+  /api/buildoor/slot-results/{slot}/payload/{index}:
+    get:
+      description: |-
+        Returns one of the execution payloads built for the slot by
+        artifact index (a slot may build several candidate payloads on
+        different parents; the slot result's build entries carry each
+        build's artifact index). Content negotiation as with the
+        default payload artifact endpoint.
+      operationId: getSlotPayloadArtifactByIndex
+      parameters:
+      - description: Slot
+        in: path
+        name: slot
+        required: true
+        type: integer
+      - description: Payload artifact index
+        in: path
+        name: index
+        required: true
+        type: integer
+      produces:
+      - application/json
+      - application/octet-stream
+      responses:
+        "200":
+          description: Versioned payload (or raw SSZ)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No artifact for this slot/index
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "406":
+          description: No acceptable content type
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get one of a slot's built candidate payloads
       tags:
       - ActionPlan
   /api/buildoor/validators:

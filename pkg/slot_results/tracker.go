@@ -13,6 +13,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
@@ -50,6 +51,9 @@ type Tracker struct {
 	epbsSvc          *p2p_bidder.Service // may be nil pre-Gloas
 	revealSvc        *payload_bidder.RevealService
 	inclusionTracker *payload_bidder.InclusionTracker
+	// registry resolves a recorded bid's on-chain builder index back to the
+	// managed key that signed it. May be nil.
+	registry *builder_keys.Registry
 
 	store     *memstore.Store[phase0.Slot, *SlotResult]
 	artifacts *ArtifactStore
@@ -75,7 +79,8 @@ type Tracker struct {
 func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database,
 	planSvc *action_plan.PlanService, builderSvc *payload_builder.Service,
 	epbsSvc *p2p_bidder.Service, revealSvc *payload_bidder.RevealService,
-	inclusionTracker *payload_bidder.InclusionTracker, log logrus.FieldLogger) *Tracker {
+	inclusionTracker *payload_bidder.InclusionTracker, registry *builder_keys.Registry,
+	log logrus.FieldLogger) *Tracker {
 	trackerLog := log.WithField("component", "slot-results")
 
 	return &Tracker{
@@ -87,6 +92,7 @@ func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database
 		epbsSvc:          epbsSvc,
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
+		registry:         registry,
 		store:            memstore.New[phase0.Slot, *SlotResult](),
 		artifacts:        NewArtifactStore(stateDB, trackerLog),
 		lastFired:        make(map[phase0.Slot]time.Time, 8),
@@ -520,8 +526,9 @@ func attributesSnapshot(attrs *beacon.PayloadAttributesEvent) *AttributesSnapsho
 }
 
 // fillBidDetail copies the bid message properties onto the attempt (blob
-// commitments aggregated to a count).
-func fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedExecutionPayloadBid) {
+// commitments aggregated to a count) and resolves which of our builder keys
+// signed it.
+func (t *Tracker) fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedExecutionPayloadBid) {
 	if signedBid == nil || signedBid.Message == nil {
 		return
 	}
@@ -535,6 +542,13 @@ func fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedExecutionPayloa
 	attempt.GasLimit = bid.GasLimit
 	attempt.BuilderIndex = uint64(bid.BuilderIndex)
 	attempt.NumBlobCommitments = len(bid.BlobKZGCommitments)
+
+	if t.registry != nil {
+		if key := t.registry.ByBuilderIndex(uint64(bid.BuilderIndex)); key != nil {
+			keyIndex := key.KeyIndex()
+			attempt.KeyIndex = &keyIndex
+		}
+	}
 }
 
 func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
@@ -609,7 +623,7 @@ func (t *Tracker) handleBidSubmission(event *p2p_bidder.BidSubmissionEvent) {
 		At:                 time.Now(),
 	}
 
-	fillBidDetail(&attempt, event.SignedBid)
+	t.fillBidDetail(&attempt, event.SignedBid)
 
 	switch event.Status {
 	case p2p_bidder.BidStatusSubmitted:
@@ -753,7 +767,7 @@ func (t *Tracker) RecordBuilderAPIBid(slot phase0.Slot, forkName string, signedB
 	// The epbs dialect serves Gloas+ bids with the full message; the legacy
 	// dialect's versioned header bids stay aggregate-only.
 	if signed, ok := signedBid.(*eth2all.SignedExecutionPayloadBid); ok {
-		fillBidDetail(&attempt, signed)
+		t.fillBidDetail(&attempt, signed)
 	}
 
 	marshaler, isMarshaler := signedBid.(sszMarshaler)

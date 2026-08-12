@@ -25,13 +25,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -107,19 +107,19 @@ func newServingPlanService(chainSvc chain.Service) *action_plan.PlanService {
 		&config.Config{APIPort: 8080, BuilderAPIEnabled: true}, chainSvc, logrus.New())
 }
 
-func newTestHandler(chainSvc chain.Service, blsSigner *signer.BLSSigner) *Handler {
+func newTestHandler(chainSvc chain.Service, registry *builder_keys.Registry) *Handler {
 	return NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
 		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10),
-		memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration](), blsSigner)
+		memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration](), registry)
 }
 
 // TestHandleGetHeader_PostGloasForkGuard returns 204 once the chain has
 // activated Gloas, even when the handler is enabled and fully configured.
 func TestHandleGetHeader_PostGloasForkGuard(t *testing.T) {
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
 
-	h := newTestHandler(&stubChainService{currentFork: version.DataVersionGloas}, blsSigner)
+	h := newTestHandler(&stubChainService{currentFork: version.DataVersionGloas}, registry)
 	h.SetEnabled(true)
 
 	pk := blsSigner.PublicKey()
@@ -142,13 +142,13 @@ func TestHandleGetHeader_PostGloasForkGuard(t *testing.T) {
 // when the Accept header prefers application/octet-stream, with identical
 // bid contents in both representations.
 func TestHandleGetHeader_Success(t *testing.T) {
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	chainSvc := &stubChainService{currentFork: version.DataVersionFulu}
 	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
-		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10), store, blsSigner)
+		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10), store, registry)
 
 	pk := blsSigner.PublicKey()
 	store.Put(pk, &apiv1.SignedValidatorRegistration{})

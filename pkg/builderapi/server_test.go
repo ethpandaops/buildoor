@@ -157,9 +157,9 @@ func TestRegisterValidators_MissingContentType(t *testing.T) {
 func TestGetHeader_NoPayload(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
-	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, blsSigner, nil)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), nil, registry, nil)
 
 	pk := blsSigner.PublicKey()
 	url := "/eth/v1/builder/header/1/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
@@ -174,11 +174,12 @@ func TestGetHeader_NoPayload(t *testing.T) {
 func TestGetHeader_InvalidSlot(t *testing.T) {
 	cfg := &config.BuilderAPIConfig{}
 	log := logrus.New()
-	blsSigner, _ := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(), payload_builder.NewPayloadCache(10), blsSigner, nil)
+	registry := newTestKeyRegistry(t, 1)
+	srv := NewServer(cfg, log, &mockChainService{}, newServingPlanService(),
+		payload_builder.NewPayloadCache(10), registry, nil)
 	srv.SetEnabled(true)
 
-	pk := blsSigner.PublicKey()
+	pk := registry.Primary().Pubkey()
 	url := "/eth/v1/builder/header/not_a_number/0x0000000000000000000000000000000000000000000000000000000000000000/0x" + hex.EncodeToString(pk[:])
 	req := httptest.NewRequest(http.MethodGet, url, nil)
 	rec := httptest.NewRecorder()
@@ -189,8 +190,8 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 
 // TestGetHeader_SubsidyInBidValue returns 200 with bid value = block_value + BlockValueSubsidyGwei.
 func TestGetHeader_SubsidyInBidValue(t *testing.T) {
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
 	pk := blsSigner.PublicKey()
 
 	// Create valid registration so getHeader does not return 204 for unregistered proposer
@@ -241,7 +242,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	}
 	cache.Store(event)
 	planSvc := action_plan.NewPlanService(fullCfg, &mockChainService{}, log)
-	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionDeneb}, planSvc, cache, blsSigner, nil)
+	srv := NewServer(cfg, log, &mockChainService{currentFork: version.DataVersionDeneb}, planSvc, cache, registry, nil)
 	srv.SetEnabled(true)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/validators", bytes.NewReader(regs))
