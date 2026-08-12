@@ -95,6 +95,9 @@ func Fields() []Field {
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
 		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
 		newField(KeyEPBSBidCandidateSwitch, "epbs-bid-candidate-switch", func(c *Config) *bool { return &c.EPBS.BidCandidateSwitch }),
+		newField(KeyEPBSKeyStrategy, "epbs-key-strategy", func(c *Config) *string { return &c.EPBS.KeyStrategy }),
+		newField(KeyEPBSBidKeysPerSlot, "epbs-bid-keys-per-slot", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerSlot }),
+		newField(KeyEPBSBidKeysPerStep, "epbs-bid-keys-per-step", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerStep }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
 		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),
@@ -120,10 +123,16 @@ func Fields() []Field {
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
 		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
 		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
+		newField(KeyBuilderAPIKeyStrategy, "builder-api-key-strategy", func(c *Config) *string { return &c.BuilderAPI.KeyStrategy }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),
 		newField(KeySlotArtifactCaptureEnabled, "slot-artifact-capture-enabled", func(c *Config) *bool { return &c.SlotArtifactCaptureEnabled }),
+
+		newField(KeyBuilderKeysTargetCount, "builder-keys-target", func(c *Config) *uint64 { return &c.BuilderKeys.TargetCount }),
+		newField(KeyBuilderKeysMaxIndex, "builder-keys-max-index", func(c *Config) *uint64 { return &c.BuilderKeys.MaxIndex }),
+		newField(KeyBuilderKeysAutoDeposit, "builder-keys-auto-deposit", func(c *Config) *bool { return &c.BuilderKeys.AutoDeposit }),
+		newField(KeyBuilderKeysAutoExit, "builder-keys-auto-exit", func(c *Config) *bool { return &c.BuilderKeys.AutoExit }),
 
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),

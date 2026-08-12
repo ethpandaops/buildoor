@@ -65,6 +65,11 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
+	rootCmd.PersistentFlags().Uint64("builder-keys-target", defaults.BuilderKeys.TargetCount, "Number of builder keys to keep registered and funded (derived from the entry key; index 0 is the entry key itself)")
+	rootCmd.PersistentFlags().Uint64("builder-keys-max-index", defaults.BuilderKeys.MaxIndex, "Highest internal builder key index that may be derived")
+	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -92,6 +97,10 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
+	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = no cap beyond the fleet)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every remaining key at once)")
+	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
 	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
 	// Payload build candidates (reorg / payload-miss preparedness)
@@ -199,6 +208,14 @@ func initConfig() error {
 			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
 			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
 			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
+			KeyStrategy:           v.GetString("builder-api-key-strategy"),
+		},
+		BuilderKeys: config.BuilderKeysConfig{
+			TargetCount:  v.GetUint64("builder-keys-target"),
+			MaxIndex:     v.GetUint64("builder-keys-max-index"),
+			DiscoveryGap: v.GetUint64("builder-keys-discovery-gap"),
+			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
+			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
@@ -223,6 +240,9 @@ func initConfig() error {
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 			BidCandidate:         v.GetString("epbs-bid-candidate"),
 			BidCandidateSwitch:   v.GetBool("epbs-bid-candidate-switch"),
+			KeyStrategy:          v.GetString("epbs-key-strategy"),
+			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
+			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),

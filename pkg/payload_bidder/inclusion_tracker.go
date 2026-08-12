@@ -11,6 +11,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -66,6 +67,7 @@ const (
 type wonTracking struct {
 	blockRoot phase0.Root    // beacon block that committed to our payload
 	execHash  phase0.Hash32  // our payload's execution block hash
+	keyIndex  uint64         // builder key whose bid won the slot (owes the payment)
 	verdict   PayloadVerdict // last fired verdict; empty until first resolution
 }
 
@@ -79,6 +81,7 @@ type InclusionTracker struct {
 	clClient   *beacon.Client
 	chainSvc   chain.Service
 	builderSvc *payload_builder.Service // payload cache + inclusion stats
+	registry   *builder_keys.Registry   // resolves a block's builder index to our key
 	revealSvc  *RevealService           // optional; nil pre-Gloas
 	payments   *PaymentTracker          // optional; nil pre-Gloas
 
@@ -104,6 +107,7 @@ func NewInclusionTracker(
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	builderSvc *payload_builder.Service,
+	registry *builder_keys.Registry,
 	revealSvc *RevealService,
 	payments *PaymentTracker,
 	log logrus.FieldLogger,
@@ -112,6 +116,7 @@ func NewInclusionTracker(
 		clClient:    clClient,
 		chainSvc:    chainSvc,
 		builderSvc:  builderSvc,
+		registry:    registry,
 		revealSvc:   revealSvc,
 		payments:    payments,
 		trackedWins: make(map[phase0.Slot]*wonTracking, 4),
@@ -268,7 +273,7 @@ func (t *InclusionTracker) applyVerdictSideEffects(
 	}
 
 	if t.payments != nil {
-		t.payments.SetPaymentDisputed(slot, orphaned)
+		t.payments.SetPaymentDisputed(win.keyIndex, slot, orphaned)
 	}
 }
 
@@ -381,11 +386,30 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		bidValueGwei = new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	}
 
+	// Resolve which of our keys actually won. The block's bid builder index is
+	// the only ground truth: several managed keys may have bid the very same
+	// payload, and the winning key both owes the payment and must sign the
+	// reveal.
+	winner := t.winningKey(blockInfo)
+	if winner == nil {
+		t.log.WithFields(logrus.Fields{
+			"slot":          blockInfo.Slot,
+			"builder_index": blockInfo.BuilderIndex,
+			"block_hash":    fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
+		}).Error("Our payload was included under a builder index we do not own — " +
+			"cannot bind the payment or the reveal to a key")
+
+		return
+	}
+
 	t.log.WithFields(logrus.Fields{
 		"slot":       blockInfo.Slot,
+		"key":        winner.String(),
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
 		"bid_value":  bidValueGwei,
 	}).Info("Our payload was included in a beacon block!")
+
+	t.registry.RecordWin(winner.KeyIndex())
 
 	// Builder payments and reveals only exist post-Gloas; before that the
 	// payload is part of the block itself and nothing is owed or revealed.
@@ -393,13 +417,14 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		// Record as pending payment (moved to a balance deduction if revealed,
 		// or pending for 2 epochs if not).
 		if bidValueGwei > 0 {
-			t.payments.RecordWonBid(payload.Attributes.ProposalSlot, bidValueGwei)
+			t.payments.RecordWonBid(winner.KeyIndex(), payload.Attributes.ProposalSlot, bidValueGwei)
 		}
 
 		// Request the reveal; the per-slot dedup makes this a no-op for
 		// Builder-API-won slots whose reveal was requested at delivery time.
 		t.revealSvc.RequestReveal(&RevealRequest{
 			Payload:   payload,
+			Key:       winner,
 			BlockInfo: blockInfo,
 			Transport: payload_builder.BidTransportP2P,
 		})
@@ -428,8 +453,21 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		t.trackedWins[slot] = &wonTracking{
 			blockRoot: blockInfo.Root,
 			execHash:  blockInfo.ExecutionBlockHash,
+			keyIndex:  winner.KeyIndex(),
 		}
 	}
+}
+
+// winningKey resolves the managed key behind a block's committed bid. From
+// Gloas on the block names the builder index, which maps to exactly one of our
+// keys; pre-Gloas no builder is named and the primary key stands in (nothing is
+// signed or owed on that path anyway).
+func (t *InclusionTracker) winningKey(blockInfo *beacon.BlockInfo) *builder_keys.Key {
+	if !blockInfo.BuilderIndexKnown {
+		return t.registry.Primary()
+	}
+
+	return t.registry.ByBuilderIndex(blockInfo.BuilderIndex)
 }
 
 // buildWonBlock derives the won-block summary for an included payload (no

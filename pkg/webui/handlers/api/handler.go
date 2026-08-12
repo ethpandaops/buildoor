@@ -5,6 +5,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
@@ -27,6 +28,7 @@ type APIHandler struct {
 	builderSvc     *payload_builder.Service
 	epbsSvc        *p2p_bidder.Service                                                   // May be nil
 	lifecycleMgr   *lifecycle.Manager                                                    // May be nil
+	keys           *builder_keys.Registry                                                // Managed builder key set
 	chainSvc       chain.Service                                                         // May be nil
 	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration] // May be nil (only set when Builder API enabled)
 	builderAPISvc  *builderapi.Server                                                    // May be nil (only set when Builder API enabled)
@@ -49,6 +51,7 @@ func NewAPIHandler(
 	builderSvc *payload_builder.Service,
 	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
+	keys *builder_keys.Registry,
 	chainSvc chain.Service,
 	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
 	builderAPISvc *builderapi.Server,
@@ -67,6 +70,7 @@ func NewAPIHandler(
 		builderSvc:     builderSvc,
 		epbsSvc:        epbsSvc,
 		lifecycleMgr:   lifecycleMgr,
+		keys:           keys,
 		chainSvc:       chainSvc,
 		validatorStore: validatorStore,
 		builderAPISvc:  builderAPISvc,
@@ -83,7 +87,7 @@ func NewAPIHandler(
 	// Create and start event stream manager
 	if builderSvc != nil {
 		h.eventStreamMgr = NewEventStreamManager(
-			builderSvc, epbsSvc, lifecycleMgr, chainSvc,
+			builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc,
 			builderAPISvc, revealSvc, inclusionTracker, payments,
 			planSvc, resultTracker,
 		)

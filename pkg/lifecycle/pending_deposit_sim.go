@@ -48,18 +48,20 @@ func activationExitChurnLimit(
 	return churn
 }
 
-// simulateDepositSurvives appends our deposit (amount ourAmount, gwei) to the back of
-// the current pending-deposit queue (amounts in gwei) and replays `transitions` epoch
-// boundaries of Electra deposit processing. It returns true if our deposit is never
-// drained — i.e. it is still queued at the fork boundary.
+// simulateDepositSurvives appends our deposits (amounts in gwei) to the back of the
+// current pending-deposit queue (amounts in gwei) and replays `transitions` epoch
+// boundaries of Electra deposit processing. It returns true if the LAST of our
+// deposits is never drained — i.e. the whole batch is still queued at the fork
+// boundary. Onboarding several builder keys appends several entries back to back,
+// so the batch survives exactly when its last entry does.
 //
 // Per transition the processable budget is depositBalanceToConsume (carried) + churnLimit;
 // entries drain FIFO while the per-epoch count stays under maxPerEpoch and the running
 // amount stays within the budget. The leftover budget is carried only when the churn
 // limit was hit, matching the spec.
 func simulateDepositSurvives(
-	queue []uint64,
-	ourAmount, depositBalanceToConsume, churnLimit, maxPerEpoch, transitions uint64,
+	queue, ourAmounts []uint64,
+	depositBalanceToConsume, churnLimit, maxPerEpoch, transitions uint64,
 ) bool {
 	if maxPerEpoch == 0 {
 		// No per-epoch cap means we cannot model draining; treat as undecidable and
@@ -67,11 +69,16 @@ func simulateDepositSurvives(
 		return false
 	}
 
-	ourIdx := len(queue)
+	if len(ourAmounts) == 0 {
+		return true
+	}
 
-	sim := make([]uint64, len(queue)+1)
-	copy(sim, queue)
-	sim[ourIdx] = ourAmount
+	// ourIdx is the index of the last of our deposits: the one that must survive.
+	ourIdx := len(queue) + len(ourAmounts) - 1
+
+	sim := make([]uint64, 0, len(queue)+len(ourAmounts))
+	sim = append(sim, queue...)
+	sim = append(sim, ourAmounts...)
 
 	dbtc := depositBalanceToConsume
 	head := 0
@@ -114,15 +121,16 @@ func simulateDepositSurvives(
 	return head <= ourIdx
 }
 
-// depositSurvivesUntilFork is the chain-typed wrapper around simulateDepositSurvives. It
-// returns true if a deposit of ourAmountGwei submitted at stats.Epoch would still be in
-// the pending_deposits queue at forkEpoch. It returns false (be conservative — prefer the
-// deposit-just-before-fork path) when the fork is not in the future or the spec lacks the
-// deposit-processing parameters needed to model draining.
-func depositSurvivesUntilFork(
+// depositsSurviveUntilFork is the chain-typed wrapper around simulateDepositSurvives. It
+// returns true if a batch of depositCount deposits of ourAmountGwei each, submitted at
+// stats.Epoch, would all still be in the pending_deposits queue at forkEpoch. It returns
+// false (be conservative — prefer the deposit-just-before-fork path) when the fork is not
+// in the future or the spec lacks the deposit-processing parameters needed to model
+// draining.
+func depositsSurviveUntilFork(
 	stats *chain.EpochStats,
 	spec *chain.ChainSpec,
-	ourAmountGwei uint64,
+	ourAmountGwei, depositCount uint64,
 	forkEpoch phase0.Epoch,
 ) bool {
 	if stats == nil || spec == nil || forkEpoch <= stats.Epoch {
@@ -146,11 +154,16 @@ func depositSurvivesUntilFork(
 		amounts[i] = deposit.Amount
 	}
 
+	ourAmounts := make([]uint64, depositCount)
+	for i := range ourAmounts {
+		ourAmounts[i] = ourAmountGwei
+	}
+
 	transitions := uint64(forkEpoch - stats.Epoch)
 
 	return simulateDepositSurvives(
 		amounts,
-		ourAmountGwei,
+		ourAmounts,
 		stats.DepositBalanceToConsume,
 		churnLimit,
 		spec.MaxPendingDepositsPerEpoch,
