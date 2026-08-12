@@ -142,6 +142,20 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// The block's bid names the builder index the proposer committed to. That is
+	// the key that must sign the envelope: the block is the authority, not
+	// whichever key we would pick now.
+	revealKey := h.registry.ByBuilderIndex(uint64(bid.BuilderIndex))
+	if revealKey == nil {
+		log.WithField("builder_index", bid.BuilderIndex).
+			Info("submitBeaconBlock: 400 — bid builder index does not belong to this builder")
+		h.recordSubmission(bid.Slot, submissionStatusFailed,
+			"bid builder index does not belong to this builder")
+		writeError(w, http.StatusBadRequest, "bid builder index does not belong to this builder")
+
+		return
+	}
+
 	beaconBlockRoot, err := dynssz.GetGlobalDynSsz().HashTreeRoot(block.Message)
 	if err != nil {
 		log.WithError(err).Warn("submitBeaconBlock: failed to compute beacon block hash tree root")
@@ -182,11 +196,14 @@ func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request
 	// and per-slot dedup with the p2p flow — nothing is published here.
 	h.revealSvc.RequestReveal(&payload_bidder.RevealRequest{
 		Payload: event,
+		Key:     revealKey,
 		BlockInfo: &beacon.BlockInfo{
 			Slot:               bid.Slot,
 			Root:               blockRoot,
 			ParentRoot:         block.Message.ParentRoot,
 			ExecutionBlockHash: bid.BlockHash,
+			BuilderIndex:       uint64(bid.BuilderIndex),
+			BuilderIndexKnown:  true,
 		},
 		Transport: payload_builder.BidTransportBuilderAPI,
 	})

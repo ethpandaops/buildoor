@@ -60,6 +60,7 @@ func (s *stubChainService) SubscribeEpochStats() *utils.Subscription[*EpochStats
 	return nil
 }
 func (s *stubChainService) GetHeadVoteTracker() *HeadVoteTracker { return nil }
+func (s *stubChainService) GetHeadTracker() *HeadTracker         { return nil }
 func (s *stubChainService) GetFinalizedEpoch() phase0.Epoch      { return 0 }
 func (s *stubChainService) GetBuilderByIndex(_ uint64) *BuilderInfo {
 	return nil

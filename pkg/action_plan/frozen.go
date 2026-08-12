@@ -6,6 +6,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 )
 
@@ -87,6 +88,11 @@ type ResolvedBuildSettings struct {
 	// execution payload instead of the immediate parent — a deliberate
 	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
+
+	// CandidateModes is the effective build-candidate policy for the slot:
+	// candidate key -> auto/always/never, merged from the global config and
+	// the plan's build.candidates overrides.
+	CandidateModes map[string]string `json:"candidate_modes,omitempty"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -105,10 +111,42 @@ type ResolvedBidSettings struct {
 	// IgnoreMissingPrefs bids without gossip proposer preferences.
 	IgnoreMissingPrefs bool `json:"ignore_missing_prefs,omitempty"`
 
+	// BidCandidate is the effective bid candidate selection for the slot:
+	// auto, all, or a specific candidate key.
+	BidCandidate string `json:"bid_candidate,omitempty"`
+
+	// KeyStrategy is the effective builder key selection strategy for the
+	// slot's bids.
+	KeyStrategy string `json:"key_strategy,omitempty"`
+
+	// BidKeysPerSlot caps how many distinct builder keys bid the slot
+	// (0 = no cap beyond the fleet).
+	BidKeysPerSlot uint64 `json:"bid_keys_per_slot,omitempty"`
+
+	// BidKeysPerStep is how many keys bid a payload per interval step
+	// (0 = every remaining key at once).
+	BidKeysPerStep uint64 `json:"bid_keys_per_step,omitempty"`
+
 	// Forced marks that the plan activated bidding although the module is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
 }
+
+// EffectiveKeysPerStep returns how many keys one step may spend: the configured
+// count, or every key the fleet has left when unset.
+func (s *ResolvedBidSettings) EffectiveKeysPerStep() uint64 {
+	if s.BidKeysPerStep > 0 {
+		return s.BidKeysPerStep
+	}
+
+	// Unset means "as many as are left"; the per-slot cap and the fleet size
+	// bound the loop, so a generous ceiling is enough.
+	return maxKeysPerStep
+}
+
+// maxKeysPerStep bounds an unset per-step count so a step can never loop
+// unbounded; no fleet reaches it in practice.
+const maxKeysPerStep = 1024
 
 // ResolvedBuilderAPISettings are the effective Builder API bid-serving
 // parameters for the slot.
@@ -120,6 +158,14 @@ type ResolvedBuilderAPISettings struct {
 	TotalValueGwei *uint64 `json:"total_value_gwei,omitempty"`
 
 	DelayMs int64 `json:"delay_ms,omitempty"`
+
+	// ServeCandidates is the effective serve-candidates policy for the slot
+	// (all, canonical_only, or a comma-separated candidate key list).
+	ServeCandidates string `json:"serve_candidates,omitempty"`
+
+	// KeyStrategy is the effective builder key selection strategy for the
+	// slot's served bids.
+	KeyStrategy string `json:"key_strategy,omitempty"`
 
 	// Forced marks that the plan activated serving although the module is
 	// globally disabled.
@@ -208,6 +254,8 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 		build.ReorgParentPayload = frozen.Plan.Build.ReorgParentPayload
 	}
 
+	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
+
 	// A plan that explicitly activates (mode custom) an available consumer
 	// forces the build past the schedule. A merely-inherited active consumer
 	// never forces, and a custom category whose consumer is unavailable
@@ -275,6 +323,27 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	return build
 }
 
+// resolveCandidateModes merges the global build-candidate policy with the
+// plan's per-slot overrides into the complete effective mode map.
+func resolveCandidateModes(plan *SlotPlan, cfg *config.Config) map[string]string {
+	modes := make(map[string]string, len(chain.AllCandidateKeys))
+
+	for _, key := range chain.AllCandidateKeys {
+		modes[string(key)] = cfg.Build.CandidateMode(string(key))
+	}
+
+	if plan != nil && plan.Build != nil {
+		for key, mode := range plan.Build.Candidates {
+			if normalized := config.NormalizedCandidateMode(mode, ""); normalized != "" &&
+				chain.IsValidCandidateKey(key) {
+				modes[key] = normalized
+			}
+		}
+	}
+
+	return modes
+}
+
 // planForcesConsumer reports whether the plan explicitly activates (mode
 // custom) a consumer that is actually available for the slot.
 func planForcesConsumer(frozen *FrozenPlan) bool {
@@ -336,13 +405,17 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 	}
 
 	resolved := &ResolvedBidSettings{
-		StartMs:      cfg.EPBS.BidStartTime,
-		EndMs:        cfg.EPBS.BidEndTime,
-		IntervalMs:   cfg.EPBS.BidInterval,
-		MinGwei:      cfg.EPBS.BidMinAmount,
-		IncreaseGwei: cfg.EPBS.BidIncrease,
-		SubsidyGwei:  cfg.EPBS.BidSubsidy,
-		Forced:       forced,
+		StartMs:        cfg.EPBS.BidStartTime,
+		EndMs:          cfg.EPBS.BidEndTime,
+		IntervalMs:     cfg.EPBS.BidInterval,
+		MinGwei:        cfg.EPBS.BidMinAmount,
+		IncreaseGwei:   cfg.EPBS.BidIncrease,
+		SubsidyGwei:    cfg.EPBS.BidSubsidy,
+		BidCandidate:   cfg.EPBS.BidCandidate,
+		KeyStrategy:    cfg.EPBS.KeyStrategy,
+		BidKeysPerSlot: cfg.EPBS.BidKeysPerSlot,
+		BidKeysPerStep: cfg.EPBS.BidKeysPerStep,
+		Forced:         forced,
 	}
 
 	if cfg.EPBS.BidValueOverride > 0 {
@@ -364,6 +437,17 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 		}
 
 		resolved.IgnoreMissingPrefs = bid.IgnoreMissingPrefs
+
+		if bid.BidCandidate != nil {
+			resolved.BidCandidate = *bid.BidCandidate
+		}
+
+		if bid.KeyStrategy != nil {
+			resolved.KeyStrategy = *bid.KeyStrategy
+		}
+
+		applyOverride(&resolved.BidKeysPerSlot, bid.BidKeysPerSlot)
+		applyOverride(&resolved.BidKeysPerStep, bid.BidKeysPerStep)
 	}
 
 	return resolved
@@ -389,8 +473,10 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 	}
 
 	resolved := &ResolvedBuilderAPISettings{
-		SubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
-		Forced:      forced,
+		SubsidyGwei:     cfg.BuilderAPI.BlockValueSubsidyGwei,
+		ServeCandidates: cfg.BuilderAPI.ServeCandidates,
+		KeyStrategy:     builderAPIKeyStrategy(cfg),
+		Forced:          forced,
 	}
 
 	if cfg.BuilderAPI.ValueOverrideGwei > 0 {
@@ -406,9 +492,27 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		if api.TotalValueOverrideGwei != nil {
 			resolved.TotalValueGwei = cloneScalar(api.TotalValueOverrideGwei)
 		}
+
+		if api.ServeCandidates != nil {
+			resolved.ServeCandidates = *api.ServeCandidates
+		}
+
+		if api.KeyStrategy != nil {
+			resolved.KeyStrategy = *api.KeyStrategy
+		}
 	}
 
 	return resolved
+}
+
+// builderAPIKeyStrategy resolves the Builder API's key selection strategy,
+// which falls back to the ePBS one when left unset.
+func builderAPIKeyStrategy(cfg *config.Config) string {
+	if cfg.BuilderAPI.KeyStrategy != "" {
+		return cfg.BuilderAPI.KeyStrategy
+	}
+
+	return cfg.EPBS.KeyStrategy
 }
 
 func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {

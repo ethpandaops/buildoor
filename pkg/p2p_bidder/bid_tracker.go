@@ -5,24 +5,34 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 )
 
 // BidTracker tracks bids observed on the p2p network for competition analysis.
 type BidTracker struct {
-	slotBids      map[phase0.Slot]*SlotBids
-	ourBuilderIdx uint64
-	mu            sync.RWMutex
+	slotBids map[phase0.Slot]*SlotBids
+	registry *builder_keys.Registry
+	mu       sync.RWMutex
 
 	log logrus.FieldLogger
 }
 
-// NewBidTracker creates a new bid tracker.
-func NewBidTracker(ourBuilderIdx uint64, log logrus.FieldLogger) *BidTracker {
+// NewBidTracker creates a new bid tracker. The key registry identifies which
+// gossiped bids are ours: with several managed keys bidding the same slot, any
+// of their builder indices must be excluded from competitor comparisons.
+func NewBidTracker(registry *builder_keys.Registry, log logrus.FieldLogger) *BidTracker {
 	return &BidTracker{
-		slotBids:      make(map[phase0.Slot]*SlotBids, 64),
-		ourBuilderIdx: ourBuilderIdx,
-		log:           log.WithField("component", "bid-tracker"),
+		slotBids: make(map[phase0.Slot]*SlotBids, 64),
+		registry: registry,
+		log:      log.WithField("component", "bid-tracker"),
 	}
+}
+
+// IsOurs reports whether a gossiped bid's builder index belongs to the managed
+// key set.
+func (t *BidTracker) IsOurs(builderIndex uint64) bool {
+	return t.registry != nil && t.registry.ByBuilderIndex(builderIndex) != nil
 }
 
 // TrackBid adds a bid to the tracker.
@@ -75,9 +85,14 @@ func (t *BidTracker) GetHighestBid(slot phase0.Slot) *TrackedBid {
 }
 
 // GetHighestCompetitorBid returns the highest tracked bid value (gwei) for
-// the slot excluding our own builder index, and whether any competitor bid is
-// known. Unlike GetHighestBid it can never report our own bid back to us.
-func (t *BidTracker) GetHighestCompetitorBid(slot phase0.Slot, ourBuilderIndex uint64) (uint64, bool) {
+// the slot excluding every key of ours, and whether any competitor bid is
+// known. Unlike GetHighestBid it can never report one of our own bids back to
+// us — which matters once several managed keys bid the same slot.
+// A non-zero parentHash restricts the comparison to bids committing to the
+// same execution parent (bids on other forks are not competing).
+func (t *BidTracker) GetHighestCompetitorBid(
+	slot phase0.Slot, parentHash phase0.Hash32,
+) (uint64, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -91,7 +106,11 @@ func (t *BidTracker) GetHighestCompetitorBid(slot phase0.Slot, ourBuilderIndex u
 	found := false
 
 	for builderIndex, tracked := range slotBids.Bids {
-		if builderIndex == ourBuilderIndex || tracked.IsOurs {
+		if tracked.IsOurs || t.IsOurs(builderIndex) {
+			continue
+		}
+
+		if parentHash != (phase0.Hash32{}) && tracked.Bid.ParentBlockHash != parentHash {
 			continue
 		}
 
@@ -135,12 +154,4 @@ func (t *BidTracker) Cleanup(olderThan phase0.Slot) {
 			delete(t.slotBids, slot)
 		}
 	}
-}
-
-// SetBuilderIndex updates the builder index.
-func (t *BidTracker) SetBuilderIndex(index uint64) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	t.ourBuilderIdx = index
 }

@@ -16,12 +16,11 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
-	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -100,8 +99,7 @@ type BidSubmissionEvent struct {
 // reveals, inclusion tracking, and payment accounting live in the shared
 // payload_bidder services.
 type Service struct {
-	signer                *payload_bidder.Signer
-	blsSigner             *signer.BLSSigner
+	registry              *builder_keys.Registry
 	scheduler             *Scheduler
 	bidCreator            *BidCreator
 	bidTracker            *BidTracker
@@ -109,8 +107,6 @@ type Service struct {
 	chainSvc              chain.Service
 	propPrefsStore        *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	planSvc               *action_plan.PlanService
-	builderIndex          uint64
-	builderPubkey         phase0.BLSPubKey
 	bidSubmissionDispatch *utils.Dispatcher[*BidSubmissionEvent]
 	builderSvc            *payload_builder.Service
 
@@ -134,24 +130,19 @@ type Service struct {
 func NewService(
 	clClient *beacon.Client,
 	chainSvc chain.Service,
-	blsSigner *signer.BLSSigner,
+	registry *builder_keys.Registry,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	planSvc *action_plan.PlanService,
 	log logrus.FieldLogger,
 ) (*Service, error) {
 	serviceLog := log.WithField("component", "p2p-bidder")
 
-	// Create the shared payload bidder signer
-	epbsSigner := payload_bidder.NewSigner(blsSigner)
-
 	s := &Service{
-		signer:                epbsSigner,
-		blsSigner:             blsSigner,
+		registry:              registry,
 		clClient:              clClient,
 		chainSvc:              chainSvc,
 		propPrefsStore:        propPrefsStore,
 		planSvc:               planSvc,
-		builderPubkey:         blsSigner.PublicKey(),
 		bidSubmissionDispatch: &utils.Dispatcher[*BidSubmissionEvent]{},
 		log:                   serviceLog,
 	}
@@ -193,32 +184,29 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.builderSvc = builderSvc
 
-	// Load builder index from chain service and determine initial registration state
+	// Determine the initial registration state from the primary key's on-chain entry
+	pubkey := s.GetBuilderPubkey()
+
 	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {
 		s.log.Info("No builders in beacon state (pre-Gloas), waiting for registration")
-		s.builderIndex = 0
 		s.registrationState.Store(RegistrationStateWaitingGloas)
-	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(s.builderPubkey); builderInfo == nil {
+	} else if builderInfo := s.chainSvc.GetBuilderByPubkey(pubkey); builderInfo == nil {
 		s.log.Info("Builder not found in beacon state")
-		s.builderIndex = 0
 		s.registrationState.Store(RegistrationStateUnregistered)
 	} else {
-		s.builderIndex = builderInfo.Index
 		s.registrationState.Store(s.computeRegistrationState(builderInfo))
 		s.log.WithFields(logrus.Fields{
-			"builder_index":  s.builderIndex,
-			"builder_pubkey": fmt.Sprintf("%x", s.builderPubkey[:8]),
+			"builder_index":  builderInfo.Index,
+			"builder_pubkey": fmt.Sprintf("%x", pubkey[:8]),
 			"state":          RegistrationStateName(s.registrationState.Load()),
 		}).Info("Builder found in beacon state")
 	}
 
 	// Initialize components
-	s.bidTracker = NewBidTracker(s.builderIndex, s.log)
+	s.bidTracker = NewBidTracker(s.registry, s.log)
 	s.bidCreator = NewBidCreator(
-		s.signer,
 		s.clClient,
 		s.chainSvc,
-		s.builderIndex,
 		s.log,
 	)
 	// The scheduler skips bidding for slots without cached proposer preferences:
@@ -229,9 +217,10 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		s.bidTracker,
 		builderSvc.GetPayloadCache(),
 		s,
-		s.blsSigner,
+		s.registry,
 		s.propPrefsStore,
 		s.planSvc,
+		builderSvc.GetConfig(),
 		s.log,
 	)
 
@@ -255,6 +244,12 @@ func (s *Service) Stop() {
 
 	s.wg.Wait()
 
+	// Bid submissions run detached from the scheduler's tick, so they are
+	// awaited separately.
+	if s.scheduler != nil {
+		s.scheduler.Wait()
+	}
+
 	s.log.Info("p2p bidder service stopped")
 }
 
@@ -272,6 +267,17 @@ func (s *Service) run() {
 	defer epochSub.Unsubscribe()
 	defer ticker.Stop()
 
+	// Head-change events reopen bidding for slots whose closing block was
+	// reorged out (a nil channel simply never fires).
+	var headChangeCh <-chan *chain.HeadChangeEvent
+
+	if headTracker := s.chainSvc.GetHeadTracker(); headTracker != nil {
+		headChangeSub := headTracker.SubscribeHeadChanges()
+		defer headChangeSub.Unsubscribe()
+
+		headChangeCh = headChangeSub.Channel()
+	}
+
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -283,10 +289,19 @@ func (s *Service) run() {
 		case event := <-bidSub.Channel():
 			s.handleBidEvent(event)
 
-		case _, ok := <-epochSub.Channel():
+		case epochStats, ok := <-epochSub.Channel():
 			if ok {
 				s.RefreshRegistrationState()
+
+				// Prune per-slot bid state that left the retention window.
+				if firstSlot := epochStats.Epoch * phase0.Epoch(s.chainSvc.GetChainSpec().SlotsPerEpoch); firstSlot > 64 {
+					s.scheduler.Cleanup(phase0.Slot(firstSlot) - 64)
+					s.bidTracker.Cleanup(phase0.Slot(firstSlot) - 64)
+				}
 			}
+
+		case change := <-headChangeCh:
+			s.scheduler.OnHeadChange(s.ctx, change)
 
 		case <-ticker.C:
 			// The enable policy is per slot: the scheduler resolves it from
@@ -313,7 +328,7 @@ func (s *Service) handleHeadEvent(event *beacon.HeadEvent) {
 
 // handleBidEvent processes a bid event from the event stream.
 func (s *Service) handleBidEvent(event *beacon.BidEvent) {
-	isOurs := event.BuilderIndex == s.builderIndex
+	isOurs := s.bidTracker.IsOurs(event.BuilderIndex)
 
 	bid := &ExecutionPayloadBid{
 		Slot:             event.Slot,
@@ -355,27 +370,27 @@ func (s *Service) IsActive() bool {
 
 // SetRegistrationPending marks the builder as having a deposit in flight.
 // Called by the lifecycle manager when a deposit is submitted.
+//
+// A deposit only says something about the key it funds. Once any key of the
+// fleet is active the builder can bid, so a deposit for some other key must not
+// pull the reported state back to pending — the scheduler gates bidding on it,
+// and a fleet ramping toward its target deposits continuously, which would
+// otherwise suppress bidding for the whole ramp.
 func (s *Service) SetRegistrationPending() {
+	if s.registry != nil && s.registry.AnyActive() {
+		return
+	}
+
 	s.registrationState.Store(RegistrationStatePending)
 	s.log.Info("Builder deposit submitted, waiting for beacon chain inclusion")
 }
 
-// SetBuilderRegistered updates the builder index when the lifecycle manager detects registration.
-// It sets the appropriate state based on finalization status.
-// Called by the lifecycle manager's registration callback.
+// SetBuilderRegistered re-evaluates the reported registration state when the
+// lifecycle manager detects a registration. The builder index itself lives on
+// the key registry; this only drives the status reporting.
 func (s *Service) SetBuilderRegistered(index uint64) {
-	s.builderIndex = index
-
-	if s.bidCreator != nil {
-		s.bidCreator.SetBuilderIndex(index)
-	}
-
-	if s.bidTracker != nil {
-		s.bidTracker.SetBuilderIndex(index)
-	}
-
 	// Determine the correct state based on finalization
-	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	info := s.chainSvc.GetBuilderByPubkey(s.GetBuilderPubkey())
 	if info != nil {
 		s.registrationState.Store(s.computeRegistrationState(info))
 	} else {
@@ -419,7 +434,7 @@ func (s *Service) RefreshRegistrationState() {
 		return
 	}
 
-	info := s.chainSvc.GetBuilderByPubkey(s.builderPubkey)
+	info := s.chainSvc.GetBuilderByPubkey(s.GetBuilderPubkey())
 	if info == nil {
 		// Builder not in state — keep current state if pending (deposit submitted),
 		// otherwise mark as unregistered
@@ -446,12 +461,21 @@ func (s *Service) GetBidTracker() *BidTracker {
 	return s.bidTracker
 }
 
-// GetBuilderIndex returns the builder index.
+// GetBuilderIndex returns the primary key's on-chain builder index (0 when it is
+// not registered). Status reporting only — bids carry the index of the key that
+// signed them.
 func (s *Service) GetBuilderIndex() uint64 {
-	return s.builderIndex
+	index, _ := s.registry.Primary().BuilderIndex()
+
+	return index
 }
 
-// GetBuilderPubkey returns the builder public key.
+// GetBuilderPubkey returns the primary key's public key.
 func (s *Service) GetBuilderPubkey() phase0.BLSPubKey {
-	return s.builderPubkey
+	return s.registry.Primary().Pubkey()
+}
+
+// Registry returns the managed builder key set.
+func (s *Service) Registry() *builder_keys.Registry {
+	return s.registry
 }

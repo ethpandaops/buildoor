@@ -19,7 +19,11 @@ export const Legend: React.FC = () => {
         <span><span className="legend-dot bg-vote-threshold-met"></span> Threshold Met</span>
       </div>
       <div className="timeline-legend d-flex flex-wrap gap-2 small mt-1">
-        <span className="legend-section">Bidder:</span>
+        <span className="legend-section">Candidates:</span>
+        <span><span className="legend-line" style={{ backgroundColor: '#61e392' }}></span> parent (full)</span>
+        <span><span className="legend-line" style={{ backgroundColor: '#e6a23c' }}></span> parent (empty)</span>
+        <span><span className="legend-line" style={{ backgroundColor: '#a78bfa' }}></span> grandparent</span>
+        <span className="legend-section ms-2">Bidder:</span>
         <span><span className="legend-dot bg-bid-submitted"></span> Bid Submitted</span>
         <span><span className="legend-dot bg-bid-failed"></span> Bid Failed</span>
         <span><span className="legend-dot bg-reveal-sent"></span> Reveal</span>

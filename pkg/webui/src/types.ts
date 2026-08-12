@@ -23,11 +23,25 @@ export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
   reveal?: RevealConfig;
+  build?: BuildConfig;
   deposit_amount: number;
   topup_threshold: number;
   topup_amount: number;
   payload_build_time?: number;
   extra_data?: string;
+}
+
+// Build-candidate policy: which parent candidates a slot builds payloads for
+// (auto | always | never per candidate) and how the engine builds run.
+export interface BuildConfig {
+  candidate_parent_full?: string;
+  candidate_parent_empty?: string;
+  candidate_grandparent_full?: string;
+  candidate_grandparent_empty?: string;
+  parallel?: boolean;
+  speculative_build_time_ms?: number;
+  auto_weak_head_pct?: number;
+  enforce_bid_gas_limit?: boolean;
 }
 
 // Payload reveal config (own section, shared by the p2p bidder and Builder
@@ -58,6 +72,10 @@ export interface EPBSConfig {
   bid_interval: number;
   bid_subsidy: number;
   payload_build_delay?: number;
+  bid_candidate?: string;
+  key_strategy?: string;
+  bid_keys_per_slot?: number;
+  bid_keys_per_step?: number;
 }
 
 export interface ServiceStatus {
@@ -102,6 +120,71 @@ export interface BuilderInfo {
   wallet_balance_wei?: string;
   deposit_epoch: number;
   withdrawable_epoch: number;
+  // Fleet summary of the managed builder key set. Equal to the fields above on
+  // a single-key deployment.
+  key_count: number;
+  key_target: number;
+  keys_active: number;
+  total_balance_gwei: number;
+  total_pending_payments_gwei: number;
+  total_effective_gwei: number;
+}
+
+export type BuilderKeyStatus =
+  | 'unused'
+  | 'depositing'
+  | 'pending'
+  | 'active'
+  | 'exiting'
+  | 'exited'
+  | 'withdrawn';
+
+export interface BuilderKeyState {
+  key_index: number;
+  pubkey: string;
+  status: BuilderKeyStatus;
+  builder_index: number;
+  has_builder_index: boolean;
+  balance_gwei: number;
+  pending_payments_gwei: number;
+  balance_adjustment_gwei: number;
+  effective_balance_gwei: number;
+  deposit_epoch: number;
+  withdrawable_epoch: number;
+  use_count: number;
+  last_deposit_at?: number;
+  last_exit_at?: number;
+  last_topup_epoch?: number;
+  bids_submitted: number;
+  bids_won: number;
+}
+
+export interface BuilderKeysAggregate {
+  target: number;
+  managed: number;
+  unused: number;
+  depositing: number;
+  pending: number;
+  active: number;
+  exiting: number;
+  exited: number;
+  withdrawn: number;
+  total_balance_gwei: number;
+  total_pending_payments_gwei: number;
+  total_effective_gwei: number;
+}
+
+export interface BuilderKeysSettings {
+  target_count: number;
+  max_index: number;
+  auto_deposit: boolean;
+  auto_exit: boolean;
+}
+
+export interface BuilderKeysResponse {
+  keys: BuilderKeyState[];
+  aggregate: BuilderKeysAggregate;
+  settings: BuilderKeysSettings;
 }
 
 export interface SlotStartEvent {
@@ -125,6 +208,8 @@ export interface BidSubmittedEvent {
   timestamp: number;
   success: boolean;
   error?: string;
+  builder_index?: number;
+  key_index?: number;
 }
 
 export interface HeadReceivedEvent {
@@ -284,6 +369,34 @@ export interface PayloadDetail {
   numExecRequests?: number;
 }
 
+// Build-parent candidate keys: which beacon block / execution payload a
+// candidate payload extends (see the backend chain.CandidateKey).
+export type CandidateKey =
+  | 'parent_full'
+  | 'parent_empty'
+  | 'grandparent_full'
+  | 'grandparent_empty'
+  | '';
+
+// CandidateBuild tracks one candidate payload build of a slot (a slot may
+// build several payloads on different parents for reorg preparedness).
+export interface CandidateBuild {
+  candidate: CandidateKey;
+  startedAt?: number;
+  readyAt?: number;
+  failedAt?: number;
+  failed?: boolean;
+  error?: string;
+  blockHash?: string;
+  blockValueGwei?: number;
+  // Parent tuple this candidate payload extends.
+  parentBlockHash?: string;
+  parentBlockNumber?: number;
+  parentBlockRoot?: string;
+  parentSlot?: number;
+  detail?: PayloadDetail;
+}
+
 // UI State types
 export interface SlotState {
   slot: number;
@@ -297,6 +410,10 @@ export interface SlotState {
   payloadCreatedAt?: number;
   payloadBlockHash?: string;
   payloadBlockValue?: number;
+  // Candidate of the primary payload (the most canonical ready build).
+  payloadCandidate?: CandidateKey;
+  // Every candidate build of the slot (present when candidates ran).
+  candidateBuilds?: CandidateBuild[];
   blockReceivedAt?: number;
   blockRoot?: string;
   bidsClosed?: boolean;
@@ -372,6 +489,9 @@ export interface OurBid {
   feeRecipient?: string;
   gasLimit?: number;
   builderIndex?: number;
+  // The managed builder key that signed the bid: with several keys bidding one
+  // slot, the builder index alone does not say which of ours it was.
+  keyIndex?: number;
   parentBlockHash?: string;
   parentBlockRoot?: string;
   numBlobCommitments?: number;
@@ -498,6 +618,7 @@ export interface BidPlan {
   bid_subsidy?: number; // gwei
   bid_value_gwei?: number; // absolute bid base value
   ignore_missing_prefs?: boolean;
+  bid_candidate?: string; // auto | all | candidate key
 }
 
 export interface BuilderAPIPlan {
@@ -505,6 +626,7 @@ export interface BuilderAPIPlan {
   value_subsidy_gwei?: number;
   total_value_override_gwei?: number;
   response_delay_ms?: number;
+  serve_candidates?: string; // all | canonical_only | key list
 }
 
 export interface RevealPlan {
@@ -519,6 +641,8 @@ export interface RevealPlan {
 // slot's payload is built when a build happens.
 export interface BuildPlan {
   reorg_parent_payload?: boolean;
+  // Per-slot candidate policy overrides: candidate key -> auto/always/never.
+  candidates?: Record<string, string>;
 }
 
 // The transforms category has no mode: each field is a jq expression applied
@@ -607,6 +731,7 @@ export interface ResolvedBuildSettings {
   plan_involved?: boolean;
   build_start_time_ms: number;
   reorg_parent_payload?: boolean;
+  candidate_modes?: Record<string, string>;
 }
 
 export interface ResolvedBidSettings {
@@ -618,6 +743,7 @@ export interface ResolvedBidSettings {
   subsidy_gwei: number;
   value_gwei?: number;
   ignore_missing_prefs?: boolean;
+  bid_candidate?: string;
   forced?: boolean;
 }
 
@@ -625,6 +751,7 @@ export interface ResolvedBuilderAPISettings {
   subsidy_gwei: number;
   total_value_gwei?: number;
   delay_ms?: number;
+  serve_candidates?: string;
   forced?: boolean;
 }
 
@@ -683,6 +810,8 @@ export type RevealAttemptStatus = 'suppressed' | 'published' | 'failed' | 'skipp
 export interface BuildOutcome {
   status: BuildStatus;
   skip_reason?: string;
+  candidate?: string; // build-parent candidate key ("" / absent = unclassified)
+  artifact_idx?: number; // payload artifact index of this build
   block_hash?: string;
   block_value_wei?: string;
   num_transactions?: number;
@@ -738,6 +867,7 @@ export interface SlotBidAttempt {
   fee_recipient?: string;
   gas_limit?: number;
   builder_index?: number;
+  key_index?: number;
   num_blob_commitments?: number;
   error?: string;
   at: string;
@@ -782,6 +912,9 @@ export interface SlotResult {
   fork: string;
   applied_plan?: FrozenPlan;
   build?: BuildOutcome;
+  // Every candidate build of the slot (present when more than one ran);
+  // build stays the primary outcome.
+  builds?: BuildOutcome[];
   bids?: SlotBidAttempt[];
   block_submissions?: SlotBlockSubmission[];
   reveal_attempts?: SlotRevealAttempt[];

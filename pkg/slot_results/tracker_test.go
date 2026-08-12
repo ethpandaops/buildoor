@@ -93,7 +93,7 @@ func newTrackerTestEnv(t *testing.T, withDB bool) *trackerTestEnv {
 
 	t.Cleanup(func() { _ = stateDB.Close() })
 
-	tracker := NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, log)
+	tracker := NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
 
 	return &trackerTestEnv{
 		cfg:      cfg,
@@ -375,7 +375,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
 
-	fresh := NewTracker(env.cfg, env.chainSvc, env.stateDB, env.planSvc, nil, nil, nil, nil, log)
+	fresh := NewTracker(env.cfg, env.chainSvc, env.stateDB, env.planSvc, nil, nil, nil, nil, nil, log)
 	fresh.SetPersistence(t.Context(), env.stateDB)
 
 	defer fresh.store.Stop()
@@ -475,7 +475,8 @@ func TestArtifactStoreBufferWithoutDB(t *testing.T) {
 		GasLimit: 1, GasUsed: 1, Timestamp: 1, BlockNumber: 1,
 	}
 
-	require.NoError(t, store.StorePayload(700, version.DataVersionFulu, payload))
+	_, err := store.StorePayload(700, version.DataVersionFulu, payload, PayloadArtifactMeta{})
+	require.NoError(t, err)
 
 	artifact, err := store.Get(700, ArtifactKindPayload, 0)
 	require.NoError(t, err)
@@ -484,7 +485,8 @@ func TestArtifactStoreBufferWithoutDB(t *testing.T) {
 
 	// Buffer bound: newest 64 distinct slots.
 	for slot := phase0.Slot(701); slot <= 800; slot++ {
-		require.NoError(t, store.StorePayload(slot, version.DataVersionFulu, payload))
+		_, slotErr := store.StorePayload(slot, version.DataVersionFulu, payload, PayloadArtifactMeta{})
+		require.NoError(t, slotErr)
 	}
 
 	evicted, err := store.Get(700, ArtifactKindPayload, 0)
@@ -511,7 +513,8 @@ func TestArtifactSSZRoundTrip(t *testing.T) {
 		Timestamp:   1234,
 	}
 
-	require.NoError(t, store.StorePayload(900, version.DataVersionFulu, original))
+	_, err := store.StorePayload(900, version.DataVersionFulu, original, PayloadArtifactMeta{})
+	require.NoError(t, err)
 
 	artifact, err := store.Get(900, ArtifactKindPayload, 0)
 	require.NoError(t, err)

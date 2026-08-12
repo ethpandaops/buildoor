@@ -39,6 +39,29 @@ export interface OverviewStats {
   builder_api_registered_validators: number;
 }
 
+// One managed builder key, as listed by the overview endpoint.
+export interface OverviewBuilderKey {
+  key_index: number;
+  pubkey: string;
+  status: string;
+  builder_index: number;
+  has_builder_index: boolean;
+  balance_gwei?: number;
+}
+
+// The managed fleet. Absent on instances predating the managed key set, which
+// is why builder_pubkey/builder_index below are still populated (primary key).
+export interface OverviewBuilders {
+  count: number;
+  target: number;
+  active: number;
+  indexes: number[];
+  keys?: OverviewBuilderKey[];
+  total_balance_gwei: number;
+  total_pending_payments_gwei: number;
+  total_effective_gwei: number;
+}
+
 export interface OverviewResponse {
   version: string;
   running: boolean;
@@ -50,6 +73,7 @@ export interface OverviewResponse {
   services: OverviewServices;
   balances: OverviewBalances;
   stats: OverviewStats;
+  builders?: OverviewBuilders;
 }
 
 export type InstanceStatus =

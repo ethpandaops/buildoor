@@ -188,9 +188,61 @@ func parseArtifactSlot(w http.ResponseWriter, r *http.Request) (phase0.Slot, boo
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this slot"
 // @Failure 406 {object} map[string]string "No acceptable content type"
+// @Param candidate query string false "Build-parent candidate key (parent_full, parent_empty, grandparent_full, grandparent_empty)"
 // @Router /api/buildoor/slot-results/{slot}/payload [get]
 func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Request) {
-	h.serveArtifact(w, r, slot_results.ArtifactKindPayload, 0)
+	idx := 0
+
+	// A slot may hold one payload per build-parent candidate; ?candidate=
+	// selects one of them, defaulting to the first stored payload.
+	if candidate := r.URL.Query().Get("candidate"); candidate != "" {
+		if h.resultTracker == nil {
+			writeError(w, http.StatusNotFound, "artifact not found")
+			return
+		}
+
+		slot, ok := parseArtifactSlot(w, r)
+		if !ok {
+			return
+		}
+
+		resolved, found := h.resultTracker.Artifacts().PayloadIndexForCandidate(slot, candidate)
+		if !found {
+			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate)
+			return
+		}
+
+		idx = resolved
+	}
+
+	h.serveArtifact(w, r, slot_results.ArtifactKindPayload, idx)
+}
+
+// GetSlotPayloadArtifactByIndex godoc
+// @Id getSlotPayloadArtifactByIndex
+// @Summary Get one of a slot's built candidate payloads
+// @Tags ActionPlan
+// @Description Returns one of the execution payloads built for the slot by
+// @Description artifact index (a slot may build several candidate payloads on
+// @Description different parents; the slot result's build entries carry each
+// @Description build's artifact index). Content negotiation as with the
+// @Description default payload artifact endpoint.
+// @Produce json,application/octet-stream
+// @Param slot path int true "Slot"
+// @Param index path int true "Payload artifact index"
+// @Success 200 {object} map[string]any "Versioned payload (or raw SSZ)"
+// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 404 {object} map[string]string "No artifact for this slot/index"
+// @Failure 406 {object} map[string]string "No acceptable content type"
+// @Router /api/buildoor/slot-results/{slot}/payload/{index} [get]
+func (h *APIHandler) GetSlotPayloadArtifactByIndex(w http.ResponseWriter, r *http.Request) {
+	idx, err := strconv.Atoi(mux.Vars(r)["index"])
+	if err != nil || idx < 0 {
+		writeError(w, http.StatusBadRequest, "invalid index: must be a non-negative number")
+		return
+	}
+
+	h.serveArtifact(w, r, slot_results.ArtifactKindPayload, idx)
 }
 
 // GetSlotEnvelopeArtifact godoc

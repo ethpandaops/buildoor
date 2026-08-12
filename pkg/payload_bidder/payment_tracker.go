@@ -11,17 +11,17 @@ import (
 
 // PendingPayment records an unrevealed won bid that may be deducted later.
 type PendingPayment struct {
-	Slot  phase0.Slot
-	Epoch phase0.Epoch
-	Value uint64 // Gwei
+	KeyIndex uint64
+	Slot     phase0.Slot
+	Epoch    phase0.Epoch
+	Value    uint64 // Gwei
+	// Disputed marks a payment whose winning block was reorged out: it no
+	// longer counts toward the pending total unless the block returns.
+	Disputed bool
 }
 
-// PaymentTracker tracks the builder's payment obligations and live balance
-// adjustments across both bid flows (p2p and Builder API). Fed by the
-// InclusionTracker (won bids) and RevealService (reveals); consumed by the
-// lifecycle manager (top-ups) and the WebUI. Passive and thread-safe: it runs
-// no goroutine of its own.
-type PaymentTracker struct {
+// keyPayments is one builder key's payment accounting.
+type keyPayments struct {
 	// balanceAdjustment bridges the gap between an operation and the epoch
 	// snapshot reflecting it: positive = deposits/topups, negative = revealed
 	// bid payments. It holds only deltas from the current snapshot epoch;
@@ -30,12 +30,24 @@ type PaymentTracker struct {
 	// was anchored to.
 	balanceAdjustment int64
 	adjustmentEpoch   phase0.Epoch
-	adjustmentMu      sync.Mutex
 
-	// Pending payments: unrevealed won bids, pending for 2 epochs.
-	// Only these count as "pending" in the UI and for topup checks.
-	pendingPayments map[phase0.Slot]*PendingPayment
-	pendingMu       sync.Mutex
+	// pending holds unrevealed won bids, kept for 2 epochs. Only these count as
+	// "pending" in the UI and for topup checks.
+	pending map[phase0.Slot]*PendingPayment
+}
+
+// PaymentTracker tracks payment obligations and live balance adjustments per
+// builder key, across both bid flows (p2p and Builder API). Fed by the
+// InclusionTracker (won bids) and RevealService (reveals); consumed by the
+// lifecycle manager (top-ups), the key registry (effective balances) and the
+// WebUI. Passive and thread-safe: it runs no goroutine of its own.
+//
+// Accounting is per key because a payment is owed by the key whose bid won —
+// with several managed keys bidding, charging the wrong one would let an
+// underfunded key keep bidding while a funded one looks broke.
+type PaymentTracker struct {
+	mu   sync.Mutex
+	keys map[uint64]*keyPayments
 
 	chainSvc chain.Service
 	log      logrus.FieldLogger
@@ -44,136 +56,242 @@ type PaymentTracker struct {
 // NewPaymentTracker creates a new payment tracker.
 func NewPaymentTracker(chainSvc chain.Service, log logrus.FieldLogger) *PaymentTracker {
 	return &PaymentTracker{
-		pendingPayments: make(map[phase0.Slot]*PendingPayment, 16),
-		chainSvc:        chainSvc,
-		log:             log.WithField("component", "payment-tracker"),
+		keys:     make(map[uint64]*keyPayments, 8),
+		chainSvc: chainSvc,
+		log:      log.WithField("component", "payment-tracker"),
 	}
 }
 
-// RecordWonBid records a won bid as a pending payment (unrevealed).
-// Called when our bid is included in a beacon block.
-// If we later reveal, call MarkRevealed to move it from pending to a balance deduction.
-// If we don't reveal, it stays pending for 2 epochs then expires.
-func (t *PaymentTracker) RecordWonBid(slot phase0.Slot, value uint64) {
-	t.pendingMu.Lock()
-	defer t.pendingMu.Unlock()
-
-	epoch := t.chainSvc.GetEpochOfSlot(slot)
-
-	t.pendingPayments[slot] = &PendingPayment{
-		Slot:  slot,
-		Epoch: epoch,
-		Value: value,
+// forKey returns the key's accounting, creating it on first use. Callers must
+// hold mu.
+func (t *PaymentTracker) forKey(keyIndex uint64) *keyPayments {
+	entry, ok := t.keys[keyIndex]
+	if !ok {
+		entry = &keyPayments{pending: make(map[phase0.Slot]*PendingPayment, 8)}
+		t.keys[keyIndex] = entry
 	}
 
+	return entry
+}
+
+// RecordWonBid records a won bid as a pending payment (unrevealed) against the
+// key whose bid was included. If we later reveal, MarkRevealed moves it from
+// pending to a balance deduction; otherwise it stays pending for 2 epochs and
+// then expires.
+func (t *PaymentTracker) RecordWonBid(keyIndex uint64, slot phase0.Slot, value uint64) {
+	epoch := t.chainSvc.GetEpochOfSlot(slot)
+
+	t.mu.Lock()
+
+	t.forKey(keyIndex).pending[slot] = &PendingPayment{
+		KeyIndex: keyIndex,
+		Slot:     slot,
+		Epoch:    epoch,
+		Value:    value,
+	}
+
+	t.mu.Unlock()
+
 	t.log.WithFields(logrus.Fields{
-		"slot":  slot,
-		"epoch": epoch,
-		"value": value,
+		"key_index": keyIndex,
+		"slot":      slot,
+		"epoch":     epoch,
+		"value":     value,
 	}).Info("Recorded won bid as pending payment")
 }
 
-// MarkRevealed moves a won bid from pending to an immediate balance deduction.
-// The payment is removed from pending and subtracted from the balance adjustment.
-func (t *PaymentTracker) MarkRevealed(slot phase0.Slot) {
-	t.pendingMu.Lock()
-	p, ok := t.pendingPayments[slot]
+// MarkRevealed moves a won bid from pending to an immediate balance deduction on
+// the key that owes it.
+func (t *PaymentTracker) MarkRevealed(keyIndex uint64, slot phase0.Slot) {
+	slotEpoch := t.chainSvc.GetEpochOfSlot(slot)
+
+	t.mu.Lock()
+
+	entry := t.forKey(keyIndex)
+
+	payment, ok := entry.pending[slot]
 	if !ok {
-		t.pendingMu.Unlock()
+		t.mu.Unlock()
 		return
 	}
 
-	value := p.Value
-	delete(t.pendingPayments, slot)
-	t.pendingMu.Unlock()
+	value := payment.Value
+	delete(entry.pending, slot)
 
 	// Deduct from live balance, anchored to this slot's epoch so the
 	// reconciler keeps the delta until the snapshot advances past it.
-	t.adjustmentMu.Lock()
-	t.balanceAdjustment -= int64(value)
-	t.anchorEpochLocked(t.chainSvc.GetEpochOfSlot(slot))
-	t.adjustmentMu.Unlock()
+	entry.balanceAdjustment -= int64(value)
+	anchorEpoch(entry, slotEpoch)
+
+	t.mu.Unlock()
 
 	t.log.WithFields(logrus.Fields{
-		"slot":  slot,
-		"value": value,
+		"key_index": keyIndex,
+		"slot":      slot,
+		"value":     value,
 	}).Info("Revealed bid: deducted from live balance")
 }
 
-// AddDeposit credits a deposit/topup to the live balance adjustment, anchored
-// to the current epoch. The credit is reconciled away by ReconcileToEpoch once
-// the authoritative snapshot advances past that epoch.
-func (t *PaymentTracker) AddDeposit(amount uint64) {
-	t.adjustmentMu.Lock()
-	t.balanceAdjustment += int64(amount)
-	t.anchorEpochLocked(t.chainSvc.GetCurrentEpoch())
-	t.adjustmentMu.Unlock()
+// AddDeposit credits a deposit/topup to the key's live balance adjustment,
+// anchored to the current epoch. The credit is reconciled away by
+// ReconcileToEpoch once the authoritative snapshot advances past that epoch.
+func (t *PaymentTracker) AddDeposit(keyIndex, amount uint64) {
+	currentEpoch := t.chainSvc.GetCurrentEpoch()
 
-	t.log.WithField("amount", amount).Info("Deposit added to live balance")
+	t.mu.Lock()
+
+	entry := t.forKey(keyIndex)
+	entry.balanceAdjustment += int64(amount)
+	anchorEpoch(entry, currentEpoch)
+
+	t.mu.Unlock()
+
+	t.log.WithFields(logrus.Fields{
+		"key_index": keyIndex,
+		"amount":    amount,
+	}).Info("Deposit added to live balance")
 }
 
-// anchorEpochLocked advances the adjustment's anchor epoch so the reconciler
-// keeps the current delta through opEpoch. Callers must hold adjustmentMu.
-func (t *PaymentTracker) anchorEpochLocked(opEpoch phase0.Epoch) {
-	if opEpoch > t.adjustmentEpoch {
-		t.adjustmentEpoch = opEpoch
+// anchorEpoch advances the adjustment's anchor epoch so the reconciler keeps the
+// current delta through opEpoch.
+func anchorEpoch(entry *keyPayments, opEpoch phase0.Epoch) {
+	if opEpoch > entry.adjustmentEpoch {
+		entry.adjustmentEpoch = opEpoch
 	}
 }
 
-// GetBalanceAdjustment returns the cumulative balance adjustment since last state refresh.
-func (t *PaymentTracker) GetBalanceAdjustment() int64 {
-	t.adjustmentMu.Lock()
-	defer t.adjustmentMu.Unlock()
+// GetBalanceAdjustment returns the key's cumulative balance adjustment since the
+// last state refresh. It implements builder_keys.BalanceAdjuster.
+func (t *PaymentTracker) GetBalanceAdjustment(keyIndex uint64) int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	return t.balanceAdjustment
+	entry, ok := t.keys[keyIndex]
+	if !ok {
+		return 0
+	}
+
+	return entry.balanceAdjustment
 }
 
-// ReconcileToEpoch drops the local adjustment once the authoritative builder
-// snapshot advances past the epoch the adjustment is anchored to: the newer
-// snapshot already accounts for every reveal/top-up from earlier epochs.
+// ReconcileToEpoch drops each key's local adjustment once the authoritative
+// builder snapshot advances past the epoch the adjustment is anchored to: the
+// newer snapshot already accounts for every reveal/top-up from earlier epochs.
 // Deltas anchored to the snapshot's own epoch are retained (not yet reflected).
 // Safe to call every refresh; a no-op until the epoch advances.
 func (t *PaymentTracker) ReconcileToEpoch(snapshotEpoch phase0.Epoch) {
-	t.adjustmentMu.Lock()
-	defer t.adjustmentMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	if snapshotEpoch <= t.adjustmentEpoch {
-		return
+	for _, entry := range t.keys {
+		if snapshotEpoch <= entry.adjustmentEpoch {
+			continue
+		}
+
+		entry.balanceAdjustment = 0
+		entry.adjustmentEpoch = snapshotEpoch
 	}
-
-	t.balanceAdjustment = 0
-	t.adjustmentEpoch = snapshotEpoch
 }
 
-// GetTotalPendingPayments returns the sum of unrevealed won bid obligations.
+// GetTotalPendingPayments returns the sum of unrevealed won bid obligations
+// across all keys (disputed payments — winning block reorged out — excluded).
 func (t *PaymentTracker) GetTotalPendingPayments() uint64 {
-	t.pendingMu.Lock()
-	defer t.pendingMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	var total uint64
 
-	for _, p := range t.pendingPayments {
-		total += p.Value
+	for keyIndex := range t.keys {
+		total += t.pendingForKeyLocked(keyIndex)
 	}
 
 	return total
 }
 
+// GetPendingPayments returns one key's unrevealed won bid obligations.
+func (t *PaymentTracker) GetPendingPayments(keyIndex uint64) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return t.pendingForKeyLocked(keyIndex)
+}
+
+// pendingForKeyLocked sums a key's undisputed pending payments. Callers must
+// hold mu.
+func (t *PaymentTracker) pendingForKeyLocked(keyIndex uint64) uint64 {
+	entry, ok := t.keys[keyIndex]
+	if !ok {
+		return 0
+	}
+
+	var total uint64
+
+	for _, payment := range entry.pending {
+		if payment.Disputed {
+			continue
+		}
+
+		total += payment.Value
+	}
+
+	return total
+}
+
+// SetPaymentDisputed flags (or clears) a pending payment whose winning block
+// was reorged out. An already settled payment (revealed and deducted) cannot
+// be rolled back locally — the on-chain payment quorum decides its fate — so
+// the dispute is only logged in that case.
+func (t *PaymentTracker) SetPaymentDisputed(keyIndex uint64, slot phase0.Slot, disputed bool) {
+	t.mu.Lock()
+
+	entry, hasKey := t.keys[keyIndex]
+
+	var payment *PendingPayment
+	if hasKey {
+		payment = entry.pending[slot]
+	}
+
+	if payment != nil {
+		payment.Disputed = disputed
+	}
+
+	t.mu.Unlock()
+
+	logCtx := t.log.WithFields(logrus.Fields{
+		"key_index": keyIndex,
+		"slot":      slot,
+		"disputed":  disputed,
+	})
+
+	switch {
+	case payment != nil:
+		logCtx.Info("Updated pending payment dispute state (reorg)")
+	case disputed:
+		logCtx.Warn("Winning block reorged out after the payment settled locally — " +
+			"the on-chain payment quorum decides the final outcome")
+	}
+}
+
 // PruneExpiredPayments removes pending payments older than 2 epochs.
 func (t *PaymentTracker) PruneExpiredPayments(currentEpoch phase0.Epoch) {
-	t.pendingMu.Lock()
-	defer t.pendingMu.Unlock()
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-	for slot, p := range t.pendingPayments {
-		if currentEpoch > p.Epoch+1 {
+	for keyIndex, entry := range t.keys {
+		for slot, payment := range entry.pending {
+			if currentEpoch <= payment.Epoch+1 {
+				continue
+			}
+
 			t.log.WithFields(logrus.Fields{
+				"key_index":     keyIndex,
 				"slot":          slot,
-				"payment_epoch": p.Epoch,
+				"payment_epoch": payment.Epoch,
 				"current_epoch": currentEpoch,
-				"value":         p.Value,
+				"value":         payment.Value,
 			}).Debug("Pruning expired pending payment")
 
-			delete(t.pendingPayments, slot)
+			delete(entry.pending, slot)
 		}
 	}
 }

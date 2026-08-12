@@ -198,6 +198,43 @@ npm run clean
      still-open slots (`> currentSlot`, not yet frozen) — past slots keep their
      recorded history instead of being described by today's rules.
 
+0b. **Chain view / head tracker** (`pkg/chain/headtracker.go`) — buildoor's own
+   canonical-chain oracle: current head, bounded block-by-root ancestry cache
+   (shared with the inclusion tracker), per-block Gloas payload reveal status
+   (payload-available events + child-block evidence + PAYLOAD_DUE fallback),
+   reorg detection (head-change events with depth/common-ancestor; the beacon
+   `chain_reorg` SSE topic is subscribed as a cross-check), and build-parent
+   candidate resolution. Also: epoch-stats refetch when a head event's duty
+   dependent root proves a reorg crossed the epoch boundary.
+
+0c. **Build candidates** — a slot may build SEVERAL payloads, one per parent
+   tuple (candidate keys: `parent_full`, `parent_empty` = Gloas payload miss,
+   `grandparent_full` = deliberate reorg of the head block,
+   `grandparent_empty`). Policy per key: `auto` (chain signals: parent payload
+   reveal status, head-vote weakness below `build.auto_weak_head_pct`) /
+   `always` / `never` via `build.candidate_*` settings, per-slot overridable
+   through the action plan's `build.candidates` map (resolved into
+   `FrozenPlan.Build.CandidateModes`). Attributes are cached per
+   (slot, parent_root, parent_hash) variant — last-writer-wins per variant —
+   sanitized against the chain view (Grandine's wrong miss-case parent is
+   corrected, missing parent numbers backfilled) and synthesized for uncovered
+   candidates (empty-parent withdrawals from the parent slot's attributes;
+   grandparent candidates re-target the parent slot's attributes, refused
+   across epoch boundaries). Sequential builds run speculative candidates
+   first, canonical last (`build.parallel` opts into concurrent engine
+   builds). Consumers select at request time: p2p bids per
+   `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
+   `epbs.bid_candidate_switch`; `all` = deliberate multi-parent gossip),
+   builder-api serves whichever candidate matches the requested parent
+   (`builder_api.serve_candidates` policy, optional
+   `builder_api.on_demand_build`). Reveals re-bind (rebuilt, re-signed
+   envelope) when a won payload is re-included under a different block root
+   (`reveal.rebind_on_reorg`); orphaned wins dispute pending payments and
+   clear won markers until the block returns. Flag-gated
+   `build.enforce_bid_gas_limit` adjusts built payloads to the exact
+   bid-gossip-legal gas limit (EL parent gas limit stepped toward the
+   proposer target).
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
@@ -296,10 +333,51 @@ npm run clean
      participation opens reveal vote gates late or never (withheld at slot
      end)
 
-4. **Lifecycle Manager** (`pkg/lifecycle/`)
-   - Builder registration on beacon chain
-   - Balance monitoring and auto top-ups
-   - Deposit and exit operations
+3b. **Builder Key Registry** (`pkg/builder_keys/`) — the managed set of builder
+   BLS keys and the identity dependency of every module that used to hold a
+   single `*signer.BLSSigner`.
+   - **Derivation**: keys come from the operator's ENTRY key (`--builder-privkey`
+     or `--builder-mnemonic` + `--builder-key-index`). Internal index 0 IS the
+     entry key; index n ≥ 1 is `derive_child_SK(entry_sk, n)` — one EIP-2333 node
+     deeper than any other participant's account path, which is what makes the
+     set collision-free with other builders sharing a mnemonic. Derivation is
+     cached for the process lifetime (`signer.DeriveInternalKey`).
+   - **Two index spaces, never conflated**: `KeyIndex` is our derivation index
+     (stable forever); `BuilderIndex` is the beacon registry index, assigned at
+     deposit and REUSED by other builders after an exit.
+   - **State** per key (`Status`: unused / depositing / pending / active /
+     exiting / exited / withdrawn) is resolved from the epoch snapshot in ONE
+     pass over `chainSvc.GetBuilders()`, so monitoring hundreds of keys costs the
+     same beacon query as one. Only transactions scale with the fleet size.
+   - **Usage history** (`kv_store` namespace `builder_keys`) survives restarts so
+     a key deposited in an earlier run is recognised before the beacon state
+     confirms it, and a key whose pubkey has left the registry is reused instead
+     of pushing the highest index up forever. A persisted pubkey that disagrees
+     with the derived one is a hard startup error (the entry key changed).
+   - **Discovery** scans past the target for keys we used before and stops after
+     `builder_keys.discovery_gap` never-used indices. Scanned-but-unused indices
+     are derived, not tracked, so the fleet view is the size of the fleet.
+   - **Selection** (`SelectForBid`) orders active keys per strategy
+     (`round_robin` default, `single`, `random`, `least_used`) excluding keys
+     already committed for the slot. Balance is a PREFERENCE, not a filter:
+     underfunded keys sort last but are still offered when nothing else can
+     cover the bid — deliberately underfunded bids are a scenario worth testing.
+
+4. **Lifecycle Manager** (`pkg/lifecycle/`) — the fleet reconciler
+   - Keeps the managed key count at `builder_keys.target_count`: deposits keys
+     below it (`auto_deposit`), exits surplus keys above it (`auto_exit`,
+     highest index first, skipping keys with pending payments the chain would
+     silently ignore), and tops up whichever key fell below the threshold
+   - At most ONE lifecycle transaction per reconcile pass: they all go through
+     the single funding wallet and each waits for its receipt, so the fleet
+     ramps instead of flooding the EIP-8282 deposit queue (whose fee grows with
+     its length). `deposit_max_fee` then backs the ramp off on its own; a wallet
+     that cannot cover the next deposit reports once instead of failing per key
+   - Target changes wake the reconciler immediately (`Manager.Reconcile()`,
+     wired from the settings `OnChange`)
+   - Early onboarding covers the WHOLE target set: the pre-Gloas deposits sit in
+     the pending queue together and the fork transition converts them all, so
+     `pending_deposit_sim.go` asks whether the batch's LAST entry survives
    - Optional component (only active with `--lifecycle` flag)
 
 4b. **Slot Results Tracker** (`pkg/slot_results/`) — generic per-slot outcome history
@@ -414,7 +492,25 @@ Configuration is managed via:
 - Environment variables (auto-loaded by viper)
 
 Key config sections:
-- **Builder keys**: `--builder-privkey` (BLS), `--wallet-privkey` (ECDSA)
+- **Builder keys**: `--builder-privkey` (BLS) or `--builder-mnemonic` +
+  `--builder-key-index` (the ENTRY key), `--wallet-privkey` (ECDSA)
+- **Managed key set**: `--builder-keys-target` (keys kept registered and
+  funded; default 1 = the entry key alone, byte-identical to single-key
+  behaviour), `--builder-keys-max-index` (derivation cap, default 1000),
+  `--builder-keys-discovery-gap` (unused indices ending the startup scan,
+  default 100), `--builder-keys-auto-deposit` / `--builder-keys-auto-exit`
+  (both default true; auto-exit is irreversible — an exited key cannot be
+  reactivated). All but the discovery gap are mutable via
+  `builder_keys.*` settings keys
+- **Key selection**: `--epbs-key-strategy` (round_robin | single | random |
+  least_used), `--epbs-bid-keys-per-slot` (cap per slot, 0 = no cap beyond the
+  fleet), `--epbs-bid-keys-per-step` (keys bidding a payload per interval step,
+  each one increment higher; 1 = walk the fleet up the ladder, 0 = spend every
+  remaining key at once), `--builder-api-key-strategy` (empty = follow the ePBS
+  strategy). A key is SPENT once one of its bids reaches the network — the
+  gossip rules ignore a builder's later bids for a slot — so every bid, an
+  escalated re-bid of the same payload included, takes a key that has not bid
+  yet, and the submissions of one step go out concurrently
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`

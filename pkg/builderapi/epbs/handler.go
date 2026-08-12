@@ -17,12 +17,12 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // EventBroadcaster is the narrow WebUI event surface the post-Gloas dialect needs
@@ -87,24 +87,32 @@ type Handler struct {
 	log          logrus.FieldLogger
 	chainSvc     chain.Service
 	payloadCache *payload_builder.PayloadCache
-	bidderSigner *payload_bidder.Signer // shared Gloas bid signer (wraps blsSigner)
-	blsSigner    *signer.BLSSigner      // IsBuilderActive pubkey check
+	// registry is the managed builder key set: it decides which key signs each
+	// served bid and supplies the builder index that goes into it.
+	registry *builder_keys.Registry
 
 	// planSvc is the mandatory per-slot scheduling/settings authority: bid
 	// serving is decided exclusively by the slot's frozen plan.
 	planSvc *action_plan.PlanService
 
-	revealSvc      *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
-	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
-	prefsStore     *BuilderPreferencesStore                                           // created in NewHandler
-	broadcaster    BlockBroadcaster                                                   // SetBlockBroadcaster
-	events         EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
-	recorder       SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
+	revealSvc       *payload_bidder.RevealService                                      // SetRevealService — the ONLY reveal path
+	onDemandBuilder OnDemandPayloadBuilder                                             // SetOnDemandBuilder (nil-checked)
+	propPrefsStore  *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences] // SetProposerPreferencesStore
+	prefsStore      *BuilderPreferencesStore                                           // created in NewHandler
+	broadcaster     BlockBroadcaster                                                   // SetBlockBroadcaster
+	events          EventBroadcaster                                                   // SetEventBroadcaster (nil-checked)
+	recorder        SlotResultRecorder                                                 // SetResultRecorder (nil-checked)
 
 	lastBidMu sync.Mutex
 	lastBids  map[phase0.Slot]recordedBid // dedupe of repeated identical bid records
 
-	builderIndex   atomic.Uint64 // builder index used in Gloas bids; set after lifecycle registration
+	// bidKeyMu guards bidKeys, which pins the builder key each (slot, parent
+	// tuple) is served from. There is no gossip first-seen rule here, but a
+	// polling proposer must keep seeing the same builder rather than a new
+	// index per request.
+	bidKeyMu sync.Mutex
+	bidKeys  map[bidKeyTarget]uint64
+
 	enabled        atomic.Bool
 	bidsRequested  atomic.Uint64 // count of getExecutionPayloadBid requests received
 	blocksAccepted atomic.Uint64 // count of accepted signed beacon blocks
@@ -116,18 +124,71 @@ type Handler struct {
 // (via Freeze) on every getExecutionPayloadBid request.
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
-	blsSigner *signer.BLSSigner) *Handler {
+	registry *builder_keys.Registry) *Handler {
 	return &Handler{
 		cfg:          cfg,
 		log:          log.WithField("component", "builderapi-epbs"),
 		chainSvc:     chainSvc,
 		planSvc:      planSvc,
 		payloadCache: payloadCache,
-		bidderSigner: payload_bidder.NewSigner(blsSigner),
-		blsSigner:    blsSigner,
+		registry:     registry,
 		prefsStore:   NewBuilderPreferencesStore(),
 		lastBids:     make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
+		bidKeys:      make(map[bidKeyTarget]uint64, maxRecordedBidSlots),
 	}
+}
+
+// bidKeyTarget identifies what a served bid commits to, so repeated polls for
+// the same slot and parent are answered from the same builder key.
+type bidKeyTarget struct {
+	slot       phase0.Slot
+	parentHash phase0.Hash32
+	parentRoot phase0.Root
+}
+
+// bidKey returns the builder key to serve a bid for the given target from,
+// selecting one on first request and reusing it afterwards. It returns nil when
+// no key is ready to cover the value.
+func (h *Handler) bidKey(target bidKeyTarget, strategy string, requiredGwei uint64) *builder_keys.Key {
+	h.bidKeyMu.Lock()
+	defer h.bidKeyMu.Unlock()
+
+	if keyIndex, ok := h.bidKeys[target]; ok {
+		if key, err := h.registry.Key(keyIndex); err == nil && key.State().Ready(requiredGwei) {
+			return key
+		}
+
+		// The committed key can no longer cover the bid (payment settled, exit
+		// initiated); fall through and pick another.
+		delete(h.bidKeys, target)
+	}
+
+	selected := h.registry.SelectForBid(target.slot, builder_keys.SelectRequest{
+		Strategy:     strategy,
+		RequiredGwei: requiredGwei,
+		Count:        1,
+	})
+
+	if len(selected) == 0 {
+		return nil
+	}
+
+	h.bidKeys[target] = selected[0].KeyIndex()
+
+	// Bound the map: only the current and next slot are ever requested.
+	for len(h.bidKeys) > maxRecordedBidSlots {
+		oldest := target
+
+		for candidate := range h.bidKeys {
+			if candidate.slot < oldest.slot {
+				oldest = candidate
+			}
+		}
+
+		delete(h.bidKeys, oldest)
+	}
+
+	return selected[0]
 }
 
 // SetResultRecorder wires the optional per-slot result recorder.
@@ -211,6 +272,20 @@ func (h *Handler) SetRevealService(rs *payload_bidder.RevealService) {
 	h.revealSvc = rs
 }
 
+// OnDemandPayloadBuilder builds a payload for a specific parent tuple on
+// request (implemented by payload_builder.Service). Used to answer bid
+// requests for legal parents no candidate build covered.
+type OnDemandPayloadBuilder interface {
+	BuildCandidateOnDemand(ctx context.Context, slot phase0.Slot,
+		parentRoot phase0.Root, parentHash phase0.Hash32) (*payload_builder.Payload, error)
+}
+
+// SetOnDemandBuilder wires the on-demand payload builder used when a bid
+// request asks for a legal parent tuple without a built candidate.
+func (h *Handler) SetOnDemandBuilder(builder OnDemandPayloadBuilder) {
+	h.onDemandBuilder = builder
+}
+
 // SetProposerPreferencesStore wires the per-slot proposer preferences store
 // (owned by payload_bidder.ProposerPreferencesService) used to resolve the fee
 // recipient when building Gloas execution payload bids.
@@ -228,12 +303,6 @@ func (h *Handler) SetBlockBroadcaster(b BlockBroadcaster) {
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events.
 func (h *Handler) SetEventBroadcaster(b EventBroadcaster) {
 	h.events = b
-}
-
-// SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
-// Called from the lifecycle manager once registration is observed.
-func (h *Handler) SetBuilderIndex(index uint64) {
-	h.builderIndex.Store(index)
 }
 
 // SetEnabled sets the enabled state of the post-Gloas Builder API dialect.

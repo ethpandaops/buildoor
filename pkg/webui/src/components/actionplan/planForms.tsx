@@ -29,12 +29,20 @@ export const BID_FIELDS: FieldDef[] = [
   { key: 'bid_interval', label: 'Bid Interval', unit: 'ms' },
   { key: 'bid_subsidy', label: 'Bid Subsidy', unit: 'gwei' },
   { key: 'bid_value_gwei', label: 'Bid Value Override', unit: 'gwei' },
+  {
+    key: 'bid_candidate', label: 'Bid Candidate', unit: '',
+    options: ['auto', 'all', 'parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'],
+  },
 ];
 
 export const BUILDER_API_FIELDS: FieldDef[] = [
   { key: 'value_subsidy_gwei', label: 'Value Subsidy', unit: 'gwei' },
   { key: 'total_value_override_gwei', label: 'Total Value Override', unit: 'gwei' },
   { key: 'response_delay_ms', label: 'Response Delay', unit: 'ms' },
+  {
+    key: 'serve_candidates', label: 'Serve Candidates', unit: '',
+    options: ['all', 'canonical_only', 'parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'],
+  },
 ];
 
 export const REVEAL_FIELDS: FieldDef[] = [

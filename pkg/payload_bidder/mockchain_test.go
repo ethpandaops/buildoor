@@ -28,8 +28,19 @@ type stubChainService struct {
 	currentFork  version.DataVersion
 	currentEpoch phase0.Epoch
 	genesis      beacon.Genesis
+	headTracker  *chain.HeadTracker
 
 	epochStatsDispatch utils.Dispatcher[*chain.EpochStats]
+}
+
+// primeHeadTracker equips the stub with an offline head tracker whose
+// ancestry cache holds the given blocks (no beacon client; cache misses
+// error out instead of fetching).
+func (m *stubChainService) primeHeadTracker(log logrus.FieldLogger, blocks ...*beacon.BlockInfo) {
+	m.headTracker = chain.NewHeadTracker(nil, m.GetChainSpec(), &m.genesis, log)
+	for _, block := range blocks {
+		m.headTracker.PrimeBlock(block)
+	}
 }
 
 var _ chain.Service = (*stubChainService)(nil)
@@ -77,6 +88,7 @@ func (m *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.Epoc
 }
 
 func (m *stubChainService) GetHeadVoteTracker() *chain.HeadVoteTracker { return nil }
+func (m *stubChainService) GetHeadTracker() *chain.HeadTracker         { return m.headTracker }
 func (m *stubChainService) GetFinalizedEpoch() phase0.Epoch            { return 0 }
 
 func (m *stubChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo            { return nil }

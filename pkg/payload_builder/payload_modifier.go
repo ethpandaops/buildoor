@@ -30,6 +30,11 @@ const maxExtraDataSize = 32
 // API response (Electra/Prague+); they are needed to compute the requestsHash
 // header field. Pass nil for pre-Electra payloads.
 //
+// gasLimitOverride, when non-zero, additionally rewrites the payload's gas
+// limit (part of the header, so it changes the block hash): used to enforce
+// the exact bid-gossip-legal gas limit when the EL ignored the proposer's
+// target. Callers must ensure the payload's gas usage fits the override.
+//
 // The function first verifies it can reconstruct the original block hash from
 // the payload fields. If verification fails (e.g. an unhandled fork added new
 // header fields) it returns an error rather than producing an incorrect hash.
@@ -38,6 +43,7 @@ func ModifyPayloadExtraData(
 	executionRequests []prague.ExecutionRequest,
 	extraDataPrefix []byte,
 	parentBeaconBlockRoot common.Hash,
+	gasLimitOverride uint64,
 ) (common.Hash, error) {
 	header, err := buildHeaderFromPayload(p, parentBeaconBlockRoot, executionRequests)
 	if err != nil {
@@ -94,6 +100,12 @@ func ModifyPayloadExtraData(
 	}
 
 	header.Extra = newExtraData
+
+	if gasLimitOverride != 0 {
+		header.GasLimit = gasLimitOverride
+		p.GasLimit = gasLimitOverride
+	}
+
 	newHash := header.Hash()
 
 	p.ExtraData = newExtraData

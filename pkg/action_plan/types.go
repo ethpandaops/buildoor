@@ -15,6 +15,8 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 )
@@ -56,6 +58,22 @@ type BidPlan struct {
 	BidInterval  *int64  `json:"bid_interval,omitempty"`   // ms, >= 0, 0 = single bid
 	BidSubsidy   *uint64 `json:"bid_subsidy,omitempty"`    // gwei
 
+	// BidCandidate overrides which built candidate payload this slot's p2p
+	// bids commit to: auto, all, or a specific candidate key.
+	BidCandidate *string `json:"bid_candidate,omitempty"`
+
+	// KeyStrategy overrides which managed builder key signs this slot's bids:
+	// round_robin, single, random or least_used.
+	KeyStrategy *string `json:"key_strategy,omitempty"`
+
+	// BidKeysPerSlot overrides how many distinct builder keys may bid this
+	// slot (0 = no cap beyond the fleet).
+	BidKeysPerSlot *uint64 `json:"bid_keys_per_slot,omitempty"`
+
+	// BidKeysPerStep overrides how many keys bid a payload per interval step
+	// (0 = every remaining key at once).
+	BidKeysPerStep *uint64 `json:"bid_keys_per_step,omitempty"`
+
 	// BidValueGwei is an absolute bid base value replacing
 	// max(blockValue, min) + subsidy; BidIncrease still applies per re-bid.
 	// Allows underbidding the block value for testing.
@@ -79,6 +97,9 @@ func (p *BidPlan) clone() *BidPlan {
 	c.BidInterval = cloneScalar(p.BidInterval)
 	c.BidSubsidy = cloneScalar(p.BidSubsidy)
 	c.BidValueGwei = cloneScalar(p.BidValueGwei)
+	c.KeyStrategy = cloneScalar(p.KeyStrategy)
+	c.BidKeysPerSlot = cloneScalar(p.BidKeysPerSlot)
+	c.BidKeysPerStep = cloneScalar(p.BidKeysPerStep)
 
 	return &c
 }
@@ -86,7 +107,8 @@ func (p *BidPlan) clone() *BidPlan {
 func (p *BidPlan) hasOverrides() bool {
 	return p.BidStartTime != nil || p.BidEndTime != nil || p.BidMinAmount != nil ||
 		p.BidIncrease != nil || p.BidInterval != nil || p.BidSubsidy != nil ||
-		p.BidValueGwei != nil || p.IgnoreMissingPrefs
+		p.BidValueGwei != nil || p.IgnoreMissingPrefs || p.BidCandidate != nil ||
+		p.KeyStrategy != nil || p.BidKeysPerSlot != nil || p.BidKeysPerStep != nil
 }
 
 func (p *BidPlan) validate(slotMs int64) error {
@@ -115,6 +137,20 @@ func (p *BidPlan) validate(slotMs int64) error {
 		return fmt.Errorf("bid: bid_interval must be >= 0, got %d", *p.BidInterval)
 	}
 
+	if p.BidCandidate != nil {
+		if candidate := *p.BidCandidate; candidate != "auto" && candidate != "all" &&
+			!chain.IsValidCandidateKey(candidate) {
+			return fmt.Errorf("bid: bid_candidate must be auto, all or a candidate key, got %q", candidate)
+		}
+	}
+
+	if p.KeyStrategy != nil {
+		if strategy := *p.KeyStrategy; strategy != builder_keys.NormalizedStrategy(strategy) {
+			return fmt.Errorf(
+				"bid: key_strategy must be round_robin, single, random or least_used, got %q", strategy)
+		}
+	}
+
 	return nil
 }
 
@@ -134,6 +170,15 @@ type BuilderAPIPlan struct {
 	// ResponseDelayMs delays the bid response by this many milliseconds
 	// (context-cancellable, capped at one slot).
 	ResponseDelayMs *int64 `json:"response_delay_ms,omitempty"`
+
+	// KeyStrategy overrides which managed builder key signs this slot's served
+	// bids: round_robin, single, random or least_used.
+	KeyStrategy *string `json:"key_strategy,omitempty"`
+
+	// ServeCandidates overrides which built candidate payloads bid requests
+	// for this slot may be answered from: all, canonical_only, or a
+	// comma-separated candidate key list.
+	ServeCandidates *string `json:"serve_candidates,omitempty"`
 }
 
 func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
@@ -150,7 +195,8 @@ func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
 }
 
 func (p *BuilderAPIPlan) hasOverrides() bool {
-	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil || p.ResponseDelayMs != nil
+	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil || p.ResponseDelayMs != nil ||
+		p.ServeCandidates != nil || p.KeyStrategy != nil
 }
 
 func (p *BuilderAPIPlan) validate(slotMs int64) error {
@@ -165,6 +211,37 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	if p.ResponseDelayMs != nil && (*p.ResponseDelayMs < 0 || *p.ResponseDelayMs > slotMs) {
 		return fmt.Errorf("builder_api: response_delay_ms must be within [0, %d], got %d",
 			slotMs, *p.ResponseDelayMs)
+	}
+
+	if p.ServeCandidates != nil {
+		if err := validateServeCandidates(*p.ServeCandidates); err != nil {
+			return err
+		}
+	}
+
+	if p.KeyStrategy != nil {
+		if strategy := *p.KeyStrategy; strategy != builder_keys.NormalizedStrategy(strategy) {
+			return fmt.Errorf(
+				"builder_api: key_strategy must be round_robin, single, random or least_used, got %q", strategy)
+		}
+	}
+
+	return nil
+}
+
+// validateServeCandidates checks a serve-candidates policy string: all,
+// canonical_only, or a comma-separated list of candidate keys.
+func validateServeCandidates(policy string) error {
+	switch policy {
+	case "all", "canonical_only":
+		return nil
+	}
+
+	for _, key := range strings.Split(policy, ",") {
+		if !chain.IsValidCandidateKey(strings.TrimSpace(key)) {
+			return fmt.Errorf("builder_api: serve_candidates must be all, canonical_only "+
+				"or a comma-separated candidate key list, got %q", policy)
+		}
 	}
 
 	return nil
@@ -253,6 +330,12 @@ type BuildPlan struct {
 	// rejected by mainnet forkchoice, but useful for exercising the reveal /
 	// inclusion path against a withheld parent.
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
+
+	// Candidates overrides the global build-candidate policy for this slot:
+	// candidate key (parent_full, parent_empty, grandparent_full,
+	// grandparent_empty) -> mode (auto, always, never). Absent keys inherit
+	// the global policy.
+	Candidates map[string]string `json:"candidates,omitempty"`
 }
 
 func (p *BuildPlan) clone() *BuildPlan {
@@ -262,17 +345,33 @@ func (p *BuildPlan) clone() *BuildPlan {
 
 	c := *p
 
+	if p.Candidates != nil {
+		c.Candidates = make(map[string]string, len(p.Candidates))
+		for key, mode := range p.Candidates {
+			c.Candidates[key] = mode
+		}
+	}
+
 	return &c
 }
 
 // isZero reports whether the build plan carries no active instruction; such a
 // plan is dropped rather than persisted.
 func (p *BuildPlan) isZero() bool {
-	return p == nil || !p.ReorgParentPayload
+	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0)
 }
 
 func (p *BuildPlan) validate() error {
-	// No mode and no bounded fields yet; the boolean flag is always valid.
+	for key, mode := range p.Candidates {
+		if !chain.IsValidCandidateKey(key) {
+			return fmt.Errorf("build.candidates: unknown candidate key %q", key)
+		}
+
+		if config.NormalizedCandidateMode(mode, "") == "" {
+			return fmt.Errorf("build.candidates.%s: mode must be auto, always or never (got %q)", key, mode)
+		}
+	}
+
 	return nil
 }
 

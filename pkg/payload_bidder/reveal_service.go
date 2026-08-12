@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
@@ -12,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -38,7 +38,11 @@ type headVoteSource interface {
 // RevealRequest asks the RevealService to publish a payload's envelope at the
 // configured reveal time. Both flows submit these; the service dedupes by slot.
 type RevealRequest struct {
-	Payload   *payload_builder.Payload
+	Payload *payload_builder.Payload
+	// Key is the builder key whose bid the block committed to. The envelope
+	// must be signed by it and carry its builder index, or the reveal is
+	// rejected while the payment is still owed.
+	Key       *builder_keys.Key
 	BlockInfo *beacon.BlockInfo // root + parent root of the committing beacon block
 	Transport payload_builder.BidTransport
 }
@@ -103,15 +107,14 @@ const (
 // broadcast validation, deadline bypass) — the plan service is the single
 // per-slot settings authority.
 type RevealService struct {
-	cfg          *config.Config // shared live config (reveal settings resolve via planSvc.Freeze)
-	signer       *Signer
-	publisher    envelopePublisher
-	chainSvc     chain.Service
-	builderSvc   *payload_builder.Service // reveal success/failure stats
-	payments     *PaymentTracker          // optional; nil-guarded
-	planSvc      *action_plan.PlanService // per-slot scheduling/settings authority; required
-	votes        headVoteSource           // optional; nil = vote gates can never open
-	builderIndex atomic.Uint64
+	cfg        *config.Config // shared live config (reveal settings resolve via planSvc.Freeze)
+	registry   *builder_keys.Registry
+	publisher  envelopePublisher
+	chainSvc   chain.Service
+	builderSvc *payload_builder.Service // reveal success/failure stats
+	payments   *PaymentTracker          // optional; nil-guarded
+	planSvc    *action_plan.PlanService // per-slot scheduling/settings authority; required
+	votes      headVoteSource           // optional; nil = vote gates can never open
 
 	requests chan *RevealRequest
 	results  utils.Dispatcher[*RevealResult]
@@ -172,7 +175,7 @@ func (st *revealState) gateSatisfied(now time.Time) bool {
 // it may be nil (vote gates then never open and expire at the slot end).
 func NewRevealService(
 	cfg *config.Config,
-	signer *Signer,
+	registry *builder_keys.Registry,
 	publisher envelopePublisher,
 	chainSvc chain.Service,
 	builderSvc *payload_builder.Service,
@@ -183,7 +186,7 @@ func NewRevealService(
 ) *RevealService {
 	return &RevealService{
 		cfg:        cfg,
-		signer:     signer,
+		registry:   registry,
 		publisher:  publisher,
 		chainSvc:   chainSvc,
 		builderSvc: builderSvc,
@@ -218,11 +221,6 @@ func (s *RevealService) Stop() {
 	s.wg.Wait()
 
 	s.log.Info("Reveal service stopped")
-}
-
-// SetBuilderIndex updates the builder index used when signing envelopes.
-func (s *RevealService) SetBuilderIndex(index uint64) {
-	s.builderIndex.Store(index)
 }
 
 // SubscribeResults subscribes to reveal results (consumed by the WebUI).
@@ -334,13 +332,23 @@ func (s *RevealService) schedule(req *RevealRequest) {
 
 	slot := req.Payload.Attributes.ProposalSlot
 
-	if _, exists := s.pending[slot]; exists {
-		s.log.WithFields(logrus.Fields{
-			"slot":      slot,
-			"transport": req.Transport,
-		}).Debug("Duplicate reveal request for slot, ignoring")
+	if existing, exists := s.pending[slot]; exists {
+		if !s.shouldRebind(slot, existing, req) {
+			s.log.WithFields(logrus.Fields{
+				"slot":      slot,
+				"transport": req.Transport,
+			}).Debug("Duplicate reveal request for slot, ignoring")
 
-		return
+			return
+		}
+
+		s.log.WithFields(logrus.Fields{
+			"slot":     slot,
+			"old_root": fmt.Sprintf("%#x", existing.req.BlockInfo.Root[:8]),
+			"new_root": fmt.Sprintf("%#x", req.BlockInfo.Root[:8]),
+		}).Warn("Re-binding reveal to a different beacon block (reorg): rebuilding the envelope")
+
+		delete(s.pending, slot)
 	}
 
 	frozen := s.planSvc.Freeze(slot)
@@ -462,6 +470,46 @@ func (s *RevealService) schedule(req *RevealRequest) {
 	}).Debug("Scheduled payload reveal")
 }
 
+// shouldRebind decides whether a second reveal request for an already
+// scheduled slot replaces the schedule: only when re-binding is enabled, the
+// request targets a different beacon block, and the previously bound block is
+// no longer canonical (our payload was re-included under a sibling root after
+// a reorg). The rebuilt envelope is re-signed for the new root — the envelope
+// signature covers the beacon block root, so the old one cannot be reused.
+func (s *RevealService) shouldRebind(slot phase0.Slot, existing *revealState, req *RevealRequest) bool {
+	if !s.cfg.Reveal.RebindOnReorg {
+		return false
+	}
+
+	if existing.req == nil || existing.req.BlockInfo == nil {
+		return false
+	}
+
+	oldRoot := existing.req.BlockInfo.Root
+	if req.BlockInfo.Root == oldRoot {
+		return false
+	}
+
+	// Confirm the old block actually left the canonical chain when the chain
+	// view can tell; the request itself (fired from a head observation of the
+	// new block) is the fallback evidence.
+	if headTracker := s.chainSvc.GetHeadTracker(); headTracker != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, 3*time.Second)
+		defer cancel()
+
+		if headTracker.IsCanonical(ctx, oldRoot) {
+			s.log.WithFields(logrus.Fields{
+				"slot":     slot,
+				"old_root": fmt.Sprintf("%#x", oldRoot[:8]),
+			}).Warn("Ignoring reveal re-bind request: the bound block is still canonical")
+
+			return false
+		}
+	}
+
+	return true
+}
+
 // processDue publishes every pending reveal whose attempt time has come and
 // whose gates are open, expires unsatisfied vote gates, handles success
 // bookkeeping and bounded retries, then prunes stale entries.
@@ -539,7 +587,7 @@ func (s *RevealService) processDue(now time.Time) {
 		})
 
 		if s.payments != nil {
-			s.payments.MarkRevealed(slot)
+			s.payments.MarkRevealed(state.req.Key.KeyIndex(), slot)
 		}
 
 		s.builderSvc.IncrementRevealsSuccess()
@@ -674,12 +722,23 @@ func (s *RevealService) buildEnvelope(req *RevealRequest) (
 	ctx, cancel := context.WithTimeout(s.ctx, transformTimeout)
 	defer cancel()
 
+	revealKey := req.Key
+	if revealKey == nil {
+		return nil, nil, nil, fmt.Errorf("reveal request for slot %d has no builder key", slot)
+	}
+
+	builderIndex, registered := revealKey.BuilderIndex()
+	if !registered {
+		return nil, nil, nil, fmt.Errorf("builder key %s is not registered on chain", revealKey)
+	}
+
 	envelope, blobs, proofs, err = BuildSignedEnvelope(ctx, req.Payload, RevealContext{
-		BuilderIndex:          s.builderIndex.Load(),
+		BuilderIndex:          builderIndex,
 		BeaconBlockRoot:       req.BlockInfo.Root,
 		ParentBeaconBlockRoot: req.BlockInfo.ParentRoot,
 		Transform:             envelopeTransform,
-	}, s.signer, forkVersion, s.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	}, NewSigner(revealKey.BLSSigner()), forkVersion,
+		s.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to build signed envelope: %w", err)
 	}

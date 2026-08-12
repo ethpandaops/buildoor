@@ -150,8 +150,8 @@ func (f *fakePersistence) get(pubkey phase0.BLSPubKey) *apiv1.SignedValidatorReg
 // overwrites the stored entry (replace policy) and that the latest value
 // reaches the attached persistence on flush.
 func TestHandleRegisterValidators_OverwriteAndFlush(t *testing.T) {
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
+	blsSigner := registry.Primary().BLSSigner()
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	persistence := &fakePersistence{}
@@ -160,7 +160,7 @@ func TestHandleRegisterValidators_OverwriteAndFlush(t *testing.T) {
 	defer store.Stop()
 
 	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), &stubChainService{},
-		newServingPlanService(&stubChainService{}), payload_builder.NewPayloadCache(10), store, blsSigner)
+		newServingPlanService(&stubChainService{}), payload_builder.NewPayloadCache(10), store, registry)
 	h.SetEnabled(true)
 
 	register := func(gasLimit uint64) {

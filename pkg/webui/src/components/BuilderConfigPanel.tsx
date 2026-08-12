@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
+import { CandidatePolicySection } from './CandidatePolicySection';
 import type { Config, ScheduleConfig } from '../types';
 
 interface BuilderConfigPanelProps {
@@ -196,6 +197,9 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
               </div>
             </form>
           )}
+
+          {/* Build candidate policy */}
+          <CandidatePolicySection config={config} />
 
           {/* Schedule Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">

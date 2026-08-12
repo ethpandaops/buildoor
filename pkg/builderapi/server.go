@@ -25,6 +25,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	epbsapi "github.com/ethpandaops/buildoor/pkg/builderapi/epbs"
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -33,7 +34,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // EventBroadcaster provides methods for broadcasting Builder API events to the
@@ -98,13 +98,14 @@ type Server struct {
 // planSvc is the mandatory per-slot scheduling/settings authority: the bid
 // handlers freeze the slot's plan at request time and serve per the frozen
 // effective settings. payloadCache may be nil; endpoints needing it degrade
-// gracefully. blsSigner may be nil; if set, getHeader signs builder bids.
+// gracefully. registry is the managed builder key set; getHeader signs
+// pre-Gloas builder bids with its primary key.
 // validatorStore is optional (an in-memory store is created when nil); when
 // provided it is the shared instance also read by the legacy registration
 // settings resolver.
 func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
-	blsSigner *signer.BLSSigner,
+	registry *builder_keys.Registry,
 	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]) *Server {
 	store := validatorStore
 	if store == nil {
@@ -117,8 +118,8 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		chainSvc:        chainSvc,
 		payloadCache:    payloadCache,
 		validatorsStore: store,
-		legacy:          legacy.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, store, blsSigner),
-		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, blsSigner),
+		legacy:          legacy.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, store, registry),
+		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, registry),
 	}
 }
 
@@ -150,6 +151,12 @@ func (s *Server) SetRevealService(rs *payload_bidder.RevealService) {
 	s.epbs.SetRevealService(rs)
 }
 
+// SetOnDemandBuilder wires the on-demand payload builder used by the
+// post-Gloas dialect to serve bid requests for unbuilt (but legal) parents.
+func (s *Server) SetOnDemandBuilder(builder epbsapi.OnDemandPayloadBuilder) {
+	s.epbs.SetOnDemandBuilder(builder)
+}
+
 // SetEventBroadcaster sets the optional event broadcaster for WebUI events on
 // both dialect handlers.
 func (s *Server) SetEventBroadcaster(b EventBroadcaster) {
@@ -169,12 +176,6 @@ func (s *Server) SetProposerPreferencesStore(
 func (s *Server) SetResultRecorder(rec SlotResultRecorder) {
 	s.legacy.SetResultRecorder(rec)
 	s.epbs.SetResultRecorder(rec)
-}
-
-// SetBuilderIndex sets the on-chain builder index inserted into Gloas bids.
-// Called from the lifecycle manager once registration is observed.
-func (s *Server) SetBuilderIndex(index uint64) {
-	s.epbs.SetBuilderIndex(index)
 }
 
 // GetBuilderPreferencesStore returns the store of latest per-validator builder

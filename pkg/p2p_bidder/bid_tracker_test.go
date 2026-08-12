@@ -9,11 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestBidTracker(ourBuilderIdx uint64) *BidTracker {
+func newTestBidTracker(t *testing.T, ourBuilderIdx uint64) *BidTracker {
+	t.Helper()
+
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	return NewBidTracker(ourBuilderIdx, log)
+	return NewBidTracker(newTestKeyRegistry(t, ourBuilderIdx), log)
 }
 
 func newTestBid(slot phase0.Slot, builderIndex, value uint64) *ExecutionPayloadBid {
@@ -92,7 +94,7 @@ func TestBidTracker_TrackBidAndGetHighestBid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tracker := newTestBidTracker(tt.ourBuilderIdx)
+			tracker := newTestBidTracker(t, tt.ourBuilderIdx)
 
 			for _, bid := range tt.bids {
 				tracker.TrackBid(bid, bid.BuilderIndex == tt.ourBuilderIdx)
@@ -165,13 +167,13 @@ func TestBidTracker_GetHighestCompetitorBid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tracker := newTestBidTracker(tt.ourBuilderIdx)
+			tracker := newTestBidTracker(t, tt.ourBuilderIdx)
 
 			for _, bid := range tt.bids {
 				tracker.TrackBid(bid, bid.BuilderIndex == tt.ourBuilderIdx)
 			}
 
-			value, ok := tracker.GetHighestCompetitorBid(tt.slot, tt.ourBuilderIdx)
+			value, ok := tracker.GetHighestCompetitorBid(tt.slot, phase0.Hash32{})
 			assert.Equal(t, tt.wantOK, ok, "competitor bid known")
 			assert.Equal(t, tt.wantValue, value, "highest competitor value")
 		})
@@ -179,7 +181,7 @@ func TestBidTracker_GetHighestCompetitorBid(t *testing.T) {
 }
 
 func TestBidTracker_GetHighestBidUnknownSlot(t *testing.T) {
-	tracker := newTestBidTracker(1)
+	tracker := newTestBidTracker(t, 1)
 
 	assert.Nil(t, tracker.GetHighestBid(42))
 	assert.Nil(t, tracker.GetOurBid(42))
@@ -187,7 +189,7 @@ func TestBidTracker_GetHighestBidUnknownSlot(t *testing.T) {
 }
 
 func TestBidTracker_GetSlotBids(t *testing.T) {
-	tracker := newTestBidTracker(1)
+	tracker := newTestBidTracker(t, 1)
 
 	tracker.TrackBid(newTestBid(100, 1, 700), true)
 	tracker.TrackBid(newTestBid(100, 2, 900), false)
@@ -204,7 +206,7 @@ func TestBidTracker_GetSlotBids(t *testing.T) {
 }
 
 func TestBidTracker_Cleanup(t *testing.T) {
-	tracker := newTestBidTracker(1)
+	tracker := newTestBidTracker(t, 1)
 
 	tracker.TrackBid(newTestBid(100, 2, 500), false)
 	tracker.TrackBid(newTestBid(101, 2, 500), false)
@@ -217,18 +219,24 @@ func TestBidTracker_Cleanup(t *testing.T) {
 	assert.NotNil(t, tracker.GetSlotBids(102))
 }
 
-func TestBidTracker_SetBuilderIndex(t *testing.T) {
-	tracker := newTestBidTracker(0)
+// With several managed keys bidding the same slot, none of our own bids may be
+// reported back as the competition.
+func TestBidTracker_ExcludesEveryManagedKey(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.PanicLevel)
 
-	// Simulate late registration: index becomes known after startup.
-	tracker.SetBuilderIndex(7)
+	tracker := NewBidTracker(newTestKeyRegistry(t, 7, 8), log)
 
 	tracker.TrackBid(newTestBid(100, 7, 800), true)
+	// Our second key's bid arrives over gossip, so it is not flagged as ours.
+	tracker.TrackBid(newTestBid(100, 8, 900), false)
+	tracker.TrackBid(newTestBid(100, 9, 600), false)
 
-	ourBid := tracker.GetOurBid(100)
-	require.NotNil(t, ourBid)
-	assert.Equal(t, uint64(7), ourBid.BuilderIndex)
-	assert.True(t, ourBid.IsOurs)
+	value, ok := tracker.GetHighestCompetitorBid(100, phase0.Hash32{})
+	require.True(t, ok)
+	assert.Equal(t, uint64(600), value, "our second key must not count as a competitor")
+	assert.True(t, tracker.IsOurs(8))
+	assert.False(t, tracker.IsOurs(9))
 }
 
 func uint64Ptr(v uint64) *uint64 {

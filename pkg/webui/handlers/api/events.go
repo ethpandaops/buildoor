@@ -13,6 +13,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
@@ -43,6 +44,7 @@ const (
 	EventTypeSlotState                   EventType = "slot_state"
 	EventTypePayloadAvailable            EventType = "payload_available"
 	EventTypeBuilderInfo                 EventType = "builder_info"
+	EventTypeBuilderKeys                 EventType = "builder_keys"
 	EventTypeHeadVotes                   EventType = "head_votes"
 	EventTypeVoteCoverage                EventType = "vote_coverage"
 	EventTypeRevealStarted               EventType = "reveal_started"
@@ -98,6 +100,7 @@ type SlotStartEvent struct {
 // the payload is ready, so the WebUI can render the build as in-progress.
 type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
 	StartedAt int64  `json:"started_at"`
 }
 
@@ -123,18 +126,26 @@ type PayloadAttributesStreamEvent struct {
 // PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
 // can mark the in-progress build as failed.
 type PayloadBuildFailedStreamEvent struct {
-	Slot     uint64 `json:"slot"`
-	Error    string `json:"error"`
-	FailedAt int64  `json:"failed_at"`
+	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
+	Error     string `json:"error"`
+	FailedAt  int64  `json:"failed_at"`
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
 type PayloadReadyStreamEvent struct {
-	Slot            uint64 `json:"slot"`
-	BlockHash       string `json:"block_hash"`
-	ParentBlockHash string `json:"parent_block_hash"`
-	BlockValue      string `json:"block_value"`
-	ReadyAt         int64  `json:"ready_at"`
+	Slot      uint64 `json:"slot"`
+	Candidate string `json:"candidate,omitempty"`
+	BlockHash string `json:"block_hash"`
+	// Parent tuple this payload was built on: the execution parent (hash and,
+	// where known, its block number) and the beacon parent (root and its
+	// slot), so the UI can show what the payload actually extends.
+	ParentBlockHash   string `json:"parent_block_hash"`
+	ParentBlockNumber uint64 `json:"parent_block_number,omitempty"`
+	ParentBlockRoot   string `json:"parent_block_root,omitempty"`
+	ParentSlot        uint64 `json:"parent_slot,omitempty"`
+	BlockValue        string `json:"block_value"`
+	ReadyAt           int64  `json:"ready_at"`
 
 	// Full built-payload properties (list fields aggregated to counts).
 	BlockNumber     uint64 `json:"block_number,omitempty"`
@@ -163,13 +174,17 @@ type BidSubmittedEvent struct {
 	Warning   string `json:"warning,omitempty"`
 
 	// Full bid message properties (blob commitments aggregated to a count).
-	ExecutionPayment   uint64 `json:"execution_payment,omitempty"`
-	FeeRecipient       string `json:"fee_recipient,omitempty"`
-	GasLimit           uint64 `json:"gas_limit,omitempty"`
-	BuilderIndex       uint64 `json:"builder_index,omitempty"`
-	ParentBlockHash    string `json:"parent_block_hash,omitempty"`
-	ParentBlockRoot    string `json:"parent_block_root,omitempty"`
-	NumBlobCommitments int    `json:"num_blob_commitments,omitempty"`
+	ExecutionPayment uint64 `json:"execution_payment,omitempty"`
+	FeeRecipient     string `json:"fee_recipient,omitempty"`
+	GasLimit         uint64 `json:"gas_limit,omitempty"`
+	BuilderIndex     uint64 `json:"builder_index,omitempty"`
+	// KeyIndex is the managed builder key that signed the bid. With several
+	// keys bidding one slot, the builder index alone does not say which of ours
+	// it was.
+	KeyIndex           *uint64 `json:"key_index,omitempty"`
+	ParentBlockHash    string  `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot    string  `json:"parent_block_root,omitempty"`
+	NumBlobCommitments int     `json:"num_blob_commitments,omitempty"`
 }
 
 // HeadReceivedEvent is sent when a head event is received.
@@ -297,7 +312,9 @@ func fillEnvelopeDetail(detail *EnvelopeDetail, envelope *eth2all.SignedExecutio
 	}
 }
 
-// BuilderInfoEvent contains builder identity and balance information.
+// BuilderInfoEvent contains builder identity and balance information. The
+// identity fields describe the primary key; the fleet totals summarise every
+// managed key (they equal the primary's values on a single-key deployment).
 type BuilderInfoEvent struct {
 	BuilderPubkey     string `json:"builder_pubkey"`
 	BuilderIndex      uint64 `json:"builder_index"`
@@ -310,6 +327,21 @@ type BuilderInfoEvent struct {
 	WalletBalance     string `json:"wallet_balance_wei,omitempty"`
 	DepositEpoch      uint64 `json:"deposit_epoch"`
 	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
+
+	// Fleet summary of the managed builder key set.
+	KeyCount             uint64 `json:"key_count"`
+	KeyTarget            uint64 `json:"key_target"`
+	KeysActive           uint64 `json:"keys_active"`
+	TotalBalance         uint64 `json:"total_balance_gwei"`
+	TotalPendingPayments uint64 `json:"total_pending_payments_gwei"`
+	TotalEffective       uint64 `json:"total_effective_gwei"`
+}
+
+// BuilderKeysStreamEvent is the full managed key set, pushed on every change so
+// the keys view stays live without polling.
+type BuilderKeysStreamEvent struct {
+	Keys      []*builder_keys.State  `json:"keys"`
+	Aggregate builder_keys.Aggregate `json:"aggregate"`
 }
 
 // HeadVotesStreamEvent is sent when head vote participation changes.
@@ -475,10 +507,11 @@ type BuilderAPISubmitBlockDeliveredEvent struct {
 // EventStreamManager manages SSE connections and event broadcasting.
 type EventStreamManager struct {
 	builderSvc    *payload_builder.Service
-	epbsSvc       *p2p_bidder.Service // Optional ePBS service for bid events
-	lifecycleMgr  *lifecycle.Manager  // Optional lifecycle manager for balance info
-	chainSvc      chain.Service       // Optional chain service for head vote tracking
-	builderAPISvc *builderapi.Server  // Optional Builder API server
+	epbsSvc       *p2p_bidder.Service    // Optional ePBS service for bid events
+	lifecycleMgr  *lifecycle.Manager     // Optional lifecycle manager for balance info
+	keys          *builder_keys.Registry // Managed builder key set
+	chainSvc      chain.Service          // Optional chain service for head vote tracking
+	builderAPISvc *builderapi.Server     // Optional Builder API server
 
 	revealSvc        *payload_bidder.RevealService    // Optional shared reveal service (Gloas+)
 	inclusionTracker *payload_bidder.InclusionTracker // Optional shared inclusion tracker
@@ -525,6 +558,7 @@ func NewEventStreamManager(
 	builderSvc *payload_builder.Service,
 	epbsSvc *p2p_bidder.Service,
 	lifecycleMgr *lifecycle.Manager,
+	keys *builder_keys.Registry,
 	chainSvc chain.Service,
 	builderAPISvc *builderapi.Server,
 	revealSvc *payload_bidder.RevealService,
@@ -539,6 +573,7 @@ func NewEventStreamManager(
 		builderSvc:       builderSvc,
 		epbsSvc:          epbsSvc,
 		lifecycleMgr:     lifecycleMgr,
+		keys:             keys,
 		chainSvc:         chainSvc,
 		builderAPISvc:    builderAPISvc,
 		revealSvc:        revealSvc,
@@ -650,6 +685,18 @@ func (m *EventStreamManager) Start() {
 		resultUpdateChan = resultUpdateSub.Channel()
 	}
 
+	// Subscribe to builder key set changes (if lifecycle management available).
+	// Lossy delivery is fine: every event carries the complete key set, so a
+	// dropped one is superseded by the next.
+	var keyChangeSub *utils.Subscription[*builder_keys.ChangeEvent]
+
+	var keyChangeChan <-chan *builder_keys.ChangeEvent
+
+	if registry := m.keyRegistry(); registry != nil {
+		keyChangeSub = registry.SubscribeChanges(8, false)
+		keyChangeChan = keyChangeSub.Channel()
+	}
+
 	// Subscribe to head vote + subnet coverage updates (if chain service available)
 	var hvSub *utils.Subscription[*chain.HeadVoteUpdate]
 
@@ -724,6 +771,10 @@ func (m *EventStreamManager) Start() {
 
 		if resultUpdateSub != nil {
 			defer resultUpdateSub.Unsubscribe()
+		}
+
+		if keyChangeSub != nil {
+			defer keyChangeSub.Unsubscribe()
 		}
 
 		// Slot tracking ticker
@@ -829,6 +880,21 @@ func (m *EventStreamManager) Start() {
 					Type:      EventTypeSlotResultUpdated,
 					Timestamp: time.Now().UnixMilli(),
 					Data:      event,
+				})
+
+			case event, ok := <-keyChangeChan:
+				if !ok {
+					keyChangeChan = nil
+					continue
+				}
+
+				m.Broadcast(&StreamEvent{
+					Type:      EventTypeBuilderKeys,
+					Timestamp: time.Now().UnixMilli(),
+					Data: BuilderKeysStreamEvent{
+						Keys:      event.States,
+						Aggregate: event.Aggregate,
+					},
 				})
 
 			case event, ok := <-revealChan:
@@ -1029,6 +1095,7 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildStartedStreamEvent{
 			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
 			StartedAt: event.StartedAt.UnixMilli(),
 		},
 	})
@@ -1061,23 +1128,44 @@ func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.Pay
 		Type:      EventTypePayloadBuildFailed,
 		Timestamp: time.Now().UnixMilli(),
 		Data: PayloadBuildFailedStreamEvent{
-			Slot:     uint64(event.Slot),
-			Error:    event.Error,
-			FailedAt: event.FailedAt.UnixMilli(),
+			Slot:      uint64(event.Slot),
+			Candidate: event.Candidate,
+			Error:     event.Error,
+			FailedAt:  event.FailedAt.UnixMilli(),
 		},
 	})
 }
 
 // payloadReadyStreamEvent assembles the full payload_ready wire event from a
 // built payload (list fields aggregated to counts).
-func payloadReadyStreamEvent(slot phase0.Slot, event *payload_builder.Payload) PayloadReadyStreamEvent {
+func (m *EventStreamManager) payloadReadyStreamEvent(
+	slot phase0.Slot, event *payload_builder.Payload,
+) PayloadReadyStreamEvent {
 	data := PayloadReadyStreamEvent{
-		Slot:            uint64(slot),
-		BlockHash:       fmt.Sprintf("0x%x", event.BlockHash[:]),
-		ParentBlockHash: fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
-		BlockValue:      event.BlockValue.String(),
-		ReadyAt:         event.ReadyAt.UnixMilli(),
-		FeeRecipient:    event.FeeRecipient.Hex(),
+		Slot:              uint64(slot),
+		Candidate:         string(event.Candidate),
+		BlockHash:         fmt.Sprintf("0x%x", event.BlockHash[:]),
+		ParentBlockHash:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
+		ParentBlockNumber: event.Attributes.ParentBlockNumber,
+		ParentBlockRoot:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockRoot[:]),
+		BlockValue:        event.BlockValue.String(),
+		ReadyAt:           event.ReadyAt.UnixMilli(),
+		FeeRecipient:      event.FeeRecipient.Hex(),
+	}
+
+	// The beacon parent's slot makes the payload's position in the chain
+	// readable; cache-only so event assembly never blocks.
+	if m.chainSvc != nil {
+		if tracker := m.chainSvc.GetHeadTracker(); tracker != nil {
+			if parent, ok := tracker.LookupBlock(event.Attributes.ParentBlockRoot); ok {
+				data.ParentSlot = uint64(parent.Slot)
+
+				if data.ParentBlockNumber == 0 &&
+					parent.ExecutionBlockHash == event.Attributes.ParentBlockHash {
+					data.ParentBlockNumber = parent.ExecutionBlockNumber
+				}
+			}
+		}
 	}
 
 	if ep := event.ExecutionPayload; ep != nil {
@@ -1113,7 +1201,7 @@ func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) 
 	m.broadcastForSlot(slot, &StreamEvent{
 		Type:      EventTypePayloadReady,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      payloadReadyStreamEvent(slot, event),
+		Data:      m.payloadReadyStreamEvent(slot, event),
 	})
 
 	// Update slot state
@@ -1149,6 +1237,14 @@ func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmi
 		data.FeeRecipient = fmt.Sprintf("0x%x", bid.FeeRecipient)
 		data.GasLimit = bid.GasLimit
 		data.BuilderIndex = uint64(bid.BuilderIndex)
+
+		if registry := m.keyRegistry(); registry != nil {
+			if key := registry.ByBuilderIndex(uint64(bid.BuilderIndex)); key != nil {
+				keyIndex := key.KeyIndex()
+				data.KeyIndex = &keyIndex
+			}
+		}
+
 		data.ParentBlockHash = fmt.Sprintf("0x%x", bid.ParentBlockHash[:])
 		data.ParentBlockRoot = fmt.Sprintf("0x%x", bid.ParentBlockRoot[:])
 		data.NumBlobCommitments = len(bid.BlobKZGCommitments)
@@ -1218,10 +1314,14 @@ func (m *EventStreamManager) handleHeadEvent(event *beacon.HeadEvent) {
 }
 
 func (m *EventStreamManager) handleBidEvent(event *beacon.BidEvent) {
-	// Determine if this is our own bid. The beacon node echoes our submitted bid
-	// back over the SSE stream, so without this it would be shown as an external
-	// bid. Match on builder index, the same way the ePBS service classifies bids.
-	isOurs := m.epbsSvc != nil && event.BuilderIndex == m.epbsSvc.GetBuilderIndex()
+	// Determine if this is our own bid. The beacon node echoes our submitted bids
+	// back over the SSE stream, so without this they would be shown as external
+	// bids. Every managed key counts: with a fleet, a slot's bids carry several
+	// different builder indices, all of them ours.
+	isOurs := false
+	if registry := m.keyRegistry(); registry != nil {
+		isOurs = registry.ByBuilderIndex(event.BuilderIndex) != nil
+	}
 
 	m.broadcastForSlot(event.Slot, &StreamEvent{
 		Type:      EventTypeBidEvent,
@@ -1493,7 +1593,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if m.payments != nil {
-			adjustment := m.payments.GetBalanceAdjustment()
+			adjustment := m.payments.GetBalanceAdjustment(m.epbsSvc.Registry().Primary().KeyIndex())
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0
@@ -1521,7 +1621,42 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		info.EffectiveBalance = info.CLBalance - info.PendingPayments
 	}
 
+	// Fleet totals. On a single-key deployment these equal the primary key's
+	// values above; they diverge as soon as the target count grows.
+	if registry := m.keyRegistry(); registry != nil {
+		aggregate := registry.Aggregate()
+		info.KeyCount = uint64(len(registry.Keys()))
+		info.KeyTarget = aggregate.Target
+		info.KeysActive = aggregate.Active
+		info.TotalBalance = aggregate.TotalBalance
+		info.TotalPendingPayments = aggregate.TotalPendingPayments
+		info.TotalEffective = aggregate.TotalEffective
+	}
+
 	return info
+}
+
+// keyRegistry returns the managed builder key set (nil only when the WebUI runs
+// without one).
+func (m *EventStreamManager) keyRegistry() *builder_keys.Registry {
+	return m.keys
+}
+
+// BroadcastBuilderKeys pushes the current managed key set to all clients.
+func (m *EventStreamManager) BroadcastBuilderKeys() {
+	registry := m.keyRegistry()
+	if registry == nil {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeBuilderKeys,
+		Timestamp: time.Now().UnixMilli(),
+		Data: BuilderKeysStreamEvent{
+			Keys:      registry.States(),
+			Aggregate: registry.Aggregate(),
+		},
+	})
 }
 
 func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
@@ -1665,6 +1800,20 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		},
 	}) {
 		return
+	}
+
+	// Send the managed builder key set
+	if registry := m.keyRegistry(); registry != nil {
+		if !send(&StreamEvent{
+			Type:      EventTypeBuilderKeys,
+			Timestamp: time.Now().UnixMilli(),
+			Data: BuilderKeysStreamEvent{
+				Keys:      registry.States(),
+				Aggregate: registry.Aggregate(),
+			},
+		}) {
+			return
+		}
 	}
 
 	// Send service status

@@ -275,6 +275,22 @@ type BlockInfo struct {
 	FinalitySafeExecutionBlockHash phase0.Hash32
 	ParentRoot                     phase0.Root
 	StateRoot                      phase0.Root
+	// Gas limit the block committed to: the embedded payload's gas limit
+	// pre-Gloas, the bid's gas limit from Gloas on (the envelope check
+	// enforces payload.gas_limit == bid.gas_limit, so the values agree
+	// whenever the payload is revealed).
+	GasLimit uint64
+	// Execution block number of the committed payload. Only known pre-Gloas
+	// (the payload is embedded in the block); zero from Gloas on, where the
+	// number requires the revealed envelope.
+	ExecutionBlockNumber uint64
+	// BuilderIndex is the builder the block's execution payload bid came from
+	// (Gloas+). It is the ground truth for which of our keys won a slot — the
+	// payload alone cannot say, since several of our keys may have bid the very
+	// same payload. BuilderIndexKnown is false pre-Gloas, where the payload is
+	// embedded in the block and no builder is named.
+	BuilderIndex      uint64
+	BuilderIndexKnown bool
 }
 
 // FinalityInfo contains finality checkpoint execution block hashes.
@@ -324,6 +340,9 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		return nil, fmt.Errorf("failed to get finality-safe execution block hash: %w", err)
 	}
 
+	gasLimit, blockNumber := agnosticExecutionGasLimitAndNumber(msg)
+	builderIndex, builderIndexKnown := agnosticBidBuilderIndex(msg)
+
 	return &BlockInfo{
 		Slot:                           msg.Slot,
 		Root:                           root,
@@ -331,7 +350,50 @@ func (c *Client) GetBlockInfo(ctx context.Context, blockID string) (*BlockInfo, 
 		FinalitySafeExecutionBlockHash: finalitySafeHash,
 		ParentRoot:                     msg.ParentRoot,
 		StateRoot:                      msg.StateRoot,
+		GasLimit:                       gasLimit,
+		ExecutionBlockNumber:           blockNumber,
+		BuilderIndex:                   builderIndex,
+		BuilderIndexKnown:              builderIndexKnown,
 	}, nil
+}
+
+// agnosticBidBuilderIndex extracts the builder index of the block's committed
+// execution payload bid. Only Gloas+ blocks name a builder; before that the
+// payload is part of the block itself.
+func agnosticBidBuilderIndex(msg *all.BeaconBlock) (index uint64, known bool) {
+	if msg.Version < version.DataVersionGloas {
+		return 0, false
+	}
+
+	bid := msg.Body.SignedExecutionPayloadBid
+	if bid == nil || bid.Message == nil {
+		return 0, false
+	}
+
+	return uint64(bid.Message.BuilderIndex), true
+}
+
+// agnosticExecutionGasLimitAndNumber extracts the committed gas limit and (where
+// knowable) the execution block number from a fork-agnostic beacon block.
+// Pre-Gloas both come from the embedded payload; from Gloas on the gas limit is
+// on the bid (present even when the payload was withheld) and the number is
+// unknown without the envelope, so it stays zero.
+func agnosticExecutionGasLimitAndNumber(msg *all.BeaconBlock) (gasLimit, blockNumber uint64) {
+	body := msg.Body
+
+	if msg.Version >= version.DataVersionGloas {
+		if body.SignedExecutionPayloadBid != nil && body.SignedExecutionPayloadBid.Message != nil {
+			return body.SignedExecutionPayloadBid.Message.GasLimit, 0
+		}
+
+		return 0, 0
+	}
+
+	if body.ExecutionPayload == nil {
+		return 0, 0
+	}
+
+	return body.ExecutionPayload.GasLimit, body.ExecutionPayload.BlockNumber
 }
 
 // agnosticExecutionBlockHash extracts the execution block hash from a

@@ -36,7 +36,7 @@ type GetHeaderResponse struct {
 func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/header/...")
 
-	if h.payloadCache == nil || h.blsSigner == nil {
+	if h.payloadCache == nil || h.registry == nil {
 		log.Warn("getHeader: returning 204 — payload cache or BLS signer not available")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -130,23 +130,24 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event := h.payloadCache.Get(slot)
-	if event == nil {
-		log.WithField("slot", slotU64).Info(
-			"getHeader: returning 204 — no cached payload for slot")
-		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusFailed, "no cached payload for slot")
-		w.WriteHeader(http.StatusNoContent)
+	// The slot may hold several candidate payloads (reorg preparedness): serve
+	// whichever one matches the requested parent hash.
+	var event *payload_builder.Payload
 
-		return
+	for _, candidate := range h.payloadCache.GetSlotPayloads(slot) {
+		if candidate.Attributes.ParentBlockHash == parentHash {
+			event = candidate
+			break
+		}
 	}
-	if event.Attributes.ParentBlockHash != parentHash {
+
+	if event == nil {
 		log.WithFields(logrus.Fields{
 			"slot":                slotU64,
 			"request_parent_hash": "0x" + hex.EncodeToString(parentHash[:]),
-			"cached_parent_hash":  "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
-		}).Info("getHeader: returning 204 — cached payload parent hash does not match request")
+		}).Info("getHeader: returning 204 — no cached payload for requested parent")
 		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusFailed,
-			"cached payload parent hash does not match request")
+			"no cached payload for requested parent")
 		w.WriteHeader(http.StatusNoContent)
 
 		return
@@ -163,7 +164,12 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	if chainSpec := h.chainSvc.GetChainSpec(); chainSpec != nil {
 		maxWithdrawalsPerPayload = chainSpec.MaxWithdrawalsPerPayload
 	}
-	signedBid, err := BuildSignedBuilderBid(event, fork, h.blsSigner.PublicKey(), h.blsSigner,
+	// Pre-Gloas bids are signed by the primary key: the proposer's relay verifies
+	// the signature against the pubkey it saw in this very response, so rotating
+	// keys per request would only churn what the relay sees.
+	bidKey := h.registry.Primary()
+
+	signedBid, err := BuildSignedBuilderBid(event, fork, bidKey.Pubkey(), bidKey.BLSSigner(),
 		subsidyGwei, totalValueGwei, h.chainSvc.GetGenesis().GenesisForkVersion, maxWithdrawalsPerPayload)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")

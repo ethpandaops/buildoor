@@ -12,6 +12,14 @@ func DefaultConfig() *Config {
 		BuilderAPIEnabled: false, // Disabled by default
 		BuilderAPI: BuilderAPIConfig{
 			BlockValueSubsidyGwei: 100000, // 100k Gwei
+			ServeCandidates:       "all",
+		},
+		BuilderKeys: BuilderKeysConfig{
+			TargetCount:  1, // single key by default: index 0 is the entry key
+			MaxIndex:     1000,
+			DiscoveryGap: 100,
+			AutoDeposit:  true,
+			AutoExit:     true,
 		},
 		DepositAmount:               50000000000, // 50 ETH in Gwei
 		TopupThreshold:              10000000000, // 10 ETH in Gwei
@@ -33,6 +41,17 @@ func DefaultConfig() *Config {
 			BidInterval:          500,       // 500ms between bids
 			BidSubsidy:           100000000, // 100M gwei = 0.1 ETH; clears validator local-EL threshold
 			HeadVoteThresholdPct: 60,        // Gloas builder payment quorum (6/10)
+			BidCandidate:         "auto",
+			KeyStrategy:          "round_robin",
+			BidKeysPerStep:       1,
+		},
+		Build: BuildConfig{
+			CandidateParentFull:       CandidateModeAlways,
+			CandidateParentEmpty:      CandidateModeAuto,
+			CandidateGrandparentFull:  CandidateModeAuto,
+			CandidateGrandparentEmpty: CandidateModeNever,
+			Parallel:                  true,
+			AutoWeakHeadPct:           40,
 		},
 		Reveal: RevealConfig{
 			Enabled: true,
@@ -45,6 +64,7 @@ func DefaultConfig() *Config {
 			BroadcastValidation: BroadcastValidationConsensusAndEquivocation,
 			MaxAttempts:         3,
 			RetryIntervalMs:     500,
+			RebindOnReorg:       true,
 			// TimeMs: 0 = auto-compute from slot time (see ApplySlotDefaults).
 		},
 	}

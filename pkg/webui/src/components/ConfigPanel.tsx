@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
+import { KeySelectionSection } from './KeySelectionSection';
 import type { Config, EPBSConfig, ServiceStatus } from '../types';
 
 interface ConfigPanelProps {
@@ -268,6 +269,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
               </div>
             </form>
           )}
+
+          <KeySelectionSection config={config} />
         </div>
       )}
     </div>

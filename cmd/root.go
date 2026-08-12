@@ -61,8 +61,15 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
+	rootCmd.PersistentFlags().String("builder-api-serve-candidates", defaults.BuilderAPI.ServeCandidates, "Which built candidate payloads bid requests are answered from: all, canonical_only, or a comma-separated candidate key list")
+	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
+	rootCmd.PersistentFlags().Uint64("builder-keys-target", defaults.BuilderKeys.TargetCount, "Number of builder keys to keep registered and funded (derived from the entry key; index 0 is the entry key itself)")
+	rootCmd.PersistentFlags().Uint64("builder-keys-max-index", defaults.BuilderKeys.MaxIndex, "Highest internal builder key index that may be derived")
+	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
+	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
 	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
@@ -89,6 +96,22 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
+	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
+	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = no cap beyond the fleet)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every remaining key at once)")
+	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
+	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
+
+	// Payload build candidates (reorg / payload-miss preparedness)
+	rootCmd.PersistentFlags().String("build-candidate-parent-full", defaults.Build.CandidateParentFull, "Build the normal candidate on the head block and its payload: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-parent-empty", defaults.Build.CandidateParentEmpty, "Build the payload-miss candidate on the head block but its execution parent: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-grandparent-full", defaults.Build.CandidateGrandparentFull, "Build the reorg candidate on the head block's parent: auto, always or never")
+	rootCmd.PersistentFlags().String("build-candidate-grandparent-empty", defaults.Build.CandidateGrandparentEmpty, "Build the reorg + payload-miss candidate: auto, always or never")
+	rootCmd.PersistentFlags().Bool("build-parallel", defaults.Build.Parallel, "Build selected candidates concurrently against the EL instead of sequentially (canonical first, speculative after)")
+	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
+	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
+	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
@@ -98,6 +121,7 @@ func init() {
 	rootCmd.PersistentFlags().String("reveal-broadcast-validation", defaults.Reveal.BroadcastValidation, "Envelope broadcast validation: gossip, consensus or consensus_and_equivocation")
 	rootCmd.PersistentFlags().Uint64("reveal-max-attempts", defaults.Reveal.MaxAttempts, "Total publish attempts per reveal")
 	rootCmd.PersistentFlags().Int64("reveal-retry-interval", defaults.Reveal.RetryIntervalMs, "Wait between failed reveal attempts in ms")
+	rootCmd.PersistentFlags().Bool("reveal-rebind-on-reorg", defaults.Reveal.RebindOnReorg, "Re-bind a slot's reveal (rebuilt, re-signed envelope) when our payload is re-included under a different block root after a reorg")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
@@ -182,6 +206,16 @@ func initConfig() error {
 			RequireRequestAuth:    v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
 			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
+			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
+			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
+			KeyStrategy:           v.GetString("builder-api-key-strategy"),
+		},
+		BuilderKeys: config.BuilderKeysConfig{
+			TargetCount:  v.GetUint64("builder-keys-target"),
+			MaxIndex:     v.GetUint64("builder-keys-max-index"),
+			DiscoveryGap: v.GetUint64("builder-keys-discovery-gap"),
+			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
+			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
@@ -204,6 +238,11 @@ func initConfig() error {
 			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
+			BidCandidate:         v.GetString("epbs-bid-candidate"),
+			BidCandidateSwitch:   v.GetBool("epbs-bid-candidate-switch"),
+			KeyStrategy:          v.GetString("epbs-key-strategy"),
+			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
+			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),
@@ -213,6 +252,17 @@ func initConfig() error {
 			BroadcastValidation: v.GetString("reveal-broadcast-validation"),
 			MaxAttempts:         v.GetUint64("reveal-max-attempts"),
 			RetryIntervalMs:     v.GetInt64("reveal-retry-interval"),
+			RebindOnReorg:       v.GetBool("reveal-rebind-on-reorg"),
+		},
+		Build: config.BuildConfig{
+			CandidateParentFull:       v.GetString("build-candidate-parent-full"),
+			CandidateParentEmpty:      v.GetString("build-candidate-parent-empty"),
+			CandidateGrandparentFull:  v.GetString("build-candidate-grandparent-full"),
+			CandidateGrandparentEmpty: v.GetString("build-candidate-grandparent-empty"),
+			Parallel:                  v.GetBool("build-parallel"),
+			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
+			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),
+			EnforceBidGasLimit:        v.GetBool("build-enforce-bid-gas-limit"),
 		},
 		PayloadBuildTime:            v.GetUint64("payload-build-time"),
 		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),
@@ -227,6 +277,17 @@ func initConfig() error {
 
 	if cfg.BuilderPrivkey != "" && cfg.BuilderMnemonic != "" {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
+	}
+
+	for flag, mode := range map[string]string{
+		"--build-candidate-parent-full":       cfg.Build.CandidateParentFull,
+		"--build-candidate-parent-empty":      cfg.Build.CandidateParentEmpty,
+		"--build-candidate-grandparent-full":  cfg.Build.CandidateGrandparentFull,
+		"--build-candidate-grandparent-empty": cfg.Build.CandidateGrandparentEmpty,
+	} {
+		if mode != config.NormalizedCandidateMode(mode, "") {
+			return fmt.Errorf("invalid %s %q: must be auto, always or never", flag, mode)
+		}
 	}
 
 	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {

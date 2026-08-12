@@ -11,6 +11,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -60,15 +61,13 @@ const (
 	// being re-evaluated against the head's ancestry; reorgs deeper than this
 	// window no longer revise the recorded status.
 	wonTrackingWindowSlots = 16
-	// blockCacheExtraSlots keeps ancestry blocks slightly longer than the
-	// tracking window so verdict walks rarely refetch.
-	blockCacheExtraSlots = 4
 )
 
 // wonTracking is the run-loop-owned reorg-aware state for one won slot.
 type wonTracking struct {
 	blockRoot phase0.Root    // beacon block that committed to our payload
 	execHash  phase0.Hash32  // our payload's execution block hash
+	keyIndex  uint64         // builder key whose bid won the slot (owes the payment)
 	verdict   PayloadVerdict // last fired verdict; empty until first resolution
 }
 
@@ -82,6 +81,7 @@ type InclusionTracker struct {
 	clClient   *beacon.Client
 	chainSvc   chain.Service
 	builderSvc *payload_builder.Service // payload cache + inclusion stats
+	registry   *builder_keys.Registry   // resolves a block's builder index to our key
 	revealSvc  *RevealService           // optional; nil pre-Gloas
 	payments   *PaymentTracker          // optional; nil pre-Gloas
 
@@ -90,9 +90,9 @@ type InclusionTracker struct {
 
 	// Reorg-aware verdict state, owned by the run loop (no mutex): every won
 	// slot is re-evaluated against each new head's ancestry until it leaves
-	// the tracking window. blockCache holds resolved ancestry blocks by root.
+	// the tracking window. Ancestry blocks are resolved through the chain
+	// service's shared head tracker cache.
 	trackedWins map[phase0.Slot]*wonTracking
-	blockCache  map[phase0.Root]*beacon.BlockInfo
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -107,6 +107,7 @@ func NewInclusionTracker(
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	builderSvc *payload_builder.Service,
+	registry *builder_keys.Registry,
 	revealSvc *RevealService,
 	payments *PaymentTracker,
 	log logrus.FieldLogger,
@@ -115,10 +116,10 @@ func NewInclusionTracker(
 		clClient:    clClient,
 		chainSvc:    chainSvc,
 		builderSvc:  builderSvc,
+		registry:    registry,
 		revealSvc:   revealSvc,
 		payments:    payments,
 		trackedWins: make(map[phase0.Slot]*wonTracking, 4),
-		blockCache:  make(map[phase0.Root]*beacon.BlockInfo, 32),
 		log:         log.WithField("component", "inclusion-tracker"),
 	}
 }
@@ -188,12 +189,9 @@ func (t *InclusionTracker) run() {
 
 // processHead resolves the head block's info and runs the inclusion checks.
 func (t *InclusionTracker) processHead(event *beacon.HeadEvent) {
-	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
-	defer cancel()
-
-	blockInfo, err := t.clClient.GetBlockInfo(ctx, fmt.Sprintf("0x%x", event.Block[:]))
-	if err != nil {
-		t.log.WithError(err).WithField("slot", event.Slot).Debug("Failed to get block info")
+	blockInfo, ok := t.getBlock(event.Block)
+	if !ok {
+		t.log.WithField("slot", event.Slot).Debug("Failed to get head block info")
 		return
 	}
 
@@ -206,8 +204,6 @@ func (t *InclusionTracker) processHead(event *beacon.HeadEvent) {
 //     this head's ancestry — reorgs flip verdicts, each change fires an event.
 //  3. Prune tracking state that left the window.
 func (t *InclusionTracker) processBlockInfo(blockInfo *beacon.BlockInfo) {
-	t.blockCache[blockInfo.Root] = blockInfo
-
 	t.checkForOurPayload(blockInfo)
 	t.evaluateTrackedWins(blockInfo)
 	t.pruneTracking(blockInfo.Slot)
@@ -235,6 +231,8 @@ func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
 		firstVerdict := win.verdict == ""
 		win.verdict = verdict
 
+		t.applyVerdictSideEffects(slot, win, verdict)
+
 		t.payloadStatusDispatch.Fire(&PayloadStatusEvent{
 			Slot:           slot,
 			Verdict:        verdict,
@@ -258,6 +256,24 @@ func (t *InclusionTracker) evaluateTrackedWins(head *beacon.BlockInfo) {
 		if firstVerdict {
 			t.logPaymentState(slot)
 		}
+	}
+}
+
+// applyVerdictSideEffects propagates a verdict change into the win and
+// payment bookkeeping: an orphaned winning block clears the payload's won
+// marker (so a re-inclusion is detected again) and disputes the pending
+// payment; a block returning to the canonical chain restores it.
+func (t *InclusionTracker) applyVerdictSideEffects(
+	slot phase0.Slot, win *wonTracking, verdict PayloadVerdict,
+) {
+	orphaned := verdict == PayloadVerdictOrphaned
+
+	if orphaned {
+		t.builderSvc.UnmarkPayloadWon(win.execHash)
+	}
+
+	if t.payments != nil {
+		t.payments.SetPaymentDisputed(win.keyIndex, slot, orphaned)
 	}
 }
 
@@ -296,10 +312,18 @@ func (t *InclusionTracker) resolveVerdict(
 	return PayloadVerdictMissed, next
 }
 
-// getBlock resolves a block by root through the ancestry cache, fetching from
-// the beacon node on a miss.
+// getBlock resolves a block by root through the chain service's shared head
+// tracker (cache-then-fetch), falling back to a direct beacon-API fetch when
+// the tracker is unavailable.
 func (t *InclusionTracker) getBlock(root phase0.Root) (*beacon.BlockInfo, bool) {
-	if info, ok := t.blockCache[root]; ok {
+	if headTracker := t.chainSvc.GetHeadTracker(); headTracker != nil {
+		info, err := headTracker.GetBlock(t.ctx, root)
+		if err != nil {
+			t.log.WithError(err).WithField("root", fmt.Sprintf("%#x", root)).
+				Debug("Failed to resolve ancestry block")
+			return nil, false
+		}
+
 		return info, true
 	}
 
@@ -313,13 +337,10 @@ func (t *InclusionTracker) getBlock(root phase0.Root) (*beacon.BlockInfo, bool) 
 		return nil, false
 	}
 
-	t.blockCache[root] = info
-
 	return info, true
 }
 
-// pruneTracking drops won-slot tracking and ancestry-cache entries that left
-// the reorg window.
+// pruneTracking drops won-slot tracking entries that left the reorg window.
 func (t *InclusionTracker) pruneTracking(headSlot phase0.Slot) {
 	if headSlot <= wonTrackingWindowSlots {
 		return
@@ -329,17 +350,6 @@ func (t *InclusionTracker) pruneTracking(headSlot phase0.Slot) {
 	for slot := range t.trackedWins {
 		if slot < minWinSlot {
 			delete(t.trackedWins, slot)
-		}
-	}
-
-	if headSlot <= wonTrackingWindowSlots+blockCacheExtraSlots {
-		return
-	}
-
-	minCacheSlot := headSlot - wonTrackingWindowSlots - blockCacheExtraSlots
-	for root, info := range t.blockCache {
-		if info.Slot < minCacheSlot {
-			delete(t.blockCache, root)
 		}
 	}
 }
@@ -376,11 +386,30 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		bidValueGwei = new(big.Int).Div(payload.BlockValue, big.NewInt(1_000_000_000)).Uint64()
 	}
 
+	// Resolve which of our keys actually won. The block's bid builder index is
+	// the only ground truth: several managed keys may have bid the very same
+	// payload, and the winning key both owes the payment and must sign the
+	// reveal.
+	winner := t.winningKey(blockInfo)
+	if winner == nil {
+		t.log.WithFields(logrus.Fields{
+			"slot":          blockInfo.Slot,
+			"builder_index": blockInfo.BuilderIndex,
+			"block_hash":    fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
+		}).Error("Our payload was included under a builder index we do not own — " +
+			"cannot bind the payment or the reveal to a key")
+
+		return
+	}
+
 	t.log.WithFields(logrus.Fields{
 		"slot":       blockInfo.Slot,
+		"key":        winner.String(),
 		"block_hash": fmt.Sprintf("%x", blockInfo.ExecutionBlockHash[:8]),
 		"bid_value":  bidValueGwei,
 	}).Info("Our payload was included in a beacon block!")
+
+	t.registry.RecordWin(winner.KeyIndex())
 
 	// Builder payments and reveals only exist post-Gloas; before that the
 	// payload is part of the block itself and nothing is owed or revealed.
@@ -388,13 +417,14 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		// Record as pending payment (moved to a balance deduction if revealed,
 		// or pending for 2 epochs if not).
 		if bidValueGwei > 0 {
-			t.payments.RecordWonBid(payload.Attributes.ProposalSlot, bidValueGwei)
+			t.payments.RecordWonBid(winner.KeyIndex(), payload.Attributes.ProposalSlot, bidValueGwei)
 		}
 
 		// Request the reveal; the per-slot dedup makes this a no-op for
 		// Builder-API-won slots whose reveal was requested at delivery time.
 		t.revealSvc.RequestReveal(&RevealRequest{
 			Payload:   payload,
+			Key:       winner,
 			BlockInfo: blockInfo,
 			Transport: payload_builder.BidTransportP2P,
 		})
@@ -423,8 +453,21 @@ func (t *InclusionTracker) checkForOurPayload(blockInfo *beacon.BlockInfo) {
 		t.trackedWins[slot] = &wonTracking{
 			blockRoot: blockInfo.Root,
 			execHash:  blockInfo.ExecutionBlockHash,
+			keyIndex:  winner.KeyIndex(),
 		}
 	}
+}
+
+// winningKey resolves the managed key behind a block's committed bid. From
+// Gloas on the block names the builder index, which maps to exactly one of our
+// keys; pre-Gloas no builder is named and the primary key stands in (nothing is
+// signed or owed on that path anyway).
+func (t *InclusionTracker) winningKey(blockInfo *beacon.BlockInfo) *builder_keys.Key {
+	if !blockInfo.BuilderIndexKnown {
+		return t.registry.Primary()
+	}
+
+	return t.registry.ByBuilderIndex(blockInfo.BuilderIndex)
 }
 
 // buildWonBlock derives the won-block summary for an included payload (no

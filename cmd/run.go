@@ -29,7 +29,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
@@ -84,13 +83,14 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to connect to EL engine API: %w", err)
 		}
 
-		// 3. Initialize BLS signer (raw hex key or mnemonic-derived)
-		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)
+		// 3. Initialize the managed builder key set (derived from the raw hex key
+		// or the mnemonic; internal key 0 is that entry key itself)
+		keyRegistry, err := newKeyRegistry(cfg, logger)
 		if err != nil {
-			return fmt.Errorf("invalid builder key: %w", err)
+			return err
 		}
 
-		pubkey := blsSigner.PublicKey()
+		pubkey := keyRegistry.Primary().Pubkey()
 		logger.WithField("pubkey", fmt.Sprintf("%x", pubkey[:8])).Info("Builder key loaded")
 
 		// 4. Initialize RPC client and wallet (if lifecycle enabled)
@@ -217,6 +217,14 @@ and begins building blocks according to configuration.`,
 		}
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
+		// 7a. Start the builder key registry: it resolves every managed key's
+		// on-chain state from the chain service's epoch snapshots and persists
+		// the usage history that makes withdrawn keys reusable.
+		if err := keyRegistry.Start(ctx, chainSvc, stateDB); err != nil {
+			return fmt.Errorf("failed to start builder key registry: %w", err)
+		}
+		defer keyRegistry.Stop()
+
 		// 7b. Initialize the per-slot action plan service. Decision points
 		// (build/bid/serve/reveal) freeze the slot's plan on first use; plans
 		// persist in the state-db's kv_store when --state-db is set.
@@ -234,7 +242,7 @@ and begins building blocks according to configuration.`,
 		var lifecycleMgr *lifecycle.Manager
 
 		if lifecycleAvailable {
-			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
+			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, keyRegistry, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
 			}
@@ -299,7 +307,11 @@ and begins building blocks according to configuration.`,
 		if epbsAvailable {
 			paymentTracker = payload_bidder.NewPaymentTracker(chainSvc, logger)
 
-			revealSvc = payload_bidder.NewRevealService(cfg, payload_bidder.NewSigner(blsSigner),
+			// Effective balances (bid readiness, top-up decisions) must account
+			// for payments settled since the last epoch snapshot.
+			keyRegistry.SetBalanceAdjuster(paymentTracker)
+
+			revealSvc = payload_bidder.NewRevealService(cfg, keyRegistry,
 				clClient, chainSvc, builderSvc, paymentTracker, planSvc,
 				chainSvc.GetHeadVoteTracker(), logger)
 			if err := revealSvc.Start(ctx); err != nil {
@@ -308,7 +320,8 @@ and begins building blocks according to configuration.`,
 			defer revealSvc.Stop()
 		}
 
-		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, revealSvc, paymentTracker, logger)
+		inclusionTracker := payload_bidder.NewInclusionTracker(clClient, chainSvc, builderSvc, keyRegistry,
+			revealSvc, paymentTracker, logger)
 
 		if err := inclusionTracker.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start inclusion tracker: %w", err)
@@ -340,7 +353,7 @@ and begins building blocks according to configuration.`,
 			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
 			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing p2p bidder service...")
 
-			epbsSvc, err = p2p_bidder.NewService(clClient, chainSvc, blsSigner, propPrefSvc.GetStore(), planSvc, logger)
+			epbsSvc, err = p2p_bidder.NewService(clClient, chainSvc, keyRegistry, propPrefSvc.GetStore(), planSvc, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize p2p bidder: %w", err)
 			}
@@ -368,7 +381,7 @@ and begins building blocks according to configuration.`,
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), blsSigner, validatorStore)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), keyRegistry, validatorStore)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 
@@ -379,6 +392,7 @@ and begins building blocks according to configuration.`,
 
 			if revealSvc != nil {
 				builderAPISrv.SetRevealService(revealSvc)
+				builderAPISrv.SetOnDemandBuilder(builderSvc)
 			}
 
 			if propPrefSvc != nil {
@@ -392,7 +406,7 @@ and begins building blocks according to configuration.`,
 		// subscriptions never miss an event; SetPersistence migrates any
 		// legacy won_blocks namespace into slot results.
 		resultTracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc,
-			builderSvc, epbsSvc, revealSvc, inclusionTracker, logger)
+			builderSvc, epbsSvc, revealSvc, inclusionTracker, keyRegistry, logger)
 		resultTracker.SetPersistence(ctx, stateDB)
 
 		if err := resultTracker.Start(ctx); err != nil {
@@ -433,7 +447,13 @@ and begins building blocks according to configuration.`,
 
 			if lifecycleMgr != nil {
 				lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
+				// A target key count change must act now, not at the next
+				// reconcile tick.
+				lifecycleMgr.Reconcile()
 			}
+
+			// The derived key set follows the target/derivation settings.
+			keyRegistry.Refresh()
 		})
 
 		// 15. Start WebUI/API server (if configured)
@@ -451,7 +471,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {
@@ -470,12 +490,6 @@ and begins building blocks according to configuration.`,
 			})
 			lifecycleMgr.SetRegistrationCallback(func(index uint64) {
 				epbsSvc.SetBuilderRegistered(index)
-				if builderAPISrv != nil {
-					builderAPISrv.SetBuilderIndex(index)
-				}
-				if revealSvc != nil {
-					revealSvc.SetBuilderIndex(index)
-				}
 			})
 		}
 

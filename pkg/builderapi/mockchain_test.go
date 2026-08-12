@@ -60,6 +60,7 @@ func (m *mockChainService) GetEpochStats(phase0.Epoch) *chain.EpochStats { retur
 
 func (m *mockChainService) SubscribeEpochStats() *utils.Subscription[*chain.EpochStats] { return nil }
 func (m *mockChainService) GetHeadVoteTracker() *chain.HeadVoteTracker                  { return nil }
+func (m *mockChainService) GetHeadTracker() *chain.HeadTracker                          { return nil }
 func (m *mockChainService) GetFinalizedEpoch() phase0.Epoch                             { return 0 }
 
 func (m *mockChainService) GetBuilderByIndex(uint64) *chain.BuilderInfo            { return nil }

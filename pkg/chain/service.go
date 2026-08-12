@@ -42,6 +42,9 @@ type Service interface {
 	// Head vote tracking
 	GetHeadVoteTracker() *HeadVoteTracker
 
+	// Canonical head / ancestry / payload-status view
+	GetHeadTracker() *HeadTracker
+
 	// Finality
 	GetFinalizedEpoch() phase0.Epoch
 
@@ -74,8 +77,16 @@ type service struct {
 	currentEpoch        phase0.Epoch
 	cacheMu             sync.RWMutex
 
+	// Duty dependent root each cached epoch's state was fetched under. A head
+	// event whose dependent root differs proves the cached state came from a
+	// branch that was reorged across the epoch boundary and must be refetched.
+	epochDependentRoots map[phase0.Epoch]phase0.Root
+
 	// Head vote tracking
 	headVoteTracker *HeadVoteTracker
+
+	// Canonical head / ancestry / payload-status view
+	headTracker *HeadTracker
 
 	// Event dispatching
 	epochStatsDispatcher *utils.Dispatcher[*EpochStats]
@@ -101,6 +112,7 @@ func NewService(
 		genesis:              genesis,
 		log:                  log.WithField("component", "chain-service"),
 		stateCache:           make(map[phase0.Epoch]*EpochStats, 2),
+		epochDependentRoots:  make(map[phase0.Epoch]phase0.Root, 2),
 		epochStatsDispatcher: &utils.Dispatcher[*EpochStats]{},
 	}
 }
@@ -118,6 +130,10 @@ func (s *service) Start(ctx context.Context) error {
 	s.headVoteTracker = NewHeadVoteTracker(s.cfg, s, s.clClient, s.log)
 	s.headVoteTracker.Start(s.ctx)
 
+	// Start canonical head tracker
+	s.headTracker = NewHeadTracker(s.clClient, s.chainSpec, s.genesis, s.log)
+	s.headTracker.Start(s.ctx)
+
 	// Subscribe to head events to detect epoch transitions
 	s.wg.Add(1)
 	go s.runEpochMonitor()
@@ -133,6 +149,10 @@ func (s *service) Stop() error {
 
 	if s.headVoteTracker != nil {
 		s.headVoteTracker.Stop()
+	}
+
+	if s.headTracker != nil {
+		s.headTracker.Stop()
 	}
 
 	if s.cancel != nil {
@@ -291,17 +311,26 @@ func (s *service) GetHeadVoteTracker() *HeadVoteTracker {
 	return s.headVoteTracker
 }
 
+// GetHeadTracker returns the canonical head tracker.
+func (s *service) GetHeadTracker() *HeadTracker {
+	return s.headTracker
+}
+
 // RefreshBuilders re-fetches the head state to pick up new builder registrations.
 func (s *service) RefreshBuilders(ctx context.Context) error {
 	s.log.Debug("Refreshing builders from head state")
 
-	stats, err := s.fetchEpochStats(ctx, "head", s.currentEpoch)
+	s.cacheMu.RLock()
+	epoch := s.currentEpoch
+	s.cacheMu.RUnlock()
+
+	stats, err := s.fetchEpochStats(ctx, "head", epoch)
 	if err != nil {
 		return fmt.Errorf("failed to refresh builders: %w", err)
 	}
 
 	s.cacheMu.Lock()
-	s.stateCache[s.currentEpoch] = stats
+	s.stateCache[epoch] = stats
 	s.cacheMu.Unlock()
 
 	return nil
@@ -326,17 +355,22 @@ func (s *service) runEpochMonitor() {
 	}
 }
 
-// handleHeadEvent checks if a head event represents a new epoch and fetches state.
+// handleHeadEvent checks if a head event represents a new epoch and fetches
+// state. For already-cached epochs it verifies the event's duty dependent
+// root against the one the cached state was fetched under: a mismatch means
+// a reorg crossed the epoch boundary and the cached state (duties, builders,
+// randao) belongs to an orphaned branch, so it is refetched and re-fired.
 func (s *service) handleHeadEvent(event *beacon.HeadEvent) {
 	newEpoch := phase0.Epoch(uint64(event.Slot) / s.chainSpec.SlotsPerEpoch)
 
 	s.cacheMu.RLock()
 	currentEpoch := s.currentEpoch
 	_, alreadyCached := s.stateCache[newEpoch]
+	knownDependentRoot, hasDependentRoot := s.epochDependentRoots[newEpoch]
 	s.cacheMu.RUnlock()
 
-	// Only fetch state when we enter a new epoch that hasn't been cached yet
 	if newEpoch <= currentEpoch || alreadyCached {
+		s.checkDependentRoot(event, newEpoch, alreadyCached, knownDependentRoot, hasDependentRoot)
 		return
 	}
 
@@ -352,20 +386,74 @@ func (s *service) handleHeadEvent(event *beacon.HeadEvent) {
 		return
 	}
 
-	// Update current epoch and evict old states
+	// Update current epoch, record the dependent root the state was fetched
+	// under, and evict old states
 	s.cacheMu.Lock()
 	s.currentEpoch = newEpoch
+	s.epochDependentRoots[newEpoch] = event.CurrentDutyDependentRoot
 
 	// Keep only last 2 epochs
 	for epoch := range s.stateCache {
 		if epoch < newEpoch-1 {
 			delete(s.stateCache, epoch)
+			delete(s.epochDependentRoots, epoch)
 		}
 	}
 	s.cacheMu.Unlock()
 
 	// Fire epoch stats event
 	stats := s.GetEpochStats(newEpoch)
+	if stats != nil {
+		s.epochStatsDispatcher.Fire(stats)
+	}
+}
+
+// checkDependentRoot refetches a cached epoch's state when the head event
+// proves it was derived from a branch that has since been reorged out.
+func (s *service) checkDependentRoot(
+	event *beacon.HeadEvent,
+	epoch phase0.Epoch,
+	cached bool,
+	knownRoot phase0.Root,
+	hasRoot bool,
+) {
+	if !cached || event.CurrentDutyDependentRoot == (phase0.Root{}) {
+		return
+	}
+
+	// The initial startup fetch has no head event, so the first event of an
+	// epoch adopts its dependent root without a refetch.
+	if !hasRoot {
+		s.cacheMu.Lock()
+		if _, exists := s.epochDependentRoots[epoch]; !exists {
+			s.epochDependentRoots[epoch] = event.CurrentDutyDependentRoot
+		}
+		s.cacheMu.Unlock()
+
+		return
+	}
+
+	if knownRoot == event.CurrentDutyDependentRoot {
+		return
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"epoch":    epoch,
+		"old_root": fmt.Sprintf("%#x", knownRoot[:8]),
+		"new_root": fmt.Sprintf("%#x", event.CurrentDutyDependentRoot[:8]),
+	}).Warn("Epoch dependent root changed (reorg across epoch boundary), refetching state")
+
+	stateID := fmt.Sprintf("%d", event.Slot)
+	if err := s.fetchAndCacheEpochState(s.ctx, stateID, epoch); err != nil {
+		s.log.WithError(err).Error("Failed to refetch epoch state after reorg")
+		return
+	}
+
+	s.cacheMu.Lock()
+	s.epochDependentRoots[epoch] = event.CurrentDutyDependentRoot
+	s.cacheMu.Unlock()
+
+	stats := s.GetEpochStats(epoch)
 	if stats != nil {
 		s.epochStatsDispatcher.Fire(stats)
 	}
