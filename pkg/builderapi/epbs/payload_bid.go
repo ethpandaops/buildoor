@@ -316,7 +316,20 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	builderIndex, _ := bidKey.BuilderIndex()
+	// Key selection only ever offers active keys, which by definition carry an
+	// on-chain index — but signing with the zero value here would be silent:
+	// the bid is well-formed and served, its signature just belongs to whoever
+	// holds builder index 0. Refuse instead of serving an unverifiable bid.
+	builderIndex, registered := bidKey.BuilderIndex()
+	if !registered {
+		log.WithField("key", bidKey.String()).
+			Warn("getExecutionPayloadBid: returning 204 — selected builder key has no on-chain index")
+		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),
+			bidStatusFailed, "selected builder key has no on-chain index")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
 
 	signedBid, err := payload_bidder.BuildSignedBid(tctx, event, payload_bidder.BidParams{
 		BuilderIndex:     builderIndex,

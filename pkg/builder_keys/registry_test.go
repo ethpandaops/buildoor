@@ -269,6 +269,49 @@ func TestRegistryLookupsByPubkey(t *testing.T) {
 	require.Nil(t, registry.ByBuilderIndex(42), "no key is registered on chain in this fixture")
 }
 
+// Every consumer that signs — p2p bids, Builder API bids, reveal envelopes —
+// takes its builder index from the key's state, and a key that reads
+// unregistered is refused rather than signed with the zero index. So the whole
+// fleet's ability to bid rests on the registry resolving indexes from beacon
+// state on its own, with no registration callback involved: a buildoor started
+// without --lifecycle (no --el-rpc / --wallet-privkey) never sees one, and a
+// fleet deposited in an earlier run must come up bidding regardless.
+func TestRegistryResolvesBuilderIndexesFromChainState(t *testing.T) {
+	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 3, DiscoveryGap: 1, MaxIndex: 100})
+
+	// Three keys already registered on chain, at indexes that do not line up
+	// with our derivation indexes — the two spaces are unrelated.
+	chainSvc := &stubChainService{currentEpoch: 30, finalizedEpoch: 20}
+	for keyIndex, builderIndex := range []uint64{11, 7, 25} {
+		key, err := registry.Key(uint64(keyIndex))
+		require.NoError(t, err)
+
+		chainSvc.builders = append(chainSvc.builders, &chain.BuilderInfo{
+			Index:             builderIndex,
+			Pubkey:            key.Pubkey(),
+			Balance:           2_000_000_000,
+			DepositEpoch:      5,
+			WithdrawableEpoch: chain.FarFutureEpoch,
+		})
+	}
+
+	require.NoError(t, registry.Start(t.Context(), chainSvc, nil))
+	defer registry.Stop()
+
+	for keyIndex, want := range []uint64{11, 7, 25} {
+		key, err := registry.Key(uint64(keyIndex))
+		require.NoError(t, err)
+
+		builderIndex, registered := key.BuilderIndex()
+		require.True(t, registered, "key %d must resolve its index from chain state alone", keyIndex)
+		require.Equal(t, want, builderIndex)
+		require.Equal(t, StatusActive, key.Status())
+		require.Same(t, key, registry.ByBuilderIndex(want), "reveals resolve the winning key by index")
+	}
+
+	require.Equal(t, uint64(3), registry.Aggregate().Active)
+}
+
 func TestKeyStringIdentifiesTheDerivationIndex(t *testing.T) {
 	registry := testRegistry(t, config.BuilderKeysConfig{TargetCount: 2})
 
