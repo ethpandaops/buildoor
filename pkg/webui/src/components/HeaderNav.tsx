@@ -9,6 +9,7 @@ const NAV_ITEMS: Array<{ view: ViewType; label: string; requiresAuth?: boolean }
   { view: 'dashboard', label: 'Dashboard' },
   { view: 'action-plan', label: 'Action Plan' },
   { view: 'bids-won', label: 'Bids Won' },
+  { view: 'builder-keys', label: 'Builder Keys' },
   { view: 'validators', label: 'Validators' },
   { view: 'proposer-preferences', label: 'Proposer Prefs' },
   { view: 'builder-preferences', label: 'Builder Prefs' },

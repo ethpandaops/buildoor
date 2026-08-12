@@ -10,7 +10,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
@@ -52,13 +51,20 @@ var exitCmd = &cobra.Command{
 		}
 		defer rpcClient.Close()
 
-		// Initialize BLS signer (raw hex key or mnemonic-derived)
-		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)
+		// Initialize the managed builder key set and select the key to exit
+		registry, err := newKeyRegistry(cfg, logger)
 		if err != nil {
-			return fmt.Errorf("invalid builder key: %w", err)
+			return err
 		}
 
-		pubkey := blsSigner.PublicKey()
+		keyIndex, _ := cmd.Flags().GetUint64("key-index")
+
+		key, err := registry.Key(keyIndex)
+		if err != nil {
+			return err
+		}
+
+		pubkey := key.Pubkey()
 
 		// Initialize wallet (its address is the exit source; must match the builder's
 		// registered execution address)
@@ -97,12 +103,13 @@ var exitCmd = &cobra.Command{
 		}
 
 		logger.WithFields(map[string]any{
+			"key":           key.String(),
 			"builder_index": builderInfo.Index,
 			"pubkey":        fmt.Sprintf("%x", pubkey[:8]),
 		}).Info("Submitting builder exit")
 
-		exitSvc := lifecycle.NewExitService(chainSvc, blsSigner, w, logger)
-		if err := exitSvc.CreateExit(ctx); err != nil {
+		exitSvc := lifecycle.NewExitService(chainSvc, w, logger)
+		if err := exitSvc.CreateExit(ctx, key); err != nil {
 			return fmt.Errorf("failed to submit builder exit: %w", err)
 		}
 
@@ -114,4 +121,6 @@ var exitCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(exitCmd)
+
+	exitCmd.Flags().Uint64("key-index", 0, "Internal builder key index to exit (0 = the entry key)")
 }

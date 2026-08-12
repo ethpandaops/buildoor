@@ -11,7 +11,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
@@ -53,10 +52,17 @@ var depositCmd = &cobra.Command{
 		}
 		defer rpcClient.Close()
 
-		// Initialize BLS signer (raw hex key or mnemonic-derived)
-		blsSigner, err := signer.NewBuilderSigner(cfg.BuilderPrivkey, cfg.BuilderMnemonic, cfg.BuilderKeyIndex)
+		// Initialize the managed builder key set and select the key to deposit for
+		registry, err := newKeyRegistry(cfg, logger)
 		if err != nil {
-			return fmt.Errorf("invalid builder key: %w", err)
+			return err
+		}
+
+		keyIndex, _ := cmd.Flags().GetUint64("key-index")
+
+		key, err := registry.Key(keyIndex)
+		if err != nil {
+			return err
 		}
 
 		// Initialize wallet
@@ -92,7 +98,7 @@ var depositCmd = &cobra.Command{
 		defer chainSvc.Stop() //nolint:errcheck // cleanup
 
 		// Check if builder already registered
-		pubkey := blsSigner.PublicKey()
+		pubkey := key.Pubkey()
 
 		builderInfo := chainSvc.GetBuilderByPubkey(pubkey)
 		if builderInfo != nil {
@@ -110,25 +116,26 @@ var depositCmd = &cobra.Command{
 		timeout, _ := cmd.Flags().GetDuration("timeout")
 
 		// Initialize lifecycle manager
-		lifecycleMgr, err := lifecycle.NewManager(cfg, clClient, chainSvc, blsSigner, w, logger)
+		lifecycleMgr, err := lifecycle.NewManager(cfg, clClient, chainSvc, registry, w, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize lifecycle manager: %w", err)
 		}
 
 		logger.WithFields(map[string]any{
+			"key":         key.String(),
 			"pubkey":      fmt.Sprintf("%x", pubkey[:8]),
 			"amount_gwei": amount,
 		}).Info("Creating builder deposit")
 
 		// Ensure builder is registered
-		if err := lifecycleMgr.EnsureBuilderRegistered(ctx); err != nil {
+		if err := lifecycleMgr.EnsureBuilderRegistered(ctx, key); err != nil {
 			return fmt.Errorf("failed to ensure builder registered: %w", err)
 		}
 
 		if waitForInclusion {
 			logger.Info("Waiting for registration...")
 
-			if err := lifecycleMgr.WaitForRegistration(ctx, timeout); err != nil {
+			if err := lifecycleMgr.WaitForRegistration(ctx, key, timeout); err != nil {
 				return fmt.Errorf("registration wait failed: %w", err)
 			}
 
@@ -147,6 +154,7 @@ func init() {
 	rootCmd.AddCommand(depositCmd)
 
 	depositCmd.Flags().Uint64("amount", 10000000000, "Deposit amount in Gwei")
+	depositCmd.Flags().Uint64("key-index", 0, "Internal builder key index to deposit for (0 = the entry key)")
 	depositCmd.Flags().Bool("wait", true, "Wait for deposit to be included")
 	depositCmd.Flags().Duration("timeout", 5*time.Minute, "Timeout for waiting")
 }

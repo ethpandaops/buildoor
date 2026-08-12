@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
@@ -61,6 +62,18 @@ type BidPlan struct {
 	// bids commit to: auto, all, or a specific candidate key.
 	BidCandidate *string `json:"bid_candidate,omitempty"`
 
+	// KeyStrategy overrides which managed builder key signs this slot's bids:
+	// round_robin, single, random or least_used.
+	KeyStrategy *string `json:"key_strategy,omitempty"`
+
+	// BidKeysPerSlot overrides how many distinct builder keys may bid this
+	// slot (0 = no cap beyond the fleet).
+	BidKeysPerSlot *uint64 `json:"bid_keys_per_slot,omitempty"`
+
+	// BidKeysPerStep overrides how many keys bid a payload per interval step
+	// (0 = every remaining key at once).
+	BidKeysPerStep *uint64 `json:"bid_keys_per_step,omitempty"`
+
 	// BidValueGwei is an absolute bid base value replacing
 	// max(blockValue, min) + subsidy; BidIncrease still applies per re-bid.
 	// Allows underbidding the block value for testing.
@@ -84,6 +97,9 @@ func (p *BidPlan) clone() *BidPlan {
 	c.BidInterval = cloneScalar(p.BidInterval)
 	c.BidSubsidy = cloneScalar(p.BidSubsidy)
 	c.BidValueGwei = cloneScalar(p.BidValueGwei)
+	c.KeyStrategy = cloneScalar(p.KeyStrategy)
+	c.BidKeysPerSlot = cloneScalar(p.BidKeysPerSlot)
+	c.BidKeysPerStep = cloneScalar(p.BidKeysPerStep)
 
 	return &c
 }
@@ -91,7 +107,8 @@ func (p *BidPlan) clone() *BidPlan {
 func (p *BidPlan) hasOverrides() bool {
 	return p.BidStartTime != nil || p.BidEndTime != nil || p.BidMinAmount != nil ||
 		p.BidIncrease != nil || p.BidInterval != nil || p.BidSubsidy != nil ||
-		p.BidValueGwei != nil || p.IgnoreMissingPrefs || p.BidCandidate != nil
+		p.BidValueGwei != nil || p.IgnoreMissingPrefs || p.BidCandidate != nil ||
+		p.KeyStrategy != nil || p.BidKeysPerSlot != nil || p.BidKeysPerStep != nil
 }
 
 func (p *BidPlan) validate(slotMs int64) error {
@@ -127,6 +144,13 @@ func (p *BidPlan) validate(slotMs int64) error {
 		}
 	}
 
+	if p.KeyStrategy != nil {
+		if strategy := *p.KeyStrategy; strategy != builder_keys.NormalizedStrategy(strategy) {
+			return fmt.Errorf(
+				"bid: key_strategy must be round_robin, single, random or least_used, got %q", strategy)
+		}
+	}
+
 	return nil
 }
 
@@ -146,6 +170,10 @@ type BuilderAPIPlan struct {
 	// ResponseDelayMs delays the bid response by this many milliseconds
 	// (context-cancellable, capped at one slot).
 	ResponseDelayMs *int64 `json:"response_delay_ms,omitempty"`
+
+	// KeyStrategy overrides which managed builder key signs this slot's served
+	// bids: round_robin, single, random or least_used.
+	KeyStrategy *string `json:"key_strategy,omitempty"`
 
 	// ServeCandidates overrides which built candidate payloads bid requests
 	// for this slot may be answered from: all, canonical_only, or a
@@ -168,7 +196,7 @@ func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
 
 func (p *BuilderAPIPlan) hasOverrides() bool {
 	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil || p.ResponseDelayMs != nil ||
-		p.ServeCandidates != nil
+		p.ServeCandidates != nil || p.KeyStrategy != nil
 }
 
 func (p *BuilderAPIPlan) validate(slotMs int64) error {
@@ -188,6 +216,13 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	if p.ServeCandidates != nil {
 		if err := validateServeCandidates(*p.ServeCandidates); err != nil {
 			return err
+		}
+	}
+
+	if p.KeyStrategy != nil {
+		if strategy := *p.KeyStrategy; strategy != builder_keys.NormalizedStrategy(strategy) {
+			return fmt.Errorf(
+				"builder_api: key_strategy must be round_robin, single, random or least_used, got %q", strategy)
 		}
 	}
 

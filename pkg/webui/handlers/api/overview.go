@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/version"
@@ -46,8 +47,45 @@ type OverviewStats struct {
 	BuilderAPIRegisteredValidators int    `json:"builder_api_registered_validators"`
 }
 
+// OverviewBuilderKey is one managed builder key, kept small enough that an
+// instance can list its whole fleet in the overview payload.
+type OverviewBuilderKey struct {
+	KeyIndex uint64 `json:"key_index"`
+	Pubkey   string `json:"pubkey"`
+	Status   string `json:"status"`
+	// BuilderIndex is the on-chain registry index, only meaningful when
+	// HasBuilderIndex is set (index 0 is a valid builder index).
+	BuilderIndex    uint64 `json:"builder_index"`
+	HasBuilderIndex bool   `json:"has_builder_index"`
+	BalanceGwei     uint64 `json:"balance_gwei,omitempty"`
+}
+
+// OverviewBuilders is the managed fleet: the counts a consumer needs to render
+// a summary, plus every registered builder index so an indexer can attribute
+// blocks and bids to this instance.
+//
+// Consumers must treat it as optional — an instance predating the managed key
+// set omits it, and the legacy top-level builder_pubkey/builder_index fields
+// remain populated with the primary key for exactly that reason.
+type OverviewBuilders struct {
+	Count  uint64 `json:"count"`
+	Target uint64 `json:"target"`
+	Active uint64 `json:"active"`
+	// Indexes are the on-chain indexes of every key currently in the registry,
+	// ascending. This is the field an indexer wants.
+	Indexes            []uint64             `json:"indexes"`
+	Keys               []OverviewBuilderKey `json:"keys,omitempty"`
+	TotalBalanceGwei   uint64               `json:"total_balance_gwei"`
+	TotalPendingGwei   uint64               `json:"total_pending_payments_gwei"`
+	TotalEffectiveGwei uint64               `json:"total_effective_gwei"`
+}
+
 // OverviewResponse is the response payload of /api/buildoor/overview — a compact
 // summary used by the multi-instance overview UI.
+//
+// BuilderPubkey/BuilderIndex/IsRegistered describe the PRIMARY key only and are
+// retained for consumers that predate the managed key set; Builders carries the
+// whole fleet.
 type OverviewResponse struct {
 	Version       string            `json:"version"`
 	Running       bool              `json:"running"`
@@ -59,6 +97,7 @@ type OverviewResponse struct {
 	Services      OverviewServices  `json:"services"`
 	Balances      OverviewBalances  `json:"balances"`
 	Stats         OverviewStats     `json:"stats"`
+	Builders      *OverviewBuilders `json:"builders,omitempty"`
 }
 
 // GetOverview godoc
@@ -118,6 +157,46 @@ func (h *APIHandler) GetOverview(w http.ResponseWriter, r *http.Request) {
 				resp.Balances.CLBalanceGwei = info.Balance
 			}
 		}
+	}
+
+	// The managed fleet, when the key registry is available. Its aggregate
+	// replaces the primary key's balances: a multi-key instance's funds are the
+	// fleet's, and on a single-key deployment the two are identical.
+	if registry := h.keyRegistry(); registry != nil {
+		states := registry.States()
+		aggregate := registry.Aggregate()
+
+		builders := &OverviewBuilders{
+			Count:              aggregate.Managed,
+			Target:             aggregate.Target,
+			Active:             aggregate.Active,
+			Indexes:            make([]uint64, 0, len(states)),
+			Keys:               make([]OverviewBuilderKey, 0, len(states)),
+			TotalBalanceGwei:   aggregate.TotalBalance,
+			TotalPendingGwei:   aggregate.TotalPendingPayments,
+			TotalEffectiveGwei: aggregate.TotalEffective,
+		}
+
+		for _, state := range states {
+			if state.HasBuilderIndex {
+				builders.Indexes = append(builders.Indexes, state.BuilderIndex)
+			}
+
+			builders.Keys = append(builders.Keys, OverviewBuilderKey{
+				KeyIndex:        state.KeyIndex,
+				Pubkey:          state.PubkeyHex,
+				Status:          string(state.Status),
+				BuilderIndex:    state.BuilderIndex,
+				HasBuilderIndex: state.HasBuilderIndex,
+				BalanceGwei:     state.Balance,
+			})
+		}
+
+		slices.Sort(builders.Indexes)
+
+		resp.Builders = builders
+		resp.Balances.CLBalanceGwei = aggregate.TotalBalance
+		resp.Balances.PendingPaymentsGwei = aggregate.TotalPendingPayments
 	}
 
 	if resp.Balances.CLBalanceGwei > resp.Balances.PendingPaymentsGwei {

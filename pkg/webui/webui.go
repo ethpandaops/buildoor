@@ -12,6 +12,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/builderapi"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
@@ -43,7 +44,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
@@ -61,7 +62,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}
 
 	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker)
+	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)
@@ -105,6 +106,13 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/builder-api-status", apiHandler.GetBuilderAPIStatus).Methods(http.MethodGet)
+
+	// Managed builder key set
+	apiRouter.HandleFunc("/buildoor/builder-keys", apiHandler.GetBuilderKeys).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/builder-keys/target", apiHandler.UpdateBuilderKeyTarget).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/deposit", apiHandler.DepositBuilderKey).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/topup", apiHandler.TopupBuilderKey).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/exit", apiHandler.ExitBuilderKey).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/buildoor/overview", apiHandler.GetOverview).Methods(http.MethodGet, http.MethodOptions)
 	apiRouter.HandleFunc("/buildoor/proposer-preferences", apiHandler.GetProposerPreferences).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/builder-preferences", apiHandler.GetBuilderPreferences).Methods(http.MethodGet)
