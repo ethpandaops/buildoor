@@ -431,7 +431,7 @@ func (h *Handler) matchPayloadForParent(
 	servePolicy string,
 ) (*payload_builder.Payload, *bidMatchError) {
 	if servePolicy == "" {
-		servePolicy = h.cfg.ServeCandidates
+		servePolicy = h.cfg.GetServeCandidates()
 	}
 
 	if payload := h.payloadCache.GetVariant(slot, beacon.AttrParentKey{Root: parentRoot, Hash: parentHash}); payload != nil {

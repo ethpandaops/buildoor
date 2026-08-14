@@ -379,7 +379,7 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 		MinGwei:      cfg.EPBS.BidMinAmount,
 		IncreaseGwei: cfg.EPBS.BidIncrease,
 		SubsidyGwei:  cfg.EPBS.BidSubsidy,
-		BidCandidate: cfg.EPBS.BidCandidate,
+		BidCandidate: cfg.EPBS.GetBidCandidate(),
 		Forced:       forced,
 	}
 
@@ -432,7 +432,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 
 	resolved := &ResolvedBuilderAPISettings{
 		SubsidyGwei:     cfg.BuilderAPI.BlockValueSubsidyGwei,
-		ServeCandidates: cfg.BuilderAPI.ServeCandidates,
+		ServeCandidates: cfg.BuilderAPI.GetServeCandidates(),
 		Forced:          forced,
 	}
 

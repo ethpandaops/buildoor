@@ -286,7 +286,7 @@ func (s *Scheduler) selectBidPayloads(
 	// frozen before the setting existed.
 	mode := bidSettings.BidCandidate
 	if mode == "" {
-		mode = s.cfg.EPBS.BidCandidate
+		mode = s.cfg.EPBS.GetBidCandidate()
 	}
 
 	switch {

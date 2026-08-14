@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // Field describes a single mutable setting: how to read and write it on a
@@ -74,6 +75,56 @@ func newField[T comparable](key, flag string, ptr func(*Config) *T) Field {
 	}
 }
 
+// newLockedStringField builds a Field for a string setting that is read
+// through a locked accessor rather than direct struct access (see NM-02: a
+// UI override mutating a plain string field in place while a hot-path reader
+// dereferences it unsynchronized can observe a torn {ptr,len} read and panic
+// on an out-of-bounds slice). mu must return the same *sync.RWMutex the
+// field's accessor method(s) lock — see Config.GetExtraData,
+// EPBSConfig.GetBidCandidate, BuilderAPIConfig.GetServeCandidates,
+// BuildConfig.CandidateMode, RevealConfig.NormalizedGateMode/
+// NormalizedBroadcastValidation.
+func newLockedStringField(key, flag string, ptr func(*Config) *string, mu func(*Config) *sync.RWMutex) Field {
+	return Field{
+		Key:     key,
+		FlagKey: flag,
+		get: func(c *Config) any {
+			m := mu(c)
+			m.RLock()
+			defer m.RUnlock()
+
+			return *ptr(c)
+		},
+		set: func(c *Config, v any) error {
+			tv, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("settings: %s: invalid value type %T", key, v)
+			}
+
+			m := mu(c)
+			m.Lock()
+			*ptr(c) = tv
+			m.Unlock()
+
+			return nil
+		},
+		decode: func(raw json.RawMessage) (any, error) {
+			var x string
+			if err := json.Unmarshal(raw, &x); err != nil {
+				return nil, err
+			}
+
+			return x, nil
+		},
+		equal: func(a, b any) bool {
+			av, aok := a.(string)
+			bv, bok := b.(string)
+
+			return aok && bok && av == bv
+		},
+	}
+}
+
 // Fields returns the registry of all mutable settings, including the per-module
 // enable flags (which are configured via CLI flags exactly like other settings
 // and therefore follow the same default/cli/ui resolution).
@@ -93,32 +144,50 @@ func Fields() []Field {
 		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *uint64 { return &c.EPBS.BidSubsidy }),
 		newField(KeyEPBSBidValueOverride, "epbs-bid-value-override", func(c *Config) *uint64 { return &c.EPBS.BidValueOverride }),
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
-		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
+		newLockedStringField(KeyEPBSBidCandidate, "epbs-bid-candidate",
+			func(c *Config) *string { return &c.EPBS.BidCandidate },
+			func(c *Config) *sync.RWMutex { return &c.EPBS.mu }),
 		newField(KeyEPBSBidCandidateSwitch, "epbs-bid-candidate-switch", func(c *Config) *bool { return &c.EPBS.BidCandidateSwitch }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
-		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),
+		newLockedStringField(KeyRevealGateMode, "reveal-gate-mode",
+			func(c *Config) *string { return &c.Reveal.GateMode },
+			func(c *Config) *sync.RWMutex { return &c.Reveal.mu }),
 		newField(KeyRevealTimeMs, "reveal-time", func(c *Config) *int64 { return &c.Reveal.TimeMs }),
 		newField(KeyRevealVoteThreshold, "reveal-vote-threshold", func(c *Config) *uint64 { return &c.Reveal.VoteThresholdPct }),
-		newField(KeyRevealBroadcastValidation, "reveal-broadcast-validation", func(c *Config) *string { return &c.Reveal.BroadcastValidation }),
+		newLockedStringField(KeyRevealBroadcastValidation, "reveal-broadcast-validation",
+			func(c *Config) *string { return &c.Reveal.BroadcastValidation },
+			func(c *Config) *sync.RWMutex { return &c.Reveal.mu }),
 		newField(KeyRevealMaxAttempts, "reveal-max-attempts", func(c *Config) *uint64 { return &c.Reveal.MaxAttempts }),
 		newField(KeyRevealRetryInterval, "reveal-retry-interval", func(c *Config) *int64 { return &c.Reveal.RetryIntervalMs }),
 		newField(KeyRevealRebindOnReorg, "reveal-rebind-on-reorg", func(c *Config) *bool { return &c.Reveal.RebindOnReorg }),
 
-		newField(KeyBuildCandidateParentFull, "build-candidate-parent-full", func(c *Config) *string { return &c.Build.CandidateParentFull }),
-		newField(KeyBuildCandidateParentEmpty, "build-candidate-parent-empty", func(c *Config) *string { return &c.Build.CandidateParentEmpty }),
-		newField(KeyBuildCandidateGrandparentFull, "build-candidate-grandparent-full", func(c *Config) *string { return &c.Build.CandidateGrandparentFull }),
-		newField(KeyBuildCandidateGrandparentEmpty, "build-candidate-grandparent-empty", func(c *Config) *string { return &c.Build.CandidateGrandparentEmpty }),
+		newLockedStringField(KeyBuildCandidateParentFull, "build-candidate-parent-full",
+			func(c *Config) *string { return &c.Build.CandidateParentFull },
+			func(c *Config) *sync.RWMutex { return &c.Build.mu }),
+		newLockedStringField(KeyBuildCandidateParentEmpty, "build-candidate-parent-empty",
+			func(c *Config) *string { return &c.Build.CandidateParentEmpty },
+			func(c *Config) *sync.RWMutex { return &c.Build.mu }),
+		newLockedStringField(KeyBuildCandidateGrandparentFull, "build-candidate-grandparent-full",
+			func(c *Config) *string { return &c.Build.CandidateGrandparentFull },
+			func(c *Config) *sync.RWMutex { return &c.Build.mu }),
+		newLockedStringField(KeyBuildCandidateGrandparentEmpty, "build-candidate-grandparent-empty",
+			func(c *Config) *string { return &c.Build.CandidateGrandparentEmpty },
+			func(c *Config) *sync.RWMutex { return &c.Build.mu }),
 		newField(KeyBuildParallel, "build-parallel", func(c *Config) *bool { return &c.Build.Parallel }),
 		newField(KeyBuildSpeculativeBuildTime, "build-speculative-build-time", func(c *Config) *uint64 { return &c.Build.SpeculativeBuildTimeMs }),
 		newField(KeyBuildAutoWeakHeadPct, "build-auto-weak-head-pct", func(c *Config) *uint64 { return &c.Build.AutoWeakHeadPct }),
 		newField(KeyBuildEnforceBidGasLimit, "build-enforce-bid-gas-limit", func(c *Config) *bool { return &c.Build.EnforceBidGasLimit }),
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
-		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
+		newLockedStringField(KeyExtraData, "extra-data",
+			func(c *Config) *string { return &c.ExtraData },
+			func(c *Config) *sync.RWMutex { return &c.extraDataMu }),
 		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
-		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
+		newLockedStringField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates",
+			func(c *Config) *string { return &c.BuilderAPI.ServeCandidates },
+			func(c *Config) *sync.RWMutex { return &c.BuilderAPI.mu }),
 		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),

@@ -310,7 +310,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	newHash, err := ModifyPayloadExtraData(
 		enginePayload,
 		resp.ExecutionRequests,
-		[]byte(b.cfg.ExtraData),
+		[]byte(b.cfg.GetExtraData()),
 		common.Hash(attrs.ParentBeaconBlockRoot),
 		gasLimitOverride,
 	)

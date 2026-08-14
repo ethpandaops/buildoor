@@ -1,7 +1,10 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // ValidatorRangesConfig configures how to load validator index → client name mappings.
 // If both are set, URL takes precedence.
@@ -53,7 +56,12 @@ type Config struct {
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
+	// A UI override can rewrite this live (settings_fields.go); read it only via
+	// GetExtraData(), never the field directly — extraDataMu is what makes a
+	// concurrent UI write and a build-time read race-free instead of a torn
+	// {ptr,len} read.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
+	extraDataMu     sync.RWMutex
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
 	// SlotResultRetentionEpochs is how many epochs of per-slot result history
 	// (plans + outcome summaries) are kept before pruning, in memory and in the
@@ -72,6 +80,15 @@ type Config struct {
 	// proposer preferences and an audit log across restarts. Startup-only and
 	// never itself persisted. Empty disables persistence (in-memory only).
 	StateDBPath string `yaml:"state_db" json:"state_db,omitempty"`
+}
+
+// GetExtraData returns the live-configured extra-data prefix. Race-free
+// against a concurrent UI override (see the ExtraData field comment).
+func (c *Config) GetExtraData() string {
+	c.extraDataMu.RLock()
+	defer c.extraDataMu.RUnlock()
+
+	return c.ExtraData
 }
 
 // ScheduleConfig defines when the builder should build blocks.
@@ -120,13 +137,25 @@ type BuilderAPIConfig struct {
 	// ServeCandidates controls which built candidate payloads bid requests may
 	// be answered from: "all" (default; serve whichever candidate matches the
 	// requested parent), "canonical_only" (only parent_full and unclassified
-	// payloads), or a comma-separated list of candidate keys.
+	// payloads), or a comma-separated list of candidate keys. A UI override can
+	// rewrite this live; read it only via GetServeCandidates(), never the field
+	// directly (see mu).
 	ServeCandidates string `yaml:"serve_candidates" json:"serve_candidates"`
+	mu              sync.RWMutex
 
 	// OnDemandBuild builds a payload on the fly when a bid request asks for a
 	// legal parent tuple no candidate covers yet (bounded by the request's
 	// response budget).
 	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
+}
+
+// GetServeCandidates returns the live-configured serve policy. Race-free
+// against a concurrent UI override (see the ServeCandidates field comment).
+func (c *BuilderAPIConfig) GetServeCandidates() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.ServeCandidates
 }
 
 // ServeCandidateAllowed reports whether the given serve policy allows
@@ -155,7 +184,7 @@ func ServeCandidateAllowed(policy, key string) bool {
 
 // ServeCandidateAllowed applies the config's own serve policy.
 func (c *BuilderAPIConfig) ServeCandidateAllowed(key string) bool {
-	return ServeCandidateAllowed(c.ServeCandidates, key)
+	return ServeCandidateAllowed(c.GetServeCandidates(), key)
 }
 
 // EPBSConfig defines time-scheduled bidding parameters for ePBS.
@@ -200,8 +229,11 @@ type EPBSConfig struct {
 	// status), a specific candidate key (parent_full, parent_empty,
 	// grandparent_full, grandparent_empty), or "all" (gossip a bid for every
 	// built candidate — deliberate multi-parent bidding for gossip testing;
-	// most nodes propagate only a builder's first bid per slot).
+	// most nodes propagate only a builder's first bid per slot). A UI override
+	// can rewrite this live; read it only via GetBidCandidate(), never the
+	// field directly (see mu).
 	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
+	mu           sync.RWMutex
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first
@@ -216,6 +248,16 @@ type EPBSConfig struct {
 	// (BUILDER_PAYMENT_THRESHOLD_NUMERATOR/DENOMINATOR = 6/10) — the
 	// participation level at which the builder's payment actually settles.
 	HeadVoteThresholdPct uint64 `yaml:"head_vote_threshold_pct" json:"head_vote_threshold_pct"`
+}
+
+// GetBidCandidate returns the live-configured p2p bid candidate selection.
+// Race-free against a concurrent UI override (see the BidCandidate field
+// comment).
+func (c *EPBSConfig) GetBidCandidate() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return c.BidCandidate
 }
 
 // Candidate build modes: whether a build-parent candidate is built for a slot.
@@ -247,6 +289,9 @@ func NormalizedCandidateMode(mode, fallback string) string {
 // it built upon ("empty", the Gloas payload-miss case).
 type BuildConfig struct {
 	// CandidateParentFull: the normal build on the head block and its payload.
+	// This and the three candidate fields below can be rewritten live by a UI
+	// override; they are only ever read through CandidateMode(), which locks
+	// mu — never read these fields directly.
 	CandidateParentFull string `yaml:"candidate_parent_full" json:"candidate_parent_full"`
 	// CandidateParentEmpty: build on the head block but on its execution
 	// parent (head payload treated as withheld). Gloas only.
@@ -256,6 +301,7 @@ type BuildConfig struct {
 	// CandidateGrandparentEmpty: reorg combined with a withheld grandparent
 	// payload. Gloas only.
 	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
+	mu                        sync.RWMutex
 
 	// Parallel runs the selected candidate builds concurrently against the
 	// EL, each with its own payload ID (default). Disable it to serialize
@@ -280,8 +326,12 @@ type BuildConfig struct {
 }
 
 // CandidateMode returns the normalized mode configured for the given
-// candidate key ("" for unknown keys).
+// candidate key ("" for unknown keys). Race-free against a concurrent UI
+// override of any of the four candidate fields (see their comments).
 func (c *BuildConfig) CandidateMode(key string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	switch key {
 	case "parent_full":
 		return NormalizedCandidateMode(c.CandidateParentFull, CandidateModeAlways)
@@ -329,8 +379,12 @@ type RevealConfig struct {
 
 	// GateMode decides the reveal moment: time | vote | vote_or_time |
 	// vote_and_time (see the RevealGate* constants). Unknown values fall
-	// back to time.
+	// back to time. This and BroadcastValidation below can be rewritten live
+	// by a UI override; they are only ever read through NormalizedGateMode()/
+	// NormalizedBroadcastValidation(), which lock mu — never read these
+	// fields directly.
 	GateMode string `yaml:"gate_mode" json:"gate_mode"`
+	mu       sync.RWMutex
 
 	// TimeMs is milliseconds relative to slot start for the time gate.
 	// 0 = auto-compute from slot time (see ApplySlotDefaults).
@@ -361,8 +415,12 @@ type RevealConfig struct {
 }
 
 // NormalizedGateMode returns the gate mode, falling back to RevealGateTime
-// for unknown values (UI overrides are free-form strings).
+// for unknown values (UI overrides are free-form strings). Race-free against
+// a concurrent UI override (see the GateMode field comment).
 func (c *RevealConfig) NormalizedGateMode() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	switch c.GateMode {
 	case RevealGateTime, RevealGateVote, RevealGateVoteOrTime, RevealGateVoteAndTime:
 		return c.GateMode
@@ -372,8 +430,12 @@ func (c *RevealConfig) NormalizedGateMode() string {
 }
 
 // NormalizedBroadcastValidation returns the broadcast validation level,
-// falling back to gossip for unknown values.
+// falling back to gossip for unknown values. Race-free against a concurrent
+// UI override (see the GateMode field comment).
 func (c *RevealConfig) NormalizedBroadcastValidation() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	switch c.BroadcastValidation {
 	case BroadcastValidationGossip, BroadcastValidationConsensus,
 		BroadcastValidationConsensusAndEquivocation:
