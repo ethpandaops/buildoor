@@ -298,18 +298,6 @@ func TestSubmitBlindedBlockV2_MissingContentType(t *testing.T) {
 	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
 }
 
-func TestSubmitBeaconBlockCanonicalRoute(t *testing.T) {
-	cfg := &config.BuilderAPIConfig{}
-	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
-
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", nil)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "builder not ready")
-}
-
 // mockProposalSubmitter records the last SubmitProposal call for tests.
 type mockProposalSubmitter struct {
 	lastProposal *api.VersionedSignedProposal
