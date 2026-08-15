@@ -297,7 +297,7 @@ func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash
 }
 
 func postBeaconBlock(h *Handler, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -364,7 +364,7 @@ func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	assert.Nil(t, proposal.Heze)
 
 	// Heze via the Eth-Consensus-Version header (same wire schema as Gloas).
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block",
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks",
 		bytes.NewReader(signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "heze")
@@ -466,7 +466,7 @@ func TestHandleSubmitBeaconBlock_SSZBody(t *testing.T) {
 	body, err := block.MarshalSSZ()
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	rec := httptest.NewRecorder()
 
