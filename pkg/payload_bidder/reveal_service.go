@@ -102,6 +102,14 @@ const (
 // frozen action plan (suppression, gate mode, reveal time, vote threshold,
 // broadcast validation, deadline bypass) — the plan service is the single
 // per-slot settings authority.
+//
+// The run loop is the sole owner of s.pending: it decides when a slot's
+// attempt starts, but the build+publish work itself (buildEnvelope/publish,
+// including the network call) runs off-loop in a per-slot goroutine (see
+// attemptReveal/processDue), reporting its outcome back over attemptResults
+// for the loop to apply. This is deliberate: one slot's slow or hanging
+// publish call must never head-of-line-block another slot's reveal, which a
+// single synchronous loop would otherwise guarantee.
 type RevealService struct {
 	cfg          *config.Config // shared live config (reveal settings resolve via planSvc.Freeze)
 	signer       *Signer
@@ -113,10 +121,11 @@ type RevealService struct {
 	votes        headVoteSource           // optional; nil = vote gates can never open
 	builderIndex atomic.Uint64
 
-	requests chan *RevealRequest
-	results  utils.Dispatcher[*RevealResult]
-	starts   utils.Dispatcher[*RevealStarted]
-	pending  map[phase0.Slot]*revealState // owned by the run loop; no mutex
+	requests       chan *RevealRequest
+	attemptResults chan *revealAttemptOutcome // offloaded attempts report back here; run loop only
+	results        utils.Dispatcher[*RevealResult]
+	starts         utils.Dispatcher[*RevealStarted]
+	pending        map[phase0.Slot]*revealState // owned by the run loop; no mutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -135,11 +144,35 @@ type revealState struct {
 	attempts         int
 	attemptStartedAt time.Time // start of the current attempt (construction + submit)
 
+	// inFlight marks a slot whose attempt is currently running in its own
+	// goroutine (see attemptReveal): processDue must not start a second
+	// concurrent attempt for the same slot, and rearm must not schedule a
+	// timer wakeup for it — its next event is attemptResults, not the timer.
+	inFlight bool
+
 	voteGateMet bool
 	timeDue     time.Time // when the time gate opens (gate modes involving time)
 	expiry      time.Time // when an unsatisfied vote gate gives up
 	nextAttempt time.Time
 	done        bool
+}
+
+// revealAttemptOutcome reports an offloaded attemptReveal call's result back
+// to the run loop. state is an identity token (never dereferenced by
+// attemptReveal itself): the run loop only applies the outcome when
+// s.pending[slot] is still this exact state, so an attempt that was
+// superseded by a reorg re-bind (or pruned) while in flight is discarded
+// instead of being wrongly attributed to whatever now occupies the slot.
+type revealAttemptOutcome struct {
+	slot        phase0.Slot
+	state       *revealState
+	attempt     int
+	envelope    *eth2all.SignedExecutionPayloadEnvelope
+	blobs       [][]byte
+	proofs      [][]byte
+	err         error
+	startedAt   time.Time
+	completedAt time.Time
 }
 
 // voteGated reports whether the state's gate mode involves the vote gate.
@@ -182,17 +215,18 @@ func NewRevealService(
 	log logrus.FieldLogger,
 ) *RevealService {
 	return &RevealService{
-		cfg:        cfg,
-		signer:     signer,
-		publisher:  publisher,
-		chainSvc:   chainSvc,
-		builderSvc: builderSvc,
-		payments:   payments,
-		planSvc:    planSvc,
-		votes:      votes,
-		requests:   make(chan *RevealRequest, 16),
-		pending:    make(map[phase0.Slot]*revealState, 8),
-		log:        log.WithField("component", "reveal-service"),
+		cfg:            cfg,
+		signer:         signer,
+		publisher:      publisher,
+		chainSvc:       chainSvc,
+		builderSvc:     builderSvc,
+		payments:       payments,
+		planSvc:        planSvc,
+		votes:          votes,
+		requests:       make(chan *RevealRequest, 16),
+		attemptResults: make(chan *revealAttemptOutcome, 8),
+		pending:        make(map[phase0.Slot]*revealState, 8),
+		log:            log.WithField("component", "reveal-service"),
 	}
 }
 
@@ -273,6 +307,8 @@ func (s *RevealService) run() {
 			s.schedule(req)
 		case update := <-voteChan:
 			s.handleVoteUpdate(update)
+		case outcome := <-s.attemptResults:
+			s.handleAttemptOutcome(outcome)
 		case <-timer.C:
 			s.processDue(time.Now())
 		}
@@ -512,12 +548,14 @@ func (s *RevealService) shouldRebind(slot phase0.Slot, existing *revealState, re
 	return true
 }
 
-// processDue publishes every pending reveal whose attempt time has come and
-// whose gates are open, expires unsatisfied vote gates, handles success
-// bookkeeping and bounded retries, then prunes stale entries.
+// processDue starts a build+publish attempt (off-loaded to its own goroutine,
+// see attemptReveal) for every pending reveal whose attempt time has come and
+// whose gates are open, expires unsatisfied vote gates, then prunes stale
+// entries. Slots with an attempt already in flight are left alone — their
+// next event is attemptResults, not another attempt from here.
 func (s *RevealService) processDue(now time.Time) {
 	for slot, state := range s.pending {
-		if state.done || state.nextAttempt.After(now) {
+		if state.done || state.inFlight || state.nextAttempt.After(now) {
 			continue
 		}
 
@@ -549,6 +587,7 @@ func (s *RevealService) processDue(now time.Time) {
 
 		state.attempts++
 		state.attemptStartedAt = time.Now()
+		state.inFlight = true
 
 		s.starts.Fire(&RevealStarted{
 			Slot:      slot,
@@ -564,55 +603,121 @@ func (s *RevealService) processDue(now time.Time) {
 			"max_attempts": state.settings.MaxAttempts,
 		}).Info("Revealing payload")
 
-		if state.envelope == nil {
-			envelope, blobs, proofs, err := s.buildEnvelope(state.req)
-			if err != nil {
-				s.handlePublishFailure(slot, state, now, err)
-				continue
-			}
+		s.wg.Add(1)
 
-			state.envelope, state.blobs, state.proofs = envelope, blobs, proofs
-		}
-
-		if err := s.publish(state.envelope, state.blobs, state.proofs,
-			state.settings.BroadcastValidation); err != nil {
-			s.handlePublishFailure(slot, state, now, err)
-			continue
-		}
-
-		state.done = true
-
-		state.req.Payload.MarkRevealed(payload_builder.RevealRecord{
-			Transport:       state.req.Transport,
-			BeaconBlockRoot: state.req.BlockInfo.Root,
-			At:              now,
-		})
-
-		if s.payments != nil {
-			s.payments.MarkRevealed(slot)
-		}
-
-		s.builderSvc.IncrementRevealsSuccess()
-
-		s.results.Fire(&RevealResult{
-			Slot:        slot,
-			Transport:   state.req.Transport,
-			Success:     true,
-			Attempt:     state.attempts,
-			MaxAttempts: int(state.settings.MaxAttempts),
-			StartedAt:   state.attemptStartedAt,
-			CompletedAt: time.Now(),
-			Envelope:    state.envelope,
-		})
-
-		s.log.WithFields(logrus.Fields{
-			"slot":       slot,
-			"block_hash": fmt.Sprintf("%x", state.req.Payload.BlockHash[:8]),
-			"transport":  state.req.Transport,
-		}).Info("Payload revealed")
+		go s.attemptReveal(slot, state, state.req, state.settings,
+			state.envelope, state.blobs, state.proofs, state.attempts, state.attemptStartedAt)
 	}
 
 	s.pruneDone(now)
+}
+
+// attemptReveal builds the envelope (unless already cached from an earlier
+// attempt) and publishes it, entirely off the run loop's goroutine so one
+// slot's slow or hanging publish call can never head-of-line-block another
+// slot's reveal. It must never read or write state directly — state is
+// passed through only as an identity token for handleAttemptOutcome to
+// compare against; req/settings/the cached envelope are copied out up front
+// instead. The outcome is always reported back on s.attemptResults (or
+// dropped if the service is shutting down and nobody will read it again).
+func (s *RevealService) attemptReveal(
+	slot phase0.Slot, state *revealState, req *RevealRequest, settings *action_plan.ResolvedRevealSettings,
+	cachedEnvelope *eth2all.SignedExecutionPayloadEnvelope, cachedBlobs, cachedProofs [][]byte,
+	attempt int, startedAt time.Time,
+) {
+	defer s.wg.Done()
+
+	envelope, blobs, proofs := cachedEnvelope, cachedBlobs, cachedProofs
+
+	var err error
+
+	if envelope == nil {
+		envelope, blobs, proofs, err = s.buildEnvelope(req)
+	}
+
+	if err == nil {
+		err = s.publish(envelope, blobs, proofs, settings.BroadcastValidation)
+	}
+
+	outcome := &revealAttemptOutcome{
+		slot:        slot,
+		state:       state,
+		attempt:     attempt,
+		envelope:    envelope,
+		blobs:       blobs,
+		proofs:      proofs,
+		err:         err,
+		startedAt:   startedAt,
+		completedAt: time.Now(),
+	}
+
+	select {
+	case s.attemptResults <- outcome:
+	case <-s.ctx.Done():
+		// Shutting down: the run loop may have already exited and stopped
+		// reading attemptResults. Nothing is left to apply this outcome to.
+	}
+}
+
+// handleAttemptOutcome applies a completed attemptReveal call's outcome to
+// its slot's pending state: caches the built envelope for any future retry,
+// records success, or hands off to handlePublishFailure to schedule a retry
+// or give up. Must only be called from the run loop.
+func (s *RevealService) handleAttemptOutcome(outcome *revealAttemptOutcome) {
+	state, ok := s.pending[outcome.slot]
+	if !ok || state != outcome.state {
+		// Pruned, or re-bound to a different block by a reorg (schedule's
+		// shouldRebind path replaces the map entry), while this attempt was
+		// in flight: applying it here would attribute a stale attempt to
+		// whatever now occupies the slot. Discard it; the goroutine that
+		// superseded this one (if any) is already tracked in s.pending.
+		s.log.WithField("slot", outcome.slot).Debug(
+			"Discarding reveal attempt outcome for a superseded slot state")
+
+		return
+	}
+
+	state.inFlight = false
+
+	if outcome.envelope != nil {
+		state.envelope, state.blobs, state.proofs = outcome.envelope, outcome.blobs, outcome.proofs
+	}
+
+	if outcome.err != nil {
+		s.handlePublishFailure(outcome.slot, state, outcome.completedAt, outcome.err)
+		return
+	}
+
+	state.done = true
+
+	state.req.Payload.MarkRevealed(payload_builder.RevealRecord{
+		Transport:       state.req.Transport,
+		BeaconBlockRoot: state.req.BlockInfo.Root,
+		At:              outcome.completedAt,
+	})
+
+	if s.payments != nil {
+		s.payments.MarkRevealed(outcome.slot)
+	}
+
+	s.builderSvc.IncrementRevealsSuccess()
+
+	s.results.Fire(&RevealResult{
+		Slot:        outcome.slot,
+		Transport:   state.req.Transport,
+		Success:     true,
+		Attempt:     outcome.attempt,
+		MaxAttempts: int(state.settings.MaxAttempts),
+		StartedAt:   outcome.startedAt,
+		CompletedAt: outcome.completedAt,
+		Envelope:    state.envelope,
+	})
+
+	s.log.WithFields(logrus.Fields{
+		"slot":       outcome.slot,
+		"block_hash": fmt.Sprintf("%x", state.req.Payload.BlockHash[:8]),
+		"transport":  state.req.Transport,
+	}).Info("Payload revealed")
 }
 
 // handlePublishFailure surfaces a failed reveal attempt (envelope construction
@@ -636,7 +741,7 @@ func (s *RevealService) handlePublishFailure(slot phase0.Slot, state *revealStat
 		Attempt:     state.attempts,
 		MaxAttempts: maxAttempts,
 		StartedAt:   state.attemptStartedAt,
-		CompletedAt: time.Now(),
+		CompletedAt: now,
 		Envelope:    state.envelope,
 	})
 
@@ -682,7 +787,7 @@ func (s *RevealService) rearm(timer *time.Timer) {
 	now := time.Now()
 
 	for _, state := range s.pending {
-		if state.done {
+		if state.done || state.inFlight {
 			continue
 		}
 
@@ -749,7 +854,16 @@ func (s *RevealService) publish(envelope *eth2all.SignedExecutionPayloadEnvelope
 		}).Info("Including blobs and kzg proofs with envelope publish")
 	}
 
-	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	// Never let a single publish attempt's timeout exceed half the slot: on
+	// a short devnet slot, the historical flat 5s budget could by itself run
+	// well past the slot's own deadlines, independent of how many attempts a
+	// retry burns through.
+	publishTimeout := 5 * time.Second
+	if half := s.chainSvc.GetChainSpec().SecondsPerSlot / 2; half < publishTimeout {
+		publishTimeout = half
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, publishTimeout)
 	defer cancel()
 
 	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, envelope, blobs, proofs,
