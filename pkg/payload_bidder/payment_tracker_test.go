@@ -88,6 +88,78 @@ func TestPaymentTracker_ReconcileToEpoch(t *testing.T) {
 	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment())
 }
 
+// TestPaymentTracker_MarkRevealedBeforeRecordWonBid guards NM-07: MarkRevealed
+// and RecordWonBid are fed by independent goroutines with no happens-before
+// edge between them, so a delayed head event can deliver them in either
+// order. Before the fix, a MarkRevealed that arrived first found no pending
+// entry and silently no-op'd, permanently dropping the deduction; the later
+// RecordWonBid then created an orphaned pending entry that was never marked
+// revealed.
+func TestPaymentTracker_MarkRevealedBeforeRecordWonBid(t *testing.T) {
+	tracker := newTestPaymentTracker()
+
+	const slot = phase0.Slot(200)
+	const value = uint64(5000)
+
+	// The reveal completes before the win is even recorded.
+	tracker.MarkRevealed(slot)
+	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment(),
+		"the value isn't known yet, so no deduction can apply until RecordWonBid runs")
+	assert.Equal(t, uint64(0), tracker.GetTotalPendingPayments())
+
+	// The delayed head event now lands and the win is recorded.
+	tracker.RecordWonBid(slot, value)
+
+	// The deduction lands immediately -- the bid is never treated as
+	// "pending" despite arriving after the reveal, since it was already
+	// revealed.
+	assert.Equal(t, -int64(value), tracker.GetBalanceAdjustment(),
+		"NM-07: the deduction must still apply once the won bid is recorded")
+	assert.Equal(t, uint64(0), tracker.GetTotalPendingPayments(),
+		"a bid revealed before it was recorded must never sit in pending")
+}
+
+// TestPaymentTracker_RecordWonBidBeforeMarkRevealed confirms the common
+// ordering (win recorded, then revealed) is unaffected by the NM-07 fix.
+func TestPaymentTracker_RecordWonBidBeforeMarkRevealed(t *testing.T) {
+	tracker := newTestPaymentTracker()
+
+	const slot = phase0.Slot(201)
+	const value = uint64(3000)
+
+	tracker.RecordWonBid(slot, value)
+	assert.Equal(t, uint64(value), tracker.GetTotalPendingPayments())
+	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment())
+
+	tracker.MarkRevealed(slot)
+	assert.Equal(t, uint64(0), tracker.GetTotalPendingPayments())
+	assert.Equal(t, -int64(value), tracker.GetBalanceAdjustment())
+}
+
+// TestPaymentTracker_EarlyRevealNeverRecordedIsPruned confirms a slot whose
+// reveal arrived early but whose matching RecordWonBid never shows up (the
+// won-bid report was lost, or the win didn't pan out) doesn't leak forever:
+// PruneExpiredPayments clears it the same way it clears an expired pending
+// payment.
+func TestPaymentTracker_EarlyRevealNeverRecordedIsPruned(t *testing.T) {
+	tracker := newTestPaymentTracker()
+
+	tracker.MarkRevealed(32) // epoch 1, per stubChainService's slot/32 mapping
+	assert.Len(t, tracker.earlyReveals, 1)
+
+	tracker.PruneExpiredPayments(phase0.Epoch(2))
+	assert.Len(t, tracker.earlyReveals, 1, "must stay through payment epoch + 1")
+
+	tracker.PruneExpiredPayments(phase0.Epoch(3))
+	assert.Empty(t, tracker.earlyReveals)
+
+	// A RecordWonBid arriving after the marker was pruned falls back to the
+	// normal pending path rather than (wrongly) deducting immediately.
+	tracker.RecordWonBid(32, 100)
+	assert.Equal(t, uint64(100), tracker.GetTotalPendingPayments())
+	assert.Equal(t, int64(0), tracker.GetBalanceAdjustment())
+}
+
 func TestPaymentTracker_PruneExpiredPayments(t *testing.T) {
 	tracker := newTestPaymentTracker()
 
