@@ -471,6 +471,20 @@ func newSlotBuildState() *slotBuildState {
 	return &slotBuildState{started: make(map[beacon.AttrParentKey]bool, 4)}
 }
 
+// clearBuildStarted un-marks a (slot, parent-tuple) candidate as started
+// after a failed build attempt, so a later trigger for the exact same tuple
+// (a fresh payload_attributes redelivery, a late-build check, ...) is free
+// to retry it instead of being silently dropped by the started check in
+// executeCandidateBuild for the rest of the slot.
+func (s *Service) clearBuildStarted(slot phase0.Slot, tuple beacon.AttrParentKey) {
+	s.scheduledBuildMu.Lock()
+	defer s.scheduledBuildMu.Unlock()
+
+	if state := s.slotBuilds[slot]; state != nil {
+		delete(state.started, tuple)
+	}
+}
+
 // maybeLateBuild activates a candidate build for an attributes variant that
 // arrived after the slot's build pass already ran: the chain moved (reorg,
 // payload-miss flip, late reveal) and the new parent still deserves a payload
@@ -817,6 +831,11 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			FailedAt:  time.Now(),
 		})
 
+		// A transient failure must not permanently forfeit this parent tuple
+		// for the rest of the slot: clear the started marker so a later
+		// trigger for the same tuple can retry.
+		s.clearBuildStarted(slot, tuple)
+
 		return
 	}
 
@@ -839,6 +858,11 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
 		})
+
+		// A transient failure must not permanently forfeit this parent tuple
+		// for the rest of the slot: clear the started marker so a later
+		// trigger for the same tuple can retry.
+		s.clearBuildStarted(slot, tuple)
 
 		return
 	}
