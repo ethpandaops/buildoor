@@ -478,7 +478,7 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	cfg := config.DefaultConfig()
 	defaults := config.DefaultConfig()
 
-	settingsSvc, err := config.NewService(cfg, defaults, map[string]bool{}, stateDB, log)
+	settingsSvc, err := config.NewService(cfg, defaults, map[string]bool{}, 12*time.Second, stateDB, log)
 	require.NoError(t, err)
 
 	authHandler, err := auth.NewAuthHandler(context.Background(), "")

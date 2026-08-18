@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
@@ -42,7 +43,7 @@ func boot(t *testing.T, store *db.Database, defaults *Config, suppliedVal *uint6
 		supplied[subsidyKey] = true
 	}
 
-	svc, err := NewService(&eff, defaults, supplied, store, testLogger())
+	svc, err := NewService(&eff, defaults, supplied, 12*time.Second, store, testLogger())
 	require.NoError(t, err)
 
 	return svc
@@ -134,7 +135,7 @@ func TestUnsuppliedUsesDefault(t *testing.T) {
 	eff := *defaults
 	eff.EPBS.BidSubsidy = 999 // present in effective but NOT operator-supplied
 
-	svc, err := NewService(&eff, defaults, map[string]bool{}, store, testLogger())
+	svc, err := NewService(&eff, defaults, map[string]bool{}, 12*time.Second, store, testLogger())
 	require.NoError(t, err)
 	require.Equal(t, defaults.EPBS.BidSubsidy, svc.Current().EPBS.BidSubsidy)
 }
