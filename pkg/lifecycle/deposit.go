@@ -56,7 +56,7 @@ const depositConfirmTimeout = 5 * time.Minute
 // deposit system contract. It is key-agnostic: every operation names the builder
 // key it acts on, so one service serves the whole managed key set.
 type DepositService struct {
-	cfg      *config.Config
+	cfgSvc   *config.Service // settings source; one snapshot per read
 	chainSvc chain.Service
 	wallet   *wallet.Wallet
 	log      logrus.FieldLogger
@@ -64,7 +64,7 @@ type DepositService struct {
 
 // NewDepositService creates a new deposit service.
 func NewDepositService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	chainSvc chain.Service,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
@@ -80,7 +80,7 @@ func NewDepositService(
 		Info("Using builder deposit contract")
 
 	return &DepositService{
-		cfg:      cfg,
+		cfgSvc:   cfgSvc,
 		chainSvc: chainSvc,
 		wallet:   w,
 		log:      depositLog,
@@ -272,7 +272,7 @@ func (s *DepositService) resolveDepositFee(ctx context.Context) (*big.Int, error
 		return nil, ErrContractNotActive
 	}
 
-	if maxFeeGwei := s.cfg.DepositMaxFeeGwei; maxFeeGwei > 0 {
+	if maxFeeGwei := s.cfgSvc.Current().DepositMaxFeeGwei; maxFeeGwei > 0 {
 		maxFeeWei := GweiToWei(maxFeeGwei)
 		if fee.Cmp(maxFeeWei) > 0 {
 			s.log.WithFields(logrus.Fields{

@@ -43,7 +43,7 @@ func newTestRegistry(t *testing.T, entryKey string) *Registry {
 		MaxIndex:     50,
 	}}
 
-	registry, err := NewRegistry(cfg, entryKey, log)
+	registry, err := NewRegistry(config.NewStaticService(cfg), entryKey, log)
 	require.NoError(t, err)
 
 	return registry

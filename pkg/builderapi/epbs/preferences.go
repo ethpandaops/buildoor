@@ -30,8 +30,10 @@ func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.
 
 	// The builder MUST check auth.message.builder_url against its own URL. Without a
 	// configured URL it cannot perform that mandatory check, so treat it as a server
-	// misconfiguration (500) rather than a client error.
-	if h.cfg.BuilderURL == "" {
+	// misconfiguration (500) rather than a client error. One config snapshot
+	// covers the whole request.
+	builderURL := h.cfgSvc.Current().BuilderAPI.BuilderURL
+	if builderURL == "" {
 		log.Error("submitBuilderPreferences: 500 — builder URL not configured; cannot verify auth.message.builder_url")
 		writeError(w, http.StatusInternalServerError, "builder URL not configured")
 		return
@@ -75,10 +77,10 @@ func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.
 	}
 
 	// Check auth.message.data (the builder URL) matches this builder's URL (400 on mismatch).
-	if string(req.Auth.Message.Data) != h.cfg.BuilderURL {
+	if string(req.Auth.Message.Data) != builderURL {
 		log.WithFields(logrus.Fields{
 			"auth_url":    string(req.Auth.Message.Data),
-			"builder_url": h.cfg.BuilderURL,
+			"builder_url": builderURL,
 		}).Warn("submitBuilderPreferences: builder_url mismatch")
 		writeError(w, http.StatusBadRequest, "auth.message.data does not match this builder's URL")
 		return

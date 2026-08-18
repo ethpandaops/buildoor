@@ -42,7 +42,7 @@ const (
 // request-scoped Builder API handlers — and prunes both stores to their
 // retention windows on epoch transitions.
 type Tracker struct {
-	cfg      *config.Config
+	cfgSvc   *config.Service // settings source; one snapshot per event/prune
 	chainSvc chain.Service
 	stateDB  *db.Database
 	planSvc  *action_plan.PlanService
@@ -76,7 +76,7 @@ type Tracker struct {
 // NewTracker creates the slot results tracker. stateDB must be non-nil (a
 // disabled database is fine); epbsSvc and revealSvc may be nil when the Gloas
 // fork is not scheduled.
-func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database,
+func NewTracker(cfgSvc *config.Service, chainSvc chain.Service, stateDB *db.Database,
 	planSvc *action_plan.PlanService, builderSvc *payload_builder.Service,
 	epbsSvc *p2p_bidder.Service, revealSvc *payload_bidder.RevealService,
 	inclusionTracker *payload_bidder.InclusionTracker, registry *builder_keys.Registry,
@@ -84,7 +84,7 @@ func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database
 	trackerLog := log.WithField("component", "slot-results")
 
 	return &Tracker{
-		cfg:              cfg,
+		cfgSvc:           cfgSvc,
 		chainSvc:         chainSvc,
 		stateDB:          stateDB,
 		planSvc:          planSvc,
@@ -414,7 +414,7 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 
 	outcome.Candidate = string(payload.Candidate)
 
-	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
+	if t.cfgSvc.Current().SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
 		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,
 			PayloadArtifactMeta{
 				Candidate:       string(payload.Candidate),
@@ -641,7 +641,7 @@ func (t *Tracker) handleBidSubmission(event *p2p_bidder.BidSubmissionEvent) {
 		}
 	}
 
-	if t.cfg.SlotArtifactCaptureEnabled && event.SignedBid != nil {
+	if t.cfgSvc.Current().SlotArtifactCaptureEnabled && event.SignedBid != nil {
 		idx, err := t.artifacts.StoreBid(event.Slot, event.SignedBid.Version, event.SignedBid,
 			BidArtifactMeta{
 				Transport:      string(payload_builder.BidTransportP2P),
@@ -691,7 +691,7 @@ func (t *Tracker) handleRevealResult(result *payload_bidder.RevealResult) {
 		attempt.Status = RevealStatusFailed
 	}
 
-	if t.cfg.SlotArtifactCaptureEnabled && result.Envelope != nil {
+	if t.cfgSvc.Current().SlotArtifactCaptureEnabled && result.Envelope != nil {
 		if err := t.artifacts.StoreEnvelope(result.Slot, result.Envelope.Version,
 			result.Envelope); err != nil {
 			t.log.WithError(err).WithField("slot", result.Slot).
@@ -771,7 +771,7 @@ func (t *Tracker) RecordBuilderAPIBid(slot phase0.Slot, forkName string, signedB
 	}
 
 	marshaler, isMarshaler := signedBid.(sszMarshaler)
-	if t.cfg.SlotArtifactCaptureEnabled && isMarshaler {
+	if t.cfgSvc.Current().SlotArtifactCaptureEnabled && isMarshaler {
 		fork, err := version.DataVersionFromString(forkName)
 		if err != nil {
 			fork = version.DataVersionUnknown
@@ -1016,8 +1016,9 @@ func (t *Tracker) SubscribeUpdates(capacity int) *utils.Subscription[*SlotResult
 // retention windows.
 func (t *Tracker) pruneForEpoch(epoch phase0.Epoch) {
 	slotsPerEpoch := t.chainSvc.GetChainSpec().SlotsPerEpoch
+	cfg := t.cfgSvc.Current()
 
-	if retention := t.cfg.SlotResultRetentionEpochs; retention > 0 && uint64(epoch) > retention {
+	if retention := cfg.SlotResultRetentionEpochs; retention > 0 && uint64(epoch) > retention {
 		cutoff := phase0.Slot((uint64(epoch) - retention) * slotsPerEpoch)
 
 		pruned := t.store.Prune(func(slot phase0.Slot) bool { return slot < cutoff })
@@ -1038,7 +1039,7 @@ func (t *Tracker) pruneForEpoch(epoch phase0.Epoch) {
 		t.mu.Unlock()
 	}
 
-	if retention := t.cfg.SlotArtifactRetentionEpochs; retention > 0 && uint64(epoch) > retention {
+	if retention := cfg.SlotArtifactRetentionEpochs; retention > 0 && uint64(epoch) > retention {
 		cutoff := phase0.Slot((uint64(epoch) - retention) * slotsPerEpoch)
 		t.artifacts.PruneBefore(cutoff)
 	}

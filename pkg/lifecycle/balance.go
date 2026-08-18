@@ -23,7 +23,7 @@ const topupCooldownEpochs phase0.Epoch = 8
 // snapshot for the whole key set, so monitoring hundreds of keys costs one pass
 // rather than one beacon query per key.
 type BalanceService struct {
-	cfg        *config.Config
+	cfgSvc     *config.Service // settings source; one snapshot per check
 	chainSvc   chain.Service
 	registry   *builder_keys.Registry
 	depositSvc *DepositService
@@ -32,14 +32,14 @@ type BalanceService struct {
 
 // NewBalanceService creates a new balance service.
 func NewBalanceService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	chainSvc chain.Service,
 	registry *builder_keys.Registry,
 	depositSvc *DepositService,
 	log logrus.FieldLogger,
 ) *BalanceService {
 	return &BalanceService{
-		cfg:        cfg,
+		cfgSvc:     cfgSvc,
 		chainSvc:   chainSvc,
 		registry:   registry,
 		depositSvc: depositSvc,
@@ -75,7 +75,9 @@ func (s *BalanceService) NeedsTopup(key *builder_keys.Key) (bool, uint64, error)
 		return false, 0, nil
 	}
 
-	threshold := s.cfg.TopupThreshold
+	cfg := s.cfgSvc.Current()
+
+	threshold := cfg.TopupThreshold
 	if s.registry.EffectiveBalance(key.KeyIndex()) >= threshold {
 		return false, 0, nil
 	}
@@ -88,7 +90,7 @@ func (s *BalanceService) NeedsTopup(key *builder_keys.Key) (bool, uint64, error)
 		}
 	}
 
-	topupAmount := s.cfg.TopupAmount
+	topupAmount := cfg.TopupAmount
 	if topupAmount == 0 {
 		topupAmount = threshold
 	}

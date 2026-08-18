@@ -84,14 +84,15 @@ func newPlanAPITestEnv(t *testing.T) *planAPITestEnv {
 	cfg.APIPort = 8080
 
 	chainSvc := newPlanTestChain()
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
 	stateDB := db.NewDatabase(&db.Config{File: filepath.Join(t.TempDir(), "state.db")}, log)
 	require.NoError(t, stateDB.Init())
 
 	t.Cleanup(func() { _ = stateDB.Close() })
 
-	tracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
+	tracker := slot_results.NewTracker(cfgSvc, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
 
 	authHandler, err := auth.NewAuthHandler(context.Background(), "")
 	require.NoError(t, err)
@@ -497,16 +498,18 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 		return rec
 	}
 
-	// Partial update of two unrelated settings in one call.
+	// Partial update of two unrelated settings in one call. Applied changes
+	// publish a fresh snapshot; the operator config passed to NewService is
+	// never mutated.
 	rec := post(`{"epbs.bid_subsidy": 12345, "schedule.mode": "every_nth"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, uint64(12345), cfg.EPBS.BidSubsidy)
-	assert.Equal(t, config.ScheduleModeEveryN, cfg.Schedule.Mode)
+	assert.Equal(t, uint64(12345), settingsSvc.Current().EPBS.BidSubsidy)
+	assert.Equal(t, config.ScheduleModeEveryN, settingsSvc.Current().Schedule.Mode)
 
 	// Unknown key → 400, nothing applied.
 	rec = post(`{"epbs.bid_subsidy": 1, "no.such.key": 2}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Equal(t, uint64(12345), cfg.EPBS.BidSubsidy, "atomic: nothing applied on unknown key")
+	assert.Equal(t, uint64(12345), settingsSvc.Current().EPBS.BidSubsidy, "atomic: nothing applied on unknown key")
 
 	// Invalid value → 400.
 	rec = post(`{"slot_result_retention_epochs": 0}`)

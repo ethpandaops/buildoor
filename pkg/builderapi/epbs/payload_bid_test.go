@@ -153,9 +153,10 @@ func newPayloadBidTestEnv(t *testing.T, enabled bool) *payloadBidTestEnv {
 	// Bid serving is decided exclusively by the plan service (frozen per-slot
 	// plans over the cfg.BuilderAPIEnabled baseline) — the handler's enabled
 	// flag is deliberately never set.
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
+	h := NewHandler(cfgSvc, log, chainSvc, planSvc,
 		payload_builder.NewPayloadCache(10), registry)
 
 	recorder := &stubSlotResultRecorder{}

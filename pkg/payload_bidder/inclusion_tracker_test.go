@@ -253,8 +253,8 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 
 			// Not started: RequestReveal just queues on the buffered channel.
 			cfg := &config.Config{}
-			revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
-				chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
+			revealSvc := NewRevealService(config.NewStaticService(cfg), registry, &mockEnvelopePublisher{},
+				chainSvc, builderSvc, payments, action_plan.NewPlanService(config.NewStaticService(cfg), chainSvc, logger), nil, logger)
 
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
 			includedSub := tracker.SubscribeIncluded(4, false)
@@ -455,8 +455,8 @@ func TestInclusionTracker_BindsWinToTheBiddingKey(t *testing.T) {
 	registry := newTestKeyRegistry(t, 4, 9)
 
 	cfg := &config.Config{}
-	revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
-		chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
+	revealSvc := NewRevealService(config.NewStaticService(cfg), registry, &mockEnvelopePublisher{},
+		chainSvc, builderSvc, payments, action_plan.NewPlanService(config.NewStaticService(cfg), chainSvc, logger), nil, logger)
 	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
 
 	blockHash := phase0.Hash32{0xab}
@@ -492,8 +492,8 @@ func TestInclusionTracker_RejectsForeignBuilderIndex(t *testing.T) {
 	registry := newTestKeyRegistry(t, 4, 9)
 
 	cfg := &config.Config{}
-	revealSvc := NewRevealService(cfg, registry, &mockEnvelopePublisher{},
-		chainSvc, builderSvc, payments, action_plan.NewPlanService(cfg, chainSvc, logger), nil, logger)
+	revealSvc := NewRevealService(config.NewStaticService(cfg), registry, &mockEnvelopePublisher{},
+		chainSvc, builderSvc, payments, action_plan.NewPlanService(config.NewStaticService(cfg), chainSvc, logger), nil, logger)
 	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
 
 	blockHash := phase0.Hash32{0xcd}

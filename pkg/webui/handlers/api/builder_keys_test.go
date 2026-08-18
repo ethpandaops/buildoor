@@ -38,7 +38,7 @@ func keysTestHandler(t *testing.T, target uint64) *APIHandler {
 		db.NewDatabase(&db.Config{}, log), log)
 	require.NoError(t, err)
 
-	registry, err := builder_keys.NewRegistry(cfg, testEntryPrivkey, log)
+	registry, err := builder_keys.NewRegistry(config.NewStaticService(cfg), testEntryPrivkey, log)
 	require.NoError(t, err)
 	registry.Refresh()
 

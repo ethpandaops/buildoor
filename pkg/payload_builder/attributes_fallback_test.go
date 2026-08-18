@@ -35,9 +35,10 @@ func TestApplyAttributesFallback(t *testing.T) {
 	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
 	require.NoError(t, err)
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	svc, err := NewService(cfg, clClient, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, clClient, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()
@@ -107,9 +108,10 @@ func TestApplyAttributesFallbackMultiSlotGap(t *testing.T) {
 	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
 	require.NoError(t, err)
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	svc, err := NewService(cfg, clClient, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, clClient, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()

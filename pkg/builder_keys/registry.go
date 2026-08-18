@@ -69,7 +69,7 @@ type keyRuntime struct {
 // on-chain state, usage history and selection. It is the identity dependency of
 // every module that used to hold a single *signer.BLSSigner.
 type Registry struct {
-	cfg      *config.Config
+	cfgSvc   *config.Service // settings source; one snapshot per read
 	entrySK  string
 	log      logrus.FieldLogger
 	adjuster BalanceAdjuster
@@ -94,9 +94,9 @@ type Registry struct {
 // NewRegistry creates the key set rooted at the operator's entry key. It derives
 // key 0 eagerly, which validates the supplied key material; every other key is
 // derived on demand and cached for the process lifetime.
-func NewRegistry(cfg *config.Config, entryPrivkeyHex string, log logrus.FieldLogger) (*Registry, error) {
+func NewRegistry(cfgSvc *config.Service, entryPrivkeyHex string, log logrus.FieldLogger) (*Registry, error) {
 	r := &Registry{
-		cfg:            cfg,
+		cfgSvc:         cfgSvc,
 		entrySK:        entryPrivkeyHex,
 		log:            log.WithField("component", "builder-keys"),
 		runtimes:       make(map[uint64]*keyRuntime, 8),
@@ -149,7 +149,7 @@ func (r *Registry) Start(ctx context.Context, chainSvc chain.Service, stateDB *d
 	go r.run(runCtx)
 
 	r.log.WithFields(logrus.Fields{
-		"target":      r.cfg.BuilderKeys.EffectiveTargetCount(),
+		"target":      r.cfgSvc.Current().BuilderKeys.EffectiveTargetCount(),
 		"known_keys":  len(r.order),
 		"primary_key": r.Primary().String(),
 	}).Info("Builder key registry started")
@@ -321,8 +321,8 @@ func (r *Registry) highestTracked() uint64 {
 
 // maxIndex returns the effective derivation cap.
 func (r *Registry) maxIndex() uint64 {
-	if r.cfg.BuilderKeys.MaxIndex > 0 {
-		return r.cfg.BuilderKeys.MaxIndex
+	if capIndex := r.cfgSvc.Current().BuilderKeys.MaxIndex; capIndex > 0 {
+		return capIndex
 	}
 
 	return defaultMaxIndex
@@ -331,8 +331,8 @@ func (r *Registry) maxIndex() uint64 {
 // discoveryGap returns the effective number of consecutive unused indices that
 // ends the discovery scan.
 func (r *Registry) discoveryGap() uint64 {
-	if r.cfg.BuilderKeys.DiscoveryGap > 0 {
-		return r.cfg.BuilderKeys.DiscoveryGap
+	if gap := r.cfgSvc.Current().BuilderKeys.DiscoveryGap; gap > 0 {
+		return gap
 	}
 
 	return defaultDiscoveryGap
@@ -349,7 +349,7 @@ func (r *Registry) discoveryGap() uint64 {
 func (r *Registry) Refresh() {
 	snapshot := r.chainSnapshot()
 
-	target := r.cfg.BuilderKeys.EffectiveTargetCount()
+	target := r.cfgSvc.Current().BuilderKeys.EffectiveTargetCount()
 	maxIndex := r.maxIndex()
 	gapLimit := r.discoveryGap()
 
@@ -698,7 +698,7 @@ func (r *Registry) States() []*State {
 
 // Aggregate summarises the key set for the dashboard.
 func (r *Registry) Aggregate() Aggregate {
-	aggregate := Aggregate{Target: r.cfg.BuilderKeys.EffectiveTargetCount()}
+	aggregate := Aggregate{Target: r.cfgSvc.Current().BuilderKeys.EffectiveTargetCount()}
 
 	for _, state := range r.States() {
 		switch state.Status {

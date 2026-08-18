@@ -147,7 +147,7 @@ func (s *Service) candidateMode(slot phase0.Slot, key chain.CandidateKey) string
 		}
 	}
 
-	return s.cfg.Build.CandidateMode(string(key))
+	return s.cfgSvc.Current().Build.CandidateMode(string(key))
 }
 
 // resolveChainCandidates fetches the chain view's build-parent candidates for
@@ -212,7 +212,7 @@ func (s *Service) candidateAutoSignal(candidate *chain.CandidateParent) bool {
 // participation is below the configured weak-head threshold — the signal that
 // the next proposer may reorg it out.
 func (s *Service) headContested() bool {
-	threshold := s.cfg.Build.AutoWeakHeadPct
+	threshold := s.cfgSvc.Current().Build.AutoWeakHeadPct
 	if threshold == 0 {
 		return false
 	}
@@ -429,16 +429,18 @@ func (s *Service) resolveOnDemandTarget(slot phase0.Slot, tuple beacon.AttrParen
 // the full build time; only serialized builds shorten the speculative ones to
 // fit them alongside the canonical build.
 func (s *Service) candidateBuildTime(target *buildTarget) uint64 {
-	if s.cfg.Build.Parallel {
-		return s.cfg.PayloadBuildTime
+	cfg := s.cfgSvc.Current()
+
+	if cfg.Build.Parallel {
+		return cfg.PayloadBuildTime
 	}
 
 	if target.candidate != chain.CandidateParentFull && target.candidate != "" &&
-		s.cfg.Build.SpeculativeBuildTimeMs != 0 {
-		return s.cfg.Build.SpeculativeBuildTimeMs
+		cfg.Build.SpeculativeBuildTimeMs != 0 {
+		return cfg.Build.SpeculativeBuildTimeMs
 	}
 
-	return s.cfg.PayloadBuildTime
+	return cfg.PayloadBuildTime
 }
 
 // slotEndTime returns the wall-clock end of a slot (the bound for late

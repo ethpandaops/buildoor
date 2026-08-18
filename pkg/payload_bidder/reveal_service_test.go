@@ -154,10 +154,11 @@ func newRevealTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int
 	builderSvc := newTestBuilderSvc(chainSvc)
 	payments := NewPaymentTracker(chainSvc, log)
 	publisher := &mockEnvelopePublisher{}
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 	votes := newStubVoteSource()
 
-	svc := NewRevealService(cfg, registry, publisher, chainSvc, builderSvc,
+	svc := NewRevealService(cfgSvc, registry, publisher, chainSvc, builderSvc,
 		payments, planSvc, votes, log)
 
 	return &revealTestEnv{

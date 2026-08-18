@@ -137,10 +137,10 @@ func newGetHeaderTestEnv(t *testing.T, enabled bool, blockValueWei *big.Int) *ge
 		},
 	}
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	planSvc := action_plan.NewPlanService(config.NewStaticService(cfg), chainSvc, log)
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
-	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc, payload_builder.NewPayloadCache(10),
+	h := NewHandler(log, chainSvc, planSvc, payload_builder.NewPayloadCache(10),
 		store, registry)
 
 	recorder := &stubSlotResultRecorder{}

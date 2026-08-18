@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/signer"
@@ -159,7 +158,7 @@ func TestHandleRegisterValidators_OverwriteAndFlush(t *testing.T) {
 
 	defer store.Stop()
 
-	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), &stubChainService{},
+	h := NewHandler(logrus.New(), &stubChainService{},
 		newServingPlanService(&stubChainService{}), payload_builder.NewPayloadCache(10), store, registry)
 	h.SetEnabled(true)
 

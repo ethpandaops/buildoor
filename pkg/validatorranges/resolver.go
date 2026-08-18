@@ -28,7 +28,7 @@ type rangeEntry struct {
 
 // Resolver maps validator indices to client names using configured ranges.
 type Resolver struct {
-	cfg    *config.ValidatorRangesConfig
+	cfg    *config.ValidatorRangesConfig // static section (not in the mutable-settings registry)
 	log    logrus.FieldLogger
 	ranges []rangeEntry
 	mu     sync.RWMutex

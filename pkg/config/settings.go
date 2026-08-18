@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -29,22 +30,27 @@ type keyState struct {
 	uiSeq    int64
 }
 
-// Service is the central authority for buildoor's mutable runtime configuration.
-// It owns the effective Config every module reads and is the single writer,
-// layering three sources: hardcoded defaults < CLI-supplied < UI override. CLI
-// and UI are resolved by recency (a monotonic seq), not a fixed priority: a CLI
-// value that changed since the last run wins over an older UI override, while an
-// unchanged CLI flag lets a newer UI override win. UI overrides persist across
-// restarts via the optional state-db. The effective Config is the same pointer
-// handed to every module, so writes (applied in place under the service lock)
-// are observed live by all readers.
+// Service is the central authority for buildoor's mutable runtime configuration
+// and the dependency modules hold instead of a raw *Config. It is the single
+// writer, layering three sources: hardcoded defaults < CLI-supplied < UI
+// override. CLI and UI are resolved by recency (a monotonic seq), not a fixed
+// priority: a CLI value that changed since the last run wins over an older UI
+// override, while an unchanged CLI flag lets a newer UI override win. UI
+// overrides persist across restarts via the optional state-db.
+//
+// Published configs are immutable snapshots: every applied change builds a
+// fresh Config generation and swaps it in atomically, so a snapshot obtained
+// from Current() never changes underneath its reader. Consumers load exactly
+// one snapshot per operation (request, tick, build, reconcile pass) and thread
+// it down the call stack; only the Service itself may live in a struct field —
+// storing a *Config freezes that consumer on a stale generation.
 type Service struct {
-	log       logrus.FieldLogger
-	store     *db.Database
-	fields    []Field
-	byKey     map[string]Field
-	defaults  *Config // pristine, slot-adjusted defaults — the floor
-	effective *Config // shared config; mutated in place
+	log      logrus.FieldLogger
+	store    *db.Database
+	fields   []Field
+	byKey    map[string]Field
+	defaults *Config                // pristine, slot-adjusted defaults — the floor
+	current  atomic.Pointer[Config] // latest immutable snapshot; swapped by recompute
 
 	mu          sync.Mutex
 	seq         int64
@@ -54,22 +60,24 @@ type Service struct {
 
 // New constructs the settings service.
 //
-//   - effective is the resolved operator config (defaults + flags/env/file,
-//     already slot-adjusted); it becomes the shared config modules read and is
-//     mutated in place to apply overrides.
+//   - operator is the resolved operator config (defaults + flags/env/file,
+//     already slot-adjusted); it seeds the first published snapshot and is the
+//     source of the CLI layer's values. The constructor's final recompute
+//     publishes a fresh generation with persisted overrides applied, so the
+//     operator config itself is never mutated.
 //   - defaults is a pristine, slot-adjusted default Config used as the floor.
 //   - supplied maps each field key to whether the operator explicitly provided
 //     it (viper.IsSet); only supplied keys form the CLI layer.
 //   - store is the optional state-db (may be disabled).
-func NewService(effective, defaults *Config, supplied map[string]bool, store *db.Database, log logrus.FieldLogger) (*Service, error) {
+func NewService(operator, defaults *Config, supplied map[string]bool, store *db.Database, log logrus.FieldLogger) (*Service, error) {
 	s := &Service{
-		log:       log.WithField("module", "settings"),
-		store:     store,
-		fields:    Fields(),
-		defaults:  defaults,
-		effective: effective,
-		keyState:  make(map[string]*keyState),
+		log:      log.WithField("module", "settings"),
+		store:    store,
+		fields:   Fields(),
+		defaults: defaults,
+		keyState: make(map[string]*keyState),
 	}
+	s.current.Store(operator)
 
 	s.byKey = make(map[string]Field, len(s.fields))
 	for _, f := range s.fields {
@@ -137,7 +145,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 
 		switch {
 		case isSupplied:
-			suppliedVal := f.Get(s.effective)
+			suppliedVal := f.Get(operator)
 			if !storedHasCLI || !f.Equal(suppliedVal, storedCLI) {
 				// New or changed operator value — counts as a fresh write.
 				ks.hasCLI = true
@@ -165,10 +173,25 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 	return s, nil
 }
 
-// Load returns the effective  The returned pointer is the shared config
-// modules read; callers must treat it as read-only.
-func (s *Service) Load() *Config {
-	return s.effective
+// NewStaticService wraps a fixed config in a read-only Service for consumers
+// that need a config source without the settings machinery (tests, one-shot
+// commands). Current() always returns the given pointer; Set/SetMany reject
+// every key. Because the same pointer is served on every call, single-threaded
+// callers may still mutate the config between operations.
+func NewStaticService(cfg *Config) *Service {
+	s := &Service{}
+	s.current.Store(cfg)
+
+	return s
+}
+
+// Current returns the latest effective config snapshot. Snapshots are
+// immutable: the returned Config never changes, so all reads from it are
+// coherent (one settings generation). Load one snapshot per operation and pass
+// it down; never store it in a struct field — later generations would not be
+// observed.
+func (s *Service) Current() *Config {
+	return s.current.Load()
 }
 
 // OnChange registers a callback invoked (outside the service lock) after every
@@ -236,9 +259,15 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 	return nil
 }
 
-// recompute rebuilds the effective config in place: each registered field is set
-// to the highest-seq layer present (defaults are the seq-0 floor). Must hold mu.
+// recompute publishes a fresh config generation: the current snapshot is
+// shallow-copied (all Config fields are values, so the copy shares nothing
+// mutable), each registered field is set to the highest-seq layer present
+// (defaults are the seq-0 floor), and the result is swapped in atomically.
+// Snapshots already handed out stay untouched. Must hold mu.
 func (s *Service) recompute() {
+	next := new(Config)
+	*next = *s.current.Load()
+
 	for _, f := range s.fields {
 		ks := s.keyState[f.Key]
 		val := f.Get(s.defaults)
@@ -253,10 +282,12 @@ func (s *Service) recompute() {
 			val = ks.uiValue
 		}
 
-		if err := f.Set(s.effective, val); err != nil {
+		if err := f.Set(next, val); err != nil {
 			s.log.WithError(err).WithField("key", f.Key).Error("failed to apply setting")
 		}
 	}
+
+	s.current.Store(next)
 }
 
 // nextSeq allocates a monotonic sequence number. Must hold mu.

@@ -55,9 +55,10 @@ func newSkipTestService(t *testing.T, cfg *config.Config) (*Service, *action_pla
 	log := logrus.New()
 	log.SetLevel(logrus.ErrorLevel)
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	svc, err := NewService(cfg, nil, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, nil, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	return svc, planSvc

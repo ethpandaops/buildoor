@@ -83,7 +83,7 @@ type BlockBroadcaster interface {
 // reveal to the shared payload_bidder.RevealService, which publishes the
 // envelope at the configured reveal time.
 type Handler struct {
-	cfg          *config.BuilderAPIConfig // shared pointer, read live
+	cfgSvc       *config.Service // settings source; one snapshot per request
 	log          logrus.FieldLogger
 	chainSvc     chain.Service
 	payloadCache *payload_builder.PayloadCache
@@ -118,15 +118,15 @@ type Handler struct {
 	blocksAccepted atomic.Uint64 // count of accepted signed beacon blocks
 }
 
-// NewHandler creates a new post-Gloas Builder API dialect handler. cfg is the
-// shared mutable config pointer; values are read live, never copied out.
+// NewHandler creates a new post-Gloas Builder API dialect handler. cfgSvc is
+// the settings source; each request loads one immutable config snapshot.
 // planSvc is the mandatory per-slot scheduling/settings authority consulted
 // (via Freeze) on every getExecutionPayloadBid request.
-func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
+func NewHandler(cfgSvc *config.Service, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	registry *builder_keys.Registry) *Handler {
 	return &Handler{
-		cfg:          cfg,
+		cfgSvc:       cfgSvc,
 		log:          log.WithField("component", "builderapi-epbs"),
 		chainSvc:     chainSvc,
 		planSvc:      planSvc,

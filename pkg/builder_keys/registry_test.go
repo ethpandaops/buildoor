@@ -21,7 +21,7 @@ func testRegistry(t *testing.T, keys config.BuilderKeysConfig) *Registry {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	registry, err := NewRegistry(&config.Config{BuilderKeys: keys}, testEntryKey, log)
+	registry, err := NewRegistry(config.NewStaticService(&config.Config{BuilderKeys: keys}), testEntryKey, log)
 	require.NoError(t, err)
 
 	return registry
