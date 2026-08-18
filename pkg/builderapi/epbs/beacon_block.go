@@ -19,7 +19,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
-// HandleSubmitBeaconBlock handles POST /eth/v1/builder/beacon_block.
+// HandleSubmitBeaconBlock handles POST /eth/v1/builder/beacon_blocks.
 //
 // The proposer submits a full post-Gloas SignedBeaconBlock that binds them to
 // the builder's bid. The block is decoded fork-agnostically from either JSON
@@ -37,7 +37,7 @@ import (
 // dialect is disabled, not fully configured, or the chain has not activated
 // Gloas yet.
 func (h *Handler) HandleSubmitBeaconBlock(w http.ResponseWriter, r *http.Request) {
-	log := h.log.WithField("path", "/eth/v1/builder/beacon_block")
+	log := h.log.WithField("path", "/eth/v1/builder/beacon_blocks")
 
 	if !h.enabled.Load() || h.payloadCache == nil {
 		log.Warn("submitBeaconBlock: 503 — builder not fully configured (disabled or payload cache missing)")

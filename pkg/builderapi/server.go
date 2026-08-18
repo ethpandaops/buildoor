@@ -218,8 +218,8 @@ func (s *Server) RegisterRoutes(router *mux.Router) {
 		"/execution_payload_bid/{slot}/{parent_hash}/{parent_root}/{proposer_pubkey}",
 		s.epbs.HandleGetExecutionPayloadBid,
 	).Methods(http.MethodPost)
-	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/beacon_block.yaml
-	builderAPI.HandleFunc("/beacon_block", s.epbs.HandleSubmitBeaconBlock).Methods(http.MethodPost)
+	// https://github.com/ethereum/builder-specs/blob/main/apis/builder/beacon_blocks.yaml
+	builderAPI.HandleFunc("/beacon_blocks", s.epbs.HandleSubmitBeaconBlock).Methods(http.MethodPost)
 	// https://github.com/ethereum/builder-specs/blob/epbs-spec-updates/apis/builder/builder_preferences.yaml
 	builderAPI.HandleFunc(
 		"/builder_preferences/{validator_pubkey}",

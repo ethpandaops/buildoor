@@ -503,11 +503,29 @@ func (e *EventStream) runTopicLoop(ctx context.Context, topic string, retryDelay
 	}
 }
 
+// sseIdleTimeout bounds how long an SSE connection may go without any bytes
+// (including SSE comment/heartbeat lines, which beacon nodes send
+// periodically on every topic to keep intermediaries from considering the
+// connection dead) before it is treated as stalled and reconnected. Without
+// this, a connection that stays open but silently stops delivering bytes
+// (an app-level beacon hang, or a proxy/LB holding the socket) blocks the
+// topic goroutine's read forever: neither the dialer nor the OS TCP
+// keepalive detect an app-level stall on an otherwise-live connection.
+var sseIdleTimeout = 60 * time.Second //nolint:gochecknoglobals // overridden by tests to avoid a 60s real-time wait
+
 // connectAndStreamTopic establishes an SSE connection for a specific topic.
 func (e *EventStream) connectAndStreamTopic(ctx context.Context, topic string) error {
 	url := fmt.Sprintf("%s/eth/v1/events?topics=%s", e.client.baseURL, topic)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// A per-connection context: the idle watchdog below cancels it when no
+	// read activity is reported within sseIdleTimeout. Cancelling the
+	// request's own context aborts the in-flight connection, which is what
+	// unblocks a Read() already parked in processStream — no other way to
+	// interrupt it exists once it has entered the kernel read call.
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
+	req, err := http.NewRequestWithContext(connCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -532,11 +550,62 @@ func (e *EventStream) connectAndStreamTopic(ctx context.Context, topic string) e
 
 	e.client.log.WithField("topic", topic).Info("Connected to beacon node event stream")
 
-	return e.processStream(ctx, resp.Body)
+	activity := make(chan struct{}, 1)
+	watchdogDone := make(chan struct{})
+
+	go runIdleWatchdog(connCtx, connCancel, activity, watchdogDone, sseIdleTimeout, func() {
+		e.client.log.WithField("topic", topic).Warn(
+			"No SSE activity within idle timeout, reconnecting")
+	})
+
+	defer func() {
+		connCancel()
+		<-watchdogDone
+	}()
+
+	return e.processStream(connCtx, resp.Body, activity)
 }
 
-// processStream reads and processes SSE events from the response body.
-func (e *EventStream) processStream(ctx context.Context, body io.Reader) error {
+// runIdleWatchdog cancels the connection when no read activity is reported on
+// activity within idleTimeout of the last one (or of the watchdog starting).
+// onIdle is called just before cancelling, for logging. Exits (and closes
+// done) once ctx is done, whether that's this cancel or an outer one.
+func runIdleWatchdog(
+	ctx context.Context, cancel context.CancelFunc,
+	activity <-chan struct{}, done chan<- struct{},
+	idleTimeout time.Duration, onIdle func(),
+) {
+	defer close(done)
+
+	timer := time.NewTimer(idleTimeout)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-activity:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+
+			timer.Reset(idleTimeout)
+		case <-timer.C:
+			onIdle()
+			cancel()
+
+			return
+		}
+	}
+}
+
+// processStream reads and processes SSE events from the response body,
+// reporting every successful read (event lines and blank/comment lines
+// alike) on activity as a liveness signal for the idle watchdog.
+func (e *EventStream) processStream(ctx context.Context, body io.Reader, activity chan<- struct{}) error {
 	reader := bufio.NewReader(body)
 
 	var eventType string
@@ -553,6 +622,11 @@ func (e *EventStream) processStream(ctx context.Context, body io.Reader) error {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			return fmt.Errorf("failed to read from stream: %w", err)
+		}
+
+		select {
+		case activity <- struct{}{}:
+		default:
 		}
 
 		line = strings.TrimSpace(line)

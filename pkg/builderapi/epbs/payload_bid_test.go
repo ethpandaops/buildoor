@@ -3,6 +3,7 @@ package epbs
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -556,4 +557,21 @@ func TestHandleGetExecutionPayloadBid_SlotHorizonBound(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleGetExecutionPayloadBid_ReadsChunkedAuthBody(t *testing.T) {
+	env := newPayloadBidTestEnv(t, true)
+	env.cfg.BuilderAPI.RequireRequestAuth = true
+
+	req := newPayloadBidRequest()
+	req.Body = io.NopCloser(strings.NewReader("not json"))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	env.handler.HandleGetExecutionPayloadBid(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid SignedRequestAuthV1")
 }

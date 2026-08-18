@@ -165,15 +165,11 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	// Parse and validate SignedRequestAuth from the request body.
 	// Auth is always verified when present; h.cfg.RequireRequestAuth controls whether
 	// absence is an error.
-	var authBody []byte
-	if r.ContentLength > 0 {
-		var readErr error
-		authBody, readErr = io.ReadAll(r.Body)
-		if readErr != nil {
-			log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
-			writeError(w, http.StatusBadRequest, "failed to read request body")
-			return
-		}
+	authBody, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
 	}
 	if len(authBody) > 0 {
 		signedAuth, parseErr := parseSignedRequestAuth(authBody, r.Header.Get("Content-Type"))
