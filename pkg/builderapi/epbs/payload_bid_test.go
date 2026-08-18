@@ -3,6 +3,7 @@ package epbs
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -26,7 +27,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
 
 // recordedBidCall captures one RecordBuilderAPIBid invocation.
@@ -129,8 +129,7 @@ func newPayloadBidTestEnv(t *testing.T, enabled bool) *payloadBidTestEnv {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
 
 	cfg := &config.Config{
 		APIPort:           8080,
@@ -157,7 +156,7 @@ func newPayloadBidTestEnv(t *testing.T, enabled bool) *payloadBidTestEnv {
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
-		payload_builder.NewPayloadCache(10), blsSigner)
+		payload_builder.NewPayloadCache(10), registry)
 
 	recorder := &stubSlotResultRecorder{}
 	h.SetResultRecorder(recorder)
@@ -477,7 +476,7 @@ func TestHandleSubmitBeaconBlock_RecordsSubmissions(t *testing.T) {
 		blockHash := phase0.Hash32{0xab}
 		seedGloasPayload(env.handler, slot, blockHash)
 
-		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 		require.Equal(t, http.StatusAccepted, rec.Code)
 
 		calls := recorder.submissionCalls()
@@ -502,7 +501,7 @@ func TestHandleSubmitBeaconBlock_RecordsSubmissions(t *testing.T) {
 		blockHash := phase0.Hash32{0xab}
 		seedGloasPayload(env.handler, slot, blockHash)
 
-		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+		rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 
 		calls := recorder.submissionCalls()
@@ -558,4 +557,21 @@ func TestHandleGetExecutionPayloadBid_SlotHorizonBound(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleGetExecutionPayloadBid_ReadsChunkedAuthBody(t *testing.T) {
+	env := newPayloadBidTestEnv(t, true)
+	env.cfg.BuilderAPI.RequireRequestAuth = true
+
+	req := newPayloadBidRequest()
+	req.Body = io.NopCloser(strings.NewReader("not json"))
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	env.handler.HandleGetExecutionPayloadBid(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid SignedRequestAuthV1")
 }

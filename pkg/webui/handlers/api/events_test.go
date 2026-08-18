@@ -13,7 +13,7 @@ import (
 // newTestEventStreamManager builds a manager suitable for exercising the
 // broadcast / replay-cache paths, which touch no injected service.
 func newTestEventStreamManager() *EventStreamManager {
-	return NewEventStreamManager(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	return NewEventStreamManager(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 }
 
 func slotEvent(slot uint64) *StreamEvent {

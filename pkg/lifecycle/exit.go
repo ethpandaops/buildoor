@@ -7,8 +7,8 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 )
 
@@ -28,7 +28,6 @@ const exitGasLimit = 1000000
 // as msg.value.
 type ExitService struct {
 	chainSvc chain.Service
-	signer   *signer.BLSSigner
 	wallet   *wallet.Wallet
 	log      logrus.FieldLogger
 }
@@ -36,27 +35,28 @@ type ExitService struct {
 // NewExitService creates a new exit service.
 func NewExitService(
 	chainSvc chain.Service,
-	blsSigner *signer.BLSSigner,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
 ) *ExitService {
 	return &ExitService{
 		chainSvc: chainSvc,
-		signer:   blsSigner,
 		wallet:   w,
 		log:      log.WithField("component", "exit-service"),
 	}
 }
 
-// CreateExit submits a builder exit request transaction for this builder.
+// CreateExit submits a builder exit request transaction for the given key.
 //
 // Exits always proceed regardless of the configured deposit fee limit (unlike
 // deposits/top-ups, which are delayed when the fee is too high), so the operator can
 // always withdraw. The queue fee is read from the contract and paid as msg.value.
-func (s *ExitService) CreateExit(ctx context.Context) error {
-	pubkey := s.signer.PublicKey()
+func (s *ExitService) CreateExit(ctx context.Context, key *builder_keys.Key) error {
+	pubkey := key.Pubkey()
 
-	s.log.WithField("pubkey", fmt.Sprintf("0x%x", pubkey[:])).Info("Creating builder exit")
+	s.log.WithFields(logrus.Fields{
+		"key":    key.String(),
+		"pubkey": fmt.Sprintf("0x%x", pubkey[:]),
+	}).Info("Creating builder exit")
 
 	calldata, err := BuildBuilderExitCalldata(pubkey[:])
 	if err != nil {

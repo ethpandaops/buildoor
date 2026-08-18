@@ -37,7 +37,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -182,14 +181,17 @@ type beaconBlockTestEnv struct {
 // newBeaconBlockTestEnv creates an enabled post-Gloas handler wired to a real
 // RevealService (with a stub envelope publisher). Slot 1 starts "now"; the
 // reveal is due revealTimeMs into the slot.
+// testBuilderIndex is the on-chain builder index the test key set is primed
+// with; blocks must name it for the reveal to bind to our key.
+const testBuilderIndex = uint64(1)
+
 func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeMs int64) *beaconBlockTestEnv {
 	t.Helper()
 
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	blsSigner, err := signer.NewBLSSigner("0x0000000000000000000000000000000000000000000000000000000000000001")
-	require.NoError(t, err)
+	registry := newTestKeyRegistry(t, 1)
 
 	cfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
 	cfg.Reveal = config.DefaultConfig().Reveal
@@ -211,12 +213,12 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, payload_bidder.NewSigner(blsSigner), publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
+		cfg, registry, publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
-		payload_builder.NewPayloadCache(10), blsSigner)
+		payload_builder.NewPayloadCache(10), registry)
 	h.SetBlockBroadcaster(broadcaster)
 	h.SetRevealService(revealSvc)
 	h.SetEnabled(true)
@@ -251,7 +253,9 @@ func seedGloasPayload(h *Handler, slot phase0.Slot, blockHash phase0.Hash32) *pa
 
 // signedBeaconBlockJSON builds a fully populated Gloas SignedBeaconBlock whose
 // bid commits to blockHash, and returns its JSON encoding.
-func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash32) []byte {
+func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash32,
+	builderIndex uint64,
+) []byte {
 	t.Helper()
 
 	block := &gloasspec.SignedBeaconBlock{
@@ -276,6 +280,7 @@ func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash
 					Message: &gloasspec.ExecutionPayloadBid{
 						BlockHash:          blockHash,
 						Slot:               slot,
+						BuilderIndex:       gloasspec.BuilderIndex(builderIndex),
 						BlobKZGCommitments: []deneb.KZGCommitment{},
 					},
 				},
@@ -292,7 +297,7 @@ func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash
 }
 
 func postBeaconBlock(h *Handler, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
@@ -314,7 +319,7 @@ func TestHandleSubmitBeaconBlock_Success(t *testing.T) {
 	blockHash := phase0.Hash32{0xab}
 	payload := seedGloasPayload(env.handler, slot, blockHash)
 
-	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 
 	require.Equal(t, http.StatusAccepted, rec.Code, "submitBeaconBlock should return 202")
 	assert.Equal(t, 1, env.broadcaster.callCount(), "beacon block must be broadcast exactly once")
@@ -349,7 +354,7 @@ func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	seedGloasPayload(env.handler, slot, blockHash)
 
 	// Default: the chain's current fork (Gloas).
-	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 	require.Equal(t, http.StatusAccepted, rec.Code)
 
 	proposal := env.broadcaster.lastProposal()
@@ -359,8 +364,8 @@ func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	assert.Nil(t, proposal.Heze)
 
 	// Heze via the Eth-Consensus-Version header (same wire schema as Gloas).
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block",
-		bytes.NewReader(signedBeaconBlockJSON(t, slot, blockHash)))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks",
+		bytes.NewReader(signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "heze")
 	rec = httptest.NewRecorder()
@@ -376,6 +381,28 @@ func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	assert.Nil(t, proposal.Gloas)
 }
 
+// TestHandleSubmitBeaconBlock_ForeignBuilderIndex rejects a block whose bid
+// names a builder we do not control: signing the envelope with a key of ours
+// would produce a validly-signed reveal for somebody else's bid, which the
+// beacon chain rejects while we still owe nothing and the proposer loses the
+// slot silently.
+func TestHandleSubmitBeaconBlock_ForeignBuilderIndex(t *testing.T) {
+	env := newBeaconBlockTestEnv(t, 4*time.Second, 3500)
+
+	require.NoError(t, env.revealSvc.Start(context.Background()))
+	defer env.revealSvc.Stop()
+
+	slot := phase0.Slot(1)
+	blockHash := phase0.Hash32{0xab}
+	seedGloasPayload(env.handler, slot, blockHash)
+
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex+99))
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, 0, env.broadcaster.callCount(), "block must not be broadcast")
+	assert.Equal(t, uint64(0), env.handler.BlocksAccepted())
+}
+
 // TestHandleSubmitBeaconBlock_NoCachedPayload returns 400 and neither
 // broadcasts the block nor requests a reveal.
 func TestHandleSubmitBeaconBlock_NoCachedPayload(t *testing.T) {
@@ -385,7 +412,7 @@ func TestHandleSubmitBeaconBlock_NoCachedPayload(t *testing.T) {
 	defer env.revealSvc.Stop()
 
 	// No payload seeded.
-	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, 1, phase0.Hash32{0xab}))
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, 1, phase0.Hash32{0xab}, testBuilderIndex))
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code, "missing cached payload should return 400")
 	assert.Equal(t, 0, env.broadcaster.callCount(), "block must not be broadcast")
@@ -409,7 +436,7 @@ func TestHandleSubmitBeaconBlock_BroadcastFailure(t *testing.T) {
 	blockHash := phase0.Hash32{0xab}
 	payload := seedGloasPayload(env.handler, slot, blockHash)
 
-	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash))
+	rec := postBeaconBlock(env.handler, signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex))
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code, "broadcast failure should return 500")
 	assert.Equal(t, 1, env.broadcaster.callCount())
@@ -434,12 +461,12 @@ func TestHandleSubmitBeaconBlock_SSZBody(t *testing.T) {
 	seedGloasPayload(env.handler, slot, blockHash)
 
 	block := eth2all.SignedBeaconBlock{Version: version.DataVersionGloas}
-	require.NoError(t, json.Unmarshal(signedBeaconBlockJSON(t, slot, blockHash), &block))
+	require.NoError(t, json.Unmarshal(signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex), &block))
 
 	body, err := block.MarshalSSZ()
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_block", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/octet-stream")
 	rec := httptest.NewRecorder()
 

@@ -93,7 +93,7 @@ func newTrackerTestEnv(t *testing.T, withDB bool) *trackerTestEnv {
 
 	t.Cleanup(func() { _ = stateDB.Close() })
 
-	tracker := NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, log)
+	tracker := NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
 
 	return &trackerTestEnv{
 		cfg:      cfg,
@@ -375,7 +375,7 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
 
-	fresh := NewTracker(env.cfg, env.chainSvc, env.stateDB, env.planSvc, nil, nil, nil, nil, log)
+	fresh := NewTracker(env.cfg, env.chainSvc, env.stateDB, env.planSvc, nil, nil, nil, nil, nil, log)
 	fresh.SetPersistence(t.Context(), env.stateDB)
 
 	defer fresh.store.Stop()
