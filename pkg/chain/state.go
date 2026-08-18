@@ -91,22 +91,33 @@ func (s *service) fetchEpochStats(
 		return nil, fmt.Errorf("beacon state response is nil")
 	}
 
-	validatorPubkeys := s.validatorIndexCache
-	if cap(validatorPubkeys) < len(resp.Data.Validators) {
-		validatorPubkeys = make([]phase0.BLSPubKey, len(resp.Data.Validators))
-	} else {
-		validatorPubkeys = validatorPubkeys[:len(resp.Data.Validators)]
-	}
+	s.publishValidatorIndexCache(resp.Data.Validators)
 
-	for i, v := range resp.Data.Validators {
+	return s.computeEpochStats(resp.Data, epoch)
+}
+
+// publishValidatorIndexCache replaces the published validator-pubkey cache
+// with a freshly built one for the given (index-ordered) validator set.
+//
+// Always builds a fresh backing array rather than reusing the previously
+// published one in place: GetValidatorPubkeyByIndex (service.go) reads
+// s.validatorIndexCache under RLock but never copies out more than the
+// single element it returns, on the documented contract that the backing
+// array itself is never mutated after publication — only swapped out
+// wholesale under cacheMu. Reusing the array in place (a stale optimization
+// for when its capacity already sufficed) broke that contract: it wrote new
+// pubkeys into the same memory a concurrent reader could be dereferencing,
+// unguarded by any lock, risking a torn 48-byte read.
+func (s *service) publishValidatorIndexCache(validators []*phase0.Validator) {
+	validatorPubkeys := make([]phase0.BLSPubKey, len(validators))
+
+	for i, v := range validators {
 		validatorPubkeys[i] = v.PublicKey
 	}
 
 	s.cacheMu.Lock()
 	s.validatorIndexCache = validatorPubkeys
 	s.cacheMu.Unlock()
-
-	return s.computeEpochStats(resp.Data, epoch)
 }
 
 // computeEpochStats extracts relevant statistics from the beacon state and computes duties.

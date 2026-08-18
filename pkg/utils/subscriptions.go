@@ -57,11 +57,20 @@ func (d *Dispatcher[T]) Unsubscribe(subscription *Subscription[T]) {
 	}
 }
 
+// Fire delivers data to every current subscriber. The subscriber list is
+// snapshotted under the lock and released before any send: a blocking
+// subscriber (see Subscribe) intentionally applies back-pressure by blocking
+// the send until its consumer catches up, and doing that while still holding
+// the lock would freeze Fire/Subscribe/Unsubscribe for every other
+// subscriber of this dispatcher — including unrelated ones — for as long as
+// the slow consumer stalls.
 func (d *Dispatcher[T]) Fire(data T) {
 	d.mutex.Lock()
-	defer d.mutex.Unlock()
+	subs := make([]*Subscription[T], len(d.subscriptions))
+	copy(subs, d.subscriptions)
+	d.mutex.Unlock()
 
-	for _, s := range d.subscriptions {
+	for _, s := range subs {
 		if s.blocking {
 			s.channel <- data
 		} else {
