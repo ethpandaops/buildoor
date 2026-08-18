@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -74,6 +74,8 @@ interface UseEventStreamResult {
   chainInfo: ChainInfo | null;
   stats: Stats | null;
   builderInfo: BuilderInfo | null;
+  builderKeys: BuilderKeyState[];
+  builderKeysAggregate: BuilderKeysAggregate | null;
   serviceStatus: ServiceStatus | null;
   voteCoverage: VoteCoverage | null;
   currentSlot: number;
@@ -91,6 +93,9 @@ export function useEventStream(): UseEventStreamResult {
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [builderInfo, setBuilderInfo] = useState<BuilderInfo | null>(null);
+  const [builderKeys, setBuilderKeys] = useState<BuilderKeyState[]>([]);
+  const [builderKeysAggregate, setBuilderKeysAggregate] =
+    useState<BuilderKeysAggregate | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
@@ -232,6 +237,18 @@ export function useEventStream(): UseEventStreamResult {
         case 'builder_info':
           setBuilderInfo(event.data as BuilderInfo);
           break;
+
+        case 'builder_keys': {
+          // Every event carries the whole key set, so the latest one always
+          // wins and a dropped event is simply superseded.
+          const data = event.data as {
+            keys: BuilderKeyState[];
+            aggregate: BuilderKeysAggregate;
+          };
+          setBuilderKeys(data.keys || []);
+          setBuilderKeysAggregate(data.aggregate ?? null);
+          break;
+        }
 
         case 'service_status':
           setServiceStatus(event.data as ServiceStatus);
@@ -423,7 +440,8 @@ export function useEventStream(): UseEventStreamResult {
           const data = event.data as {
             slot: number; block_hash: string; value: number; bid_count: number; success: boolean;
             error?: string; warning?: string; execution_payment?: number; fee_recipient?: string;
-            gas_limit?: number; builder_index?: number; parent_block_hash?: string;
+            gas_limit?: number; builder_index?: number; key_index?: number;
+            parent_block_hash?: string;
             parent_block_root?: string; num_blob_commitments?: number;
           };
           const bidSuccess = data.success !== false;
@@ -462,6 +480,7 @@ export function useEventStream(): UseEventStreamResult {
               feeRecipient: data.fee_recipient,
               gasLimit: data.gas_limit,
               builderIndex: data.builder_index,
+              keyIndex: data.key_index,
               parentBlockHash: data.parent_block_hash,
               parentBlockRoot: data.parent_block_root,
               numBlobCommitments: data.num_blob_commitments
@@ -773,6 +792,8 @@ export function useEventStream(): UseEventStreamResult {
     chainInfo,
     stats,
     builderInfo,
+    builderKeys,
+    builderKeysAggregate,
     serviceStatus,
     voteCoverage,
     currentSlot,

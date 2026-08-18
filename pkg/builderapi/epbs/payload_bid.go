@@ -18,7 +18,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 
-	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -51,14 +50,14 @@ type GetExecutionPayloadBidResponse struct {
 func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
 
-	if h.payloadCache == nil || h.blsSigner == nil {
-		log.Warn("getExecutionPayloadBid: returning 204 — signer or payload cache unavailable")
+	if h.payloadCache == nil || h.registry == nil {
+		log.Warn("getExecutionPayloadBid: returning 204 — key registry or payload cache unavailable")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	if !chain.IsBuilderActive(h.chainSvc.GetBuilderByPubkey(h.blsSigner.PublicKey()), uint64(h.chainSvc.GetFinalizedEpoch())) {
-		log.Warn("getExecutionPayloadBid: returning 204 — builder not active on chain")
+	if !h.registry.AnyActive() {
+		log.Warn("getExecutionPayloadBid: returning 204 — no builder key active on chain")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -166,15 +165,11 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	// Parse and validate SignedRequestAuth from the request body.
 	// Auth is always verified when present; h.cfg.RequireRequestAuth controls whether
 	// absence is an error.
-	var authBody []byte
-	if r.ContentLength > 0 {
-		var readErr error
-		authBody, readErr = io.ReadAll(r.Body)
-		if readErr != nil {
-			log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
-			writeError(w, http.StatusBadRequest, "failed to read request body")
-			return
-		}
+	authBody, readErr := io.ReadAll(r.Body)
+	if readErr != nil {
+		log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
 	}
 	if len(authBody) > 0 {
 		signedAuth, parseErr := parseSignedRequestAuth(authBody, r.Header.Get("Content-Type"))
@@ -302,13 +297,44 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	tctx, cancel := context.WithTimeout(r.Context(), transformTimeout)
 	defer cancel()
 
+	bidKey := h.bidKey(bidKeyTarget{
+		slot:       slot,
+		parentHash: event.Attributes.ParentBlockHash,
+		parentRoot: event.Attributes.ParentBlockRoot,
+	}, frozenSettings.KeyStrategy, uint64(valueAfterSubsidy))
+	if bidKey == nil {
+		log.WithField("value_gwei", uint64(valueAfterSubsidy)).
+			Warn("getExecutionPayloadBid: returning 204 — no builder key ready to cover the bid")
+		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),
+			bidStatusFailed, "no builder key ready to cover the bid")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
+	// Key selection only ever offers active keys, which by definition carry an
+	// on-chain index — but signing with the zero value here would be silent:
+	// the bid is well-formed and served, its signature just belongs to whoever
+	// holds builder index 0. Refuse instead of serving an unverifiable bid.
+	builderIndex, registered := bidKey.BuilderIndex()
+	if !registered {
+		log.WithField("key", bidKey.String()).
+			Warn("getExecutionPayloadBid: returning 204 — selected builder key has no on-chain index")
+		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),
+			bidStatusFailed, "selected builder key has no on-chain index")
+		w.WriteHeader(http.StatusNoContent)
+
+		return
+	}
+
 	signedBid, err := payload_bidder.BuildSignedBid(tctx, event, payload_bidder.BidParams{
-		BuilderIndex:     h.builderIndex.Load(),
+		BuilderIndex:     builderIndex,
 		FeeRecipient:     prefs.FeeRecipient,
 		Value:            value,
 		ExecutionPayment: executionPayment,
 		Transform:        bidTransform,
-	}, h.bidderSigner, bidForkVersion, h.chainSvc.GetGenesis().GenesisValidatorsRoot)
+	}, payload_bidder.NewSigner(bidKey.BLSSigner()), bidForkVersion,
+		h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {
 		log.WithError(err).Warn("getExecutionPayloadBid: failed to build signed bid")
 		h.recordBid(slot, fork.String(), "", nil, uint64(valueAfterSubsidy), uint64(executionPayment),

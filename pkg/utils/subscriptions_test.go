@@ -53,6 +53,47 @@ func TestDispatcherUnsubscribeRemovesSubscription(t *testing.T) {
 	}
 }
 
+// TestDispatcherStalledBlockingSubscriberDoesNotFreezeOtherOperations guards
+// against NM-31: Fire used to send to a blocking subscriber while still
+// holding the dispatcher's mutex, so a single stalled consumer froze
+// Subscribe/Unsubscribe/every other Fire call on the dispatcher indefinitely
+// -- not just delivery to that one subscriber. Fire must release the lock
+// before sending.
+func TestDispatcherStalledBlockingSubscriberDoesNotFreezeOtherOperations(t *testing.T) {
+	d := &Dispatcher[int]{}
+
+	// An unbuffered, blocking subscriber that is never drained: Fire's send
+	// to it blocks forever, modeling a stalled consumer.
+	d.Subscribe(0, true)
+
+	fireBlocked := make(chan struct{})
+
+	go func() {
+		close(fireBlocked)
+		d.Fire(1) // blocks forever sending to `stalled`
+	}()
+
+	<-fireBlocked
+	// Give the goroutine a moment to actually enter the blocking send.
+	time.Sleep(50 * time.Millisecond)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		// Both need d.mutex; before the fix this would hang until the
+		// process exited, since Fire above never releases it.
+		sub := d.Subscribe(4, false)
+		sub.Unsubscribe()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Subscribe/Unsubscribe blocked behind Fire's stalled send -- NM-31 reproduced")
+	}
+}
+
 func TestDispatcherUnsubscribeKeepsOtherSubscriptions(t *testing.T) {
 	d := &Dispatcher[int]{}
 	sub1 := d.Subscribe(4, false)

@@ -6,6 +6,7 @@ const DashboardPage = React.lazy(() => import('./pages/DashboardPage'));
 const ActionPlanPage = React.lazy(() => import('./pages/ActionPlanPage'));
 const ValidatorsPage = React.lazy(() => import('./pages/ValidatorsPage'));
 const BidsWonPage = React.lazy(() => import('./pages/BidsWonPage'));
+const BuilderKeysPage = React.lazy(() => import('./pages/BuilderKeysPage'));
 const ProposerPreferencesPage = React.lazy(() => import('./pages/ProposerPreferencesPage'));
 const BuilderPreferencesPage = React.lazy(() => import('./pages/BuilderPreferencesPage'));
 const AuditLogPage = React.lazy(() => import('./pages/AuditLogPage'));
@@ -23,6 +24,7 @@ export const App: React.FC = () => {
           {currentView === 'action-plan' && <ActionPlanPage />}
           {currentView === 'validators' && <ValidatorsPage />}
           {currentView === 'bids-won' && <BidsWonPage />}
+          {currentView === 'builder-keys' && <BuilderKeysPage />}
           {currentView === 'proposer-preferences' && <ProposerPreferencesPage />}
           {currentView === 'builder-preferences' && <BuilderPreferencesPage />}
           {currentView === 'audit-log' && <AuditLogPage />}

@@ -2,7 +2,9 @@ package beacon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	eth2client "github.com/ethpandaops/go-eth2-client"
 	"github.com/ethpandaops/go-eth2-client/api"
@@ -28,6 +30,27 @@ func (c *Client) SubmitExecutionPayloadBid(ctx context.Context, bid *eth2all.Sig
 	}
 
 	return nil
+}
+
+// BidRejected reports whether err is the beacon node answering a bid submission
+// with a rejection, as opposed to the submission never reaching it. The
+// distinction matters because a rejected bid WAS seen — retrying it unchanged
+// only repeats the rejection — while a transport failure leaves the bid unsent
+// and worth retrying.
+func BidRejected(err error) bool {
+	// go-eth2-client returns *api.Error; accept the value form too so a future
+	// change of that detail cannot silently turn every rejection into a retry.
+	var apiErrPtr *api.Error
+	if errors.As(err, &apiErrPtr) && apiErrPtr != nil {
+		return apiErrPtr.StatusCode >= http.StatusBadRequest
+	}
+
+	var apiErr api.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode >= http.StatusBadRequest
+	}
+
+	return false
 }
 
 // SubmitExecutionPayloadEnvelope submits a signed execution payload envelope using the

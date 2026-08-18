@@ -24,32 +24,35 @@ type Config struct {
 	// BuilderKeyIndex using the standard validator key path m/12381/3600/{index}/0/0.
 	// Mutually exclusive with BuilderPrivkey. json:"-" keeps the secret out of every JSON
 	// serialization path (WebUI REST + SSE); YAML config loading is unaffected.
-	BuilderMnemonic   string           `yaml:"builder_mnemonic" json:"-"`
-	BuilderKeyIndex   uint64           `yaml:"builder_key_index" json:"builder_key_index"`
-	CLClient          string           `yaml:"cl_client" json:"cl_client,omitempty"`
-	ELEngineAPI       string           `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
-	ELJWTSecret       string           `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
-	ELRPC             string           `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
-	WalletPrivkey     string           `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
-	APIPort           int              `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
-	AuthProviderURL   string           `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
-	InjectHeadHTML    string           `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
-	OverviewURL       string           `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
-	LifecycleEnabled  bool             `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
-	EPBSEnabled       bool             `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
-	BuilderAPIEnabled bool             `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
-	BuilderAPI        BuilderAPIConfig `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
-	DepositAmount     uint64           `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
-	TopupThreshold    uint64           `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
-	TopupAmount       uint64           `yaml:"topup_amount" json:"topup_amount"`               // Gwei
-	DepositMaxFeeGwei uint64           `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig   `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig       `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig     `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig      `yaml:"build" json:"build"`   // Payload build candidate policy
-	Debug             bool             `yaml:"debug" json:"debug"`
-	Pprof             bool             `yaml:"pprof" json:"pprof"`
-	PayloadBuildTime  uint64           `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	BuilderMnemonic string `yaml:"builder_mnemonic" json:"-"`
+	BuilderKeyIndex uint64 `yaml:"builder_key_index" json:"builder_key_index"`
+	// BuilderKeys configures the managed set of internally derived builder keys
+	// that the entry key (BuilderPrivkey / BuilderMnemonic+BuilderKeyIndex) roots.
+	BuilderKeys       BuilderKeysConfig `yaml:"builder_keys" json:"builder_keys"`
+	CLClient          string            `yaml:"cl_client" json:"cl_client,omitempty"`
+	ELEngineAPI       string            `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
+	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
+	ELRPC             string            `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	WalletPrivkey     string            `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
+	APIPort           int               `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
+	AuthProviderURL   string            `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
+	InjectHeadHTML    string            `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
+	OverviewURL       string            `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav so operators get consistent navigation across instances.
+	LifecycleEnabled  bool              `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
+	EPBSEnabled       bool              `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
+	BuilderAPIEnabled bool              `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
+	BuilderAPI        BuilderAPIConfig  `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
+	DepositAmount     uint64            `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
+	TopupThreshold    uint64            `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
+	TopupAmount       uint64            `yaml:"topup_amount" json:"topup_amount"`               // Gwei
+	DepositMaxFeeGwei uint64            `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+	Schedule          ScheduleConfig    `yaml:"schedule" json:"schedule"`
+	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build             BuildConfig       `yaml:"build" json:"build"`   // Payload build candidate policy
+	Debug             bool              `yaml:"debug" json:"debug"`
+	Pprof             bool              `yaml:"pprof" json:"pprof"`
+	PayloadBuildTime  uint64            `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
@@ -72,6 +75,48 @@ type Config struct {
 	// proposer preferences and an audit log across restarts. Startup-only and
 	// never itself persisted. Empty disables persistence (in-memory only).
 	StateDBPath string `yaml:"state_db" json:"state_db,omitempty"`
+}
+
+// BuilderKeysConfig defines the managed builder key set: how many keys buildoor
+// keeps registered and funded, and how far the internal derivation may reach.
+//
+// Keys are derived from the entry key (see signer.DeriveInternalKey): internal
+// index 0 is the entry key itself, so a TargetCount of 1 behaves exactly like a
+// single-key deployment.
+type BuilderKeysConfig struct {
+	// TargetCount is the number of builder keys kept registered and funded.
+	// Raising it deposits new keys; lowering it exits surplus keys when AutoExit
+	// is on. 0 is treated as 1.
+	TargetCount uint64 `yaml:"target_count" json:"target_count"`
+
+	// MaxIndex caps internal derivation, bounding both the target and the
+	// startup discovery scan.
+	MaxIndex uint64 `yaml:"max_index" json:"max_index"`
+
+	// DiscoveryGap is how many consecutive never-used indices end the startup
+	// scan for previously deposited keys.
+	DiscoveryGap uint64 `yaml:"discovery_gap" json:"discovery_gap"`
+
+	// AutoDeposit deposits new keys to reach TargetCount.
+	AutoDeposit bool `yaml:"auto_deposit" json:"auto_deposit"`
+
+	// AutoExit exits surplus keys when the managed count exceeds TargetCount.
+	// Irreversible: an exited builder key cannot be reactivated until its
+	// registry entry is reused by another builder's deposit.
+	AutoExit bool `yaml:"auto_exit" json:"auto_exit"`
+}
+
+// EffectiveTargetCount returns the target key count clamped into the usable
+// range: at least one key, and never more than the derivation cap allows
+// (indices 0..MaxIndex, so MaxIndex+1 keys).
+func (c *BuilderKeysConfig) EffectiveTargetCount() uint64 {
+	target := max(c.TargetCount, 1)
+
+	if c.MaxIndex > 0 && target > c.MaxIndex+1 {
+		return c.MaxIndex + 1
+	}
+
+	return target
 }
 
 // ScheduleConfig defines when the builder should build blocks.
@@ -127,6 +172,12 @@ type BuilderAPIConfig struct {
 	// legal parent tuple no candidate covers yet (bounded by the request's
 	// response budget).
 	OnDemandBuild bool `yaml:"on_demand_build" json:"on_demand_build"`
+
+	// KeyStrategy selects which managed builder key signs served bids. Unlike
+	// p2p gossip there is no first-seen rule here, but the choice is sticky per
+	// (slot, parent tuple) so a polling proposer keeps seeing the same builder.
+	// Empty falls back to the ePBS key strategy.
+	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
 }
 
 // ServeCandidateAllowed reports whether the given serve policy allows
@@ -202,6 +253,25 @@ type EPBSConfig struct {
 	// built candidate — deliberate multi-parent bidding for gossip testing;
 	// most nodes propagate only a builder's first bid per slot).
 	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
+
+	// KeyStrategy selects which managed builder key signs each of a slot's
+	// bids: round_robin (default), single, random or least_used. Each key bids
+	// at most once per slot — the gossip rules ignore a builder's later bids —
+	// so with several built candidates the strategy decides which keys cover
+	// them.
+	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
+
+	// BidKeysPerSlot caps how many distinct builder keys bid a slot. 0 means
+	// no cap beyond the fleet itself; 1 reproduces single-key behaviour (one
+	// gossiped bid per slot) regardless of how many candidates were built.
+	BidKeysPerSlot uint64 `yaml:"bid_keys_per_slot" json:"bid_keys_per_slot"`
+
+	// BidKeysPerStep is how many keys bid a payload per interval step, each
+	// one value-increment higher than the last. 1 (default) walks the fleet up
+	// the interval ladder one key at a time; 0 spends every remaining key at
+	// once, so a whole slot can be bid from all active keys in parallel as
+	// soon as the bid window opens.
+	BidKeysPerStep uint64 `yaml:"bid_keys_per_step" json:"bid_keys_per_step"`
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first
