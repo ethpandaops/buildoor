@@ -15,13 +15,25 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
-	"github.com/ethpandaops/buildoor/pkg/signer"
 )
+
+// payloadBidState is one payload's own bidding progress within a slot.
+type payloadBidState struct {
+	// lastBid gates the bid interval.
+	lastBid time.Time
+	// count is how often this payload has been bid. It also drives the value
+	// escalation: every bid lands one increase above the last, since gossip only
+	// forwards the highest bid seen for a (slot, parent) tuple and bids sharing
+	// a value cannot all propagate. It is per payload so several candidates do
+	// not inherit each other's escalation.
+	count int
+}
 
 // SlotState tracks the bidding state for a single slot.
 type SlotState struct {
@@ -31,16 +43,24 @@ type SlotState struct {
 	BidsClosed       bool        // Block received, no more bids possible
 	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
 	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
-	// BidPayloads tracks the last bid time per payload: interval throttling
-	// and single-bid dedup are PER PAYLOAD, so multi-candidate bidding
-	// ("all") does not starve the other candidates behind one payload's
+	NoKeyWarnedFor   bool        // No-ready-key skip already reported for this slot
+
+	// PayloadBids tracks each payload's own bid progress, so multi-candidate
+	// bidding ("all") does not starve the other candidates behind one payload's
 	// interval gate.
-	BidPayloads map[phase0.Hash32]time.Time
+	PayloadBids map[phase0.Hash32]*payloadBidState
 
 	// BidCandidate is the candidate the auto selection committed to on the
 	// first bid of the slot (sticky unless candidate switching is enabled).
 	BidCandidate    chain.CandidateKey
 	BidCandidateSet bool
+
+	// UsedKeys holds the keys that already gossiped a bid for this slot. The
+	// gossip rules ignore every bid a builder makes after its first for a slot,
+	// so a key is SPENT once one of its bids reached the network — every later
+	// bid, including an escalated re-bid of the very same payload, has to come
+	// from a key that has not bid yet or it never propagates.
+	UsedKeys map[uint64]struct{}
 
 	// Frozen is the slot's immutable action-plan snapshot, resolved on the
 	// first scheduler evaluation of the slot (nil until then).
@@ -55,7 +75,7 @@ type Scheduler struct {
 	bidTracker     *BidTracker
 	payloadCache   *payload_builder.PayloadCache
 	service        *Service // Reference to parent service for firing events
-	blsSigner      *signer.BLSSigner
+	registry       *builder_keys.Registry
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	planSvc        *action_plan.PlanService // per-slot scheduling/settings authority
 	cfg            *config.Config           // shared config; mutable settings read live
@@ -64,6 +84,16 @@ type Scheduler struct {
 	// Simple state tracking per slot
 	slotStates map[phase0.Slot]*SlotState
 	mu         sync.Mutex
+
+	// wg tracks in-flight bid submissions so shutdown can wait for them. They
+	// deliberately do NOT block the tick that started them.
+	wg sync.WaitGroup
+}
+
+// Wait blocks until every in-flight bid submission has finished. Called during
+// shutdown, after the context is cancelled.
+func (s *Scheduler) Wait() {
+	s.wg.Wait()
 }
 
 // NewScheduler creates a new scheduler. planSvc is the mandatory per-slot
@@ -77,7 +107,7 @@ func NewScheduler(
 	bidTracker *BidTracker,
 	payloadCache *payload_builder.PayloadCache,
 	service *Service,
-	blsSigner *signer.BLSSigner,
+	registry *builder_keys.Registry,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	planSvc *action_plan.PlanService,
 	cfg *config.Config,
@@ -89,7 +119,7 @@ func NewScheduler(
 		bidTracker:     bidTracker,
 		payloadCache:   payloadCache,
 		service:        service,
-		blsSigner:      blsSigner,
+		registry:       registry,
 		propPrefsStore: propPrefsStore,
 		planSvc:        planSvc,
 		cfg:            cfg,
@@ -177,8 +207,9 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 		return
 	}
 
-	// Don't bid if the builder is not active on-chain.
-	if !chain.IsBuilderActive(s.chainSvc.GetBuilderByPubkey(s.blsSigner.PublicKey()), uint64(s.chainSvc.GetFinalizedEpoch())) {
+	// Don't bid unless at least one managed key is active on chain; which key
+	// each bid is signed with is decided per bid.
+	if !s.registry.AnyActive() {
 		return
 	}
 
@@ -270,8 +301,23 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 		return
 	}
 
+	// Every planned bid is an independent key on an independent payload, so the
+	// submissions go out concurrently AND detached from this tick: a submission
+	// takes tens of milliseconds while the scheduler ticks every 10ms, so
+	// waiting on them here would stall the next step — and the next slot — for
+	// the duration of the slowest beacon call. All the state a later tick reads
+	// (the payload's interval claim, each key's claim) is already committed by
+	// planBidStep before any of these start.
 	for _, payload := range payloads {
-		s.trySubmitBid(ctx, slot, now, msRelativeToSlot, bidSettings, payload, prefsBypassed)
+		for _, planned := range s.planBidStep(slot, now, bidSettings, payload) {
+			s.wg.Add(1)
+
+			go func() {
+				defer s.wg.Done()
+
+				s.submitBid(ctx, slot, msRelativeToSlot, bidSettings, planned, payload, prefsBypassed)
+			}()
+		}
 	}
 }
 
@@ -350,6 +396,101 @@ func (s *Scheduler) selectBidPayloads(
 	return []*payload_builder.Payload{payload}
 }
 
+// claimBidKey reserves a builder key for one bid on the given payload, or
+// returns nil when the slot has no key left to spend.
+//
+// The gossip rules ignore every bid a builder makes after its first for a slot,
+// so a key is spent as soon as one of its bids reaches the network. Every later
+// bid therefore needs a key that has not bid yet — including an escalated re-bid
+// of the very same payload, which is exactly what makes the escalation reach the
+// network instead of being dropped as already known.
+//
+// The key is claimed here rather than after the submission because the
+// submission is a network call taking tens of milliseconds while the scheduler
+// ticks every 10ms: the ticks landing mid-flight would otherwise pick the same
+// key again. releaseBidKey hands it back when the submission never made it out.
+func (s *Scheduler) claimBidKey(
+	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, bidValue uint64,
+) *builder_keys.Key {
+	s.mu.Lock()
+	state := s.getSlotState(slot)
+
+	// Cap how many keys one slot may spend. Unset means every ready key.
+	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	spent := make(map[uint64]struct{}, len(state.UsedKeys))
+	for keyIndex := range state.UsedKeys {
+		spent[keyIndex] = struct{}{}
+	}
+
+	s.mu.Unlock()
+
+	selected := s.registry.SelectForBid(slot, builder_keys.SelectRequest{
+		Strategy:     bidSettings.KeyStrategy,
+		RequiredGwei: bidValue,
+		Count:        1,
+		Exclude:      spent,
+	})
+
+	if len(selected) == 0 {
+		s.mu.Lock()
+		state = s.getSlotState(slot)
+		alreadyWarned := state.NoKeyWarnedFor
+		state.NoKeyWarnedFor = true
+		s.mu.Unlock()
+
+		if !alreadyWarned {
+			s.log.WithFields(logrus.Fields{
+				"slot":       slot,
+				"spent_keys": len(spent),
+				"strategy":   builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
+			}).Info("Every builder key has bid this slot — no further bid can propagate")
+		}
+
+		return nil
+	}
+
+	key := selected[0]
+
+	s.mu.Lock()
+	state = s.getSlotState(slot)
+
+	if state.UsedKeys == nil {
+		state.UsedKeys = make(map[uint64]struct{}, 4)
+	}
+
+	// Re-check the cap: a concurrent tick may have claimed the last allowed key
+	// while this one was selecting.
+	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	if _, taken := state.UsedKeys[key.KeyIndex()]; taken {
+		s.mu.Unlock()
+
+		return nil
+	}
+
+	state.UsedKeys[key.KeyIndex()] = struct{}{}
+	s.mu.Unlock()
+
+	return key
+}
+
+// releaseBidKey returns a claimed key to the slot's pool after a submission that
+// never reached the network: nothing was gossiped, so the key is not spent.
+func (s *Scheduler) releaseBidKey(slot phase0.Slot, key *builder_keys.Key) {
+	s.mu.Lock()
+	delete(s.getSlotState(slot).UsedKeys, key.KeyIndex())
+	s.mu.Unlock()
+}
+
 // preferredPayload picks the built payload matching the chain view's current
 // head and its payload status, falling back to the cache's primary payload.
 func (s *Scheduler) preferredPayload(slot phase0.Slot) *payload_builder.Payload {
@@ -371,104 +512,180 @@ func (s *Scheduler) preferredPayload(slot phase0.Slot) *payload_builder.Payload 
 	return s.payloadCache.Get(slot)
 }
 
-// trySubmitBid runs the per-payload bid checks (window close, interval,
-// single-bid dedup), computes the bid value and submits.
-func (s *Scheduler) trySubmitBid(
-	ctx context.Context,
+// plannedBid is one bid decided by a step: which key signs it, at what value.
+type plannedBid struct {
+	key      *builder_keys.Key
+	value    uint64
+	bidCount int
+}
+
+// planBidStep decides the bids one evaluation of a payload should submit.
+//
+// A step spends up to BidKeysPerStep keys at once. That is what lets a slot be
+// bid from several keys in parallel instead of one key per interval tick: the
+// interval ladder is a single-key shape, and with a fleet the useful shapes run
+// from "one key per step, escalating" all the way to "every key at once".
+//
+// All bookkeeping happens under one lock — the payload's interval claim, its
+// escalation count and each key's claim — so the ticks that land while the
+// submissions are in flight cannot re-decide the same bids.
+func (s *Scheduler) planBidStep(
 	slot phase0.Slot,
 	now time.Time,
-	msRelativeToSlot int64,
 	bidSettings *action_plan.ResolvedBidSettings,
 	payload *payload_builder.Payload,
-	prefsBypassed bool,
-) {
+) []plannedBid {
 	s.mu.Lock()
+
 	state := s.getSlotState(slot)
 
-	// Check if we should bid
 	// - Not if bidding is closed (block already received)
-	// - Not if we bid too recently (respect interval)
-	// - Not if we already bid this payload (single bid mode)
+	// - Not if we bid this payload too recently (respect interval)
+	// - Not if we already bid it at all (single bid mode)
 	if state.BidsClosed {
 		s.mu.Unlock()
-		return
+		return nil
 	}
 
-	// Check bid interval (per payload, so "all" mode candidates do not
-	// throttle each other)
-	lastBid, alreadyBid := state.BidPayloads[payload.BlockHash]
+	bidState, alreadyBid := state.PayloadBids[payload.BlockHash]
 
 	if bidSettings.IntervalMs > 0 {
-		if alreadyBid && time.Since(lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
+		if alreadyBid && time.Since(bidState.lastBid) < time.Duration(bidSettings.IntervalMs)*time.Millisecond {
 			s.mu.Unlock()
-			return
+			return nil
 		}
-	} else {
-		// Single bid mode - only bid payloads we have not bid yet.
-		if alreadyBid {
-			s.mu.Unlock()
-			return
-		}
+	} else if alreadyBid {
+		s.mu.Unlock()
+		return nil
 	}
 
-	// Calculate bid value (all gwei, overflow-clamped).
-	// ValueGwei, when set, is an absolute base (per-slot custom value or the
-	// global bid value override, resolved at freeze time) replacing the
-	// max(blockValue, BidMinAmount) + BidSubsidy formula. The subsidy pads the
-	// formula bid so it clears the proposer BN's local-build threshold.
-	var bidBase uint64
-
-	if bidSettings.ValueGwei != nil {
-		bidBase = *bidSettings.ValueGwei
-	} else {
-		bidBase = max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei)
-		bidBase = s.addGweiClamped(slot, bidBase, bidSettings.SubsidyGwei)
+	if state.PayloadBids == nil {
+		state.PayloadBids = make(map[phase0.Hash32]*payloadBidState, 2)
 	}
 
-	// Re-bid increase applies in interval mode regardless of the base source.
-	bidValue := bidBase
-	if bidSettings.IntervalMs > 0 && state.BidCount > 0 {
-		increase := s.mulGweiClamped(slot, uint64(state.BidCount), bidSettings.IncreaseGwei) //nolint:gosec // BidCount >= 0
-		bidValue = s.addGweiClamped(slot, bidValue, increase)
+	if bidState == nil {
+		bidState = &payloadBidState{}
+		state.PayloadBids[payload.BlockHash] = bidState
 	}
+
+	bidState.lastBid = now
+	state.LastBidTime = now
+	state.LastBidHash = payload.BlockHash
 
 	s.mu.Unlock()
 
+	planned := make([]plannedBid, 0, 4)
+
+	// Every bid gets its own value, one increase above the last. Gossip only
+	// forwards a bid that is the highest seen for the (slot, parent) tuple, so
+	// bids sharing a value cannot all propagate however many keys sign them —
+	// all but the first to arrive are dropped as too low.
+	for range bidSettings.EffectiveKeysPerStep() {
+		s.mu.Lock()
+		escalations := bidState.count
+		s.mu.Unlock()
+
+		value := s.bidValueFor(slot, bidSettings, payload, escalations)
+
+		key := s.claimBidKey(slot, bidSettings, value)
+		if key == nil {
+			break
+		}
+
+		s.mu.Lock()
+		state = s.getSlotState(slot)
+		bidState.count++
+		state.BidCount++
+		bidCount := state.BidCount
+		s.mu.Unlock()
+
+		planned = append(planned, plannedBid{key: key, value: value, bidCount: bidCount})
+	}
+
+	if len(planned) == 0 {
+		// Nothing was actually bid, so the payload's interval claim must not
+		// stand — the next tick has to re-evaluate it.
+		s.mu.Lock()
+		if bidState.count == 0 {
+			delete(s.getSlotState(slot).PayloadBids, payload.BlockHash)
+		} else {
+			bidState.lastBid = time.Time{}
+		}
+		s.mu.Unlock()
+	}
+
+	return planned
+}
+
+// bidValueFor computes the bid value for the payload's next bid.
+//
+// ValueGwei, when set, is an absolute base (per-slot custom value or the global
+// bid value override, resolved at freeze time) replacing the
+// max(blockValue, BidMinAmount) + BidSubsidy formula. The subsidy pads the
+// formula bid so it clears the proposer BN's local-build threshold.
+//
+// escalations is how many bids this payload already has, so every bid lands one
+// increase above the last and each one can be the new highest for the tuple.
+func (s *Scheduler) bidValueFor(
+	slot phase0.Slot,
+	bidSettings *action_plan.ResolvedBidSettings,
+	payload *payload_builder.Payload,
+	escalations int,
+) uint64 {
+	var value uint64
+
+	if bidSettings.ValueGwei != nil {
+		value = *bidSettings.ValueGwei
+	} else {
+		value = max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei)
+		value = s.addGweiClamped(slot, value, bidSettings.SubsidyGwei)
+	}
+
+	if escalations > 0 {
+		increase := s.mulGweiClamped(slot, uint64(escalations), bidSettings.IncreaseGwei) //nolint:gosec // escalations > 0
+		value = s.addGweiClamped(slot, value, increase)
+	}
+
+	return value
+}
+
+// submitBid gossips one planned bid and reports the outcome.
+func (s *Scheduler) submitBid(
+	ctx context.Context,
+	slot phase0.Slot,
+	msRelativeToSlot int64,
+	bidSettings *action_plan.ResolvedBidSettings,
+	planned plannedBid,
+	payload *payload_builder.Payload,
+	prefsBypassed bool,
+) {
+	builderIndex, _ := planned.key.BuilderIndex()
+
 	s.log.WithFields(logrus.Fields{
 		"slot":         slot,
-		"bid_value":    bidValue,
-		"bid_count":    state.BidCount,
+		"key":          planned.key.String(),
+		"bid_value":    planned.value,
+		"bid_count":    planned.bidCount,
 		"block_hash":   fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
 	// Submit bid, applying the slot's frozen bid transform if any.
 	var bidTransform string
-	if state.Frozen != nil && state.Frozen.Transforms != nil {
-		bidTransform = state.Frozen.Transforms.Bid
-	}
 
-	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, payload, bidValue, bidTransform)
-
-	// Update state regardless of success - we don't want to spam on failure
 	s.mu.Lock()
-	state.LastBidTime = now
-	state.LastBidHash = payload.BlockHash
-
-	if state.BidPayloads == nil {
-		state.BidPayloads = make(map[phase0.Hash32]time.Time, 2)
+	if frozen := s.getSlotState(slot).Frozen; frozen != nil && frozen.Transforms != nil {
+		bidTransform = frozen.Transforms.Bid
 	}
-
-	state.BidPayloads[payload.BlockHash] = now
-	state.BidCount++
-	bidCount := state.BidCount
 	s.mu.Unlock()
+
+	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, planned.key, payload, planned.value, bidTransform)
 
 	event := &BidSubmissionEvent{
 		Slot:      slot,
 		BlockHash: payload.BlockHash,
-		Value:     bidValue,
-		BidCount:  bidCount,
+		Value:     planned.value,
+		BidCount:  planned.bidCount,
 		SignedBid: signedBid,
 	}
 
@@ -476,13 +693,33 @@ func (s *Scheduler) trySubmitBid(
 		event.Warning = "no proposer preferences for slot — bid sent anyway (ignore_missing_prefs)"
 	}
 
-	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, s.bidCreator.GetBuilderIndex(),
-		payload.Attributes.ParentBlockHash); ok {
+	if high, ok := s.bidTracker.GetHighestCompetitorBid(slot, payload.Attributes.ParentBlockHash); ok {
 		event.CompetitorHighGwei = &high
 	}
 
 	if err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Failed to submit bid")
+		// A rejection means the beacon node saw the bid and turned it down, so
+		// the key stays spent: retrying it unchanged only repeats the rejection.
+		// Only a submission that never reached the node hands its key back.
+		rejected := beacon.BidRejected(err)
+		if !rejected {
+			s.releaseBidKey(slot, planned.key)
+		}
+
+		// Rejections are the normal outcome of bidding a whole fleet: the node
+		// keeps only the best bid per parent, so every key beyond the first to
+		// arrive at a given value is turned down. Logging those at error level
+		// buries the transport failures that actually need attention — the
+		// per-attempt record on the slot result keeps them all inspectable.
+		logLevel := logrus.ErrorLevel
+		if rejected {
+			logLevel = logrus.DebugLevel
+		}
+
+		s.log.WithError(err).WithFields(logrus.Fields{
+			"slot": slot,
+			"key":  planned.key.String(),
+		}).Log(logLevel, "Failed to submit bid")
 
 		// Constructed-but-not-submitted bids carry the signed bid object so
 		// consumers can record exactly what was built.
@@ -500,11 +737,13 @@ func (s *Scheduler) trySubmitBid(
 		return
 	}
 
+	s.registry.RecordBid(planned.key.KeyIndex())
+
 	// Track the bid
 	s.bidTracker.TrackBid(&ExecutionPayloadBid{
 		Slot:            slot,
-		BuilderIndex:    s.bidCreator.builderIndex,
-		Value:           bidValue,
+		BuilderIndex:    builderIndex,
+		Value:           planned.value,
 		BlockHash:       payload.BlockHash,
 		ParentBlockHash: payload.Attributes.ParentBlockHash,
 		ParentBlockRoot: payload.Attributes.ParentBlockRoot,
@@ -525,8 +764,9 @@ func (s *Scheduler) trySubmitBid(
 
 	s.log.WithFields(logrus.Fields{
 		"slot":       slot,
-		"bid_value":  bidValue,
-		"bid_count":  bidCount,
+		"key":        planned.key.String(),
+		"bid_value":  planned.value,
+		"bid_count":  planned.bidCount,
 		"block_hash": payload.BlockHash[:8],
 	}).Info("Bid submitted")
 }

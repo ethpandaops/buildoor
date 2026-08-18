@@ -36,7 +36,7 @@ type GetHeaderResponse struct {
 func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/header/...")
 
-	if h.payloadCache == nil || h.blsSigner == nil {
+	if h.payloadCache == nil || h.registry == nil {
 		log.Warn("getHeader: returning 204 — payload cache or BLS signer not available")
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -164,7 +164,12 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 	if chainSpec := h.chainSvc.GetChainSpec(); chainSpec != nil {
 		maxWithdrawalsPerPayload = chainSpec.MaxWithdrawalsPerPayload
 	}
-	signedBid, err := BuildSignedBuilderBid(event, fork, h.blsSigner.PublicKey(), h.blsSigner,
+	// Pre-Gloas bids are signed by the primary key: the proposer's relay verifies
+	// the signature against the pubkey it saw in this very response, so rotating
+	// keys per request would only churn what the relay sees.
+	bidKey := h.registry.Primary()
+
+	signedBid, err := BuildSignedBuilderBid(event, fork, bidKey.Pubkey(), bidKey.BLSSigner(),
 		subsidyGwei, totalValueGwei, h.chainSvc.GetGenesis().GenesisForkVersion, maxWithdrawalsPerPayload)
 	if err != nil {
 		log.WithError(err).Warn("getHeader: failed to build SignedBuilderBid")

@@ -414,6 +414,265 @@
                 }
             }
         },
+        "/api/buildoor/builder-keys": {
+            "get": {
+                "description": "Returns every managed builder key with its lifecycle status,\non-chain builder index, balances and usage history, plus fleet\naggregates and the mutable key-set settings.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Builder Keys"
+                ],
+                "summary": "Get the managed builder key set",
+                "operationId": "getBuilderKeys",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderKeysResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Lifecycle management not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/builder-keys/target": {
+            "post": {
+                "description": "Sets how many builder keys are kept registered and funded.\nRaising it deposits new keys; lowering it exits surplus keys\nwhen auto-exit is on — an exited key can never be reactivated.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Builder Keys"
+                ],
+                "summary": "Set the target builder key count",
+                "operationId": "updateBuilderKeyTarget",
+                "parameters": [
+                    {
+                        "description": "Target key count",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateBuilderKeyTargetRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderKeysResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/builder-keys/{index}/deposit": {
+            "post": {
+                "description": "Submits a builder deposit for the given key and waits for it to\nregister on the beacon chain.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Builder Keys"
+                ],
+                "summary": "Deposit for a builder key",
+                "operationId": "depositBuilderKey",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Internal builder key index",
+                        "name": "index",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid key index or deposit failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/builder-keys/{index}/exit": {
+            "post": {
+                "description": "Submits a builder exit request for the given key. Irreversible:\nan exited key cannot be reactivated until its registry entry is\nreused by another builder's deposit. With lower_target the\ntarget key count is decremented in the same write, so the\nreconciler does not deposit a replacement.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Builder Keys"
+                ],
+                "summary": "Exit a builder key",
+                "operationId": "exitBuilderKey",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Internal builder key index",
+                        "name": "index",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Exit options",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderKeyExitRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid key index",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "409": {
+                        "description": "Key cannot be exited yet",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/builder-keys/{index}/topup": {
+            "post": {
+                "description": "Submits a top-up deposit for the given key when its balance is\nbelow the configured threshold.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Builder Keys"
+                ],
+                "summary": "Top up a builder key",
+                "operationId": "topupBuilderKey",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Internal builder key index",
+                        "name": "index",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid key index or top-up failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/builder-preferences": {
             "get": {
                 "description": "Returns all builder preferences currently in the cache, submitted by proposers via the submitBuilderPreferences API.",
@@ -811,6 +1070,12 @@
                         "name": "slot",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Build-parent candidate key (parent_full, parent_empty, grandparent_full, grandparent_empty)",
+                        "name": "candidate",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -832,6 +1097,72 @@
                     },
                     "404": {
                         "description": "No artifact for this slot",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "406": {
+                        "description": "No acceptable content type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/slot-results/{slot}/payload/{index}": {
+            "get": {
+                "description": "Returns one of the execution payloads built for the slot by\nartifact index (a slot may build several candidate payloads on\ndifferent parents; the slot result's build entries carry each\nbuild's artifact index). Content negotiation as with the\ndefault payload artifact endpoint.",
+                "produces": [
+                    "application/json",
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "ActionPlan"
+                ],
+                "summary": "Get one of a slot's built candidate payloads",
+                "operationId": "getSlotPayloadArtifactByIndex",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Slot",
+                        "name": "slot",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Payload artifact index",
+                        "name": "index",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Versioned payload (or raw SSZ)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No artifact for this slot/index",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1462,6 +1793,10 @@
         "action_plan.BidPlan": {
             "type": "object",
             "properties": {
+                "bid_candidate": {
+                    "description": "BidCandidate overrides which built candidate payload this slot's p2p\nbids commit to: auto, all, or a specific candidate key.",
+                    "type": "string"
+                },
                 "bid_end_time": {
                     "type": "integer"
                 },
@@ -1471,6 +1806,10 @@
                 },
                 "bid_interval": {
                     "description": "ms, \u003e= 0, 0 = single bid",
+                    "type": "integer"
+                },
+                "bid_keys_per_slot": {
+                    "description": "BidKeysPerSlot overrides how many distinct builder keys may bid this\nslot (0 = one key per selected candidate payload).",
                     "type": "integer"
                 },
                 "bid_min_amount": {
@@ -1492,6 +1831,10 @@
                     "description": "IgnoreMissingPrefs bids with the payload's fee recipient when no gossip\nproposer preferences arrived for the slot, bypassing the skip gate.",
                     "type": "boolean"
                 },
+                "key_strategy": {
+                    "description": "KeyStrategy overrides which managed builder key signs this slot's bids:\nround_robin, single, random or least_used.",
+                    "type": "string"
+                },
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 }
@@ -1500,6 +1843,13 @@
         "action_plan.BuildPlan": {
             "type": "object",
             "properties": {
+                "candidates": {
+                    "description": "Candidates overrides the global build-candidate policy for this slot:\ncandidate key (parent_full, parent_empty, grandparent_full,\ngrandparent_empty) -\u003e mode (auto, always, never). Absent keys inherit\nthe global policy.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "reorg_parent_payload": {
                     "description": "ReorgParentPayload builds on the grandparent (n-2) execution payload\ninstead of the immediate parent: the FCU head block hash and the payload\nattributes' withdrawals are taken from the PARENT slot's payload\nattributes (whose parent is n-2), while every other property comes from\nthe current slot. This is a deliberate parent-payload reorg attempt —\nrejected by mainnet forkchoice, but useful for exercising the reveal /\ninclusion path against a withheld parent.",
                     "type": "boolean"
@@ -1509,12 +1859,20 @@
         "action_plan.BuilderAPIPlan": {
             "type": "object",
             "properties": {
+                "key_strategy": {
+                    "description": "KeyStrategy overrides which managed builder key signs this slot's served\nbids: round_robin, single, random or least_used.",
+                    "type": "string"
+                },
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 },
                 "response_delay_ms": {
                     "description": "ResponseDelayMs delays the bid response by this many milliseconds\n(context-cancellable, capped at one slot).",
                     "type": "integer"
+                },
+                "serve_candidates": {
+                    "description": "ServeCandidates overrides which built candidate payloads bid requests\nfor this slot may be answered from: all, canonical_only, or a\ncomma-separated candidate key list.",
+                    "type": "string"
                 },
                 "total_value_override_gwei": {
                     "description": "TotalValueOverrideGwei is the absolute total proposer-visible bid value\n(before the Gloas execution-payment split), replacing block value +\nsubsidy. May exceed the block value to test payment edge cases.",
@@ -1656,6 +2014,14 @@
         "action_plan.ResolvedBidSettings": {
             "type": "object",
             "properties": {
+                "bid_candidate": {
+                    "description": "BidCandidate is the effective bid candidate selection for the slot:\nauto, all, or a specific candidate key.",
+                    "type": "string"
+                },
+                "bid_keys_per_slot": {
+                    "description": "BidKeysPerSlot caps how many distinct builder keys bid the slot\n(0 = one key per selected candidate payload).",
+                    "type": "integer"
+                },
                 "end_ms": {
                     "type": "integer"
                 },
@@ -1672,6 +2038,10 @@
                 },
                 "interval_ms": {
                     "type": "integer"
+                },
+                "key_strategy": {
+                    "description": "KeyStrategy is the effective builder key selection strategy for the\nslot's bids.",
+                    "type": "string"
                 },
                 "min_gwei": {
                     "type": "integer"
@@ -1698,6 +2068,13 @@
                 "build_start_time_ms": {
                     "description": "BuildStartTimeMs is the effective build start time, milliseconds\nrelative to slot start (signed).",
                     "type": "integer"
+                },
+                "candidate_modes": {
+                    "description": "CandidateModes is the effective build-candidate policy for the slot:\ncandidate key -\u003e auto/always/never, merged from the global config and\nthe plan's build.candidates overrides.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 },
                 "forced": {
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
@@ -1726,6 +2103,14 @@
                 "forced": {
                     "description": "Forced marks that the plan activated serving although the module is\nglobally disabled.",
                     "type": "boolean"
+                },
+                "key_strategy": {
+                    "description": "KeyStrategy is the effective builder key selection strategy for the\nslot's served bids.",
+                    "type": "string"
+                },
+                "serve_candidates": {
+                    "description": "ServeCandidates is the effective serve-candidates policy for the slot\n(all, canonical_only, or a comma-separated candidate key list).",
+                    "type": "string"
                 },
                 "subsidy_gwei": {
                     "type": "integer"
@@ -2021,6 +2406,48 @@
                     "type": "boolean"
                 },
                 "validator_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.BuilderKeyExitRequest": {
+            "type": "object",
+            "properties": {
+                "lower_target": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "api.BuilderKeysResponse": {
+            "type": "object",
+            "properties": {
+                "aggregate": {
+                    "$ref": "#/definitions/builder_keys.Aggregate"
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/builder_keys.State"
+                    }
+                },
+                "settings": {
+                    "$ref": "#/definitions/api.BuilderKeysSettings"
+                }
+            }
+        },
+        "api.BuilderKeysSettings": {
+            "type": "object",
+            "properties": {
+                "auto_deposit": {
+                    "type": "boolean"
+                },
+                "auto_exit": {
+                    "type": "boolean"
+                },
+                "max_index": {
+                    "type": "integer"
+                },
+                "target_count": {
                     "type": "integer"
                 }
             }
@@ -2477,6 +2904,14 @@
                 }
             }
         },
+        "api.UpdateBuilderKeyTargetRequest": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.UpdateEPBSRequest": {
             "type": "object",
             "properties": {
@@ -2547,6 +2982,129 @@
                     "type": "integer"
                 }
             }
+        },
+        "builder_keys.Aggregate": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                },
+                "depositing": {
+                    "type": "integer"
+                },
+                "exited": {
+                    "type": "integer"
+                },
+                "exiting": {
+                    "type": "integer"
+                },
+                "managed": {
+                    "type": "integer"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "target": {
+                    "type": "integer"
+                },
+                "total_balance_gwei": {
+                    "type": "integer"
+                },
+                "total_effective_gwei": {
+                    "type": "integer"
+                },
+                "total_pending_payments_gwei": {
+                    "type": "integer"
+                },
+                "unused": {
+                    "type": "integer"
+                },
+                "withdrawn": {
+                    "type": "integer"
+                }
+            }
+        },
+        "builder_keys.State": {
+            "type": "object",
+            "properties": {
+                "balance_adjustment_gwei": {
+                    "type": "integer"
+                },
+                "balance_gwei": {
+                    "type": "integer"
+                },
+                "bids_submitted": {
+                    "type": "integer"
+                },
+                "bids_won": {
+                    "type": "integer"
+                },
+                "builder_index": {
+                    "description": "BuilderIndex is the on-chain registry index; only meaningful when\nHasBuilderIndex is set (index 0 is a valid builder index).",
+                    "type": "integer"
+                },
+                "deposit_epoch": {
+                    "type": "integer"
+                },
+                "effective_balance_gwei": {
+                    "description": "EffectiveBalance is the balance the key can actually bid against:\nchain balance plus local adjustments minus pending payments.",
+                    "type": "integer"
+                },
+                "has_builder_index": {
+                    "type": "boolean"
+                },
+                "key_index": {
+                    "type": "integer"
+                },
+                "last_deposit_at": {
+                    "type": "integer"
+                },
+                "last_exit_at": {
+                    "type": "integer"
+                },
+                "last_topup_epoch": {
+                    "description": "LastTopupEpoch guards the per-key top-up cooldown (0 = never topped up).",
+                    "type": "integer"
+                },
+                "pending_payments_gwei": {
+                    "type": "integer"
+                },
+                "pubkey": {
+                    "description": "PubkeyHex is the 0x-prefixed public key, for JSON consumers.",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/builder_keys.Status"
+                },
+                "use_count": {
+                    "description": "UseCount is how many deposit generations this key has gone through.",
+                    "type": "integer"
+                },
+                "withdrawable_epoch": {
+                    "type": "integer"
+                }
+            }
+        },
+        "builder_keys.Status": {
+            "type": "string",
+            "enum": [
+                "unused",
+                "depositing",
+                "pending",
+                "active",
+                "exiting",
+                "exited",
+                "withdrawn"
+            ],
+            "x-enum-varnames": [
+                "StatusUnused",
+                "StatusDepositing",
+                "StatusPending",
+                "StatusActive",
+                "StatusExiting",
+                "StatusExited",
+                "StatusWithdrawn"
+            ]
         },
         "db.AuditLog": {
             "type": "object",
@@ -2678,6 +3236,10 @@
                 "gas_limit": {
                     "type": "integer"
                 },
+                "key_index": {
+                    "description": "KeyIndex is the internal builder key the bid was signed with, resolved\nfrom BuilderIndex at record time. Recorded because a builder index is\nreused by other builders after an exit, so the mapping is only reliable\nwhile the bid is being made.",
+                    "type": "integer"
+                },
                 "num_blob_commitments": {
                     "type": "integer"
                 },
@@ -2742,6 +3304,10 @@
         "slot_results.BuildOutcome": {
             "type": "object",
             "properties": {
+                "artifact_idx": {
+                    "description": "ArtifactIdx is the per-slot payload artifact index of this build's\ncaptured payload (nil when no artifact was captured).",
+                    "type": "integer"
+                },
                 "at": {
                     "type": "string"
                 },
@@ -2768,6 +3334,10 @@
                     "type": "integer"
                 },
                 "block_value_wei": {
+                    "type": "string"
+                },
+                "candidate": {
+                    "description": "Candidate classifies which build-parent candidate this outcome belongs\nto (parent_full, parent_empty, grandparent_full, grandparent_empty;\nempty = unclassified or single-build slot).",
                     "type": "string"
                 },
                 "error": {
@@ -2965,7 +3535,18 @@
                     }
                 },
                 "build": {
-                    "$ref": "#/definitions/slot_results.BuildOutcome"
+                    "description": "Build is the slot's primary build outcome (the most canonical ready\ncandidate, or the single lifecycle record). Builds lists every\ncandidate build the slot produced when more than one ran.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.BuildOutcome"
+                        }
+                    ]
+                },
+                "builds": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.BuildOutcome"
+                    }
                 },
                 "dropped_attempts": {
                     "description": "DroppedAttempts counts attempts beyond the per-kind retention cap,\nkeyed by kind (\"bids\", \"block_submissions\", \"reveal_attempts\").",

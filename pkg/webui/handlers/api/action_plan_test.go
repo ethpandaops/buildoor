@@ -91,12 +91,12 @@ func newPlanAPITestEnv(t *testing.T) *planAPITestEnv {
 
 	t.Cleanup(func() { _ = stateDB.Close() })
 
-	tracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, log)
+	tracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
 
 	authHandler, err := auth.NewAuthHandler(context.Background(), "")
 	require.NoError(t, err)
 
-	handler := NewAPIHandler(authHandler, nil, stateDB, nil, nil, nil, chainSvc,
+	handler := NewAPIHandler(authHandler, nil, stateDB, nil, nil, nil, nil, chainSvc,
 		nil, nil, nil, nil, nil, nil, nil, planSvc, tracker)
 
 	return &planAPITestEnv{
@@ -483,7 +483,7 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	authHandler, err := auth.NewAuthHandler(context.Background(), "")
 	require.NoError(t, err)
 
-	handler := NewAPIHandler(authHandler, settingsSvc, stateDB, nil, nil, nil, nil,
+	handler := NewAPIHandler(authHandler, settingsSvc, stateDB, nil, nil, nil, nil, nil,
 		nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	post := func(body string) *httptest.ResponseRecorder {
