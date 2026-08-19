@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -123,11 +124,21 @@ func TestWithdrawalCredentials(t *testing.T) {
 }
 
 // fakeStorageReader returns a fixed 32-byte slot value and non-empty code
-// unless noCode is set.
+// unless noCode is set. callResult is what the queue fee getter answers with.
 type fakeStorageReader struct {
-	value  []byte
-	err    error
-	noCode bool
+	value      []byte
+	err        error
+	noCode     bool
+	callResult []byte
+	callErr    error
+}
+
+func (f fakeStorageReader) CallContract(_ context.Context, _ ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	if f.callErr != nil {
+		return nil, f.callErr
+	}
+
+	return f.callResult, nil
 }
 
 func (f fakeStorageReader) GetStorageAt(_ context.Context, _ common.Address, _ common.Hash) ([]byte, error) {
@@ -158,13 +169,14 @@ func TestReadQueueFee(t *testing.T) {
 	assert.False(t, active, "inhibitor means contract not active")
 	assert.Nil(t, fee)
 
-	// Active contract with excess=0 -> fee priced queueFeeHeadroom slots ahead.
-	fee, active, err = ReadQueueFee(ctx, fakeStorageReader{value: slotBytes(big.NewInt(0))}, BuilderDepositContractAddress)
+	// Active contract -> the contract's quote, priced queueFeeHeadroom slots ahead.
+	fee, active, err = ReadQueueFee(ctx, fakeStorageReader{
+		value:      slotBytes(big.NewInt(0)),
+		callResult: slotBytes(big.NewInt(64)),
+	}, BuilderDepositContractAddress)
 	require.NoError(t, err)
 	assert.True(t, active)
-
-	want := fakeExponential(big.NewInt(minRequestFee), big.NewInt(queueFeeHeadroom), big.NewInt(feeUpdateFraction))
-	assert.Equal(t, want.String(), fee.String(), "fee includes headroom over excess")
+	assert.Equal(t, "76", fee.String(), "fee is the contract quote plus headroom")
 
 	// No code at the address -> ErrContractNotDeployed, never "active": an empty
 	// account reads slot 0 as zero, which must not be mistaken for an empty queue.
@@ -172,4 +184,46 @@ func TestReadQueueFee(t *testing.T) {
 	require.ErrorIs(t, err, ErrContractNotDeployed)
 	assert.False(t, active)
 	assert.Nil(t, fee)
+}
+
+// TestReadQueueFeeUsesContractQuote is a regression test for builder deposits
+// reverting on an insufficient fee.
+//
+// The excess counter in slot 0 is only folded in by the end-of-block system call,
+// so while requests are queued in the current block it still reads zero even
+// though the contract already charges for the full queue. Deriving the fee from
+// slot 0 produced the 1 wei minimum against a real fee of 64 wei, and every
+// deposit reverted.
+func TestReadQueueFeeUsesContractQuote(t *testing.T) {
+	ctx := context.Background()
+
+	reader := fakeStorageReader{
+		value:      slotBytes(big.NewInt(0)),  // excess not yet updated
+		callResult: slotBytes(big.NewInt(64)), // what the contract actually charges
+	}
+
+	fee, active, err := ReadQueueFee(ctx, reader, BuilderDepositContractAddress)
+	require.NoError(t, err)
+	assert.True(t, active)
+	assert.GreaterOrEqual(t, fee.Int64(), int64(64), "fee must cover the contract quote")
+	assert.NotEqual(t, int64(minRequestFee), fee.Int64(), "must not fall back to the minimum fee")
+}
+
+func TestReadQueueFeeRejectsMalformedQuote(t *testing.T) {
+	ctx := context.Background()
+
+	for name, result := range map[string][]byte{
+		"empty":    {},
+		"oversize": make([]byte, 33),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fee, active, err := ReadQueueFee(ctx, fakeStorageReader{
+				value:      slotBytes(big.NewInt(0)),
+				callResult: result,
+			}, BuilderDepositContractAddress)
+			require.ErrorIs(t, err, ErrUnexpectedFeeResponse)
+			assert.False(t, active)
+			assert.Nil(t, fee)
+		})
+	}
 }

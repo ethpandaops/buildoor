@@ -31,6 +31,10 @@ var ErrContractNotActive = errors.New("builder deposit contract not active yet")
 // addresses than this build expects.
 var ErrContractNotDeployed = errors.New("builder system contract not deployed")
 
+// ErrUnexpectedFeeResponse is returned when a builder system contract's queue fee
+// getter answers with something other than a single 32-byte word.
+var ErrUnexpectedFeeResponse = errors.New("unexpected queue fee response")
+
 // ErrBuilderExited is returned when a deposit/top-up targets a builder whose exit has
 // been initiated. Exited builders can never be reactivated: the deposit would only top
 // up the exited registry entry and be withdrawn back to the wallet by the sweep. The

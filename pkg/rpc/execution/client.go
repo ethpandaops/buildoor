@@ -223,6 +223,17 @@ func (c *Client) HeaderByNumber(ctx context.Context, number *big.Int) (*types.He
 	return header, nil
 }
 
+// CallContract executes a read-only message call against a contract. A nil
+// blockNumber selects the latest block.
+func (c *Client) CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	result, err := c.ethClient.CallContract(ctx, msg, blockNumber)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call contract: %w", err)
+	}
+
+	return result, nil
+}
+
 // EstimateGas estimates gas for a transaction.
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
 	gas, err := c.ethClient.EstimateGas(ctx, msg)
