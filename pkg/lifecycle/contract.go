@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -38,10 +39,14 @@ const (
 	// feeUpdateFraction is *_REQUEST_FEE_UPDATE_FRACTION (17): the fake-exponential
 	// denominator controlling how steeply the queue fee grows with excess requests.
 	feeUpdateFraction = 17
-	// queueFeeHeadroom prices the fee a few queue slots ahead of the currently
-	// observed excess, so the request still clears if other requests land in the
+	// queueFeeHeadroom prices the fee a few queue slots ahead of the contract's
+	// current quote, so the request still clears if other requests land in the
 	// same block(s) before ours is included. Mirrors dora's "add extra fee".
 	queueFeeHeadroom = 3
+	// headroomScale is the fixed-point denominator used to apply queueFeeHeadroom
+	// as a multiplier. The fee grows as e^(excess/feeUpdateFraction), so pricing N
+	// slots ahead scales the quote by e^(N/feeUpdateFraction).
+	headroomScale = 1_000_000
 
 	// builderWithdrawalPrefix is the withdrawal-credential prefix for builder
 	// deposits submitted via the EIP-8282 builder deposit contract. Must be
@@ -60,10 +65,12 @@ const (
 // accepting requests, so callers must wait rather than submit.
 var excessInhibitor = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 
-// contractReader reads contract storage and code; satisfied by *execution.Client.
+// contractReader reads contract storage and code and performs read-only calls;
+// satisfied by *execution.Client.
 type contractReader interface {
 	GetStorageAt(ctx context.Context, account common.Address, slot common.Hash) ([]byte, error)
 	GetCode(ctx context.Context, account common.Address) ([]byte, error)
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
 
 // BuildBuilderDepositCalldata builds the 184-byte builder deposit request calldata:
@@ -146,9 +153,53 @@ func ReadQueueFee(
 		return nil, false, nil
 	}
 
-	numerator := new(big.Int).Add(excess, big.NewInt(queueFeeHeadroom))
+	quote, err := readContractFee(ctx, reader, contract)
+	if err != nil {
+		return nil, false, err
+	}
 
-	return fakeExponential(big.NewInt(minRequestFee), numerator, big.NewInt(feeUpdateFraction)), true, nil
+	return applyQueueFeeHeadroom(quote), true, nil
+}
+
+// readContractFee asks the predeploy for its current per-request fee by calling it
+// with empty calldata, per the EIP-7002 fee interface.
+//
+// The quote must come from the contract rather than being recomputed from the
+// excess counter in slot 0: excess is only folded in by the end-of-block system
+// call, so requests already queued in the current block are invisible to a storage
+// read. Deriving the fee from slot 0 alone therefore returns the minimum fee while
+// the contract charges for the full queue, and every request reverts on an
+// insufficient fee.
+func readContractFee(ctx context.Context, reader contractReader, contract common.Address) (*big.Int, error) {
+	out, err := reader.CallContract(ctx, ethereum.CallMsg{To: &contract}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read queue fee: %w", err)
+	}
+
+	if len(out) == 0 || len(out) > 32 {
+		return nil, fmt.Errorf("%w: got %d bytes", ErrUnexpectedFeeResponse, len(out))
+	}
+
+	return new(big.Int).SetBytes(out), nil
+}
+
+// applyQueueFeeHeadroom scales a fee quote queueFeeHeadroom queue slots ahead and
+// never returns less than the minimum request fee.
+func applyQueueFeeHeadroom(quote *big.Int) *big.Int {
+	scale := fakeExponential(
+		big.NewInt(headroomScale),
+		big.NewInt(queueFeeHeadroom),
+		big.NewInt(feeUpdateFraction),
+	)
+
+	fee := new(big.Int).Mul(quote, scale)
+	fee.Div(fee, big.NewInt(headroomScale))
+
+	if fee.Cmp(big.NewInt(minRequestFee)) < 0 {
+		return big.NewInt(minRequestFee)
+	}
+
+	return fee
 }
 
 // fakeExponential approximates factor * e^(numerator/denominator) using integer
