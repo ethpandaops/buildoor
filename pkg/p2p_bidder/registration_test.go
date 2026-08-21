@@ -41,9 +41,9 @@ func TestSetRegistrationPendingKeepsFleetBidding(t *testing.T) {
 		log.SetLevel(logrus.PanicLevel)
 
 		registry, err := builder_keys.NewRegistry(
-			&config.Config{BuilderKeys: config.BuilderKeysConfig{
+			config.NewStaticService(&config.Config{BuilderKeys: config.BuilderKeysConfig{
 				TargetCount: 1, DiscoveryGap: 1, MaxIndex: 32,
-			}}, testBuilderPrivkey, log)
+			}}), testBuilderPrivkey, log)
 		require.NoError(t, err)
 		require.False(t, registry.AnyActive())
 

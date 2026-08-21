@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/lifecycle"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
@@ -52,7 +53,11 @@ var exitCmd = &cobra.Command{
 		defer rpcClient.Close()
 
 		// Initialize the managed builder key set and select the key to exit
-		registry, err := newKeyRegistry(cfg, logger)
+		// One-shot command: wrap the resolved operator config in a static
+		// settings service (no UI overrides, no persistence).
+		cfgSvc := config.NewStaticService(cfg)
+
+		registry, err := newKeyRegistry(cfgSvc, logger)
 		if err != nil {
 			return err
 		}
@@ -90,7 +95,7 @@ var exitCmd = &cobra.Command{
 		}
 
 		// Initialize chain service
-		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(cfgSvc, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}

@@ -207,7 +207,8 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 	cfg.EPBS.BidSubsidy = 0
 	cfg.EPBS.BidValueOverride = 0
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
 	// Several keys by default: a key is spent once it has bid a slot, so tests
 	// that re-bid or bid several candidates need more than one.
@@ -216,7 +217,7 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 
 	prefs := memstore.New[phase0.Slot, *gloasspec.SignedProposerPreferences]()
 
-	svc, err := NewService(nil, chainSvc, registry, prefs, planSvc, log)
+	svc, err := NewService(cfgSvc, nil, chainSvc, registry, prefs, planSvc, log)
 	require.NoError(t, err)
 	svc.SetEnabled(opts.serviceEnabled)
 
@@ -226,7 +227,7 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 	cache := payload_builder.NewPayloadCache(8)
 
 	scheduler := NewScheduler(chainSvc, bidCreator, bidTracker,
-		cache, svc, registry, prefs, planSvc, cfg, log)
+		cache, svc, registry, prefs, planSvc, cfgSvc, log)
 
 	events := svc.SubscribeBidSubmissions(16, false)
 	t.Cleanup(events.Unsubscribe)

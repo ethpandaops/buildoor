@@ -39,7 +39,7 @@ type LifecycleEvent struct {
 
 // Manager orchestrates builder lifecycle operations.
 type Manager struct {
-	cfg             *config.Config
+	cfgSvc          *config.Service // settings source; one snapshot per pass
 	clClient        *beacon.Client
 	chainSvc        chain.Service
 	registry        *builder_keys.Registry
@@ -73,7 +73,7 @@ type Manager struct {
 
 // NewManager creates a new lifecycle manager.
 func NewManager(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	registry *builder_keys.Registry,
@@ -83,7 +83,7 @@ func NewManager(
 	managerLog := log.WithField("component", "lifecycle-manager")
 
 	m := &Manager{
-		cfg:          cfg,
+		cfgSvc:       cfgSvc,
 		clClient:     clClient,
 		chainSvc:     chainSvc,
 		registry:     registry,
@@ -95,7 +95,7 @@ func NewManager(
 	}
 
 	// Initialize services
-	depositSvc, err := NewDepositService(cfg, chainSvc, w, managerLog)
+	depositSvc, err := NewDepositService(cfgSvc, chainSvc, w, managerLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create deposit service: %w", err)
 	}
@@ -104,7 +104,7 @@ func NewManager(
 
 	// Early deposit service (regular validator deposit contract, used to onboard the
 	// builder before the Gloas fork so there is no Builder-API-to-Gloas coverage gap).
-	earlyDepositSvc, err := NewEarlyDepositService(cfg, chainSvc, w, managerLog)
+	earlyDepositSvc, err := NewEarlyDepositService(cfgSvc, chainSvc, w, managerLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create early deposit service: %w", err)
 	}
@@ -222,13 +222,13 @@ func (m *Manager) EnsureBuilderRegistered(ctx context.Context, key *builder_keys
 	}
 
 	m.log.Info("Builder not registered, creating deposit")
-	m.fireEvent("deposit", fmt.Sprintf("Builder not registered, submitting deposit (%d gwei)", m.cfg.DepositAmount), "info")
+	m.fireEvent("deposit", fmt.Sprintf("Builder not registered, submitting deposit (%d gwei)", m.cfgSvc.Current().DepositAmount), "info")
 
 	if m.depositPendingCallback != nil {
 		m.depositPendingCallback()
 	}
 
-	if err := m.depositSvc.CreateDeposit(ctx, key, m.cfg.DepositAmount); err != nil {
+	if err := m.depositSvc.CreateDeposit(ctx, key, m.cfgSvc.Current().DepositAmount); err != nil {
 		if isDepositDeferred(err) {
 			// Fee too high or contract not active yet — delay, don't treat as failure.
 			m.fireEvent("deposit", fmt.Sprintf("Deposit deferred: %v", err), "info")
@@ -270,7 +270,7 @@ func (m *Manager) CheckAndTopup(ctx context.Context, key *builder_keys.Key) erro
 // configured top-up amount.
 func (m *Manager) TopupKey(ctx context.Context, key *builder_keys.Key, amountGwei uint64) error {
 	if amountGwei == 0 {
-		amountGwei = m.cfg.TopupAmount
+		amountGwei = m.cfgSvc.Current().TopupAmount
 	}
 
 	if err := m.depositSvc.CreateTopup(ctx, key, amountGwei); err != nil {
@@ -382,7 +382,7 @@ func (m *Manager) WaitForRegistration(
 // stores it for direct access.
 func (m *Manager) SetPaymentTracker(payments *payload_bidder.PaymentTracker) {
 	m.payments = payments
-	m.balanceSvc = NewBalanceService(m.cfg, m.chainSvc, m.registry, m.depositSvc, m.log)
+	m.balanceSvc = NewBalanceService(m.cfgSvc, m.chainSvc, m.registry, m.depositSvc, m.log)
 }
 
 // GetPaymentTracker returns the shared payment tracker.

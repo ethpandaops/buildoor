@@ -34,11 +34,11 @@ func keysTestHandler(t *testing.T, target uint64) *APIHandler {
 
 	// The settings service owns cfg, so it must be built before the registry
 	// reads the resolved values.
-	settingsSvc, err := config.NewService(cfg, defaults, map[string]bool{},
+	settingsSvc, err := config.NewService(cfg, defaults, map[string]bool{}, 0,
 		db.NewDatabase(&db.Config{}, log), log)
 	require.NoError(t, err)
 
-	registry, err := builder_keys.NewRegistry(cfg, testEntryPrivkey, log)
+	registry, err := builder_keys.NewRegistry(config.NewStaticService(cfg), testEntryPrivkey, log)
 	require.NoError(t, err)
 	registry.Refresh()
 

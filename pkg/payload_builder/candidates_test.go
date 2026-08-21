@@ -40,12 +40,13 @@ func candidateTestSetup(t *testing.T, gp, parent *beacon.BlockInfo) *Service {
 	cfg := config.DefaultConfig()
 	cfg.EPBSEnabled = true
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
 	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
 	require.NoError(t, err)
 
-	svc, err := NewService(cfg, clClient, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, clClient, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()
@@ -97,7 +98,7 @@ func TestResolveBuildTargets_PayloadMissAddsEmptyCandidate(t *testing.T) {
 func TestResolveBuildTargets_NeverModeSuppresses(t *testing.T) {
 	gp, parent := testCandidateChain()
 	svc := candidateTestSetup(t, gp, parent)
-	svc.cfg.Build.CandidateParentEmpty = config.CandidateModeNever
+	svc.cfgSvc.Current().Build.CandidateParentEmpty = config.CandidateModeNever
 
 	events := svc.clClient.Events()
 	require.True(t, events.InjectPayloadAttributes(&beacon.PayloadAttributesEvent{

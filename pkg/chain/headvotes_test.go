@@ -124,7 +124,7 @@ func newVoteTestTracker(
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	return NewHeadVoteTracker(cfg, chainSvc, nil, log), chainSvc
+	return NewHeadVoteTracker(config.NewStaticService(cfg), chainSvc, nil, log), chainSvc
 }
 
 // drainUpdates reads all buffered updates from the subscription.

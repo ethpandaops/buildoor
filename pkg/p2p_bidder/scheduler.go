@@ -78,7 +78,7 @@ type Scheduler struct {
 	registry       *builder_keys.Registry
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences]
 	planSvc        *action_plan.PlanService // per-slot scheduling/settings authority
-	cfg            *config.Config           // shared config; mutable settings read live
+	cfgSvc         *config.Service          // settings source; one snapshot per selection
 	log            logrus.FieldLogger
 
 	// Simple state tracking per slot
@@ -110,7 +110,7 @@ func NewScheduler(
 	registry *builder_keys.Registry,
 	propPrefsStore *memstore.Store[phase0.Slot, *gloasspec.SignedProposerPreferences],
 	planSvc *action_plan.PlanService,
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	log logrus.FieldLogger,
 ) *Scheduler {
 	return &Scheduler{
@@ -122,7 +122,7 @@ func NewScheduler(
 		registry:       registry,
 		propPrefsStore: propPrefsStore,
 		planSvc:        planSvc,
-		cfg:            cfg,
+		cfgSvc:         cfgSvc,
 		slotStates:     make(map[phase0.Slot]*SlotState),
 		log:            log.WithField("component", "scheduler"),
 	}
@@ -328,11 +328,13 @@ func (s *Scheduler) checkSlotForBidding(ctx context.Context, slot phase0.Slot, n
 func (s *Scheduler) selectBidPayloads(
 	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings,
 ) []*payload_builder.Payload {
-	// The frozen per-slot selection wins; the live config covers snapshots
-	// frozen before the setting existed.
+	// One config snapshot per selection. The frozen per-slot selection wins;
+	// the snapshot covers plans frozen before the setting existed.
+	cfg := s.cfgSvc.Current()
+
 	mode := bidSettings.BidCandidate
 	if mode == "" {
-		mode = s.cfg.EPBS.BidCandidate
+		mode = cfg.EPBS.BidCandidate
 	}
 
 	switch {
@@ -358,7 +360,7 @@ func (s *Scheduler) selectBidPayloads(
 	chosen, chosenSet := state.BidCandidate, state.BidCandidateSet
 	s.mu.Unlock()
 
-	if chosenSet && !s.cfg.EPBS.BidCandidateSwitch {
+	if chosenSet && !cfg.EPBS.BidCandidateSwitch {
 		// Sticky: keep bidding the committed candidate (the gossip first-seen
 		// rule makes a switched bid unlikely to propagate anyway); fall back
 		// to the primary payload when that candidate produced none.

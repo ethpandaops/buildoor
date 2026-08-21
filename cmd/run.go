@@ -83,16 +83,6 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to connect to EL engine API: %w", err)
 		}
 
-		// 3. Initialize the managed builder key set (derived from the raw hex key
-		// or the mnemonic; internal key 0 is that entry key itself)
-		keyRegistry, err := newKeyRegistry(cfg, logger)
-		if err != nil {
-			return err
-		}
-
-		pubkey := keyRegistry.Primary().Pubkey()
-		logger.WithField("pubkey", fmt.Sprintf("%x", pubkey[:8])).Info("Builder key loaded")
-
 		// 4. Initialize RPC client and wallet (if lifecycle enabled)
 		var rpcClient *execution.Client
 
@@ -178,6 +168,10 @@ and begins building blocks according to configuration.`,
 		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
 		cfg.ApplySlotDefaults(slotTimeMs)
 
+		if err := config.ValidateTimingBounds(cfg, chainSpec.SecondsPerSlot); err != nil {
+			return fmt.Errorf("invalid timing configuration: %w", err)
+		}
+
 		logger.WithFields(logrus.Fields{
 			"slot_time_ms":       slotTimeMs,
 			"build_start_time":   cfg.EPBS.BuildStartTime,
@@ -187,9 +181,12 @@ and begins building blocks according to configuration.`,
 		}).Info("Timing defaults applied")
 
 		// 6. Open the optional state-db and build the central settings service.
-		// The settings service applies persisted UI overrides (and detects CLI
-		// changes) into cfg in place BEFORE any service reads it, so every
-		// module starts from the effective configuration.
+		// The settings service publishes immutable config snapshots: persisted
+		// UI overrides (and detected CLI changes) are part of the first
+		// generation, so every module starts from the effective configuration.
+		// Modules receive the service itself and load one snapshot per
+		// operation; cfg below is rebound to the initial snapshot for the
+		// remaining startup reads.
 		stateDB := db.NewDatabase(&db.Config{File: cfg.StateDBPath}, logger)
 		if err := stateDB.Init(); err != nil {
 			return fmt.Errorf("failed to init state-db: %w", err)
@@ -205,13 +202,26 @@ and begins building blocks according to configuration.`,
 			supplied[f.Key] = v.IsSet(f.FlagKey)
 		}
 
-		settingsSvc, err := config.NewService(cfg, defaults, supplied, stateDB, logger)
+		settingsSvc, err := config.NewService(cfg, defaults, supplied, chainSpec.SecondsPerSlot, stateDB, logger)
 		if err != nil {
 			return fmt.Errorf("failed to init settings service: %w", err)
 		}
 
+		cfg = settingsSvc.Current()
+
+		// 6b. Initialize the managed builder key set (derived from the raw hex
+		// key or the mnemonic; internal key 0 is that entry key itself). Needs
+		// the settings service: the fleet targets are mutable settings.
+		keyRegistry, err := newKeyRegistry(settingsSvc, logger)
+		if err != nil {
+			return err
+		}
+
+		pubkey := keyRegistry.Primary().Pubkey()
+		logger.WithField("pubkey", fmt.Sprintf("%x", pubkey[:8])).Info("Builder key loaded")
+
 		// 7. Start chain service (epoch-level state management)
-		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
+		chainSvc := chain.NewService(settingsSvc, clClient, chainSpec, genesis, logger)
 		if err := chainSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start chain service: %w", err)
 		}
@@ -228,7 +238,7 @@ and begins building blocks according to configuration.`,
 		// 7b. Initialize the per-slot action plan service. Decision points
 		// (build/bid/serve/reveal) freeze the slot's plan on first use; plans
 		// persist in the state-db's kv_store when --state-db is set.
-		planSvc := action_plan.NewPlanService(cfg, chainSvc, logger)
+		planSvc := action_plan.NewPlanService(settingsSvc, chainSvc, logger)
 		planSvc.SetPersistence(ctx, stateDB)
 
 		if err := planSvc.Start(ctx); err != nil {
@@ -242,7 +252,7 @@ and begins building blocks according to configuration.`,
 		var lifecycleMgr *lifecycle.Manager
 
 		if lifecycleAvailable {
-			lifecycleMgr, err = lifecycle.NewManager(cfg, clClient, chainSvc, keyRegistry, w, logger)
+			lifecycleMgr, err = lifecycle.NewManager(settingsSvc, clClient, chainSvc, keyRegistry, w, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize lifecycle: %w", err)
 			}
@@ -278,7 +288,7 @@ and begins building blocks according to configuration.`,
 			defer validatorStore.Stop()
 		}
 
-		builderSvc, err := payload_builder.NewService(cfg, clClient, chainSvc, planSvc, engineClient, feeRecipient, logger)
+		builderSvc, err := payload_builder.NewService(settingsSvc, clClient, chainSvc, planSvc, engineClient, feeRecipient, logger)
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
@@ -311,7 +321,7 @@ and begins building blocks according to configuration.`,
 			// for payments settled since the last epoch snapshot.
 			keyRegistry.SetBalanceAdjuster(paymentTracker)
 
-			revealSvc = payload_bidder.NewRevealService(cfg, keyRegistry,
+			revealSvc = payload_bidder.NewRevealService(settingsSvc, keyRegistry,
 				clClient, chainSvc, builderSvc, paymentTracker, planSvc,
 				chainSvc.GetHeadVoteTracker(), logger)
 			if err := revealSvc.Start(ctx); err != nil {
@@ -353,7 +363,7 @@ and begins building blocks according to configuration.`,
 			gloasForkEpoch := chainSpec.GetForkEpoch(version.DataVersionGloas)
 			logger.WithField("gloas_fork_epoch", gloasForkEpoch).Info("Initializing p2p bidder service...")
 
-			epbsSvc, err = p2p_bidder.NewService(clClient, chainSvc, keyRegistry, propPrefSvc.GetStore(), planSvc, logger)
+			epbsSvc, err = p2p_bidder.NewService(settingsSvc, clClient, chainSvc, keyRegistry, propPrefSvc.GetStore(), planSvc, logger)
 			if err != nil {
 				return fmt.Errorf("failed to initialize p2p bidder: %w", err)
 			}
@@ -381,7 +391,7 @@ and begins building blocks according to configuration.`,
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), keyRegistry, validatorStore)
+			builderAPISrv = builderapi.NewServer(settingsSvc, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), keyRegistry, validatorStore)
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 
@@ -405,7 +415,7 @@ and begins building blocks according to configuration.`,
 		// artifacts. Started before the producer services so its blocking
 		// subscriptions never miss an event; SetPersistence migrates any
 		// legacy won_blocks namespace into slot results.
-		resultTracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc,
+		resultTracker := slot_results.NewTracker(settingsSvc, chainSvc, stateDB, planSvc,
 			builderSvc, epbsSvc, revealSvc, inclusionTracker, keyRegistry, logger)
 		resultTracker.SetPersistence(ctx, stateDB)
 
@@ -425,28 +435,26 @@ and begins building blocks according to configuration.`,
 		valRanges.Start(ctx)
 
 		// 14. Register settings OnChange subscribers: route changes through the
-		// modules. The settings service has already mutated cfg in place; these
-		// callbacks trigger module-side resets (schedule counters, scheduler) and
-		// sync the enable flags.
+		// modules. The settings service has already published the new snapshot
+		// when these fire; they trigger module-side resets (schedule counters)
+		// and sync the enable flags from a fresh snapshot.
 		settingsSvc.OnChange(func() {
+			current := settingsSvc.Current()
+
 			// The plan service is the scheduling authority: schedule-mode
 			// changes reset its next_n accounting.
 			planSvc.UpdateConfig()
 
-			if err := builderSvc.UpdateConfig(cfg); err != nil {
-				logger.WithError(err).Warn("failed to apply builder config update")
-			}
-
 			if epbsSvc != nil {
-				epbsSvc.SetEnabled(cfg.EPBSEnabled)
+				epbsSvc.SetEnabled(current.EPBSEnabled)
 			}
 
 			if builderAPISrv != nil {
-				builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
+				builderAPISrv.SetEnabled(current.BuilderAPIEnabled)
 			}
 
 			if lifecycleMgr != nil {
-				lifecycleMgr.SetEnabled(cfg.LifecycleEnabled)
+				lifecycleMgr.SetEnabled(current.LifecycleEnabled)
 				// A target key count change must act now, not at the next
 				// reconcile tick.
 				lifecycleMgr.Reconcile()

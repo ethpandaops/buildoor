@@ -59,7 +59,7 @@ func newTestService(chainSvc *stubChain, cfg *config.Config) *PlanService {
 	log := logrus.New()
 	log.SetLevel(logrus.ErrorLevel)
 
-	return NewPlanService(cfg, chainSvc, log)
+	return NewPlanService(config.NewStaticService(cfg), chainSvc, log)
 }
 
 func TestApplyUpdatesAndGet(t *testing.T) {
@@ -701,7 +701,7 @@ func TestFrozenCandidateSettings(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	svc := NewPlanService(cfg, newStubChain(), log)
+	svc := NewPlanService(config.NewStaticService(cfg), newStubChain(), log)
 
 	// Without a plan: the frozen snapshot carries the complete global
 	// candidate policy and the global bid/serve selections.

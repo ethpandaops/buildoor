@@ -163,8 +163,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	}
 
 	// Parse and validate SignedRequestAuth from the request body.
-	// Auth is always verified when present; h.cfg.RequireRequestAuth controls whether
-	// absence is an error.
+	// Auth is always verified when present; RequireRequestAuth controls whether
+	// absence is an error. One config snapshot covers the whole auth check.
+	bapiCfg := &h.cfgSvc.Current().BuilderAPI
+
 	authBody, readErr := io.ReadAll(r.Body)
 	if readErr != nil {
 		log.WithError(readErr).Warn("getExecutionPayloadBid: failed to read request body")
@@ -195,10 +197,10 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.slot does not match the requested slot")
 			return
 		}
-		if h.cfg.BuilderURL != "" && string(signedAuth.Message.Data) != h.cfg.BuilderURL {
+		if bapiCfg.BuilderURL != "" && string(signedAuth.Message.Data) != bapiCfg.BuilderURL {
 			log.WithFields(logrus.Fields{
 				"auth_url":    string(signedAuth.Message.Data),
-				"builder_url": h.cfg.BuilderURL,
+				"builder_url": bapiCfg.BuilderURL,
 			}).Warn("getExecutionPayloadBid: SignedRequestAuth data (builder_url) mismatch")
 			writeError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.data does not match this builder's URL")
 			return
@@ -210,7 +212,7 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 			return
 		}
 		log.Info("getExecutionPayloadBid: SignedRequestAuth verified")
-	} else if h.cfg.RequireRequestAuth {
+	} else if bapiCfg.RequireRequestAuth {
 		log.Warn("getExecutionPayloadBid: missing required SignedRequestAuth")
 		writeError(w, http.StatusUnauthorized, "missing SignedRequestAuthV1: this builder requires authenticated requests")
 		return
@@ -456,8 +458,9 @@ func (h *Handler) matchPayloadForParent(
 	ctx context.Context, slot phase0.Slot, parentRoot phase0.Root, parentHash phase0.Hash32,
 	servePolicy string,
 ) (*payload_builder.Payload, *bidMatchError) {
+	bapiCfg := &h.cfgSvc.Current().BuilderAPI
 	if servePolicy == "" {
-		servePolicy = h.cfg.ServeCandidates
+		servePolicy = bapiCfg.ServeCandidates
 	}
 
 	if payload := h.payloadCache.GetVariant(slot, beacon.AttrParentKey{Root: parentRoot, Hash: parentHash}); payload != nil {
@@ -486,7 +489,7 @@ func (h *Handler) matchPayloadForParent(
 			reason: "parent_hash is neither the parent block's committed payload nor its execution parent"}
 	}
 
-	if h.cfg.OnDemandBuild && h.onDemandBuilder != nil {
+	if bapiCfg.OnDemandBuild && h.onDemandBuilder != nil {
 		payload, err := h.onDemandBuilder.BuildCandidateOnDemand(ctx, slot, parentRoot, parentHash)
 		if err != nil {
 			return nil, &bidMatchError{status: http.StatusNoContent,

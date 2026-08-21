@@ -104,11 +104,12 @@ func (p *stubProposalSubmitter) SubmitProposal(_ context.Context, opts *api.Subm
 // plans stored).
 func newServingPlanService(chainSvc chain.Service) *action_plan.PlanService {
 	return action_plan.NewPlanService(
-		&config.Config{APIPort: 8080, BuilderAPIEnabled: true}, chainSvc, logrus.New())
+		config.NewStaticService(&config.Config{APIPort: 8080, BuilderAPIEnabled: true}),
+		chainSvc, logrus.New())
 }
 
 func newTestHandler(chainSvc chain.Service, registry *builder_keys.Registry) *Handler {
-	return NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
+	return NewHandler(logrus.New(), chainSvc,
 		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10),
 		memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration](), registry)
 }
@@ -147,7 +148,7 @@ func TestHandleGetHeader_Success(t *testing.T) {
 
 	store := memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
 	chainSvc := &stubChainService{currentFork: version.DataVersionFulu}
-	h := NewHandler(&config.BuilderAPIConfig{}, logrus.New(), chainSvc,
+	h := NewHandler(logrus.New(), chainSvc,
 		newServingPlanService(chainSvc), payload_builder.NewPayloadCache(10), store, registry)
 
 	pk := blsSigner.PublicKey()

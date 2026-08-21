@@ -47,7 +47,7 @@ type RuleChangeEvent struct {
 // that fill the slots it does not cover, their freeze state and their
 // persistence. It is the single writer; all reads return deep copies.
 type PlanService struct {
-	cfg      *config.Config
+	cfgSvc   *config.Service // settings source; one snapshot per decision
 	chainSvc chain.Service
 	store    *memstore.Store[phase0.Slot, *SlotPlan]
 	rules    *memstore.Store[string, *SlotRule]
@@ -75,9 +75,9 @@ type PlanService struct {
 // NewPlanService creates the plan service. The config pointer is the shared
 // live config; enable flags and default settings are read from it at freeze
 // time.
-func NewPlanService(cfg *config.Config, chainSvc chain.Service, log logrus.FieldLogger) *PlanService {
+func NewPlanService(cfgSvc *config.Service, chainSvc chain.Service, log logrus.FieldLogger) *PlanService {
 	return &PlanService{
-		cfg:      cfg,
+		cfgSvc:   cfgSvc,
 		chainSvc: chainSvc,
 		store:    memstore.New[phase0.Slot, *SlotPlan](),
 		rules:    memstore.New[string, *SlotRule](),
@@ -308,7 +308,7 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	plan := s.PlanForSlot(slot)
 
 	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
-	frozen := resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
+	frozen := resolveFrozenPlan(slot, plan, s.cfgSvc.Current(), fork, time.Now(), s.slotsBuilt)
 	s.frozen[slot] = frozen
 
 	return frozen
@@ -334,7 +334,7 @@ func (s *PlanService) UpdateConfig() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cfg.Schedule.Mode == config.ScheduleModeNextN {
+	if s.cfgSvc.Current().Schedule.Mode == config.ScheduleModeNextN {
 		s.slotsBuilt = 0
 	}
 }
@@ -353,15 +353,17 @@ func (s *PlanService) GetSlotsRemaining() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.cfg.Schedule.Mode != config.ScheduleModeNextN {
+	cfg := s.cfgSvc.Current()
+
+	if cfg.Schedule.Mode != config.ScheduleModeNextN {
 		return -1
 	}
 
-	if s.slotsBuilt >= s.cfg.Schedule.NextN {
+	if s.slotsBuilt >= cfg.Schedule.NextN {
 		return 0
 	}
 
-	return int(s.cfg.Schedule.NextN - s.slotsBuilt)
+	return int(cfg.Schedule.NextN - s.slotsBuilt)
 }
 
 // IsFrozen reports whether the slot's plan has been frozen already.
@@ -588,7 +590,7 @@ func matchRule(rules []*SlotRule, slot phase0.Slot, slotsPerEpoch uint64) *SlotR
 // pruneForEpoch drops past plans outside the retention window and stale
 // freeze markers. Future plans never match the cutoff and are never pruned.
 func (s *PlanService) pruneForEpoch(epoch phase0.Epoch) {
-	retention := s.cfg.SlotResultRetentionEpochs // live read; mutable setting
+	retention := s.cfgSvc.Current().SlotResultRetentionEpochs // mutable setting; fresh snapshot per prune
 	if retention == 0 || uint64(epoch) <= retention {
 		return
 	}
