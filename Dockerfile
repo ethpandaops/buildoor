@@ -15,7 +15,7 @@ COPY pkg/webui/src/ src/
 RUN make build
 
 # ── Stage 2: Build Go binary (CGO required for herumi BLS) ──────
-FROM golang:1.25-bookworm AS builder
+FROM golang:1.26-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev \
