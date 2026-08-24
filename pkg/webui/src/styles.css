@@ -445,6 +445,59 @@
   max-width: 460px;
 }
 
+/* Resizable popovers: a corner drag handle grows the box from its top-left
+   anchor; once the user has dragged, the explicit size wins over the
+   min/max widths and the custom content (heatmap) fills the rest. */
+.event-popover-resizable {
+  display: flex;
+  flex-direction: column;
+}
+
+.event-popover-resizable .popover-title,
+.event-popover-resizable .popover-tabs,
+.event-popover-resizable .popover-table,
+.event-popover-resizable .popover-artifacts {
+  flex-shrink: 0;
+}
+
+.event-popover-sized {
+  min-width: 0;
+  max-width: none;
+}
+
+.event-popover-sized .hv-heatmap {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.event-popover-sized .hv-heatmap-name {
+  flex-basis: 30%;
+  max-width: 220px;
+}
+
+.popover-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(135deg,
+      transparent 0 50%,
+      var(--bs-secondary-color) 50% 58%,
+      transparent 58% 70%,
+      var(--bs-secondary-color) 70% 78%,
+      transparent 78%);
+  opacity: 0.6;
+}
+
+.popover-resize-handle:hover {
+  opacity: 1;
+}
+
 /* Head-vote arrival heatmap (inside the participation popover):
    rows = client names, columns = time buckets, trailing column = attesters
    on chain but never seen as raw singles. */

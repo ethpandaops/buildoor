@@ -651,6 +651,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                       data: {
                         title: 'Head Vote Participation',
                         wide: true,
+                        resizable: true,
                         items: popoverItems
                       },
                       x: Math.min(e.clientX, window.innerWidth - 470),
