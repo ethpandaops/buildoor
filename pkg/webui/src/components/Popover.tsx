@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface PopoverItem {
   label: string;
@@ -27,7 +27,24 @@ export interface PopoverData {
   wide?: boolean;
   // Recorded artifact behind this event: renders JSON/SSZ download buttons.
   artifact?: { url: string; filename: string };
+  // Render a drag handle in the bottom-right corner; the popover then keeps
+  // an explicit width/height (remembered per title for the page lifetime)
+  // and its custom content fills the remaining height.
+  resizable?: boolean;
 }
+
+interface PopoverSize {
+  width: number;
+  height: number;
+}
+
+const MIN_POPOVER_WIDTH = 280;
+const MIN_POPOVER_HEIGHT = 160;
+const VIEWPORT_MARGIN = 8;
+
+// Last user-chosen size per popover title, so reopening the same popover
+// comes back at the size it was dragged to.
+const rememberedSizes = new Map<string, PopoverSize>();
 
 // downloadSSZ fetches an artifact with SSZ content negotiation and triggers a
 // browser download.
@@ -58,6 +75,9 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
   const popoverRef = useRef<HTMLDivElement>(null);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState(0);
+  const [size, setSize] = useState<PopoverSize | null>(
+    () => (data.resizable ? rememberedSizes.get(data.title) ?? null : null)
+  );
 
   const tabs = data.tabs;
   const active = tabs?.[Math.min(activeTab, tabs.length - 1)];
@@ -81,6 +101,43 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
     };
   }, [onClose]);
 
+  // Corner drag: capture the pointer on the handle and grow/shrink the
+  // popover from its fixed top-left anchor, clamped to the viewport.
+  const handleResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const el = popoverRef.current;
+    if (!el) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const rect = el.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startWidth = rect.width;
+    const startHeight = rect.height;
+    const maxWidth = Math.max(MIN_POPOVER_WIDTH, window.innerWidth - rect.left - VIEWPORT_MARGIN);
+    const maxHeight = Math.max(MIN_POPOVER_HEIGHT, window.innerHeight - rect.top - VIEWPORT_MARGIN);
+
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+
+    const onMove = (ev: PointerEvent) => {
+      const next = {
+        width: Math.min(maxWidth, Math.max(MIN_POPOVER_WIDTH, startWidth + ev.clientX - startX)),
+        height: Math.min(maxHeight, Math.max(MIN_POPOVER_HEIGHT, startHeight + ev.clientY - startY)),
+      };
+      rememberedSizes.set(data.title, next);
+      setSize(next);
+    };
+    const onUp = () => {
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  }, [data.title]);
+
   const handleCopy = async (index: number, value: string) => {
     try {
       await navigator.clipboard.writeText(value);
@@ -94,8 +151,15 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
   return (
     <div
       ref={popoverRef}
-      className={`event-popover ${data.wide ? 'event-popover-wide' : ''}`}
-      style={{ left: x, top: y }}
+      className={
+        'event-popover' +
+        (data.wide ? ' event-popover-wide' : '') +
+        (data.resizable ? ' event-popover-resizable' : '') +
+        (size ? ' event-popover-sized' : '')
+      }
+      style={size
+        ? { left: x, top: y, width: size.width, height: size.height }
+        : { left: x, top: y }}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="popover-title">{data.title}</div>
@@ -164,6 +228,13 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
         </div>
       )}
       {children}
+      {data.resizable && (
+        <div
+          className="popover-resize-handle"
+          title="Drag to resize"
+          onPointerDown={handleResizeStart}
+        />
+      )}
     </div>
   );
 };
