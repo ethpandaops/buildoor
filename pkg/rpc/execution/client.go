@@ -116,10 +116,21 @@ func (c *Client) GetTransactionReceipt(
 }
 
 // GetNonce returns the pending nonce for an address (includes mempool txs).
+// Clients without a pending-block view (nimbus-eth1 rejects the "pending" block
+// tag outright) fall back to the nonce at the latest block; callers that send
+// transactions already treat the latest nonce as an authoritative floor.
 func (c *Client) GetNonce(ctx context.Context, address common.Address) (uint64, error) {
 	nonce, err := c.ethClient.PendingNonceAt(ctx, address)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get nonce: %w", err)
+	if err == nil {
+		return nonce, nil
+	}
+
+	c.log.WithError(err).WithField("address", address.Hex()).
+		Debug("Pending nonce unavailable, falling back to latest block nonce")
+
+	nonce, latestErr := c.ethClient.NonceAt(ctx, address, nil)
+	if latestErr != nil {
+		return 0, fmt.Errorf("failed to get nonce: %w", errors.Join(err, latestErr))
 	}
 
 	return nonce, nil
