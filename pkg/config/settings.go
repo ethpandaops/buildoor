@@ -39,12 +39,13 @@ type keyState struct {
 // handed to every module, so writes (applied in place under the service lock)
 // are observed live by all readers.
 type Service struct {
-	log       logrus.FieldLogger
-	store     *db.Database
-	fields    []Field
-	byKey     map[string]Field
-	defaults  *Config // pristine, slot-adjusted defaults — the floor
-	effective *Config // shared config; mutated in place
+	log          logrus.FieldLogger
+	store        *db.Database
+	fields       []Field
+	byKey        map[string]Field
+	defaults     *Config       // pristine, slot-adjusted defaults — the floor
+	effective    *Config       // shared config; mutated in place
+	slotDuration time.Duration // 0 = unknown; skips the reveal-time upper bound check
 
 	mu          sync.Mutex
 	seq         int64
@@ -60,15 +61,21 @@ type Service struct {
 //   - defaults is a pristine, slot-adjusted default Config used as the floor.
 //   - supplied maps each field key to whether the operator explicitly provided
 //     it (viper.IsSet); only supplied keys form the CLI layer.
+//   - slotDuration is the network's slot duration, used to bound
+//     reveal-relative timing overrides; pass 0 if not yet known.
 //   - store is the optional state-db (may be disabled).
-func NewService(effective, defaults *Config, supplied map[string]bool, store *db.Database, log logrus.FieldLogger) (*Service, error) {
+func NewService(
+	effective, defaults *Config, supplied map[string]bool, slotDuration time.Duration,
+	store *db.Database, log logrus.FieldLogger,
+) (*Service, error) {
 	s := &Service{
-		log:       log.WithField("module", "settings"),
-		store:     store,
-		fields:    Fields(),
-		defaults:  defaults,
-		effective: effective,
-		keyState:  make(map[string]*keyState),
+		log:          log.WithField("module", "settings"),
+		store:        store,
+		fields:       Fields(),
+		defaults:     defaults,
+		effective:    effective,
+		slotDuration: slotDuration,
+		keyState:     make(map[string]*keyState),
 	}
 
 	s.byKey = make(map[string]Field, len(s.fields))
@@ -117,6 +124,13 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 	}
 
 	// Pass 2: reconcile the CLI layer against what the operator supplied now.
+	// Every changed row is batched into a single transaction below rather
+	// than persisted one key at a time, so a crash or a transient state-db
+	// failure mid-pass can never leave only a prefix of this reconciliation
+	// durable.
+	now := time.Now().UnixMilli()
+	changedRows := make([]db.SettingRow, 0, len(s.fields))
+
 	for _, f := range s.fields {
 		ks := s.keyState[f.Key]
 		row := rowByKey[f.Key]
@@ -156,8 +170,17 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		}
 
 		if changed {
-			s.persist(f, ks, SourceCLI)
+			built, err := buildSettingRow(f, ks, SourceCLI, now)
+			if err != nil {
+				return nil, fmt.Errorf("encode %q: %w", f.Key, err)
+			}
+
+			changedRows = append(changedRows, built)
 		}
+	}
+
+	if err := store.PutSettings(changedRows); err != nil {
+		return nil, fmt.Errorf("persist cli settings: %w", err)
 	}
 
 	s.recompute()
@@ -185,9 +208,16 @@ func (s *Service) Set(key string, raw json.RawMessage, actor string) error {
 	return s.SetMany(map[string]json.RawMessage{key: raw}, actor)
 }
 
-// SetMany applies a batch of UI overrides atomically: all values are validated
-// and decoded first, then applied, persisted, and the effective config
-// recomputed before subscribers are notified once.
+// SetMany applies a batch of UI overrides atomically: all values are
+// validated and decoded first, then checked together against the timing
+// invariants (§ValidateTimingBounds) the batch would produce, then persisted
+// in one state-db transaction, and only once that durably commits (or
+// persistence is disabled) applied to the effective config and recomputed,
+// before subscribers are notified once. Persistence failing anywhere in the
+// batch leaves both the in-memory state and the state-db exactly as they
+// were before the call — a caller that observes an error can rely on nothing
+// having changed, instead of the previous behaviour of always reporting
+// success while some or all of the batch had silently failed to persist.
 func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) error {
 	s.mu.Lock()
 
@@ -214,13 +244,53 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		decoded[key] = v
 	}
 
+	// Validate the batch's cross-field / slot-relative timing invariants
+	// against what the effective config would become if it commits: apply it
+	// to a scratch copy first, leaving fields the batch doesn't touch at
+	// their current effective value.
+	scratch := *s.effective
 	for key, v := range decoded {
-		f := s.byKey[key]
-		ks := s.keyState[key]
-		ks.hasUI = true
-		ks.uiValue = v
-		ks.uiSeq = s.nextSeq()
-		s.persist(f, ks, actor)
+		if err := s.byKey[key].Set(&scratch, v); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("apply %q: %w", key, err)
+		}
+	}
+
+	if err := ValidateTimingBounds(&scratch, s.slotDuration); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+
+	// Stage the new key state and build every row up front: nothing is
+	// applied to s.keyState/s.effective until the whole batch durably
+	// persists.
+	now := time.Now().UnixMilli()
+	rows := make([]db.SettingRow, 0, len(decoded))
+	staged := make(map[string]*keyState, len(decoded))
+
+	for key, v := range decoded {
+		next := *s.keyState[key]
+		next.hasUI = true
+		next.uiValue = v
+		next.uiSeq = s.nextSeq()
+
+		row, err := buildSettingRow(s.byKey[key], &next, actor, now)
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("encode %q: %w", key, err)
+		}
+
+		rows = append(rows, row)
+		staged[key] = &next
+	}
+
+	if err := s.store.PutSettings(rows); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("persist settings: %w", err)
+	}
+
+	for key, next := range staged {
+		s.keyState[key] = next
 	}
 
 	s.recompute()
@@ -265,35 +335,37 @@ func (s *Service) nextSeq() int64 {
 	return s.seq
 }
 
-// persist writes the full 3-way row for a key to the state-db. Must hold mu.
-func (s *Service) persist(f Field, ks *keyState, actor string) {
-	if !s.store.Enabled() {
-		return
-	}
-
+// buildSettingRow builds the full 3-way persisted row for a key from its
+// keyState, without writing anything: callers batch rows from several keys
+// into a single db.Database.PutSettings transaction.
+func buildSettingRow(f Field, ks *keyState, actor string, updatedAt int64) (db.SettingRow, error) {
 	row := db.SettingRow{
 		Key:       f.Key,
-		UpdatedAt: time.Now().UnixMilli(),
+		UpdatedAt: updatedAt,
 		Actor:     actor,
 	}
 
 	if ks.hasCLI {
-		if b, err := f.Encode(ks.cliValue); err == nil {
-			row.CLIValue = sql.NullString{String: string(b), Valid: true}
-			row.CLISeq = ks.cliSeq
+		b, err := f.Encode(ks.cliValue)
+		if err != nil {
+			return db.SettingRow{}, fmt.Errorf("encode %q cli value: %w", f.Key, err)
 		}
+
+		row.CLIValue = sql.NullString{String: string(b), Valid: true}
+		row.CLISeq = ks.cliSeq
 	}
 
 	if ks.hasUI {
-		if b, err := f.Encode(ks.uiValue); err == nil {
-			row.UIValue = sql.NullString{String: string(b), Valid: true}
-			row.UISeq = ks.uiSeq
+		b, err := f.Encode(ks.uiValue)
+		if err != nil {
+			return db.SettingRow{}, fmt.Errorf("encode %q ui value: %w", f.Key, err)
 		}
+
+		row.UIValue = sql.NullString{String: string(b), Valid: true}
+		row.UISeq = ks.uiSeq
 	}
 
-	if err := s.store.PutSetting(row); err != nil {
-		s.log.WithError(err).WithField("key", f.Key).Warn("failed to persist setting")
-	}
+	return row, nil
 }
 
 // validateValue performs light per-field validation of incoming UI values.
@@ -312,6 +384,33 @@ func validateValue(key string, v any) error {
 		if epochs == 0 {
 			return fmt.Errorf("%s must be greater than 0", key)
 		}
+	}
+
+	return nil
+}
+
+// ValidateTimingBounds checks the cross-field / slot-relative invariants a
+// mutable timing setting must satisfy regardless of which layer (CLI, config
+// file, or UI override) sets it. Neither violation crashes or corrupts
+// anything by itself — an inverted bid window just suppresses bidding, and a
+// too-late reveal time is cleanly skipped rather than published wrong — but
+// both silently defeat the feature for the rest of the run, so they are
+// better rejected outright at the point a value is accepted. slotDuration <=
+// 0 skips the reveal-time upper bound (unknown yet, e.g. before the chain
+// spec has been fetched at startup).
+func ValidateTimingBounds(cfg *Config, slotDuration time.Duration) error {
+	if cfg.EPBS.BidStartTime > cfg.EPBS.BidEndTime {
+		return fmt.Errorf("%s (%dms) must not be after %s (%dms)",
+			KeyEPBSBidStartTime, cfg.EPBS.BidStartTime, KeyEPBSBidEndTime, cfg.EPBS.BidEndTime)
+	}
+
+	if cfg.Reveal.TimeMs < 0 {
+		return fmt.Errorf("%s must not be negative, got %dms", KeyRevealTimeMs, cfg.Reveal.TimeMs)
+	}
+
+	if slotDuration > 0 && time.Duration(cfg.Reveal.TimeMs)*time.Millisecond >= slotDuration {
+		return fmt.Errorf("%s (%dms) must be less than the slot duration (%s)",
+			KeyRevealTimeMs, cfg.Reveal.TimeMs, slotDuration)
 	}
 
 	return nil
