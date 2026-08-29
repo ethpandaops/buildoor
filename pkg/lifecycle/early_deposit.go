@@ -37,7 +37,7 @@ const depositContractABI = `[{"name":"deposit","type":"function","stateMutabilit
 // validator deposit that sits in the beacon state's pending_deposits queue and is
 // converted into a builder at the Gloas fork boundary.
 type EarlyDepositService struct {
-	cfg        *config.Config
+	cfgSvc     *config.Service // settings source; one snapshot per read
 	chainSvc   chain.Service
 	wallet     *wallet.Wallet
 	depositABI abi.ABI
@@ -46,7 +46,7 @@ type EarlyDepositService struct {
 
 // NewEarlyDepositService creates a new early deposit service.
 func NewEarlyDepositService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	chainSvc chain.Service,
 	w *wallet.Wallet,
 	log logrus.FieldLogger,
@@ -57,7 +57,7 @@ func NewEarlyDepositService(
 	}
 
 	return &EarlyDepositService{
-		cfg:        cfg,
+		cfgSvc:     cfgSvc,
 		chainSvc:   chainSvc,
 		wallet:     w,
 		depositABI: depositABI,

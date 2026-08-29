@@ -107,7 +107,7 @@ func newTestBuilderSvc(chainSvc chain.Service) *payload_builder.Service {
 	log := logrus.New()
 	log.SetLevel(logrus.PanicLevel)
 
-	svc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, nil, nil, common.Address{}, log)
+	svc, err := payload_builder.NewService(config.NewStaticService(&config.Config{}), nil, chainSvc, nil, nil, common.Address{}, log)
 	if err != nil {
 		panic(err)
 	}

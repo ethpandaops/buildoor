@@ -111,14 +111,15 @@ func (m *Manager) reconcileOnce(ctx context.Context) bool {
 		return false
 	}
 
-	target := m.cfg.BuilderKeys.EffectiveTargetCount()
+	cfg := m.cfgSvc.Current()
+	target := cfg.BuilderKeys.EffectiveTargetCount()
 	managed := m.registry.Aggregate().Managed
 
 	switch {
-	case managed < target && m.cfg.BuilderKeys.AutoDeposit:
+	case managed < target && cfg.BuilderKeys.AutoDeposit:
 		return m.depositKeysToTarget(ctx, target, managed)
 
-	case managed > target && m.cfg.BuilderKeys.AutoExit:
+	case managed > target && cfg.BuilderKeys.AutoExit:
 		return m.exitSurplusKey(ctx, target, managed)
 	}
 
@@ -152,7 +153,7 @@ func (m *Manager) depositKeysToTarget(ctx context.Context, target, managed uint6
 		return false
 	}
 
-	amount := m.cfg.DepositAmount
+	amount := m.cfgSvc.Current().DepositAmount
 
 	//nolint:gosec // the batch size is bounded by wallet.MaxBatchSize
 	if !m.walletCanFund(ctx, amount*uint64(len(keys))) {

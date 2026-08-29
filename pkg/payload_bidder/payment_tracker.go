@@ -34,6 +34,18 @@ type keyPayments struct {
 	// pending holds unrevealed won bids, kept for 2 epochs. Only these count as
 	// "pending" in the UI and for topup checks.
 	pending map[phase0.Slot]*PendingPayment
+
+	// earlyReveals records slots whose MarkRevealed call arrived before
+	// RecordWonBid created the pending entry: the two are fed by independent
+	// goroutines (RevealService's gate/timer vs. InclusionTracker's
+	// head-event loop, and the Builder API requests reveals already at block
+	// submission), so either order is possible. Without this, the inverted
+	// order silently drops the balance deduction (MarkRevealed finds no
+	// pending entry and no-ops) and the later RecordWonBid creates a pending
+	// entry that is never marked revealed, orphaned until it expires two
+	// epochs later. Values are the slot's epoch, pruned on the same schedule
+	// as pending payments.
+	earlyReveals map[phase0.Slot]phase0.Epoch
 }
 
 // PaymentTracker tracks payment obligations and live balance adjustments per
@@ -67,7 +79,10 @@ func NewPaymentTracker(chainSvc chain.Service, log logrus.FieldLogger) *PaymentT
 func (t *PaymentTracker) forKey(keyIndex uint64) *keyPayments {
 	entry, ok := t.keys[keyIndex]
 	if !ok {
-		entry = &keyPayments{pending: make(map[phase0.Slot]*PendingPayment, 8)}
+		entry = &keyPayments{
+			pending:      make(map[phase0.Slot]*PendingPayment, 8),
+			earlyReveals: make(map[phase0.Slot]phase0.Epoch, 2),
+		}
 		t.keys[keyIndex] = entry
 	}
 
@@ -75,15 +90,38 @@ func (t *PaymentTracker) forKey(keyIndex uint64) *keyPayments {
 }
 
 // RecordWonBid records a won bid as a pending payment (unrevealed) against the
-// key whose bid was included. If we later reveal, MarkRevealed moves it from
-// pending to a balance deduction; otherwise it stays pending for 2 epochs and
-// then expires.
+// key whose bid was included — unless MarkRevealed already ran for this slot
+// (see keyPayments.earlyReveals), in which case the deduction that was
+// deferred for lack of a known value applies immediately and no pending
+// entry is created: a bid that was already revealed is never "pending".
+// If we later reveal (the common order), MarkRevealed moves it from pending
+// to a balance deduction; otherwise it stays pending for 2 epochs and then
+// expires.
 func (t *PaymentTracker) RecordWonBid(keyIndex uint64, slot phase0.Slot, value uint64) {
 	epoch := t.chainSvc.GetEpochOfSlot(slot)
 
 	t.mu.Lock()
 
-	t.forKey(keyIndex).pending[slot] = &PendingPayment{
+	entry := t.forKey(keyIndex)
+
+	if _, revealedEarly := entry.earlyReveals[slot]; revealedEarly {
+		delete(entry.earlyReveals, slot)
+
+		entry.balanceAdjustment -= int64(value)
+		anchorEpoch(entry, epoch)
+
+		t.mu.Unlock()
+
+		t.log.WithFields(logrus.Fields{
+			"key_index": keyIndex,
+			"slot":      slot,
+			"value":     value,
+		}).Info("Won bid was already revealed before it was recorded: deducted from live balance")
+
+		return
+	}
+
+	entry.pending[slot] = &PendingPayment{
 		KeyIndex: keyIndex,
 		Slot:     slot,
 		Epoch:    epoch,
@@ -101,7 +139,10 @@ func (t *PaymentTracker) RecordWonBid(keyIndex uint64, slot phase0.Slot, value u
 }
 
 // MarkRevealed moves a won bid from pending to an immediate balance deduction on
-// the key that owes it.
+// the key that owes it. If RecordWonBid hasn't run yet for this slot (no
+// pending entry exists), the value isn't known here, so the deduction can't
+// apply yet: the slot is recorded in earlyReveals instead and RecordWonBid
+// applies the deduction as soon as it runs.
 func (t *PaymentTracker) MarkRevealed(keyIndex uint64, slot phase0.Slot) {
 	slotEpoch := t.chainSvc.GetEpochOfSlot(slot)
 
@@ -111,7 +152,14 @@ func (t *PaymentTracker) MarkRevealed(keyIndex uint64, slot phase0.Slot) {
 
 	payment, ok := entry.pending[slot]
 	if !ok {
+		entry.earlyReveals[slot] = slotEpoch
 		t.mu.Unlock()
+
+		t.log.WithFields(logrus.Fields{
+			"key_index": keyIndex,
+			"slot":      slot,
+		}).Warn("Reveal completed before the won bid was recorded — deferring the balance deduction")
+
 		return
 	}
 
@@ -292,6 +340,24 @@ func (t *PaymentTracker) PruneExpiredPayments(currentEpoch phase0.Epoch) {
 			}).Debug("Pruning expired pending payment")
 
 			delete(entry.pending, slot)
+		}
+
+		// Early-reveal markers of the same age whose matching RecordWonBid
+		// never arrived (the block was never seen included, or the report
+		// was lost) would otherwise sit here forever.
+		for slot, epoch := range entry.earlyReveals {
+			if currentEpoch <= epoch+1 {
+				continue
+			}
+
+			t.log.WithFields(logrus.Fields{
+				"key_index":     keyIndex,
+				"slot":          slot,
+				"reveal_epoch":  epoch,
+				"current_epoch": currentEpoch,
+			}).Debug("Pruning stale early-reveal marker (matching won bid never recorded)")
+
+			delete(entry.earlyReveals, slot)
 		}
 	}
 }

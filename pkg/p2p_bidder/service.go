@@ -18,6 +18,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -99,6 +100,7 @@ type BidSubmissionEvent struct {
 // reveals, inclusion tracking, and payment accounting live in the shared
 // payload_bidder services.
 type Service struct {
+	cfgSvc                *config.Service // settings source, handed to the scheduler
 	registry              *builder_keys.Registry
 	scheduler             *Scheduler
 	bidCreator            *BidCreator
@@ -128,6 +130,7 @@ type Service struct {
 // how the slot is bid on (a plan may activate bidding for a slot even when
 // ePBS is globally disabled).
 func NewService(
+	cfgSvc *config.Service,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	registry *builder_keys.Registry,
@@ -138,6 +141,7 @@ func NewService(
 	serviceLog := log.WithField("component", "p2p-bidder")
 
 	s := &Service{
+		cfgSvc:                cfgSvc,
 		registry:              registry,
 		clClient:              clClient,
 		chainSvc:              chainSvc,
@@ -220,7 +224,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 		s.registry,
 		s.propPrefsStore,
 		s.planSvc,
-		builderSvc.GetConfig(),
+		s.cfgSvc,
 		s.log,
 	)
 

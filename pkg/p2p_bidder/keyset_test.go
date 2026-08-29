@@ -24,7 +24,7 @@ func newTestKeyRegistry(t *testing.T, builderIndices ...uint64) *builder_keys.Re
 		MaxIndex:     32,
 	}}
 
-	registry, err := builder_keys.NewRegistry(cfg, testBuilderPrivkey, log)
+	registry, err := builder_keys.NewRegistry(config.NewStaticService(cfg), testBuilderPrivkey, log)
 	require.NoError(t, err)
 
 	for keyIndex, builderIndex := range builderIndices {

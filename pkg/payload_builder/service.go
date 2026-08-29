@@ -38,7 +38,7 @@ const transformTimeout = 2 * time.Second
 // Building is triggered by payload_attributes events from the beacon node,
 // which contain all the information needed to build a payload.
 type Service struct {
-	cfg                    *config.Config
+	cfgSvc                 *config.Service // settings source; load one snapshot per operation
 	clClient               *beacon.Client
 	chainSvc               chain.Service
 	planSvc                *action_plan.PlanService // per-slot scheduling authority
@@ -102,7 +102,7 @@ type ELClientVersion struct {
 // planSvc is the per-slot scheduling authority: every build decision polls it
 // for the slot's frozen plan (schedule, force/suppress, build timing).
 func NewService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	clClient *beacon.Client,
 	chainSvc chain.Service,
 	planSvc *action_plan.PlanService,
@@ -113,7 +113,7 @@ func NewService(
 	serviceLog := log.WithField("component", "builder-service")
 
 	s := &Service{
-		cfg:                    cfg,
+		cfgSvc:                 cfgSvc,
 		clClient:               clClient,
 		chainSvc:               chainSvc,
 		planSvc:                planSvc,
@@ -145,7 +145,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.engineClient,
 		s.chainSvc,
 		s.feeRecipient,
-		s.cfg,
+		s.cfgSvc,
 		s.log,
 		s.settingsResolvers,
 	)
@@ -261,19 +261,10 @@ func (s *Service) GetStats() BuilderStats {
 	return *s.stats
 }
 
-// GetConfig returns the current configuration.
+// GetConfig returns the latest effective config snapshot (immutable; one
+// settings generation per call).
 func (s *Service) GetConfig() *config.Config {
-	return s.cfg
-}
-
-// UpdateConfig updates the service configuration at runtime. Schedule
-// changes are handled by the plan service (the scheduling authority).
-func (s *Service) UpdateConfig(cfg *config.Config) error {
-	s.cfg = cfg
-
-	s.log.Info("Configuration updated")
-
-	return nil
+	return s.cfgSvc.Current()
 }
 
 // GetCurrentSlot returns the most recently built slot.
@@ -480,6 +471,20 @@ func newSlotBuildState() *slotBuildState {
 	return &slotBuildState{started: make(map[beacon.AttrParentKey]bool, 4)}
 }
 
+// clearBuildStarted un-marks a (slot, parent-tuple) candidate as started
+// after a failed build attempt, so a later trigger for the exact same tuple
+// (a fresh payload_attributes redelivery, a late-build check, ...) is free
+// to retry it instead of being silently dropped by the started check in
+// executeCandidateBuild for the rest of the slot.
+func (s *Service) clearBuildStarted(slot phase0.Slot, tuple beacon.AttrParentKey) {
+	s.scheduledBuildMu.Lock()
+	defer s.scheduledBuildMu.Unlock()
+
+	if state := s.slotBuilds[slot]; state != nil {
+		delete(state.started, tuple)
+	}
+}
+
 // maybeLateBuild activates a candidate build for an attributes variant that
 // arrived after the slot's build pass already ran: the chain moved (reorg,
 // payload-miss flip, late reveal) and the new parent still deserves a payload
@@ -586,7 +591,7 @@ func (s *Service) scheduleAttributesFallback(targetSlot phase0.Slot) {
 	// attributes would have arrived long before it, and synthesizing then
 	// leaves the normal scheduling path an immediate build.
 	fireAt := s.chainSvc.SlotToTime(targetSlot).
-		Add(time.Duration(s.cfg.EPBS.BuildStartTime) * time.Millisecond)
+		Add(time.Duration(s.cfgSvc.Current().EPBS.BuildStartTime) * time.Millisecond)
 
 	time.AfterFunc(max(time.Until(fireAt), 0), func() {
 		s.applyAttributesFallback(targetSlot)
@@ -736,7 +741,7 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 		return
 	}
 
-	if s.cfg.Build.Parallel {
+	if s.cfgSvc.Current().Build.Parallel {
 		var wg sync.WaitGroup
 
 		for _, target := range targets {
@@ -826,6 +831,11 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			FailedAt:  time.Now(),
 		})
 
+		// A transient failure must not permanently forfeit this parent tuple
+		// for the rest of the slot: clear the started marker so a later
+		// trigger for the same tuple can retry.
+		s.clearBuildStarted(slot, tuple)
+
 		return
 	}
 
@@ -848,6 +858,11 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
 		})
+
+		// A transient failure must not permanently forfeit this parent tuple
+		// for the rest of the slot: clear the started marker so a later
+		// trigger for the same tuple can retry.
+		s.clearBuildStarted(slot, tuple)
 
 		return
 	}

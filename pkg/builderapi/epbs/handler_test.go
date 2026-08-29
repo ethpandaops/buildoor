@@ -206,18 +206,19 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 		},
 	}
 
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	builderSvc, err := payload_builder.NewService(&config.Config{}, nil, chainSvc, planSvc, nil, common.Address{}, log)
+	builderSvc, err := payload_builder.NewService(cfgSvc, nil, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	publisher := &stubEnvelopePublisher{}
 	revealSvc := payload_bidder.NewRevealService(
-		cfg, registry, publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
+		cfgSvc, registry, publisher, chainSvc, builderSvc, nil, planSvc, nil, log)
 
 	broadcaster := &stubBlockBroadcaster{}
 
-	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
+	h := NewHandler(cfgSvc, log, chainSvc, planSvc,
 		payload_builder.NewPayloadCache(10), registry)
 	h.SetBlockBroadcaster(broadcaster)
 	h.SetRevealService(revealSvc)

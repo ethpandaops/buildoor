@@ -107,7 +107,7 @@ const (
 // broadcast validation, deadline bypass) — the plan service is the single
 // per-slot settings authority.
 type RevealService struct {
-	cfg        *config.Config // shared live config (reveal settings resolve via planSvc.Freeze)
+	cfgSvc     *config.Service // settings source (reveal settings resolve via planSvc.Freeze)
 	registry   *builder_keys.Registry
 	publisher  envelopePublisher
 	chainSvc   chain.Service
@@ -174,7 +174,7 @@ func (st *revealState) gateSatisfied(now time.Time) bool {
 // programming error. votes is the head-vote tracker backing the vote gates;
 // it may be nil (vote gates then never open and expire at the slot end).
 func NewRevealService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	registry *builder_keys.Registry,
 	publisher envelopePublisher,
 	chainSvc chain.Service,
@@ -185,7 +185,7 @@ func NewRevealService(
 	log logrus.FieldLogger,
 ) *RevealService {
 	return &RevealService{
-		cfg:        cfg,
+		cfgSvc:     cfgSvc,
 		registry:   registry,
 		publisher:  publisher,
 		chainSvc:   chainSvc,
@@ -477,7 +477,7 @@ func (s *RevealService) schedule(req *RevealRequest) {
 // a reorg). The rebuilt envelope is re-signed for the new root — the envelope
 // signature covers the beacon block root, so the old one cannot be reused.
 func (s *RevealService) shouldRebind(slot phase0.Slot, existing *revealState, req *RevealRequest) bool {
-	if !s.cfg.Reveal.RebindOnReorg {
+	if !s.cfgSvc.Current().Reveal.RebindOnReorg {
 		return false
 	}
 

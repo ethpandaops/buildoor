@@ -16,7 +16,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
-	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
@@ -76,7 +75,6 @@ type ProposalSubmitter interface {
 // (registerValidators, getHeader, submitBlindedBlock). It is constructed and
 // mounted by the parent builderapi.Server.
 type Handler struct {
-	cfg             *config.BuilderAPIConfig // shared pointer, read live
 	log             logrus.FieldLogger
 	chainSvc        chain.Service
 	payloadCache    *payload_builder.PayloadCache
@@ -99,16 +97,14 @@ type Handler struct {
 	blocksPublished  atomic.Uint64
 }
 
-// NewHandler creates a new pre-Gloas Builder API dialect handler. cfg is the
-// shared mutable config pointer; values are read live, never copied out.
+// NewHandler creates a new pre-Gloas Builder API dialect handler.
 // planSvc is the mandatory per-slot scheduling/settings authority consulted
 // (via Freeze) on every getHeader request.
-func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
+func NewHandler(log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
 	registry *builder_keys.Registry) *Handler {
 	return &Handler{
-		cfg:             cfg,
 		log:             log.WithField("component", "builderapi-legacy"),
 		chainSvc:        chainSvc,
 		planSvc:         planSvc,

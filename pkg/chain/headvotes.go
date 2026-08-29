@@ -147,7 +147,7 @@ func (s *slotVoteState) primary() (phase0.Root, *rootVoteState) {
 // percent-steps on a flush interval; crossing the configured participation
 // threshold fires immediately.
 type HeadVoteTracker struct {
-	cfg      *config.Config // shared live config; threshold read per check, never cached
+	cfgSvc   *config.Service // settings source; threshold loads a fresh snapshot per check
 	chainSvc Service
 	clClient *beacon.Client
 	log      logrus.FieldLogger
@@ -172,13 +172,13 @@ type HeadVoteTracker struct {
 
 // NewHeadVoteTracker creates a new head vote tracker.
 func NewHeadVoteTracker(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	chainSvc Service,
 	clClient *beacon.Client,
 	log logrus.FieldLogger,
 ) *HeadVoteTracker {
 	return &HeadVoteTracker{
-		cfg:                cfg,
+		cfgSvc:             cfgSvc,
 		chainSvc:           chainSvc,
 		clClient:           clClient,
 		log:                log.WithField("component", "head-vote-tracker"),
@@ -363,14 +363,15 @@ func (t *HeadVoteTracker) run() {
 	}
 }
 
-// thresholdPct returns the live-configured participation threshold in percent
-// (0 = disabled). Read on every check so UI overrides apply immediately.
+// thresholdPct returns the configured participation threshold in percent
+// (0 = disabled). A fresh snapshot per check, so UI overrides apply on the
+// next check.
 func (t *HeadVoteTracker) thresholdPct() float64 {
-	if t.cfg == nil {
+	if t.cfgSvc == nil {
 		return 0
 	}
 
-	return float64(t.cfg.EPBS.HeadVoteThresholdPct)
+	return float64(t.cfgSvc.Current().EPBS.HeadVoteThresholdPct)
 }
 
 // handleHeadEvent marks the slot's head root as the primary tracked root and

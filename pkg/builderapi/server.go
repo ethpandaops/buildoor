@@ -84,7 +84,7 @@ type RequestStats struct {
 // is NOT done here — the shared payload_bidder.InclusionTracker is the single
 // owner of won-block records, recording actual inclusion.
 type Server struct {
-	cfg             *config.BuilderAPIConfig
+	cfgSvc          *config.Service // settings source shared with the dialect handlers
 	log             *logrus.Logger
 	chainSvc        chain.Service
 	payloadCache    *payload_builder.PayloadCache // debug endpoints + dialect construction
@@ -103,7 +103,7 @@ type Server struct {
 // validatorStore is optional (an in-memory store is created when nil); when
 // provided it is the shared instance also read by the legacy registration
 // settings resolver.
-func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service,
+func NewServer(cfgSvc *config.Service, log *logrus.Logger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	registry *builder_keys.Registry,
 	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]) *Server {
@@ -113,13 +113,13 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 	}
 
 	return &Server{
-		cfg:             cfg,
+		cfgSvc:          cfgSvc,
 		log:             log,
 		chainSvc:        chainSvc,
 		payloadCache:    payloadCache,
 		validatorsStore: store,
-		legacy:          legacy.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, store, registry),
-		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, registry),
+		legacy:          legacy.NewHandler(log, chainSvc, planSvc, payloadCache, store, registry),
+		epbs:            epbsapi.NewHandler(cfgSvc, log, chainSvc, planSvc, payloadCache, registry),
 	}
 }
 

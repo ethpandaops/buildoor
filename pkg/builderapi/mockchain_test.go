@@ -20,7 +20,7 @@ import (
 // plans stored).
 func newServingPlanService() *action_plan.PlanService {
 	return action_plan.NewPlanService(
-		&config.Config{APIPort: 8080, BuilderAPIEnabled: true},
+		config.NewStaticService(&config.Config{APIPort: 8080, BuilderAPIEnabled: true}),
 		&mockChainService{}, logrus.New())
 }
 
@@ -72,3 +72,9 @@ func (m *mockChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 }
 
 func (m *mockChainService) RefreshBuilders(context.Context) error { return nil }
+
+// staticSvc wraps a Builder-API section config in a full-config static
+// settings service, as the server takes the settings service now.
+func staticSvc(cfg *config.BuilderAPIConfig) *config.Service {
+	return config.NewStaticService(&config.Config{BuilderAPI: *cfg})
+}

@@ -49,11 +49,11 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 
 	m.log.WithFields(logrus.Fields{
 		"gloas_fork_epoch": forkEpoch,
-		"target_keys":      m.cfg.BuilderKeys.EffectiveTargetCount(),
+		"target_keys":      m.cfgSvc.Current().BuilderKeys.EffectiveTargetCount(),
 	}).Info("Gloas scheduled, evaluating early builder onboarding")
 	m.fireEvent("early_onboard", fmt.Sprintf(
 		"Gloas fork at epoch %d, preparing early onboarding of %d builder keys",
-		forkEpoch, m.cfg.BuilderKeys.EffectiveTargetCount()), "info")
+		forkEpoch, m.cfgSvc.Current().BuilderKeys.EffectiveTargetCount()), "info")
 
 	// Subscribe before the first evaluation so an epoch transition can't slip through
 	// between a "wait" decision and the subscription.
@@ -82,7 +82,7 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 // not yet in the builder registry and not already waiting in the pending-deposit
 // queue (restart safety — a prior run's deposits must not be submitted twice).
 func (m *Manager) earlyOnboardTargets() []*builder_keys.Key {
-	target := m.cfg.BuilderKeys.EffectiveTargetCount()
+	target := m.cfgSvc.Current().BuilderKeys.EffectiveTargetCount()
 
 	pending := make([]*builder_keys.Key, 0, target)
 
@@ -159,7 +159,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		return true
 	}
 
-	amount := m.cfg.DepositAmount
+	amount := m.cfgSvc.Current().DepositAmount
 
 	// Two deposit windows (per design): at least earlyOnboardFinalizationMargin epochs
 	// before the fork if the pending-deposit queue is long enough to shield the whole

@@ -94,7 +94,7 @@ func (h *APIHandler) GetBuilderKeys(w http.ResponseWriter, _ *http.Request) {
 
 // builderKeysSettings snapshots the mutable key-set configuration.
 func (h *APIHandler) builderKeysSettings() BuilderKeysSettings {
-	cfg := h.settingsSvc.Load()
+	cfg := h.settingsSvc.Current()
 
 	return BuilderKeysSettings{
 		TargetCount: cfg.BuilderKeys.EffectiveTargetCount(),
@@ -341,7 +341,7 @@ func (h *APIHandler) ExitBuilderKey(w http.ResponseWriter, r *http.Request) {
 	// Lower the target after the exit landed, so a failed exit never shrinks
 	// the fleet the operator asked for.
 	if req.LowerTarget {
-		target := h.settingsSvc.Load().BuilderKeys.EffectiveTargetCount()
+		target := h.settingsSvc.Current().BuilderKeys.EffectiveTargetCount()
 		if target > 1 {
 			h.applyKeyTarget(w, r, token, "builder_keys.target", detail, target-1)
 		}

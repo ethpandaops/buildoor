@@ -65,7 +65,7 @@ var _ Service = (*service)(nil)
 
 // service is the implementation of Service.
 type service struct {
-	cfg       *config.Config
+	cfgSvc    *config.Service // settings source; one snapshot per read
 	clClient  *beacon.Client
 	chainSpec *ChainSpec
 	genesis   *beacon.Genesis
@@ -99,14 +99,14 @@ type service struct {
 
 // NewService creates a new chain service.
 func NewService(
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	clClient *beacon.Client,
 	chainSpec *ChainSpec,
 	genesis *beacon.Genesis,
 	log logrus.FieldLogger,
 ) Service {
 	return &service{
-		cfg:                  cfg,
+		cfgSvc:               cfgSvc,
 		clClient:             clClient,
 		chainSpec:            chainSpec,
 		genesis:              genesis,
@@ -127,7 +127,7 @@ func (s *service) Start(ctx context.Context) error {
 	}
 
 	// Start head vote tracker
-	s.headVoteTracker = NewHeadVoteTracker(s.cfg, s, s.clClient, s.log)
+	s.headVoteTracker = NewHeadVoteTracker(s.cfgSvc, s, s.clClient, s.log)
 	s.headVoteTracker.Start(s.ctx)
 
 	// Start canonical head tracker

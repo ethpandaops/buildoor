@@ -539,9 +539,20 @@ Key config sections:
 
 ### Settings Service & State Persistence (`--state-db`)
 
-The **Settings Service** (`pkg/settings`) is the central authority for all *mutable*
-runtime config. It owns the single effective `config.Config` that every module reads
-and is the only writer. Setting values resolve from three layers:
+The **Settings Service** (`config.Service` in `pkg/config/settings.go`) is the
+central authority for all *mutable* runtime config and the dependency modules
+hold instead of a raw `*config.Config`. It publishes **immutable config
+snapshots**: `Current()` returns the latest generation, which never changes
+underneath its reader; every applied change builds a fresh `Config` (shallow
+copy — all fields are values) and swaps it in atomically. Consumers load
+exactly ONE snapshot per operation (HTTP request, scheduler tick, build,
+reconcile pass) and thread it down the call stack. The greppable rule:
+`*config.Service` may live in struct fields; `*config.Config` (and section
+pointers) appear only as function parameters and locals — storing a snapshot
+freezes that consumer on a stale generation. One-shot commands and tests wrap
+a fixed config via `config.NewStaticService(cfg)` (serves the same pointer
+every call, so single-threaded tests may still mutate it between operations).
+Setting values resolve from three layers:
 
 ```
 hardcoded defaults  <  CLI-supplied (flag/env/config)  <  UI override
@@ -555,12 +566,14 @@ CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
   form the CLI layer, so bumping a *hardcoded default* in a new release never
   clobbers a UI override.
 
-The mutable-setting registry lives in `pkg/settings/fields.go` (keys in `keys.go`);
-the per-module enable flags (`epbs_enabled`, `builder_api_enabled`,
-`lifecycle_enabled`) are ordinary settings too. Write handlers call
-`settingsSvc.SetMany`, which mutates the shared config in place, persists overrides,
-and fires `OnChange` callbacks (registered in `cmd/run.go`) that trigger module
-resets (`builder.UpdateConfig`, `epbs.UpdateConfig`) and `SetEnabled` syncs.
+The mutable-setting registry lives in `pkg/config/settings_fields.go` (keys in
+`settings_keys.go`); the per-module enable flags (`epbs_enabled`,
+`builder_api_enabled`, `lifecycle_enabled`) are ordinary settings too. Write
+handlers call `settingsSvc.SetMany`, which publishes the new snapshot
+generation (a `SetMany` batch is atomic: readers see all of it or none of it),
+persists overrides, and fires `OnChange` callbacks (registered in
+`cmd/run.go`) that trigger module resets (plan-service schedule accounting)
+and `SetEnabled` syncs from a fresh `Current()` snapshot.
 
 The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sqlx`
 + goose migrations) persists across restarts when `--state-db <path>` is set:
@@ -593,7 +606,7 @@ numbered step comments there match this list 1:1):
 3. Initialize BLS signer
 4. Initialize RPC client and wallet (if lifecycle available)
 5. Fetch chain spec & genesis (wait for the beacon node), apply slot-time timing defaults
-6. Open the state-db (`--state-db`) and initialize the central Settings Service (applies persisted overrides into `cfg` in place before any module reads it)
+6. Open the state-db (`--state-db`) and initialize the central Settings Service (its first published snapshot already includes persisted overrides; the builder key registry is constructed right after it, since the fleet targets are mutable settings)
 7. Start chain service
 7b. Start the action plan service (the per-slot scheduling authority; persisted via the `kv_store` `slot_plans` namespace; a mandatory constructor dependency of every action module below)
 8. Initialize lifecycle manager (if prerequisites available)

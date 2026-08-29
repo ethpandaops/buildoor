@@ -27,7 +27,7 @@ type PayloadBuilder struct {
 	feeRecipient common.Address
 
 	settingsResolvers []ProposerSettingsResolver // asked in order for proposer settings; first match wins
-	cfg               *config.Config             // shared config; mutable settings are read live, never cached
+	cfgSvc            *config.Service            // settings source; one snapshot per build
 	log               logrus.FieldLogger
 
 	// Active build tracking: multiple candidate builds may run for the same
@@ -55,7 +55,8 @@ type activeBuild struct {
 }
 
 // NewPayloadBuilder creates a new payload builder.
-// cfg is the shared config pointer; mutable settings (e.g. PayloadBuildTime) are read live from it.
+// cfgSvc is the settings source; each build loads one immutable config
+// snapshot at its start, so a build sees a single settings generation.
 // settingsResolvers are asked in order for the proposer's announced fee recipient and gas
 // limit; the first match wins.
 func NewPayloadBuilder(
@@ -63,7 +64,7 @@ func NewPayloadBuilder(
 	engineClient EngineClient,
 	chainSvc chain.Service,
 	feeRecipient common.Address,
-	cfg *config.Config,
+	cfgSvc *config.Service,
 	log logrus.FieldLogger,
 	settingsResolvers []ProposerSettingsResolver,
 ) *PayloadBuilder {
@@ -73,7 +74,7 @@ func NewPayloadBuilder(
 		engineClient:      engineClient,
 		feeRecipient:      feeRecipient,
 		settingsResolvers: settingsResolvers,
-		cfg:               cfg,
+		cfgSvc:            cfgSvc,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
 		log:               log.WithField("component", "payload-builder"),
 	}
@@ -96,6 +97,10 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	attrs *beacon.PayloadAttributesEvent,
 	buildTimeMs uint64,
 ) (*Payload, error) {
+	// One config snapshot for the whole build: every setting read below sees
+	// the same settings generation.
+	cfg := b.cfgSvc.Current()
+
 	buildKey := activeBuildKey{
 		slot:       attrs.ProposalSlot,
 		parentRoot: attrs.ParentBlockRoot,
@@ -270,9 +275,9 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"payload_id": fmt.Sprintf("%x", payloadID[:]),
 	}).Debug("Payload build requested from attributes")
 
-	// Read the build time live from config so UI overrides take effect
-	// immediately; an explicit per-build time (speculative candidates) wins.
-	payloadBuildTime := b.cfg.PayloadBuildTime
+	// An explicit per-build time (speculative candidates) wins over the
+	// configured build time.
+	payloadBuildTime := cfg.PayloadBuildTime
 	if buildTimeMs != 0 {
 		payloadBuildTime = buildTimeMs
 	}
@@ -302,7 +307,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		return nil, fmt.Errorf("getPayload returned no execution payload")
 	}
 
-	gasLimitOverride := b.resolveGasLimitOverride(buildCtx, attrs, beaconFork,
+	gasLimitOverride := b.resolveGasLimitOverride(buildCtx, cfg, attrs, beaconFork,
 		targetGasLimit, enginePayload.GasLimit, enginePayload.GasUsed)
 
 	// Inject our extra-data marker (and the gas limit override, if any) and
@@ -310,7 +315,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	newHash, err := ModifyPayloadExtraData(
 		enginePayload,
 		resp.ExecutionRequests,
-		[]byte(b.cfg.ExtraData),
+		[]byte(cfg.ExtraData),
 		common.Hash(attrs.ParentBeaconBlockRoot),
 		gasLimitOverride,
 	)
@@ -366,11 +371,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 // or the payload's gas usage exceeds the required limit.
 func (b *PayloadBuilder) resolveGasLimitOverride(
 	ctx context.Context,
+	cfg *config.Config,
 	attrs *beacon.PayloadAttributesEvent,
 	beaconFork version.DataVersion,
 	targetGasLimit, payloadGasLimit, payloadGasUsed uint64,
 ) uint64 {
-	if !b.cfg.Build.EnforceBidGasLimit || beaconFork < version.DataVersionGloas || targetGasLimit == 0 {
+	if !cfg.Build.EnforceBidGasLimit || beaconFork < version.DataVersionGloas || targetGasLimit == 0 {
 		return 0
 	}
 

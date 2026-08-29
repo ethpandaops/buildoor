@@ -57,9 +57,10 @@ func sanitizeTestSetup(t *testing.T, blocks ...*beacon.BlockInfo) *Service {
 	chainSvc.headTracker = newPrimedHeadTracker(spec, blocks...)
 
 	cfg := config.DefaultConfig()
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
-	svc, err := NewService(cfg, nil, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, nil, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()
@@ -161,12 +162,13 @@ func TestHandlePayloadAttributes_RescheduleOnParentChange(t *testing.T) {
 
 	cfg := config.DefaultConfig()
 	cfg.EPBSEnabled = true
-	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+	cfgSvc := config.NewStaticService(cfg)
+	planSvc := action_plan.NewPlanService(cfgSvc, chainSvc, log)
 
 	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
 	require.NoError(t, err)
 
-	svc, err := NewService(cfg, clClient, chainSvc, planSvc, nil, common.Address{}, log)
+	svc, err := NewService(cfgSvc, clClient, chainSvc, planSvc, nil, common.Address{}, log)
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()
