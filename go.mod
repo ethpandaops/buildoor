@@ -6,7 +6,7 @@ require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/ethereum/go-ethereum v1.17.5
 	github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28
-	github.com/ethpandaops/go-eth2-client v0.1.7-0.20260731014719-0dcfc98f58c3
+	github.com/ethpandaops/go-eth2-client v0.1.7
 	github.com/ethpandaops/service-authenticatoor v0.0.3
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/goccy/go-yaml v1.19.2
@@ -16,15 +16,15 @@ require (
 	github.com/holiman/uint256 v1.3.2
 	github.com/itchyny/gojq v0.12.19
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/pk910/dynamic-ssz v1.3.2
+	github.com/pk910/dynamic-ssz v1.3.3-0.20260812091520-ef568569f9c1
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
-	github.com/sirupsen/logrus v1.10.1
+	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.16.6
 	github.com/tyler-smith/go-bip39 v1.1.0
@@ -42,7 +42,6 @@ require (
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.20.0 // indirect
-	github.com/casbin/govaluate v1.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/consensys/gnark-crypto v0.18.1 // indirect
 	github.com/crate-crypto/go-eth-kzg v1.5.0 // indirect
@@ -80,7 +79,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/pk910/hashtree-bindings v0.2.2 // indirect
+	github.com/pk910/hashtree-bindings v0.2.5 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
@@ -103,7 +102,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/mod v0.38.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
