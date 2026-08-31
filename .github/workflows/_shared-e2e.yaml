@@ -11,7 +11,10 @@ jobs:
   e2e_kurtosis:
     name: Run Kurtosis E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The check runs three win phases in one enclave (pre-Gloas Builder API,
+    # post-Gloas p2p, post-Gloas Builder API); the post-Gloas ones first wait
+    # for the builder's deposit to activate on chain.
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
