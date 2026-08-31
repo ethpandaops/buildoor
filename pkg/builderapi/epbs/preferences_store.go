@@ -24,6 +24,10 @@ const PreferencesNamespace = "builder_preferences"
 // an earlier one) and optionally persists them to the state-db so they survive
 // restarts.
 //
+// The stored preference caps the execution-payment portion of served bids
+// (which is driven by the builder_api execution-payment settings), unless the
+// ignore_preference_limit setting deliberately serves beyond it.
+//
 // Per the Gloas builder-specs, if no preferences have been submitted for a
 // validator, the builder MUST treat its max_execution_payment as 0; GetOrDefault
 // encodes that rule.

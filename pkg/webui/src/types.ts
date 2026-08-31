@@ -625,6 +625,9 @@ export interface BuilderAPIPlan {
   mode: ActionMode;
   value_subsidy_gwei?: number;
   total_value_override_gwei?: number;
+  execution_payment_gwei?: number; // unbacked execution_payment portion, wins over percent
+  execution_payment_percent?: number; // 0-100, portion of the served total value
+  ignore_preference_limit?: boolean; // serve beyond the proposer's max_execution_payment
   response_delay_ms?: number;
   serve_candidates?: string; // all | canonical_only | key list
 }
@@ -750,6 +753,9 @@ export interface ResolvedBidSettings {
 export interface ResolvedBuilderAPISettings {
   subsidy_gwei: number;
   total_value_gwei?: number;
+  execution_payment_gwei?: number;
+  execution_payment_percent?: number;
+  ignore_preference_limit?: boolean;
   delay_ms?: number;
   serve_candidates?: string;
   forced?: boolean;

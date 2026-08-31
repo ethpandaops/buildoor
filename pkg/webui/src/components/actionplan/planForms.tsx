@@ -19,6 +19,9 @@ export interface FieldDef {
   // Enum fields render a select instead of a number input; the raw string
   // value is sent as the override.
   options?: string[];
+  // Boolean fields render as a true/false select (options must be
+  // ['true', 'false']) and are sent as real booleans.
+  bool?: boolean;
 }
 
 export const BID_FIELDS: FieldDef[] = [
@@ -38,6 +41,12 @@ export const BID_FIELDS: FieldDef[] = [
 export const BUILDER_API_FIELDS: FieldDef[] = [
   { key: 'value_subsidy_gwei', label: 'Value Subsidy', unit: 'gwei' },
   { key: 'total_value_override_gwei', label: 'Total Value Override', unit: 'gwei' },
+  { key: 'execution_payment_gwei', label: 'Execution Payment', unit: 'gwei' },
+  { key: 'execution_payment_percent', label: 'Execution Payment', unit: '%' },
+  {
+    key: 'ignore_preference_limit', label: 'Ignore Pref Limit', unit: '',
+    options: ['true', 'false'], bool: true,
+  },
   { key: 'response_delay_ms', label: 'Response Delay', unit: 'ms' },
   {
     key: 'serve_candidates', label: 'Serve Candidates', unit: '',
@@ -77,7 +86,7 @@ export function initCategoryState(
   const fields: Record<string, string> = {};
   for (const def of defs) {
     const value = raw[def.key];
-    if (typeof value === 'number' || typeof value === 'string') {
+    if (typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean') {
       fields[def.key] = String(value);
     }
   }
@@ -93,8 +102,8 @@ export function parseCategoryFields(
   name: string,
   defs: FieldDef[],
   state: CategoryFormState
-): { values: Record<string, number | string>; error: string | null } {
-  const values: Record<string, number | string> = {};
+): { values: Record<string, number | string | boolean>; error: string | null } {
+  const values: Record<string, number | string | boolean> = {};
 
   for (const def of defs) {
     const raw = (state.fields[def.key] ?? '').trim();
@@ -104,7 +113,7 @@ export function parseCategoryFields(
       if (!def.options.includes(raw)) {
         return { values, error: `${name}: ${def.label} must be one of ${def.options.join(', ')}` };
       }
-      values[def.key] = raw;
+      values[def.key] = def.bool ? raw === 'true' : raw;
       continue;
     }
 
@@ -158,9 +167,10 @@ export function resolveCategory(
 
         for (const def of defs) {
           const rawOld = initial[def.key];
-          const oldValue = typeof rawOld === 'number' || typeof rawOld === 'string'
-            ? (rawOld as number | string)
-            : undefined;
+          const oldValue =
+            typeof rawOld === 'number' || typeof rawOld === 'string' || typeof rawOld === 'boolean'
+              ? (rawOld as number | string | boolean)
+              : undefined;
           const newValue = values[def.key];
 
           if (newValue === undefined && oldValue !== undefined) {

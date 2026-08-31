@@ -167,6 +167,22 @@ type BuilderAPIPlan struct {
 	// subsidy. May exceed the block value to test payment edge cases.
 	TotalValueOverrideGwei *uint64 `json:"total_value_override_gwei,omitempty"`
 
+	// ExecutionPaymentGwei replaces the global execution-payment portion for
+	// this slot: the absolute part of the served total value claimed as
+	// execution_payment (unbacked; capped by the proposer's advertised
+	// max_execution_payment unless ignore_preference_limit; wins over the
+	// percent).
+	ExecutionPaymentGwei *uint64 `json:"execution_payment_gwei,omitempty"`
+
+	// ExecutionPaymentPercent replaces the global percentage (0-100) of the
+	// served total value claimed as execution_payment.
+	ExecutionPaymentPercent *uint64 `json:"execution_payment_percent,omitempty"`
+
+	// IgnorePreferenceLimit serves this slot's execution-payment portion even
+	// beyond the proposer's advertised max_execution_payment (deliberately
+	// spec-violating).
+	IgnorePreferenceLimit *bool `json:"ignore_preference_limit,omitempty"`
+
 	// ResponseDelayMs delays the bid response by this many milliseconds
 	// (context-cancellable, capped at one slot).
 	ResponseDelayMs *int64 `json:"response_delay_ms,omitempty"`
@@ -189,13 +205,18 @@ func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
 	c := *p
 	c.ValueSubsidyGwei = cloneScalar(p.ValueSubsidyGwei)
 	c.TotalValueOverrideGwei = cloneScalar(p.TotalValueOverrideGwei)
+	c.ExecutionPaymentGwei = cloneScalar(p.ExecutionPaymentGwei)
+	c.ExecutionPaymentPercent = cloneScalar(p.ExecutionPaymentPercent)
+	c.IgnorePreferenceLimit = cloneScalar(p.IgnorePreferenceLimit)
 	c.ResponseDelayMs = cloneScalar(p.ResponseDelayMs)
 
 	return &c
 }
 
 func (p *BuilderAPIPlan) hasOverrides() bool {
-	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil || p.ResponseDelayMs != nil ||
+	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil ||
+		p.ExecutionPaymentGwei != nil || p.ExecutionPaymentPercent != nil ||
+		p.IgnorePreferenceLimit != nil || p.ResponseDelayMs != nil ||
 		p.ServeCandidates != nil || p.KeyStrategy != nil
 }
 
@@ -211,6 +232,11 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	if p.ResponseDelayMs != nil && (*p.ResponseDelayMs < 0 || *p.ResponseDelayMs > slotMs) {
 		return fmt.Errorf("builder_api: response_delay_ms must be within [0, %d], got %d",
 			slotMs, *p.ResponseDelayMs)
+	}
+
+	if p.ExecutionPaymentPercent != nil && *p.ExecutionPaymentPercent > 100 {
+		return fmt.Errorf("builder_api: execution_payment_percent must be within [0, 100], got %d",
+			*p.ExecutionPaymentPercent)
 	}
 
 	if p.ServeCandidates != nil {

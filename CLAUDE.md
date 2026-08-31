@@ -411,8 +411,19 @@ npm run clean
      module is globally disabled. The `enabled` flag keeps gating only the
      non-slot-scoped endpoints (registrations, preferences, block submission).
      Frozen per-slot values drive subsidy, absolute total bid value (uint256 wei
-     math) and a context-cancellable response delay. Bid requests beyond
-     `currentSlot+1` are rejected with 400 before freezing
+     math), the execution-payment split and a context-cancellable response delay.
+     Bid requests beyond `currentSlot+1` are rejected with 400 before freezing.
+     The Gloas execution-payment split (`builder_api.execution_payment_gwei`
+     absolute, wins over `builder_api.execution_payment_percent`; default 0 =
+     everything paid trustlessly via bid value) claims part of the served total
+     as `execution_payment` — a deliberately UNBACKED claim (no EL payment tx is
+     ever made), capped by the proposer's advertised `max_execution_payment`
+     preference (0 when never submitted, per spec) unless
+     `builder_api.ignore_preference_limit` deliberately serves beyond it (a
+     spec-violating bid clients should reject); gossip bids stay
+     `execution_payment = 0` per spec. An unset `--builder-api-url` skips the
+     SignedRequestAuth builder_url match on BOTH ePBS handlers (bids and
+     preferences alike)
    - Outcomes are recorded through the narrow `SlotResultRecorder` interface
      (implemented by the slot results tracker): bids `served` only after a
      successful response write, `suppressed`/`failed`/`cancelled` otherwise, with
@@ -518,7 +529,11 @@ Key config sections:
   `--epbs-bid-value-override` (absolute p2p bid base, 0 = off),
   `--epbs-vote-threshold` (head-vote participation threshold in percent,
   default 60, 0 = off),
-  `--builder-api-value-override` (absolute served total value, 0 = off)
+  `--builder-api-value-override` (absolute served total value, 0 = off),
+  `--builder-api-execution-payment` / `--builder-api-execution-payment-percent`
+  (unbacked `execution_payment` portion of served Gloas bids, absolute gwei
+  wins over percent, 0 = off; capped by the proposer's advertised
+  `max_execution_payment` unless `--builder-api-ignore-preference-limit`)
 - **Payload reveal** (own section — serves both the p2p bidder and Builder
   API flows): `--reveal-enabled` (default true), `--reveal-gate-mode`
   (time | vote | vote_or_time | vote_and_time, default vote_or_time —
