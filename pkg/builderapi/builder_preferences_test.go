@@ -216,6 +216,10 @@ func TestSubmitBuilderPreferences_BadSignature(t *testing.T) {
 	assert.False(t, ok, "preference must not be stored when signature verification fails")
 }
 
+// TestSubmitBuilderPreferences_NoBuilderURLConfigured verifies that an unset
+// builder URL skips the auth.message.builder_url match (mirroring
+// getExecutionPayloadBid) instead of failing: the validly signed request is
+// accepted whatever URL its auth names.
 func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 	gfv := phase0.Version{}
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
@@ -234,7 +238,10 @@ func TestSubmitBuilderPreferences_NoBuilderURLConfigured(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	got, ok := srv.GetBuilderPreferencesStore().Get(pk)
+	require.True(t, ok, "preference should be stored when the URL check is skipped")
+	assert.Equal(t, phase0.Gwei(5_000_000_000), got)
 }
 
 func TestSubmitBuilderPreferences_InvalidJSON(t *testing.T) {
