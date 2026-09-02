@@ -115,6 +115,20 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
+	rootCmd.PersistentFlags().String("build-source", defaults.Build.Source, "Payload transaction source: pool (forkchoiceUpdated + getPayload) or testing (tx intake queue via geth testing_buildBlockV1, needs --el-rpc with the testing namespace)")
+
+	// Testing build source (tx intake + testing_buildBlockV1)
+	rootCmd.PersistentFlags().Uint64("testing-fill-gas-pct", defaults.Testing.FillGasPct, "Share of the block gas limit to pack from the intake queue, 1..100")
+	rootCmd.PersistentFlags().Uint64("testing-max-txs", defaults.Testing.MaxTxs, "Max transactions per testing-built block (0 = unlimited)")
+	rootCmd.PersistentFlags().Uint64("testing-max-blobs", defaults.Testing.MaxBlobs, "Max blobs per testing-built block (0 = the fork's blob limit)")
+	rootCmd.PersistentFlags().String("testing-policy", defaults.Testing.Policy, "Packing order of the intake queue: fifo, fee, round_robin or as_given")
+	rootCmd.PersistentFlags().Uint64("testing-base-fee-ceiling-gwei", defaults.Testing.BaseFeeCeilingGwei, "Above this next base fee the fill drops to the EIP-1559 target (0 = off)")
+	rootCmd.PersistentFlags().Int64("testing-build-deadline", defaults.Testing.BuildDeadlineMs, "Latest testing build completion in ms relative to slot start (0 = ePBS bid start minus 300 ms)")
+	rootCmd.PersistentFlags().String("testing-on-failure", defaults.Testing.OnFailure, "What a failed or late testing build does: skip the slot or fall back to the pool build")
+	rootCmd.PersistentFlags().Uint64("testing-queue-max-txs", defaults.Testing.QueueMaxTxs, "Intake queue capacity; submissions beyond it are rejected")
+	rootCmd.PersistentFlags().Uint64("testing-queue-max-age-slots", defaults.Testing.QueueMaxAgeSlots, "Queued transactions older than this many slots are evicted")
+	rootCmd.PersistentFlags().Uint64("testing-max-attempts", defaults.Testing.MaxAttempts, "Build attempts per slot after attributed EL failures")
+	rootCmd.PersistentFlags().Uint64("testing-max-strikes", defaults.Testing.MaxStrikes, "Attributed build failures before a queued transaction is evicted")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
@@ -269,6 +283,20 @@ func initConfig() error {
 			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
 			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),
 			EnforceBidGasLimit:        v.GetBool("build-enforce-bid-gas-limit"),
+			Source:                    v.GetString("build-source"),
+		},
+		Testing: config.TestingConfig{
+			FillGasPct:         v.GetUint64("testing-fill-gas-pct"),
+			MaxTxs:             v.GetUint64("testing-max-txs"),
+			MaxBlobs:           v.GetUint64("testing-max-blobs"),
+			Policy:             v.GetString("testing-policy"),
+			BaseFeeCeilingGwei: v.GetUint64("testing-base-fee-ceiling-gwei"),
+			BuildDeadlineMs:    v.GetInt64("testing-build-deadline"),
+			OnFailure:          v.GetString("testing-on-failure"),
+			QueueMaxTxs:        v.GetUint64("testing-queue-max-txs"),
+			QueueMaxAgeSlots:   v.GetUint64("testing-queue-max-age-slots"),
+			MaxAttempts:        v.GetUint64("testing-max-attempts"),
+			MaxStrikes:         v.GetUint64("testing-max-strikes"),
 		},
 		PayloadBuildTime:            v.GetUint64("payload-build-time"),
 		SlotResultRetentionEpochs:   v.GetUint64("slot-result-retention-epochs"),

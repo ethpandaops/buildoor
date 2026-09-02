@@ -62,6 +62,12 @@ definitions:
           grandparent_empty) -> mode (auto, always, never). Absent keys inherit
           the global policy.
         type: object
+      fill:
+        allOf:
+        - $ref: '#/definitions/action_plan.FillPlan'
+        description: |-
+          Fill overrides the testing build's packing for this slot (nil fields
+          inherit the global testing.* config).
       reorg_parent_payload:
         description: |-
           ReorgParentPayload builds on the grandparent (n-2) execution payload
@@ -72,6 +78,19 @@ definitions:
           rejected by mainnet forkchoice, but useful for exercising the reveal /
           inclusion path against a withheld parent.
         type: boolean
+      source:
+        description: |-
+          Source overrides the global build source for this slot: pool or
+          testing (nil inherits config build.source).
+        type: string
+      txs:
+        description: |-
+          Txs is the explicit, ordered transaction list (hashes, must be queued
+          in the tx intake) the slot's testing build packs, exactly and in this
+          order; it implies policy as_given. Any deviation fails the build.
+        items:
+          type: string
+        type: array
     type: object
   action_plan.BuilderAPIPlan:
     properties:
@@ -122,6 +141,17 @@ definitions:
         description: ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for
           this slot.
         type: integer
+    type: object
+  action_plan.FillPlan:
+    properties:
+      gas_pct:
+        type: integer
+      max_blobs:
+        type: integer
+      max_txs:
+        type: integer
+      policy:
+        type: string
     type: object
   action_plan.FrozenPlan:
     properties:
@@ -278,6 +308,12 @@ definitions:
           candidate key -> auto/always/never, merged from the global config and
           the plan's build.candidates overrides.
         type: object
+      fill:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedFill'
+        description: |-
+          Fill is the effective testing packing for the slot (testing source
+          only): the global testing.* config merged with the plan's overrides.
       forced:
         description: |-
           Forced marks builds the plan pushed past the schedule (they never
@@ -298,6 +334,9 @@ definitions:
         description: |-
           SkipReason is one of the BuildSkipReason* constants when Build is
           false, empty otherwise.
+        type: string
+      source:
+        description: 'Source is the effective build source for the slot: pool or testing.'
         type: string
     type: object
   action_plan.ResolvedBuilderAPISettings:
@@ -339,6 +378,21 @@ definitions:
           TotalValueGwei, when set, is the absolute total proposer-visible bid
           value (before the Gloas execution-payment split).
         type: integer
+    type: object
+  action_plan.ResolvedFill:
+    properties:
+      gas_pct:
+        type: integer
+      max_blobs:
+        type: integer
+      max_txs:
+        type: integer
+      policy:
+        type: string
+      txs:
+        items:
+          type: string
+        type: array
     type: object
   action_plan.ResolvedRevealSettings:
     properties:
@@ -913,6 +967,42 @@ definitions:
       target:
         type: string
     type: object
+  api.TxQueueResponse:
+    properties:
+      enabled:
+        type: boolean
+      plan_checks:
+        $ref: '#/definitions/tx_plan_verifier.Counters'
+      recent_evictions:
+        items:
+          $ref: '#/definitions/tx_intake.Eviction'
+        type: array
+      senders:
+        additionalProperties:
+          items:
+            $ref: '#/definitions/api.TxQueueSenderEntry'
+          type: array
+        type: object
+      source:
+        type: string
+      stats:
+        $ref: '#/definitions/tx_intake.Stats'
+    type: object
+  api.TxQueueSenderEntry:
+    properties:
+      age_ms:
+        type: integer
+      blobs:
+        type: integer
+      gas:
+        type: integer
+      hash:
+        type: string
+      nonce:
+        type: integer
+      strikes:
+        type: integer
+    type: object
   api.UpdateActionPlanRequest:
     properties:
       updates:
@@ -969,6 +1059,31 @@ definitions:
         type: integer
       start_slot:
         type: integer
+    type: object
+  api.UpdateTestingConfigRequest:
+    properties:
+      base_fee_ceiling_gwei:
+        type: integer
+      build_deadline_ms:
+        type: integer
+      fill_gas_pct:
+        type: integer
+      max_attempts:
+        type: integer
+      max_blobs:
+        type: integer
+      max_strikes:
+        type: integer
+      max_txs:
+        type: integer
+      on_failure:
+        type: string
+      policy:
+        type: string
+      queue_max_age_slots:
+        type: integer
+      source:
+        type: string
     type: object
   api.ValidatorRegistrationResponse:
     description: Returns the list of validators registered via the Builder API (fee
@@ -1430,6 +1545,12 @@ definitions:
         type: array
       slot:
         type: integer
+      tx_plan:
+        allOf:
+        - $ref: '#/definitions/slot_results.TxPlanResult'
+        description: |-
+          TxPlan is the testing build's committed transaction list and its
+          verification against the included block (nil for pool builds).
       updated_at:
         type: string
     type: object
@@ -1443,6 +1564,125 @@ definitions:
     - SubmissionStatusReceived
     - SubmissionStatusAccepted
     - SubmissionStatusFailed
+  slot_results.TxPlanEviction:
+    properties:
+      hash:
+        type: string
+      reason:
+        type: string
+    type: object
+  slot_results.TxPlanResult:
+    properties:
+      attempts:
+        type: integer
+      blobs:
+        type: integer
+      build_ms:
+        type: integer
+      detail:
+        type: string
+      dropped:
+        items:
+          $ref: '#/definitions/slot_results.TxPlanEviction'
+        type: array
+      evicted:
+        items:
+          $ref: '#/definitions/slot_results.TxPlanEviction'
+        type: array
+      expected_count:
+        type: integer
+      expected_hashes:
+        items:
+          type: string
+        type: array
+      first_mismatch:
+        type: integer
+      gas_cap:
+        type: integer
+      gas_limit:
+        type: integer
+      gas_sum:
+        type: integer
+      gas_used:
+        type: integer
+      included_count:
+        type: integer
+      policy:
+        type: string
+      skipped:
+        additionalProperties:
+          type: integer
+        type: object
+      status:
+        $ref: '#/definitions/slot_results.TxPlanStatus'
+      truncated:
+        type: boolean
+      verified_at:
+        type: string
+    type: object
+  slot_results.TxPlanStatus:
+    enum:
+    - pending
+    - match
+    - mismatch
+    - block_not_found
+    - not_included
+    - missed
+    - orphaned
+    type: string
+    x-enum-varnames:
+    - TxPlanPending
+    - TxPlanMatch
+    - TxPlanMismatch
+    - TxPlanBlockNotFound
+    - TxPlanNotIncluded
+    - TxPlanMissed
+    - TxPlanOrphaned
+  tx_intake.Eviction:
+    properties:
+      at:
+        type: string
+      hash:
+        items:
+          type: integer
+        type: array
+      nonce:
+        type: integer
+      reason:
+        type: string
+      sender:
+        type: string
+    type: object
+  tx_intake.Stats:
+    properties:
+      added_total:
+        type: integer
+      evictions_total:
+        additionalProperties:
+          type: integer
+        type: object
+      oldest_age_ms:
+        type: integer
+      senders:
+        type: integer
+      txs:
+        type: integer
+    type: object
+  tx_plan_verifier.Counters:
+    properties:
+      block_not_found:
+        type: integer
+      checked:
+        type: integer
+      match:
+        type: integer
+      mismatch:
+        type: integer
+      missed:
+        type: integer
+      orphaned:
+        type: integer
+    type: object
 info:
   contact: {}
 paths:
@@ -2739,4 +2979,56 @@ paths:
       summary: Get the current version
       tags:
       - Version
+  /buildoor/tx-queue:
+    delete:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Flush the tx intake queue
+      tags:
+      - buildoor
+    get:
+      parameters:
+      - description: include per-sender entries
+        in: query
+        name: senders
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TxQueueResponse'
+      summary: Tx intake queue
+      tags:
+      - buildoor
+  /config/testing:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: settings
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateTestingConfigRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update testing build settings
+      tags:
+      - config
 swagger: "2.0"

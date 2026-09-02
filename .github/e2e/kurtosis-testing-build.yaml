@@ -1,0 +1,41 @@
+# Testing build source e2e: a minimal-preset devnet with gloas at epoch 1, one
+# geth+lighthouse participant, and a dedicated buildoor whose EL RPC serves the
+# testing namespace. The e2e script switches the builder to the testing source,
+# feeds the tx intake, and checks every won block against its tx plan.
+participants:
+  - el_type: geth
+    el_image: ethpandaops/geth:master
+    el_extra_params:
+      - --http.api=admin,engine,net,eth,web3,debug,txpool,testing
+    cl_type: lighthouse
+    cl_image: ethpandaops/lighthouse:unstable
+    vc_image: ethpandaops/lighthouse:unstable
+    validator_count: 64
+    supernode: true
+
+network_params:
+  preset: minimal
+  genesis_delay: 20
+  gloas_fork_epoch: 1
+  gas_limit: 60000000
+
+additional_services:
+  - buildoor
+
+buildoor_params:
+  image: buildoor:testing-build
+  builder_api: true
+  epbs_builder: true
+  lifecycle: true
+  instances:
+    - participant: 1
+      count: 1
+  extra_args:
+    - --deposit-max-fee=0
+    - --builder-api-subsidy=100000000
+    - --epbs-bid-min=1000000
+    - --epbs-bid-subsidy=100000000
+    - --log-level=debug
+
+ethereum_genesis_generator_params:
+  image: ethpandaops/ethereum-genesis-generator:6.2.0

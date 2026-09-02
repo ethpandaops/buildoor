@@ -253,6 +253,10 @@ type SlotResult struct {
 	// keyed by kind ("bids", "block_submissions", "reveal_attempts").
 	DroppedAttempts map[string]int `json:"dropped_attempts,omitempty"`
 
+	// TxPlan is the testing build's committed transaction list and its
+	// verification against the included block (nil for pool builds).
+	TxPlan *TxPlanResult `json:"tx_plan,omitempty"`
+
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -292,6 +296,20 @@ func (r *SlotResult) Clone() *SlotResult {
 		c.Inclusion = &inclusion
 	}
 
+	if r.TxPlan != nil {
+		plan := *r.TxPlan
+		plan.ExpectedHashes = append([]string(nil), r.TxPlan.ExpectedHashes...)
+		plan.Evicted = append([]TxPlanEviction(nil), r.TxPlan.Evicted...)
+		plan.Dropped = append([]TxPlanEviction(nil), r.TxPlan.Dropped...)
+		plan.Skipped = make(map[string]int, len(r.TxPlan.Skipped))
+
+		for k, v := range r.TxPlan.Skipped {
+			plan.Skipped[k] = v
+		}
+
+		c.TxPlan = &plan
+	}
+
 	if r.Bids != nil {
 		c.Bids = make([]BidAttempt, len(r.Bids))
 		for i, bid := range r.Bids {
@@ -326,4 +344,59 @@ func (r *SlotResult) Clone() *SlotResult {
 	// The frozen plan is immutable by contract; sharing the pointer is safe.
 
 	return &c
+}
+
+// TxPlanStatus is the verification state of a testing build's tx plan
+// against the chain.
+type TxPlanStatus string
+
+const (
+	// TxPlanPending: the payload was built; inclusion not yet seen.
+	TxPlanPending TxPlanStatus = "pending"
+	// TxPlanMatch: the canonical block holds exactly the plan, in order.
+	TxPlanMatch TxPlanStatus = "match"
+	// TxPlanMismatch: the canonical block's transactions differ from the plan.
+	TxPlanMismatch TxPlanStatus = "mismatch"
+	// TxPlanBlockNotFound: the block was included but the EL never served it.
+	TxPlanBlockNotFound TxPlanStatus = "block_not_found"
+	// TxPlanNotIncluded: the slot ended without our payload on chain.
+	TxPlanNotIncluded TxPlanStatus = "not_included"
+	// TxPlanMissed / TxPlanOrphaned mirror the Gloas payload verdicts.
+	TxPlanMissed   TxPlanStatus = "missed"
+	TxPlanOrphaned TxPlanStatus = "orphaned"
+)
+
+// maxTxPlanHashes bounds the persisted expected list; the count is always
+// exact, Truncated flags a cut list.
+const maxTxPlanHashes = 4096
+
+// TxPlanEviction is a transaction the build dropped, with the reason.
+type TxPlanEviction struct {
+	Hash   string `json:"hash"`
+	Reason string `json:"reason"`
+}
+
+// TxPlanResult records what a testing build committed to and whether the
+// chain honored it: expected count and order, and the verification verdict.
+type TxPlanResult struct {
+	Policy         string           `json:"policy"`
+	ExpectedCount  int              `json:"expected_count"`
+	ExpectedHashes []string         `json:"expected_hashes"`
+	Truncated      bool             `json:"truncated,omitempty"`
+	GasSum         uint64           `json:"gas_sum"`
+	GasCap         uint64           `json:"gas_cap"`
+	GasUsed        uint64           `json:"gas_used"`
+	GasLimit       uint64           `json:"gas_limit"`
+	Blobs          int              `json:"blobs"`
+	Attempts       int              `json:"attempts"`
+	BuildMs        int64            `json:"build_ms"`
+	Skipped        map[string]int   `json:"skipped,omitempty"`
+	Evicted        []TxPlanEviction `json:"evicted,omitempty"`
+	Dropped        []TxPlanEviction `json:"dropped,omitempty"`
+
+	Status        TxPlanStatus `json:"status"`
+	IncludedCount int          `json:"included_count,omitempty"`
+	FirstMismatch int          `json:"first_mismatch,omitempty"`
+	Detail        string       `json:"detail,omitempty"`
+	VerifiedAt    *time.Time   `json:"verified_at,omitempty"`
 }

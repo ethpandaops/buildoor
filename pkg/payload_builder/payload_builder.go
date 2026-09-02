@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
+	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -28,6 +29,7 @@ type PayloadBuilder struct {
 
 	settingsResolvers []ProposerSettingsResolver // asked in order for proposer settings; first match wins
 	cfg               *config.Config             // shared config; mutable settings are read live, never cached
+	testing           *TestingBuilder            // nil without --el-rpc; required for the testing build source
 	log               logrus.FieldLogger
 
 	// Active build tracking: multiple candidate builds may run for the same
@@ -90,11 +92,13 @@ func NewPayloadBuilder(
 // built on.
 //
 // buildTimeMs is the EL build wait; 0 uses the live-configured
-// PayloadBuildTime.
+// PayloadBuildTime. A non-nil testing spec builds from the tx intake queue
+// through testing_buildBlockV1 instead of the txpool.
 func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
 	buildTimeMs uint64,
+	testing *TestingBuildSpec,
 ) (*Payload, error) {
 	buildKey := activeBuildKey{
 		slot:       attrs.ProposalSlot,
@@ -245,62 +249,22 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		"target_gas_limit": targetGasLimit,
 	}).Debug("Building payload from attributes")
 
-	fcuResp, err := b.engineClient.ForkchoiceUpdatedAgnostic(buildCtx, fcuReq)
+	var (
+		resp *engineall.GetPayloadResponse
+		plan *TxPlan
+	)
+
+	if testing != nil {
+		resp, plan, err = b.buildTestingPayload(buildCtx, attrs, fcuReq, engineVersion, targetGasLimit, testing)
+	} else {
+		resp, err = b.buildPoolPayload(buildCtx, attrs, fcuReq, engineVersion, build, buildTimeMs)
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("forkchoiceUpdated failed: %w", err)
-	}
-
-	status := fcuResp.PayloadStatus.Status
-	if status != paris.PayloadValidationStatusValid && status != paris.PayloadValidationStatusSyncing {
-		return nil, fmt.Errorf("forkchoice status: %s", status)
-	}
-
-	if fcuResp.PayloadID == nil {
-		return nil, fmt.Errorf("no payload ID returned")
-	}
-
-	payloadID := *fcuResp.PayloadID
-
-	b.mu.Lock()
-	build.payloadID = payloadID
-	b.mu.Unlock()
-
-	b.log.WithFields(logrus.Fields{
-		"slot":       attrs.ProposalSlot,
-		"payload_id": fmt.Sprintf("%x", payloadID[:]),
-	}).Debug("Payload build requested from attributes")
-
-	// Read the build time live from config so UI overrides take effect
-	// immediately; an explicit per-build time (speculative candidates) wins.
-	payloadBuildTime := b.cfg.PayloadBuildTime
-	if buildTimeMs != 0 {
-		payloadBuildTime = buildTimeMs
-	}
-
-	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
-
-	// Wait for the EL to accumulate transactions, but abort early (with an error)
-	// if the build is cancelled by a newer slot or the context deadline is hit,
-	// rather than sleeping into a doomed getPayload call.
-	buildTimer := time.NewTimer(time.Duration(payloadBuildTime) * time.Millisecond)
-	defer buildTimer.Stop()
-
-	select {
-	case <-buildCtx.Done():
-		return nil, fmt.Errorf("build aborted while waiting for payload: %w", buildCtx.Err())
-	case <-buildTimer.C:
-	}
-
-	// Retrieve the built payload as the fork-agnostic union.
-	resp, err := b.engineClient.GetPayloadAgnostic(buildCtx, engineVersion, payloadID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payload: %w", err)
+		return nil, err
 	}
 
 	enginePayload := resp.ExecutionPayload
-	if enginePayload == nil {
-		return nil, fmt.Errorf("getPayload returned no execution payload")
-	}
 
 	gasLimitOverride := b.resolveGasLimitOverride(buildCtx, attrs, beaconFork,
 		targetGasLimit, enginePayload.GasLimit, enginePayload.GasUsed)
@@ -335,6 +299,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	event := &Payload{
 		Attributes:        attrs,
+		TxPlan:            plan,
 		ExecutionPayload:  beaconPayload,
 		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),
 		ExecutionRequests: execRequests,
@@ -424,4 +389,111 @@ func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 			b.log.WithField("slot", slot).Debug("Build aborted")
 		}
 	}
+}
+
+// buildPoolPayload is the txpool build: forkchoiceUpdated with attributes,
+// the configured build wait, then getPayload.
+func (b *PayloadBuilder) buildPoolPayload(
+	ctx context.Context,
+	attrs *beacon.PayloadAttributesEvent,
+	fcuReq *engineall.ForkchoiceUpdatedRequest,
+	engineVersion enginev.DataVersion,
+	build *activeBuild,
+	buildTimeMs uint64,
+) (*engineall.GetPayloadResponse, error) {
+	fcuResp, err := b.engineClient.ForkchoiceUpdatedAgnostic(ctx, fcuReq)
+	if err != nil {
+		return nil, fmt.Errorf("forkchoiceUpdated failed: %w", err)
+	}
+
+	status := fcuResp.PayloadStatus.Status
+	if status != paris.PayloadValidationStatusValid && status != paris.PayloadValidationStatusSyncing {
+		return nil, fmt.Errorf("forkchoice status: %s", status)
+	}
+
+	if fcuResp.PayloadID == nil {
+		return nil, fmt.Errorf("no payload ID returned")
+	}
+
+	payloadID := *fcuResp.PayloadID
+
+	b.mu.Lock()
+	build.payloadID = payloadID
+	b.mu.Unlock()
+
+	b.log.WithFields(logrus.Fields{
+		"slot":       attrs.ProposalSlot,
+		"payload_id": fmt.Sprintf("%x", payloadID[:]),
+	}).Debug("Payload build requested from attributes")
+
+	// Read the build time live from config so UI overrides take effect
+	// immediately; an explicit per-build time (speculative candidates) wins.
+	payloadBuildTime := b.cfg.PayloadBuildTime
+	if buildTimeMs != 0 {
+		payloadBuildTime = buildTimeMs
+	}
+
+	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
+
+	// Wait for the EL to accumulate transactions, but abort early (with an error)
+	// if the build is cancelled by a newer slot or the context deadline is hit,
+	// rather than sleeping into a doomed getPayload call.
+	buildTimer := time.NewTimer(time.Duration(payloadBuildTime) * time.Millisecond)
+	defer buildTimer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("build aborted while waiting for payload: %w", ctx.Err())
+	case <-buildTimer.C:
+	}
+
+	// Retrieve the built payload as the fork-agnostic union.
+	resp, err := b.engineClient.GetPayloadAgnostic(ctx, engineVersion, payloadID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payload: %w", err)
+	}
+
+	if resp.ExecutionPayload == nil {
+		return nil, fmt.Errorf("getPayload returned no execution payload")
+	}
+
+	return resp, nil
+}
+
+// buildTestingPayload is the testing build: the EL is put on the parent with
+// a bare forkchoiceUpdated (geth builds on its head only), then the intake
+// queue is packed and built through testing_buildBlockV1 under the slot's
+// deadline.
+func (b *PayloadBuilder) buildTestingPayload(
+	ctx context.Context,
+	attrs *beacon.PayloadAttributesEvent,
+	fcuReq *engineall.ForkchoiceUpdatedRequest,
+	engineVersion enginev.DataVersion,
+	targetGasLimit uint64,
+	spec *TestingBuildSpec,
+) (*engineall.GetPayloadResponse, *TxPlan, error) {
+	if b.testing == nil {
+		return nil, nil, fmt.Errorf("testing build source needs --el-rpc with the testing namespace")
+	}
+
+	if !spec.Deadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, spec.Deadline)
+
+		defer cancel()
+	}
+
+	headReq := *fcuReq
+	headReq.PayloadAttributes = nil
+
+	fcuResp, err := b.engineClient.ForkchoiceUpdatedAgnostic(ctx, &headReq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("forkchoiceUpdated to parent failed: %w", err)
+	}
+
+	if status := fcuResp.PayloadStatus.Status; status != paris.PayloadValidationStatusValid {
+		return nil, nil, fmt.Errorf("EL is not at parent %x: forkchoice status %s", attrs.ParentBlockHash[:8], status)
+	}
+
+	return b.testing.Build(ctx, common.Hash(attrs.ParentBlockHash), fcuReq.PayloadAttributes, engineVersion, targetGasLimit, spec)
 }

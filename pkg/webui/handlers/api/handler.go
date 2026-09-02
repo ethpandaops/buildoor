@@ -16,6 +16,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -41,6 +42,7 @@ type APIHandler struct {
 	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
 	planSvc          *action_plan.PlanService         // May be nil
 	resultTracker    *slot_results.Tracker            // May be nil
+	verifier         *tx_plan_verifier.Verifier       // May be nil (no tx intake)
 }
 
 // NewAPIHandler creates a new API handler.
@@ -62,6 +64,7 @@ func NewAPIHandler(
 	payments *payload_bidder.PaymentTracker,
 	planSvc *action_plan.PlanService,
 	resultTracker *slot_results.Tracker,
+	verifier *tx_plan_verifier.Verifier,
 ) *APIHandler {
 	h := &APIHandler{
 		authHandler:    authHandler,
@@ -80,6 +83,7 @@ func NewAPIHandler(
 		revealSvc:        revealSvc,
 		inclusionTracker: inclusionTracker,
 		payments:         payments,
+		verifier:         verifier,
 		planSvc:          planSvc,
 		resultTracker:    resultTracker,
 	}

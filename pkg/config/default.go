@@ -52,6 +52,16 @@ func DefaultConfig() *Config {
 			CandidateGrandparentEmpty: CandidateModeNever,
 			Parallel:                  true,
 			AutoWeakHeadPct:           40,
+			Source:                    BuildSourcePool,
+		},
+		Testing: TestingConfig{
+			FillGasPct:       100,
+			Policy:           "fifo",
+			OnFailure:        TestingOnFailureSkip,
+			QueueMaxTxs:      100_000,
+			QueueMaxAgeSlots: 64,
+			MaxAttempts:      3,
+			MaxStrikes:       3,
 		},
 		Reveal: RevealConfig{
 			Enabled: true,

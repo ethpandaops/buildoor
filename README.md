@@ -161,6 +161,88 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--payload-build-time` | `2000` | Time given to the EL to build the payload after fcu (ms) |
 | `--validate-withdrawals` | `false` | Validate expected vs actual withdrawals |
 
+### Testing Build Flags
+
+The testing build source replaces the EL txpool with a private transaction
+queue and builds blocks through geth's `testing_buildBlockV1`, so a block holds
+exactly the transactions you fed it, in the order the packer chose, or the
+build fails. See [Testing build source](#testing-build-source).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--build-source` | `pool` | `pool` (forkchoiceUpdated + getPayload) or `testing` (tx intake + testing_buildBlockV1; needs `--el-rpc` on a geth HTTP RPC with `testing` in `--http.api`) |
+| `--testing-fill-gas-pct` | `100` | Share of the block gas limit to pack, 1..100 |
+| `--testing-max-txs` | `0` | Max transactions per block (0 = unlimited) |
+| `--testing-max-blobs` | `0` | Max blobs per block (0 = the fork's blob limit) |
+| `--testing-policy` | `fifo` | Packing order: `fifo`, `fee`, `round_robin`, `as_given` |
+| `--testing-base-fee-ceiling-gwei` | `0` | Above this next base fee the fill drops to the 1559 target (0 = off) |
+| `--testing-build-deadline` | `0` | Latest build completion in ms relative to slot start (0 = ePBS bid start minus 300 ms) |
+| `--testing-on-failure` | `skip` | `skip` the slot or fall back to the `pool` build |
+| `--testing-queue-max-txs` | `100000` | Intake queue capacity; submissions beyond it are rejected |
+| `--testing-queue-max-age-slots` | `64` | Queued transactions older than this are evicted |
+| `--testing-max-attempts` | `3` | Build attempts per slot after attributed EL failures |
+| `--testing-max-strikes` | `3` | Attributed build failures before a queued transaction is evicted |
+
+All of them are live settings (`POST /api/config/testing`, or the generic
+`POST /api/config/settings` with `build.source` / `testing.*` keys).
+
+## Testing build source
+
+`--build-source testing` turns buildoor into a block load and edge-case tool
+for devnets and shadowforks: you decide what a block holds, buildoor gets it
+proposed, and it checks the chain honored the plan.
+
+**Transaction intake.** Point any transaction source (spamoor, tx-fuzz, your
+own scripts) at `POST http://<buildoor>:<api-port>/rpc` instead of the EL.
+It is a JSON-RPC 2.0 endpoint: `eth_sendRawTransaction` lands in buildoor's
+private queue, `eth_getTransactionCount(addr, "pending")` answers from the
+queue on top of the EL's latest nonce, and every other method is forwarded to
+`--el-rpc` verbatim (batches included). Transactions never touch the EL's
+public txpool, so nobody else can include them.
+
+**Packing.** At payload_attributes time buildoor puts the EL on the parent,
+reads every queued sender's nonce and balance at that parent, and packs the
+queue under the block's gas limit, blob cap, byte cap, next base fee and
+sender budgets. Nonces below the parent state nonce are evicted, gaps stop a
+sender's chain, and the policy orders the rest. `as_given` (or a per-slot
+`build.txs` list in the action plan) builds exactly that list in that order;
+any deviation is an error, never a trim.
+
+**Build.** The list goes to `testing_buildBlockV1`. geth refuses the whole
+block if one transaction is invalid; buildoor attributes the error to the
+sender or index, drops those, and retries within `--testing-max-attempts`.
+The built payload is checked against the plan before it is bid or served.
+Only geth implements the method today, and only on the HTTP port with
+`testing` in `--http.api`. Speculative build candidates are skipped in this
+mode: geth builds on its current head only.
+
+**Verification.** Every included testing-built payload is fetched from the
+EL and compared with its plan: same transactions, same order, same count.
+The verdict lands on the slot result (`tx_plan.status`: `match`,
+`mismatch`, `block_not_found`, `missed`, `orphaned`), in the
+`buildoor_testing_plan_checks_total` metric, and as an error log line
+starting with `TX PLAN CHECK FAILED`.
+
+**Per-slot control** through the action plan's `build` category:
+`source`, `fill: {gas_pct, max_txs, max_blobs, policy}` and `txs` (explicit
+ordered hashes, must be queued). Recurring rules script patterns such as a
+full block every fourth slot.
+
+**Watch out for base fee.** Every full block raises the base fee by 12.5
+percent, and buildoor's own blocks are the only ones carrying its queue. Give
+your transaction source a high max fee or set
+`--testing-base-fee-ceiling-gwei` so a long run stays sustainable.
+buildoor's own lifecycle transactions go through the intake too, so its
+deposits and top-ups land in the blocks it builds.
+
+```bash
+# geth: --http.api admin,engine,net,eth,web3,debug,txpool,testing
+buildoor run ... --el-rpc http://geth:8545 --build-source testing --api-port 8080
+spamoor eoatx --rpchost http://buildoor:8080/rpc --privkey <key> -t 300 --basefee 100
+curl http://buildoor:8080/api/buildoor/tx-queue          # queue + plan check tally
+curl "http://buildoor:8080/api/buildoor/slot-results?min_slot=100&max_slot=110" | jq '.[].tx_plan'
+```
+
 ## WebUI
 
 Buildoor includes a web dashboard for monitoring builder activity in real time. Enable it with `--api-port <port>` and open `http://localhost:<port>` in your browser.

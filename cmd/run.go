@@ -30,6 +30,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
@@ -283,6 +284,40 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
 
+		// 9a. Tx intake + testing builder (needs --el-rpc). The intake queue
+		// is always available with an EL RPC so transactions can be staged
+		// before the build source is switched to testing; the testing source
+		// itself needs the EL to serve the testing namespace (geth only).
+		var testingBuilder *payload_builder.TestingBuilder
+
+		if cfg.ELRPC != "" {
+			testingBuilder, err = payload_builder.NewTestingBuilder(ctx, cfg.ELRPC, cfg.Testing.QueueMaxTxs, logger)
+			if err != nil {
+				return fmt.Errorf("failed to initialize testing builder: %w", err)
+			}
+			defer testingBuilder.Close()
+
+			builderSvc.SetTestingBuilder(testingBuilder)
+
+			// The builder's own lifecycle transactions must be in the plan too,
+			// or its intake-built blocks would never carry them.
+			if rpcClient != nil {
+				rpcClient.SetTxIntake(testingBuilder.Queue())
+			}
+		}
+
+		if cfg.Build.Source == config.BuildSourceTesting {
+			if testingBuilder == nil {
+				return fmt.Errorf("--build-source=testing requires --el-rpc")
+			}
+
+			if err := testingBuilder.Probe(ctx); err != nil {
+				return fmt.Errorf("--build-source=testing: %w", err)
+			}
+
+			logger.WithField("el_rpc", cfg.ELRPC).Info("Testing build source enabled: payloads build from the tx intake via testing_buildBlockV1")
+		}
+
 		if builderAPIAvailable {
 			// Pre-Gloas proposer settings resolve from Builder API validator
 			// registrations; the Gloas+ gossip-preferences resolver is registered
@@ -420,6 +455,17 @@ and begins building blocks according to configuration.`,
 			builderAPISrv.SetResultRecorder(resultTracker)
 		}
 
+		// 12c. Tx plan verifier: checks every included testing-built payload
+		// against its plan on the EL and records the verdict.
+		var planVerifier *tx_plan_verifier.Verifier
+
+		if testingBuilder != nil {
+			planVerifier = tx_plan_verifier.New(inclusionTracker, testingBuilder, resultTracker, logger)
+			planVerifier.Start(ctx)
+
+			defer planVerifier.Stop()
+		}
+
 		// 13. Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
@@ -435,6 +481,10 @@ and begins building blocks according to configuration.`,
 
 			if err := builderSvc.UpdateConfig(cfg); err != nil {
 				logger.WithError(err).Warn("failed to apply builder config update")
+			}
+
+			if cfg.Build.Source == config.BuildSourceTesting && testingBuilder == nil {
+				logger.Error("build.source is testing but no tx intake is configured (--el-rpc): every build will fail")
 			}
 
 			if epbsSvc != nil {
@@ -471,7 +521,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, planVerifier)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

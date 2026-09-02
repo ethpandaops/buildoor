@@ -235,6 +235,48 @@ npm run clean
    bid-gossip-legal gas limit (EL parent gas limit stepped toward the
    proposer target).
 
+0d. **Testing build source** (`pkg/tx_intake/`, `pkg/payload_builder/testing_build.go`,
+   `pkg/tx_plan_verifier/`) — `build.source: testing` builds blocks from a PRIVATE
+   transaction queue through geth's `testing_buildBlockV1` instead of the txpool.
+   - **Intake** (`tx_intake.Proxy`, served at `POST /rpc` on the API port): a
+     JSON-RPC 2.0 endpoint transaction sources point at instead of the EL.
+     `eth_sendRawTransaction` → queue; `eth_getTransactionCount(_, "pending")` →
+     EL latest nonce advanced over the queued chain; everything else forwarded
+     to `--el-rpc` verbatim (batches too). The EL's public txpool never sees
+     these transactions, so only buildoor's blocks can carry them. The
+     builder's own lifecycle transactions are teed into the queue
+     (`execution.Client.SetTxIntake`) for the same reason.
+   - **Queue** (`tx_intake.Queue`): per-sender nonce chains keyed by
+     (sender, nonce) and hash; same hash idempotent, same (sender, nonce)
+     replaced by the newer tx. NOTHING is removed at build time — the parent
+     state nonce is the truth: at pack time nonces below it are evicted, gaps
+     stop the chain. Bounded by `testing.queue_max_txs` (reject) and
+     `testing.queue_max_age_slots` (evict). Not persisted.
+   - **Packer** (`tx_intake.Pack`): deterministic pre-filter with the caps geth
+     will enforce (gas limit stepped toward the target, next base fee, blob
+     base fee bound, blob cap from `eth_config`, byte cap, per-sender budget)
+     and a policy (`fifo`, `fee`, `round_robin`, `as_given`). `as_given` and the
+     per-slot `build.txs` list are EXACT: any deviation errors, never trims.
+   - **Build** (`TestingBuilder.Build`): bare forkchoiceUpdated to the parent
+     (geth builds on its head only), pack, `testing_buildBlockV1` (returns the
+     getPayload envelope shape → `engineall.GetPayloadResponse` via the fork
+     view), verify the payload holds exactly the plan. An EL refusal is
+     attributed (`tx_intake.Attribute`: sender address / tx index / cap
+     reason / bisect), the attributed txs get a strike, and the build retries
+     within `testing.max_attempts`. Runs under the slot deadline
+     (`testing.build_deadline_ms`, default bid start − 300 ms); a miss means no
+     payload (`testing.on_failure: skip`) unless `pool` fallback is chosen.
+     Only the canonical candidate builds in this mode. The frozen plan forces
+     `BuildStartImmediately` so the synchronous build starts at attributes time.
+   - **Verifier** (`tx_plan_verifier.Verifier`): on every `PayloadIncludedEvent`
+     whose payload carries a `TxPlan`, fetch the block from the EL and compare
+     order + count; Gloas `missed`/`orphaned` verdicts are mirrored. Verdict →
+     `SlotResult.TxPlan.Status`, `buildoor_testing_plan_checks_total`, and an
+     error log prefixed `TX PLAN CHECK FAILED`. Loud by design.
+   - API: `GET/DELETE /api/buildoor/tx-queue`, `POST /api/config/testing`;
+     per-slot overrides via the action plan `build` category (`source`,
+     `fill`, `txs`). Metrics in `pkg/metrics`.
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
@@ -523,6 +565,11 @@ Key config sections:
   escalated re-bid of the same payload included, takes a key that has not bid
   yet, and the submissions of one step go out concurrently
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
+- **Testing build source**: `--build-source` (pool | testing), `--testing-*`
+  (fill-gas-pct, max-txs, max-blobs, policy, base-fee-ceiling-gwei,
+  build-deadline, on-failure, queue-max-txs, queue-max-age-slots,
+  max-attempts, max-strikes); all but queue-max-txs mutable via
+  `build.source` / `testing.*` settings keys
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
@@ -613,11 +660,13 @@ numbered step comments there match this list 1:1):
 7b. Start the action plan service (the per-slot scheduling authority; persisted via the `kv_store` `slot_plans` namespace; a mandatory constructor dependency of every action module below)
 8. Initialize lifecycle manager (if prerequisites available)
 9. Initialize builder service (when Builder API is available, also creates the validator registration memstore — persisted via `kv_store` — and registers the pre-Gloas `legacy.RegistrationSettingsResolver`)
+9a. Tx intake + testing builder (needs `--el-rpc`): the intake queue is always available with an EL RPC; `--build-source testing` additionally probes the EL for the `testing` namespace and fails startup without it; the lifecycle RPC client is teed into the queue
 9b. Start shared payment tracker + reveal service (Gloas scheduled) and inclusion tracker (always) from `pkg/payload_bidder`
 10. Initialize proposer preferences service (if Gloas fork is scheduled; registers the payload builder's Gloas+ settings resolver, store persisted via `kv_store`)
 11. Initialize p2p bidder service (if Gloas fork is scheduled; bid-gates on the proposer preferences store)
 12. Initialize Builder API server (if `--api-port` set; epbs dialect reads the proposer preferences store; builder preferences persisted via `kv_store`)
 12b. Start the slot results tracker (before the producer services so its blocking subscriptions never miss an event; runs the `won_blocks` migration; registers as the Builder API's result recorder)
+12c. Start the tx plan verifier (with a testing builder): checks every included testing-built payload against its plan on the EL and records the verdict
 13. Initialize and start validator ranges resolver
 14. Register settings `OnChange` subscribers (push changes to modules; schedule changes reset the plan service's next_n accounting)
 15. Start WebUI/API server (if APIPort > 0)
@@ -787,6 +836,12 @@ To make frontend changes:
   landed on chain without being seen as singles. Zero/absent root resolves the
   slot's primary root; only tracker-retained slots (8) are served (404
   otherwise). Fetched by the Head Vote Participation popover's heatmap
+- `GET /api/buildoor/tx-queue?senders=true` - Tx intake queue: stats, recent
+  evictions, tx plan check tally, optional per-sender nonce chains
+- `DELETE /api/buildoor/tx-queue` - Flush the intake queue (auth + audit)
+- `POST /api/config/testing` - Build source + testing packing settings; switching
+  to `testing` probes the EL for the `testing` namespace first (400 otherwise)
+- `POST /rpc` (root, not under `/api`) - The tx intake JSON-RPC endpoint
 - `POST /api/config/settings` - Generic path-based global settings update keyed by
   canonical registry keys (`{"epbs.bid_subsidy": 1000, "schedule.mode": "all"}`);
   atomic, unknown keys rejected (auth + audit)
