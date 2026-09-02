@@ -162,6 +162,26 @@ type BuilderAPIConfig struct {
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
 
+	// ExecutionPaymentGwei, when non-zero, claims this absolute portion of a
+	// served Gloas bid's total value as execution_payment (the trusted
+	// execution-layer payment); the remainder is paid trustlessly on-chain via
+	// value. The claim is deliberately unbacked — buildoor never makes the EL
+	// payment (a testing knob for client-side bid handling). Capped by the
+	// proposer's advertised max_execution_payment preference (0 when never
+	// submitted, per spec) unless IgnorePreferenceLimit is set. Clamped to the
+	// total value; wins over ExecutionPaymentPercent.
+	ExecutionPaymentGwei uint64 `yaml:"execution_payment_gwei" json:"execution_payment_gwei"`
+
+	// ExecutionPaymentPercent, when non-zero, claims this percentage (0-100)
+	// of the served total value as execution_payment instead of an absolute
+	// amount. Ignored when ExecutionPaymentGwei is set.
+	ExecutionPaymentPercent uint64 `yaml:"execution_payment_percent" json:"execution_payment_percent"`
+
+	// IgnorePreferenceLimit serves the configured execution-payment portion
+	// even when it exceeds the proposer's advertised max_execution_payment —
+	// a deliberately spec-violating bid clients should reject (testing knob).
+	IgnorePreferenceLimit bool `yaml:"ignore_preference_limit" json:"ignore_preference_limit"`
+
 	// ServeCandidates controls which built candidate payloads bid requests may
 	// be answered from: "all" (default; serve whichever candidate matches the
 	// requested parent), "canonical_only" (only parent_full and unclassified

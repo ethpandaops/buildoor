@@ -61,6 +61,9 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
+	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment", defaults.BuilderAPI.ExecutionPaymentGwei, "Absolute portion in gwei of a served Gloas bid's total value claimed as execution_payment; the claim is unbacked and capped by the proposer's advertised max_execution_payment (0 = disabled, wins over the percent)")
+	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment-percent", defaults.BuilderAPI.ExecutionPaymentPercent, "Percentage (0-100) of a served Gloas bid's total value claimed as execution_payment (0 = disabled)")
+	rootCmd.PersistentFlags().Bool("builder-api-ignore-preference-limit", defaults.BuilderAPI.IgnorePreferenceLimit, "Serve the configured execution_payment portion even beyond the proposer's advertised max_execution_payment (deliberately spec-violating, for client-side rejection testing)")
 	rootCmd.PersistentFlags().String("builder-api-serve-candidates", defaults.BuilderAPI.ServeCandidates, "Which built candidate payloads bid requests are answered from: all, canonical_only, or a comma-separated candidate key list")
 	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
 	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
@@ -202,13 +205,16 @@ func initConfig() error {
 		EPBSEnabled:       v.GetBool("epbs-enabled"),
 		BuilderAPIEnabled: v.GetBool("builder-api-enabled"),
 		BuilderAPI: config.BuilderAPIConfig{
-			BuilderURL:            v.GetString("builder-api-url"),
-			RequireRequestAuth:    v.GetBool("builder-api-require-auth"),
-			BlockValueSubsidyGwei: v.GetUint64("builder-api-subsidy"),
-			ValueOverrideGwei:     v.GetUint64("builder-api-value-override"),
-			ServeCandidates:       v.GetString("builder-api-serve-candidates"),
-			OnDemandBuild:         v.GetBool("builder-api-on-demand-build"),
-			KeyStrategy:           v.GetString("builder-api-key-strategy"),
+			BuilderURL:              v.GetString("builder-api-url"),
+			RequireRequestAuth:      v.GetBool("builder-api-require-auth"),
+			BlockValueSubsidyGwei:   v.GetUint64("builder-api-subsidy"),
+			ValueOverrideGwei:       v.GetUint64("builder-api-value-override"),
+			ExecutionPaymentGwei:    v.GetUint64("builder-api-execution-payment"),
+			ExecutionPaymentPercent: v.GetUint64("builder-api-execution-payment-percent"),
+			IgnorePreferenceLimit:   v.GetBool("builder-api-ignore-preference-limit"),
+			ServeCandidates:         v.GetString("builder-api-serve-candidates"),
+			OnDemandBuild:           v.GetBool("builder-api-on-demand-build"),
+			KeyStrategy:             v.GetString("builder-api-key-strategy"),
 		},
 		BuilderKeys: config.BuilderKeysConfig{
 			TargetCount:  v.GetUint64("builder-keys-target"),

@@ -1809,7 +1809,11 @@
                     "type": "integer"
                 },
                 "bid_keys_per_slot": {
-                    "description": "BidKeysPerSlot overrides how many distinct builder keys may bid this\nslot (0 = one key per selected candidate payload).",
+                    "description": "BidKeysPerSlot overrides how many distinct builder keys may bid this\nslot (0 = no cap beyond the fleet).",
+                    "type": "integer"
+                },
+                "bid_keys_per_step": {
+                    "description": "BidKeysPerStep overrides how many keys bid a payload per interval step\n(0 = every remaining key at once).",
                     "type": "integer"
                 },
                 "bid_min_amount": {
@@ -1859,6 +1863,18 @@
         "action_plan.BuilderAPIPlan": {
             "type": "object",
             "properties": {
+                "execution_payment_gwei": {
+                    "description": "ExecutionPaymentGwei replaces the global execution-payment portion for\nthis slot: the absolute part of the served total value claimed as\nexecution_payment (unbacked; capped by the proposer's advertised\nmax_execution_payment unless ignore_preference_limit; wins over the\npercent).",
+                    "type": "integer"
+                },
+                "execution_payment_percent": {
+                    "description": "ExecutionPaymentPercent replaces the global percentage (0-100) of the\nserved total value claimed as execution_payment.",
+                    "type": "integer"
+                },
+                "ignore_preference_limit": {
+                    "description": "IgnorePreferenceLimit serves this slot's execution-payment portion even\nbeyond the proposer's advertised max_execution_payment (deliberately\nspec-violating).",
+                    "type": "boolean"
+                },
                 "key_strategy": {
                     "description": "KeyStrategy overrides which managed builder key signs this slot's served\nbids: round_robin, single, random or least_used.",
                     "type": "string"
@@ -2019,7 +2035,11 @@
                     "type": "string"
                 },
                 "bid_keys_per_slot": {
-                    "description": "BidKeysPerSlot caps how many distinct builder keys bid the slot\n(0 = one key per selected candidate payload).",
+                    "description": "BidKeysPerSlot caps how many distinct builder keys bid the slot\n(0 = no cap beyond the fleet).",
+                    "type": "integer"
+                },
+                "bid_keys_per_step": {
+                    "description": "BidKeysPerStep is how many keys bid a payload per interval step\n(0 = every remaining key at once).",
                     "type": "integer"
                 },
                 "end_ms": {
@@ -2100,8 +2120,18 @@
                 "delay_ms": {
                     "type": "integer"
                 },
+                "execution_payment_gwei": {
+                    "description": "ExecutionPaymentGwei / ExecutionPaymentPercent claim part of the served\ntotal value as execution_payment (the trusted EL payment) instead of the\ntrustless on-chain value — an unbacked claim (testing knob). The absolute\namount wins over the percent; both 0 = the whole total goes via value.\nThe portion is capped by the proposer's advertised max_execution_payment\nunless IgnorePreferenceLimit deliberately serves beyond it.",
+                    "type": "integer"
+                },
+                "execution_payment_percent": {
+                    "type": "integer"
+                },
                 "forced": {
                     "description": "Forced marks that the plan activated serving although the module is\nglobally disabled.",
+                    "type": "boolean"
+                },
+                "ignore_preference_limit": {
                     "type": "boolean"
                 },
                 "key_strategy": {
@@ -2583,6 +2613,66 @@
                 }
             }
         },
+        "api.OverviewBuilderKey": {
+            "type": "object",
+            "properties": {
+                "balance_gwei": {
+                    "type": "integer"
+                },
+                "builder_index": {
+                    "description": "BuilderIndex is the on-chain registry index, only meaningful when\nHasBuilderIndex is set (index 0 is a valid builder index).",
+                    "type": "integer"
+                },
+                "has_builder_index": {
+                    "type": "boolean"
+                },
+                "key_index": {
+                    "type": "integer"
+                },
+                "pubkey": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
+        "api.OverviewBuilders": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "type": "integer"
+                },
+                "count": {
+                    "type": "integer"
+                },
+                "indexes": {
+                    "description": "Indexes are the on-chain indexes of every key currently in the registry,\nascending. This is the field an indexer wants.",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.OverviewBuilderKey"
+                    }
+                },
+                "target": {
+                    "type": "integer"
+                },
+                "total_balance_gwei": {
+                    "type": "integer"
+                },
+                "total_effective_gwei": {
+                    "type": "integer"
+                },
+                "total_pending_payments_gwei": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.OverviewELClient": {
             "type": "object",
             "properties": {
@@ -2611,6 +2701,9 @@
                 },
                 "builder_pubkey": {
                     "type": "string"
+                },
+                "builders": {
+                    "$ref": "#/definitions/api.OverviewBuilders"
                 },
                 "current_slot": {
                     "type": "integer"

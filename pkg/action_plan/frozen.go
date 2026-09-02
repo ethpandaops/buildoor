@@ -157,6 +157,16 @@ type ResolvedBuilderAPISettings struct {
 	// value (before the Gloas execution-payment split).
 	TotalValueGwei *uint64 `json:"total_value_gwei,omitempty"`
 
+	// ExecutionPaymentGwei / ExecutionPaymentPercent claim part of the served
+	// total value as execution_payment (the trusted EL payment) instead of the
+	// trustless on-chain value — an unbacked claim (testing knob). The absolute
+	// amount wins over the percent; both 0 = the whole total goes via value.
+	// The portion is capped by the proposer's advertised max_execution_payment
+	// unless IgnorePreferenceLimit deliberately serves beyond it.
+	ExecutionPaymentGwei    uint64 `json:"execution_payment_gwei,omitempty"`
+	ExecutionPaymentPercent uint64 `json:"execution_payment_percent,omitempty"`
+	IgnorePreferenceLimit   bool   `json:"ignore_preference_limit,omitempty"`
+
 	DelayMs int64 `json:"delay_ms,omitempty"`
 
 	// ServeCandidates is the effective serve-candidates policy for the slot
@@ -170,6 +180,27 @@ type ResolvedBuilderAPISettings struct {
 	// Forced marks that the plan activated serving although the module is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
+}
+
+// ExecutionPaymentPortion returns the execution_payment part of a served bid's
+// total value per the slot's effective settings: the absolute amount when set,
+// else the percentage of the total. The result is capped by the proposer's
+// advertised max_execution_payment (prefLimitGwei, 0 when never submitted)
+// unless IgnorePreferenceLimit is set, and always clamped to the total so the
+// on-chain value never underflows.
+func (s *ResolvedBuilderAPISettings) ExecutionPaymentPortion(totalGwei, prefLimitGwei uint64) uint64 {
+	portion := s.ExecutionPaymentGwei
+	if portion == 0 && s.ExecutionPaymentPercent > 0 {
+		// Overflow-safe floor(total * pct / 100).
+		pct := min(s.ExecutionPaymentPercent, 100)
+		portion = totalGwei/100*pct + totalGwei%100*pct/100
+	}
+
+	if !s.IgnorePreferenceLimit {
+		portion = min(portion, prefLimitGwei)
+	}
+
+	return min(portion, totalGwei)
 }
 
 // ResolvedRevealSettings are the effective reveal parameters for the slot.
@@ -473,10 +504,13 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 	}
 
 	resolved := &ResolvedBuilderAPISettings{
-		SubsidyGwei:     cfg.BuilderAPI.BlockValueSubsidyGwei,
-		ServeCandidates: cfg.BuilderAPI.ServeCandidates,
-		KeyStrategy:     builderAPIKeyStrategy(cfg),
-		Forced:          forced,
+		SubsidyGwei:             cfg.BuilderAPI.BlockValueSubsidyGwei,
+		ExecutionPaymentGwei:    cfg.BuilderAPI.ExecutionPaymentGwei,
+		ExecutionPaymentPercent: cfg.BuilderAPI.ExecutionPaymentPercent,
+		IgnorePreferenceLimit:   cfg.BuilderAPI.IgnorePreferenceLimit,
+		ServeCandidates:         cfg.BuilderAPI.ServeCandidates,
+		KeyStrategy:             builderAPIKeyStrategy(cfg),
+		Forced:                  forced,
 	}
 
 	if cfg.BuilderAPI.ValueOverrideGwei > 0 {
@@ -487,6 +521,9 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 	if plan != nil && plan.BuilderAPI != nil && plan.BuilderAPI.Mode == ModeCustom {
 		api := plan.BuilderAPI
 		applyOverride(&resolved.SubsidyGwei, api.ValueSubsidyGwei)
+		applyOverride(&resolved.ExecutionPaymentGwei, api.ExecutionPaymentGwei)
+		applyOverride(&resolved.ExecutionPaymentPercent, api.ExecutionPaymentPercent)
+		applyOverride(&resolved.IgnorePreferenceLimit, api.IgnorePreferenceLimit)
 		applyOverride(&resolved.DelayMs, api.ResponseDelayMs)
 
 		if api.TotalValueOverrideGwei != nil {

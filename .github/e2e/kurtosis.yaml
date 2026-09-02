@@ -1,11 +1,20 @@
 participants:
   - el_type: nethermind
-    el_image: ethpandaops/nethermind:glamsterdam-devnet-7
+    el_image: ethpandaops/nethermind:glamsterdam-devnet-8
     cl_type: lodestar
-    cl_image: ethpandaops/lodestar:glamsterdam-devnet-7
-    vc_image: ethpandaops/lodestar:glamsterdam-devnet-7
+    cl_image: ethpandaops/lodestar:glamsterdam-devnet-8
+    vc_image: ethpandaops/lodestar:glamsterdam-devnet-8
     validator_count: 32
     supernode: true
+    # From Gloas the external builder is configured on the VALIDATOR client and
+    # the beacon node requests bids from it on the validator's behalf, so the
+    # CL-side --builder.urls the package wires up only covers the pre-Gloas
+    # flow. The URL must match buildoor's --builder-api-url byte for byte: the
+    # VC signs its UTF-8 bytes as the bid request auth data, which buildoor
+    # verifies against its own configured builder URL. The VC flag needs
+    # lodestar >= v1.47.0-rc.0, hence the devnet-8 images.
+    vc_extra_params:
+      - --builder.urls=http://buildoor:8080
 
 network_params:
   preset: minimal

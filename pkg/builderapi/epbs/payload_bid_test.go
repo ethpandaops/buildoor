@@ -321,8 +321,10 @@ func TestHandleGetExecutionPayloadBid_PlanEffectiveEnable(t *testing.T) {
 
 // TestHandleGetExecutionPayloadBid_PlanValueResolution verifies the frozen
 // per-slot value settings: the absolute total replaces blockValue+subsidy
-// BEFORE the execution-payment split, and a per-slot subsidy override is
-// added to the block value. The seeded payload's block value is 2000 gwei.
+// BEFORE the execution-payment split, a per-slot subsidy override is added
+// to the block value, and the execution-payment portion settings drive the
+// split capped by the proposer's advertised max_execution_payment (unless
+// ignore_preference_limit). The seeded payload's block value is 2000 gwei.
 func TestHandleGetExecutionPayloadBid_PlanValueResolution(t *testing.T) {
 	tests := []struct {
 		name                string
@@ -333,18 +335,62 @@ func TestHandleGetExecutionPayloadBid_PlanValueResolution(t *testing.T) {
 		wantExecGwei        uint64
 	}{
 		{
-			name:             "absolute total without execution payment cap",
+			name:             "absolute total without execution payment",
 			planJSON:         `{"mode":"custom","total_value_override_gwei":3000}`,
 			wantBidValueGwei: 3000,
 			wantTotalGwei:    3000,
 		},
 		{
-			name:                "absolute total replaces value before the payment split",
+			name:                "proposer preference alone does not split the value",
 			planJSON:            `{"mode":"custom","total_value_override_gwei":3000}`,
 			maxExecutionPayment: 1000,
+			wantBidValueGwei:    3000,
+			wantTotalGwei:       3000,
+		},
+		{
+			name:                "absolute execution payment splits the total",
+			planJSON:            `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_gwei":1000}`,
+			maxExecutionPayment: 5000,
 			wantBidValueGwei:    2000, // 3000 total - 1000 execution payment
 			wantTotalGwei:       3000,
 			wantExecGwei:        1000,
+		},
+		{
+			name:                "percent execution payment splits the total",
+			planJSON:            `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_percent":50}`,
+			maxExecutionPayment: 5000,
+			wantBidValueGwei:    1500,
+			wantTotalGwei:       3000,
+			wantExecGwei:        1500,
+		},
+		{
+			name:                "preference limit caps the split",
+			planJSON:            `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_gwei":1000}`,
+			maxExecutionPayment: 600,
+			wantBidValueGwei:    2400,
+			wantTotalGwei:       3000,
+			wantExecGwei:        600,
+		},
+		{
+			name:             "no preference suppresses the split",
+			planJSON:         `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_gwei":1000}`,
+			wantBidValueGwei: 3000,
+			wantTotalGwei:    3000,
+		},
+		{
+			name:             "ignore limit serves beyond the preference",
+			planJSON:         `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_gwei":1000,"ignore_preference_limit":true}`,
+			wantBidValueGwei: 2000,
+			wantTotalGwei:    3000,
+			wantExecGwei:     1000,
+		},
+		{
+			name:                "execution payment clamps to the total",
+			planJSON:            `{"mode":"custom","total_value_override_gwei":3000,"execution_payment_gwei":5000}`,
+			maxExecutionPayment: 9000,
+			wantBidValueGwei:    0,
+			wantTotalGwei:       3000,
+			wantExecGwei:        3000,
 		},
 		{
 			name:             "per-slot subsidy added to block value",
@@ -370,6 +416,7 @@ func TestHandleGetExecutionPayloadBid_PlanValueResolution(t *testing.T) {
 
 			bid := decodeSignedExecutionPayloadBid(t, rec.Body.Bytes())
 			assert.Equal(t, test.wantBidValueGwei, bid.Message.Value)
+			assert.Equal(t, phase0.Gwei(test.wantExecGwei), bid.Message.ExecutionPayment)
 
 			calls := env.recorder.bidCalls()
 			require.Len(t, calls, 1)

@@ -17,7 +17,12 @@ definitions:
       bid_keys_per_slot:
         description: |-
           BidKeysPerSlot overrides how many distinct builder keys may bid this
-          slot (0 = one key per selected candidate payload).
+          slot (0 = no cap beyond the fleet).
+        type: integer
+      bid_keys_per_step:
+        description: |-
+          BidKeysPerStep overrides how many keys bid a payload per interval step
+          (0 = every remaining key at once).
         type: integer
       bid_min_amount:
         description: gwei
@@ -70,6 +75,25 @@ definitions:
     type: object
   action_plan.BuilderAPIPlan:
     properties:
+      execution_payment_gwei:
+        description: |-
+          ExecutionPaymentGwei replaces the global execution-payment portion for
+          this slot: the absolute part of the served total value claimed as
+          execution_payment (unbacked; capped by the proposer's advertised
+          max_execution_payment unless ignore_preference_limit; wins over the
+          percent).
+        type: integer
+      execution_payment_percent:
+        description: |-
+          ExecutionPaymentPercent replaces the global percentage (0-100) of the
+          served total value claimed as execution_payment.
+        type: integer
+      ignore_preference_limit:
+        description: |-
+          IgnorePreferenceLimit serves this slot's execution-payment portion even
+          beyond the proposer's advertised max_execution_payment (deliberately
+          spec-violating).
+        type: boolean
       key_strategy:
         description: |-
           KeyStrategy overrides which managed builder key signs this slot's served
@@ -197,7 +221,12 @@ definitions:
       bid_keys_per_slot:
         description: |-
           BidKeysPerSlot caps how many distinct builder keys bid the slot
-          (0 = one key per selected candidate payload).
+          (0 = no cap beyond the fleet).
+        type: integer
+      bid_keys_per_step:
+        description: |-
+          BidKeysPerStep is how many keys bid a payload per interval step
+          (0 = every remaining key at once).
         type: integer
       end_ms:
         type: integer
@@ -275,10 +304,23 @@ definitions:
     properties:
       delay_ms:
         type: integer
+      execution_payment_gwei:
+        description: |-
+          ExecutionPaymentGwei / ExecutionPaymentPercent claim part of the served
+          total value as execution_payment (the trusted EL payment) instead of the
+          trustless on-chain value — an unbacked claim (testing knob). The absolute
+          amount wins over the percent; both 0 = the whole total goes via value.
+          The portion is capped by the proposer's advertised max_execution_payment
+          unless IgnorePreferenceLimit deliberately serves beyond it.
+        type: integer
+      execution_payment_percent:
+        type: integer
       forced:
         description: |-
           Forced marks that the plan activated serving although the module is
           globally disabled.
+        type: boolean
+      ignore_preference_limit:
         type: boolean
       key_strategy:
         description: |-
@@ -627,6 +669,50 @@ definitions:
       wallet_balance_wei:
         type: string
     type: object
+  api.OverviewBuilderKey:
+    properties:
+      balance_gwei:
+        type: integer
+      builder_index:
+        description: |-
+          BuilderIndex is the on-chain registry index, only meaningful when
+          HasBuilderIndex is set (index 0 is a valid builder index).
+        type: integer
+      has_builder_index:
+        type: boolean
+      key_index:
+        type: integer
+      pubkey:
+        type: string
+      status:
+        type: string
+    type: object
+  api.OverviewBuilders:
+    properties:
+      active:
+        type: integer
+      count:
+        type: integer
+      indexes:
+        description: |-
+          Indexes are the on-chain indexes of every key currently in the registry,
+          ascending. This is the field an indexer wants.
+        items:
+          type: integer
+        type: array
+      keys:
+        items:
+          $ref: '#/definitions/api.OverviewBuilderKey'
+        type: array
+      target:
+        type: integer
+      total_balance_gwei:
+        type: integer
+      total_effective_gwei:
+        type: integer
+      total_pending_payments_gwei:
+        type: integer
+    type: object
   api.OverviewELClient:
     properties:
       code:
@@ -646,6 +732,8 @@ definitions:
         type: integer
       builder_pubkey:
         type: string
+      builders:
+        $ref: '#/definitions/api.OverviewBuilders'
       current_slot:
         type: integer
       el_client:

@@ -265,12 +265,14 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	}
 	prefs := signedPrefs.Message
 
-	// Split the post-subsidy block value between the execution-layer payment and the
-	// trustless on-chain payment (Value). max_execution_payment caps how much the
-	// proposer accepts directly from the builder as an execution payment; it defaults
-	// to 0 when the proposer never submitted preferences, per the Gloas spec (no
-	// execution payment allowed in that case). Anything above the cap is paid
-	// trustlessly on-chain via Value.
+	// Split the total between the trusted execution-layer payment
+	// (execution_payment) and the trustless on-chain payment (Value), per the
+	// slot's effective execution-payment settings (default 0 = everything paid
+	// trustlessly via Value). Buildoor never actually makes the EL payment — a
+	// non-zero execution_payment is a deliberately unbacked claim (testing
+	// knob). The portion is capped by the proposer's advertised
+	// max_execution_payment (0 when never submitted, per spec) unless the
+	// ignore_preference_limit setting deliberately serves beyond it.
 	//
 	// Value resolution per the frozen settings: an absolute total value (when
 	// set) replaces blockValue+subsidy entirely — before the execution-payment
@@ -283,8 +285,9 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		valueAfterSubsidy = phase0.Gwei(*frozenSettings.TotalValueGwei)
 	}
 
-	maxExecutionPayment := h.prefsStore.GetOrDefault(proposerPubkey)
-	executionPayment := min(valueAfterSubsidy, maxExecutionPayment)
+	prefLimit := h.prefsStore.GetOrDefault(proposerPubkey)
+	executionPayment := phase0.Gwei(frozenSettings.ExecutionPaymentPortion(
+		uint64(valueAfterSubsidy), uint64(prefLimit)))
 	value := valueAfterSubsidy - executionPayment
 
 	// The slot's frozen plan may carry a jq transform applied to the bid

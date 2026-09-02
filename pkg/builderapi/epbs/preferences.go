@@ -17,23 +17,15 @@ import (
 // the request via the embedded SignedRequestAuthV1. Per the Gloas builder-specs,
 // the builder MUST verify the auth signature against the validator_pubkey path
 // param (401 on failure) and MUST check that auth.message.builder_url matches its
-// own URL (400 on failure). The preference is stored only after both checks pass.
-// On success it returns 202.
+// own URL (400 on failure). Like getExecutionPayloadBid, the URL check is skipped
+// when no --builder-api-url is configured. The preference is stored only after
+// the checks pass. On success it returns 202.
 func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/builder_preferences")
 
 	if !h.enabled.Load() {
 		log.Warn("submitBuilderPreferences: 503 — builder API disabled")
 		writeError(w, http.StatusServiceUnavailable, "builder not ready")
-		return
-	}
-
-	// The builder MUST check auth.message.builder_url against its own URL. Without a
-	// configured URL it cannot perform that mandatory check, so treat it as a server
-	// misconfiguration (500) rather than a client error.
-	if h.cfg.BuilderURL == "" {
-		log.Error("submitBuilderPreferences: 500 — builder URL not configured; cannot verify auth.message.builder_url")
-		writeError(w, http.StatusInternalServerError, "builder URL not configured")
 		return
 	}
 
@@ -74,8 +66,9 @@ func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Check auth.message.data (the builder URL) matches this builder's URL (400 on mismatch).
-	if string(req.Auth.Message.Data) != h.cfg.BuilderURL {
+	// Check auth.message.data (the builder URL) matches this builder's URL
+	// (400 on mismatch, skipped when no URL is configured).
+	if h.cfg.BuilderURL != "" && string(req.Auth.Message.Data) != h.cfg.BuilderURL {
 		log.WithFields(logrus.Fields{
 			"auth_url":    string(req.Auth.Message.Data),
 			"builder_url": h.cfg.BuilderURL,
