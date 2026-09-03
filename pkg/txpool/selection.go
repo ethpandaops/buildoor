@@ -27,8 +27,14 @@ const (
 	SkipBlobFull            = "blob_full"
 	SkipMaxTxs              = "max_txs"
 	SkipBlobUnsupported     = "blob_unsupported"
+	SkipSizeFull            = "size_full"
 	SkipDisabled            = "txpool_disabled"
 )
+
+// maxBlockBytes bounds the encoded transaction bytes of a selection: geth's
+// RLP block size cap (params.MaxBlockSize) minus a margin for the header
+// and withdrawals, which the cap counts too.
+const maxBlockBytes = 8_388_608 - 64<<10
 
 // SelectParams describe the block a selection is assembled for.
 type SelectParams struct {
@@ -43,6 +49,10 @@ type SelectParams struct {
 	MaxTxs uint64
 	// GasFillPct is the share of GasLimit to fill (1-100; 0 = 100).
 	GasFillPct uint64
+	// BaseFeeCeiling, when non-nil, halves the fill to the EIP-1559 gas
+	// target once the next base fee exceeds it (a fill knob; SelectQueued
+	// ignores it).
+	BaseFeeCeiling *big.Int
 	// Ordering is fifo, tip or random.
 	Ordering string
 	// Seed drives the random ordering (the slot, so a preview and the build
@@ -78,6 +88,10 @@ type Selection struct {
 	BlobBaseFee *big.Int
 	// GasBudget is the gas the selection was allowed to fill.
 	GasBudget uint64
+	// CeilingApplied marks that the base-fee ceiling halved the fill.
+	CeilingApplied bool
+	// Bytes is the encoded size of the selected pool transactions.
+	Bytes uint64
 	// Snapshot is when the pool was read.
 	Snapshot time.Time
 }
@@ -94,6 +108,8 @@ type Summary struct {
 	BaseFee          string         `json:"base_fee,omitempty"`
 	BlobBaseFee      string         `json:"blob_base_fee,omitempty"`
 	GasBudget        uint64         `json:"gas_budget"`
+	CeilingApplied   bool           `json:"ceiling_applied,omitempty"`
+	Bytes            uint64         `json:"bytes,omitempty"`
 	Hashes           []string       `json:"hashes,omitempty"`
 }
 
@@ -111,6 +127,8 @@ func (s *Selection) Summary() *Summary {
 		InclusionListTxs: s.InclusionListTxs,
 		PoolSize:         s.PoolSize,
 		GasBudget:        s.GasBudget,
+		CeilingApplied:   s.CeilingApplied,
+		Bytes:            s.Bytes,
 		Hashes:           make([]string, 0, len(s.Selected)),
 	}
 
@@ -211,6 +229,15 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 	fillPct := params.GasFillPct
 	if fillPct == 0 || fillPct > 100 {
 		fillPct = 100
+	}
+
+	// Every full block raises the base fee by 12.5%; above the ceiling the
+	// fill drops to the gas target so a long run does not price its own
+	// transactions out.
+	if params.BaseFeeCeiling != nil && params.BaseFeeCeiling.Sign() > 0 &&
+		sel.BaseFee.Cmp(params.BaseFeeCeiling) > 0 && fillPct > 50 {
+		fillPct = 50
+		sel.CeilingApplied = true
 	}
 
 	sel.GasBudget = gasLimit / 100 * fillPct
@@ -500,17 +527,32 @@ func (p *Pool) mergeHeads(
 		}
 	}
 
+	// Sender order by first arrival: what fifo ties and round robin walk.
+	sort.SliceStable(cursors, func(i, j int) bool { return cursors[i].txs[0].Seq < cursors[j].txs[0].Seq })
+
 	ordering := config.NormalizedTxOrdering(params.Ordering, config.TxOrderingFIFO)
 	rng := rand.New(rand.NewPCG(params.Seed, params.Seed^0x9e3779b97f4a7c15)) //nolint:gosec // deterministic test ordering, not security
 
 	selected := make([]*PooledTx, 0, 64)
 
-	var gasUsed uint64
+	var gasUsed, bytesUsed uint64
 
 	blobs := 0
+	rrNext := 0
 
 	pick := func() int {
 		switch ordering {
+		case config.TxOrderingRoundRobin:
+			// One transaction per sender per round, senders in the order of
+			// their first arrival; cursors are appended in sender order.
+			if rrNext >= len(cursors) {
+				rrNext = 0
+			}
+
+			i := rrNext
+			rrNext++
+
+			return i
 		case config.TxOrderingTip:
 			best := 0
 
@@ -542,6 +584,10 @@ func (p *Pool) mergeHeads(
 	dropCursor := func(i int, reason string) {
 		sel.Skipped[reason] += len(cursors[i].txs) - cursors[i].pos
 		cursors = append(cursors[:i], cursors[i+1:]...)
+
+		if i < rrNext {
+			rrNext--
+		}
 	}
 
 	for len(cursors) > 0 {
@@ -563,6 +609,12 @@ func (p *Pool) mergeHeads(
 			continue
 		}
 
+		if bytesUsed+tx.Size > maxBlockBytes {
+			dropCursor(i, SkipSizeFull)
+
+			continue
+		}
+
 		txBlobs := len(tx.Tx.BlobHashes())
 		if txBlobs > 0 && uint64(blobs+txBlobs) > params.MaxBlobs {
 			dropCursor(i, SkipBlobFull)
@@ -571,16 +623,22 @@ func (p *Pool) mergeHeads(
 		}
 
 		gasUsed += tx.Tx.Gas()
+		bytesUsed += tx.Size
 		blobs += txBlobs
 		selected = append(selected, tx)
 		cur.pos++
 
 		if cur.pos >= len(cur.txs) {
 			cursors = append(cursors[:i], cursors[i+1:]...)
+
+			if i < rrNext {
+				rrNext--
+			}
 		}
 	}
 
 	sel.GasSum = gasUsed
+	sel.Bytes = bytesUsed
 	sel.Blobs = blobs
 
 	return selected

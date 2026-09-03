@@ -552,6 +552,7 @@ export const LocalBuildForm: React.FC<{
               <option value="fifo">fifo (arrival)</option>
               <option value="tip">tip (highest first)</option>
               <option value="random">random</option>
+              <option value="round_robin">round robin (one per sender per round)</option>
             </select>
           </div>
           <div className="col-12 form-text mt-0">

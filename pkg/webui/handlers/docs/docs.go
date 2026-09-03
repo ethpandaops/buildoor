@@ -2243,6 +2243,13 @@ const docTemplate = `{
                     "description": "PayloadSource: el | local | local_or_el.",
                     "type": "string"
                 },
+                "queued": {
+                    "description": "Queued is the exact ordered list of transaction hashes (0x-hex) the\nslot's local payload is built from; every hash must be queued in the\npool at build time and the order must respect each sender's nonces.\nImplies tx_source queued. Any deviation fails the build, never trims.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "transactions": {
                     "description": "Transactions is the exact raw transaction list (0x-hex, network\nencoding) the slot's local payload is built from.",
                     "type": "array",
@@ -2469,6 +2476,10 @@ const docTemplate = `{
                     "description": "AllowBlobsWithoutBundle includes blob transactions on ELs whose testing\npath returns no blobs bundle.",
                     "type": "boolean"
                 },
+                "base_fee_ceiling_gwei": {
+                    "description": "BaseFeeCeilingGwei halves the fill above this next base fee (global-only,\n0 = off; exact lists are never reduced).",
+                    "type": "integer"
+                },
                 "build_el_payload": {
                     "description": "BuildELPayload keeps the engine build when the payload source is local.",
                     "type": "boolean"
@@ -2483,6 +2494,13 @@ const docTemplate = `{
                 "gas_fill_pct": {
                     "type": "integer"
                 },
+                "max_attempts": {
+                    "description": "MaxAttempts / MaxStrikes are the retry policy of the txpool source\n(global-only).",
+                    "type": "integer"
+                },
+                "max_strikes": {
+                    "type": "integer"
+                },
                 "max_txs": {
                     "description": "Pool selection parameters (tx source txpool).",
                     "type": "integer"
@@ -2493,6 +2511,13 @@ const docTemplate = `{
                 "payload_source": {
                     "description": "PayloadSource: el | local | local_or_el.",
                     "type": "string"
+                },
+                "queued": {
+                    "description": "Queued is the exact ordered hash list for the queued source.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "transactions": {
                     "description": "Transactions is the explicit list (0x-hex) for the explicit source.",
@@ -2963,6 +2988,14 @@ const docTemplate = `{
                 },
                 "payload_source": {
                     "type": "string"
+                },
+                "plan_checks": {
+                    "description": "PlanChecks is the process-lifetime tally of post-inclusion checks of\nlocally built blocks (nil without an EL RPC).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/tx_plan_verifier.Counters"
+                        }
+                    ]
                 },
                 "tx_source": {
                     "type": "string"
@@ -3698,6 +3731,17 @@ const docTemplate = `{
                 }
             }
         },
+        "payload_builder.DroppedTx": {
+            "type": "object",
+            "properties": {
+                "hash": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
         "payload_builder.LocalBuildAvailability": {
             "type": "object",
             "properties": {
@@ -3738,12 +3782,34 @@ const docTemplate = `{
         "payload_builder.LocalBuildInfo": {
             "type": "object",
             "properties": {
+                "attempts": {
+                    "description": "Attempts is how many testing_buildBlockV1 calls the build took.",
+                    "type": "integer"
+                },
+                "built_at": {
+                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually well\nbefore the payload's ReadyAt (the hand-over to the consumers).",
+                    "type": "string"
+                },
+                "dropped": {
+                    "description": "Dropped lists the pool transactions removed from the attempt after an\nattributed EL refusal (txpool source only), with the failure class.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/payload_builder.DroppedTx"
+                    }
+                },
                 "dropped_by_el": {
                     "description": "DroppedByEL counts submitted transactions the EL left out of the payload\n(ELs that silently filter instead of failing the call).",
                     "type": "integer"
                 },
+                "expected_hashes": {
+                    "description": "ExpectedHashes are the hashes of the transactions handed to the EL, in\norder (nil for the el_mempool source, where the EL chooses). The built\npayload is checked against this list before it is used, and the\nincluded block after inclusion.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "explicit_txs": {
-                    "description": "ExplicitTxs is the explicit list length (tx source explicit).",
+                    "description": "ExplicitTxs is the explicit list length (tx source explicit / queued).",
                     "type": "integer"
                 },
                 "inclusion_list_dropped": {
@@ -4253,6 +4319,14 @@ const docTemplate = `{
                 "slot": {
                     "type": "integer"
                 },
+                "tx_plan": {
+                    "description": "TxPlan is the post-inclusion verdict of a locally built payload: whether\nthe canonical block holds exactly the transactions buildoor submitted,\nin order. Only set for included slots whose payload came from an\nexplicit list (local build with a txpool/explicit/queued source).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.TxPlanResult"
+                        }
+                    ]
+                },
                 "updated_at": {
                     "type": "string"
                 }
@@ -4270,6 +4344,85 @@ const docTemplate = `{
                 "SubmissionStatusAccepted",
                 "SubmissionStatusFailed"
             ]
+        },
+        "slot_results.TxPlanResult": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "type": "string"
+                },
+                "expected_count": {
+                    "type": "integer"
+                },
+                "expected_hashes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "first_mismatch": {
+                    "type": "integer"
+                },
+                "included_count": {
+                    "type": "integer"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.TxPlanStatus"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "tx_source": {
+                    "type": "string"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.TxPlanStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "match",
+                "mismatch",
+                "block_not_found",
+                "not_included",
+                "missed",
+                "orphaned"
+            ],
+            "x-enum-varnames": [
+                "TxPlanPending",
+                "TxPlanMatch",
+                "TxPlanMismatch",
+                "TxPlanBlockNotFound",
+                "TxPlanNotIncluded",
+                "TxPlanMissed",
+                "TxPlanOrphaned"
+            ]
+        },
+        "tx_plan_verifier.Counters": {
+            "type": "object",
+            "properties": {
+                "block_not_found": {
+                    "type": "integer"
+                },
+                "checked": {
+                    "type": "integer"
+                },
+                "match": {
+                    "type": "integer"
+                },
+                "mismatch": {
+                    "type": "integer"
+                },
+                "missed": {
+                    "type": "integer"
+                },
+                "orphaned": {
+                    "type": "integer"
+                }
+            }
         },
         "txpool.Stats": {
             "type": "object",
@@ -4299,6 +4452,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "evicted_nonce_too_low": {
+                    "type": "integer"
+                },
+                "evicted_strikes": {
                     "type": "integer"
                 },
                 "evicted_ttl": {
@@ -4347,6 +4503,12 @@ const docTemplate = `{
                 },
                 "blobs": {
                     "type": "integer"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "ceiling_applied": {
+                    "type": "boolean"
                 },
                 "gas_budget": {
                     "type": "integer"
@@ -4414,6 +4576,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "size": {
+                    "type": "integer"
+                },
+                "strikes": {
                     "type": "integer"
                 },
                 "to": {

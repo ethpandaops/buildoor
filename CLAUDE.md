@@ -297,8 +297,20 @@ npm run clean
      spamoor fans every submission out to all its hosts, so an additional EL host
      leaks the transactions into the EL mempool (visible as
      `evicted_included_by_other` on the pool stats).
+   - **Post-inclusion verification** (`pkg/tx_plan_verifier`): every included
+     payload built from an explicit list (`Payload.Local.ExpectedHashes`) is
+     re-read from the EL and compared with the plan; the verdict lands on
+     `SlotResult.tx_plan` (pending → match | mismatch | block_not_found |
+     not_included after 20 slots | missed | orphaned mirrored from the Gloas
+     payload verdicts), `buildoor_tx_plan_checks_total`, and a `TX PLAN CHECK
+     FAILED` error log. Counters on `GET /api/buildoor/local-build/status`.
+     `pkg/metrics` holds the Prometheus collectors. The EL RPC client tees
+     every lifecycle transaction it sends into the pool while the pool is
+     enabled (`execution.Client.SetTxTee`), so deposits land in pool-built
+     blocks. `.hack/txgen` signs transfers into the pool and prints the hashes
+     for an exact `build.local.queued` plan.
    - Per-slot: action plan `build.local` (`enabled`, `payload_source`, `tx_source`,
-     `transactions`, `build_el_payload`, `max_txs`, `gas_fill_pct`, `ordering`)
+     `transactions`, `queued`, `build_el_payload`, `max_txs`, `gas_fill_pct`, `ordering`)
      resolves into `FrozenPlan.Build.Local` (rules carry it too). Slot results:
      `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
      artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),

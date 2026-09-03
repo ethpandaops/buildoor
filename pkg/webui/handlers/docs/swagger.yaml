@@ -185,6 +185,15 @@ definitions:
       payload_source:
         description: 'PayloadSource: el | local | local_or_el.'
         type: string
+      queued:
+        description: |-
+          Queued is the exact ordered list of transaction hashes (0x-hex) the
+          slot's local payload is built from; every hash must be queued in the
+          pool at build time and the order must respect each sender's nonces.
+          Implies tx_source queued. Any deviation fails the build, never trims.
+        items:
+          type: string
+        type: array
       transactions:
         description: |-
           Transactions is the exact raw transaction list (0x-hex, network
@@ -395,6 +404,11 @@ definitions:
           AllowBlobsWithoutBundle includes blob transactions on ELs whose testing
           path returns no blobs bundle.
         type: boolean
+      base_fee_ceiling_gwei:
+        description: |-
+          BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
+          0 = off; exact lists are never reduced).
+        type: integer
       build_el_payload:
         description: BuildELPayload keeps the engine build when the payload source
           is local.
@@ -408,6 +422,13 @@ definitions:
         type: boolean
       gas_fill_pct:
         type: integer
+      max_attempts:
+        description: |-
+          MaxAttempts / MaxStrikes are the retry policy of the txpool source
+          (global-only).
+        type: integer
+      max_strikes:
+        type: integer
       max_txs:
         description: Pool selection parameters (tx source txpool).
         type: integer
@@ -416,6 +437,11 @@ definitions:
       payload_source:
         description: 'PayloadSource: el | local | local_or_el.'
         type: string
+      queued:
+        description: Queued is the exact ordered hash list for the queued source.
+        items:
+          type: string
+        type: array
       transactions:
         description: Transactions is the explicit list (0x-hex) for the explicit source.
         items:
@@ -751,6 +777,12 @@ definitions:
         type: boolean
       payload_source:
         type: string
+      plan_checks:
+        allOf:
+        - $ref: '#/definitions/tx_plan_verifier.Counters'
+        description: |-
+          PlanChecks is the process-lifetime tally of post-inclusion checks of
+          locally built blocks (nil without an EL RPC).
       tx_source:
         type: string
       txpool:
@@ -1260,6 +1292,13 @@ definitions:
       value_wei:
         type: string
     type: object
+  payload_builder.DroppedTx:
+    properties:
+      hash:
+        type: string
+      reason:
+        type: string
+    type: object
   payload_builder.LocalBuildAvailability:
     properties:
       available:
@@ -1292,13 +1331,39 @@ definitions:
     type: object
   payload_builder.LocalBuildInfo:
     properties:
+      attempts:
+        description: Attempts is how many testing_buildBlockV1 calls the build took.
+        type: integer
+      built_at:
+        description: |-
+          BuiltAt is when testing_buildBlockV1 returned the payload. The local
+          build runs during the engine build's wait, so this is usually well
+          before the payload's ReadyAt (the hand-over to the consumers).
+        type: string
+      dropped:
+        description: |-
+          Dropped lists the pool transactions removed from the attempt after an
+          attributed EL refusal (txpool source only), with the failure class.
+        items:
+          $ref: '#/definitions/payload_builder.DroppedTx'
+        type: array
       dropped_by_el:
         description: |-
           DroppedByEL counts submitted transactions the EL left out of the payload
           (ELs that silently filter instead of failing the call).
         type: integer
+      expected_hashes:
+        description: |-
+          ExpectedHashes are the hashes of the transactions handed to the EL, in
+          order (nil for the el_mempool source, where the EL chooses). The built
+          payload is checked against this list before it is used, and the
+          included block after inclusion.
+        items:
+          type: string
+        type: array
       explicit_txs:
-        description: ExplicitTxs is the explicit list length (tx source explicit).
+        description: ExplicitTxs is the explicit list length (tx source explicit /
+          queued).
         type: integer
       inclusion_list_dropped:
         description: |-
@@ -1690,6 +1755,14 @@ definitions:
         type: array
       slot:
         type: integer
+      tx_plan:
+        allOf:
+        - $ref: '#/definitions/slot_results.TxPlanResult'
+        description: |-
+          TxPlan is the post-inclusion verdict of a locally built payload: whether
+          the canonical block holds exactly the transactions buildoor submitted,
+          in order. Only set for included slots whose payload came from an
+          explicit list (local build with a txpool/explicit/queued source).
       updated_at:
         type: string
     type: object
@@ -1703,6 +1776,62 @@ definitions:
     - SubmissionStatusReceived
     - SubmissionStatusAccepted
     - SubmissionStatusFailed
+  slot_results.TxPlanResult:
+    properties:
+      detail:
+        type: string
+      expected_count:
+        type: integer
+      expected_hashes:
+        items:
+          type: string
+        type: array
+      first_mismatch:
+        type: integer
+      included_count:
+        type: integer
+      status:
+        $ref: '#/definitions/slot_results.TxPlanStatus'
+      truncated:
+        type: boolean
+      tx_source:
+        type: string
+      verified_at:
+        type: string
+    type: object
+  slot_results.TxPlanStatus:
+    enum:
+    - pending
+    - match
+    - mismatch
+    - block_not_found
+    - not_included
+    - missed
+    - orphaned
+    type: string
+    x-enum-varnames:
+    - TxPlanPending
+    - TxPlanMatch
+    - TxPlanMismatch
+    - TxPlanBlockNotFound
+    - TxPlanNotIncluded
+    - TxPlanMissed
+    - TxPlanOrphaned
+  tx_plan_verifier.Counters:
+    properties:
+      block_not_found:
+        type: integer
+      checked:
+        type: integer
+      match:
+        type: integer
+      mismatch:
+        type: integer
+      missed:
+        type: integer
+      orphaned:
+        type: integer
+    type: object
   txpool.Stats:
     properties:
       admitted:
@@ -1722,6 +1851,8 @@ definitions:
       evicted_included_by_us:
         type: integer
       evicted_nonce_too_low:
+        type: integer
+      evicted_strikes:
         type: integer
       evicted_ttl:
         type: integer
@@ -1754,6 +1885,10 @@ definitions:
         type: string
       blobs:
         type: integer
+      bytes:
+        type: integer
+      ceiling_applied:
+        type: boolean
       gas_budget:
         type: integer
       gas_sum:
@@ -1798,6 +1933,8 @@ definitions:
       seq:
         type: integer
       size:
+        type: integer
+      strikes:
         type: integer
       to:
         type: string

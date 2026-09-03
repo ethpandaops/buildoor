@@ -590,6 +590,7 @@ func (b *PayloadBuilder) buildLocal(
 			MaxBlobs:       b.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)),
 			MaxTxs:         req.MaxTxs,
 			GasFillPct:     req.GasFillPct,
+			BaseFeeCeiling: gweiToWei(req.BaseFeeCeilingGwei),
 			Ordering:       req.Ordering,
 			Seed:           uint64(attrs.ProposalSlot),
 			InclusionList:  attrs.InclusionListTransactions,
@@ -739,6 +740,15 @@ func (b *PayloadBuilder) buildLocal(
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
 	return localOutcome{payload: payload, info: info}
+}
+
+// gweiToWei converts a gwei amount to wei (nil for 0).
+func gweiToWei(gwei uint64) *big.Int {
+	if gwei == 0 {
+		return nil
+	}
+
+	return new(big.Int).Mul(new(big.Int).SetUint64(gwei), big.NewInt(1_000_000_000))
 }
 
 // txHashes decodes network-encoded transactions into their hashes, in order.

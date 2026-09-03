@@ -180,11 +180,12 @@ namespace (probed at startup and every 5 minutes, or on demand from the UI).
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
 | `--txpool-auth-token` | | Bearer token required on `/rpc` |
-| `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random` |
+| `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random`, `round_robin` |
 | `--txpool-block-max-txs` | `0` | Max pool txs per local block (0 = unlimited) |
 | `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |
 | `--txpool-max-txs` | `10000` | Pool capacity |
 | `--txpool-max-txs-per-sender` | `256` | Per-sender queue cap |
+| `--txpool-base-fee-ceiling-gwei` | `0` | Above this next base fee pool fills drop to the EIP-1559 gas target so a long max-fill run does not price its own txs out (exact lists are never reduced) |
 | `--txpool-max-strikes` | `3` | Drop a queued tx after this many attributed build failures (0 = never) |
 | `--txpool-tx-ttl-slots` | `0` | Drop queued txs older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind) |
 | `--txpool-forward-to-el` | `false` | Also submit admitted txs to the EL mempool (A/B shadow mode) |
@@ -194,6 +195,14 @@ Point a generator at the pool as its ONLY host:
 ```bash
 spamoor eoatx -h "name(buildoor)http://<buildoor>:8080/rpc" -p <privkey>
 ```
+
+Every locally built block is verified twice: the built payload must hold exactly
+the submitted list before it is bid, and after inclusion the canonical block is
+re-read from the EL and compared with the plan (verdict on the slot result's
+`tx_plan`, the `buildoor_tx_plan_checks_total` metric, and a `TX PLAN CHECK
+FAILED` error log on any deviation). A per-slot plan can name an exact ordered
+list of queued transaction hashes (`build.local.queued`); `.hack/txgen` signs
+transfers into the pool and prints their hashes for that purpose.
 
 The ingress answers `eth_sendRawTransaction` (and `eth_chainId`,
 `eth_getTransactionCount` pool-aware for `pending`, `txpool_*`) locally and

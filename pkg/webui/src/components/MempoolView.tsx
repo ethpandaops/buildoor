@@ -100,6 +100,9 @@ const PreviewPanel: React.FC<{
               <div className="config-item-value">
                 {selection.gas_sum.toLocaleString()} / {selection.gas_budget.toLocaleString()}
                 {gasLimit ? <span className="text-muted small"> (limit {gasLimit.toLocaleString()})</span> : null}
+                {selection.ceiling_applied && (
+                  <span className="badge bg-warning text-dark ms-1" title="Next base fee above txpool.base_fee_ceiling_gwei: fill reduced to the gas target">ceiling</span>
+                )}
               </div>
             </div>
           </div>

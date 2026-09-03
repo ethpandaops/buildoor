@@ -390,6 +390,8 @@ func (p *Pool) validateLocked(tx *types.Transaction, size uint64) (*PooledTx, er
 		return nil, ErrIntrinsicGas
 	}
 
+	p.seq++
+
 	return &PooledTx{
 		Hash:        tx.Hash(),
 		Sender:      sender,
@@ -397,6 +399,7 @@ func (p *Pool) validateLocked(tx *types.Transaction, size uint64) (*PooledTx, er
 		Size:        size,
 		Arrived:     time.Now(),
 		ArrivedSlot: p.chainSvc.GetCurrentSlot(),
+		Seq:         p.seq,
 	}, nil
 }
 

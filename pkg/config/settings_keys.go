@@ -57,6 +57,7 @@ const (
 	KeyTxPoolMaxTxsPerSender = "txpool.max_txs_per_sender"
 	KeyTxPoolTxTTLSlots      = "txpool.tx_ttl_slots"
 	KeyTxPoolMaxStrikes      = "txpool.max_strikes"
+	KeyTxPoolBaseFeeCeiling  = "txpool.base_fee_ceiling_gwei"
 	KeyTxPoolForwardToEL     = "txpool.forward_to_el"
 
 	KeyPayloadBuildTime              = "payload_build_time"

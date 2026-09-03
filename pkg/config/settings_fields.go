@@ -132,6 +132,7 @@ func Fields() []Field {
 		newField(KeyTxPoolMaxTxsPerSender, "txpool-max-txs-per-sender", func(c *Config) *uint64 { return &c.TxPool.MaxTxsPerSender }),
 		newField(KeyTxPoolTxTTLSlots, "txpool-tx-ttl-slots", func(c *Config) *uint64 { return &c.TxPool.TxTTLSlots }),
 		newField(KeyTxPoolMaxStrikes, "txpool-max-strikes", func(c *Config) *uint64 { return &c.TxPool.MaxStrikes }),
+		newField(KeyTxPoolBaseFeeCeiling, "txpool-base-fee-ceiling-gwei", func(c *Config) *uint64 { return &c.TxPool.BaseFeeCeilingGwei }),
 		newField(KeyTxPoolForwardToEL, "txpool-forward-to-el", func(c *Config) *bool { return &c.TxPool.ForwardToEL }),
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),

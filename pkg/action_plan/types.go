@@ -482,7 +482,7 @@ func (p *LocalBuildPlan) validate() error {
 	}
 
 	if p.Ordering != "" && config.NormalizedTxOrdering(p.Ordering, "") == "" {
-		return fmt.Errorf("build.local.ordering: must be fifo, tip or random (got %q)", p.Ordering)
+		return fmt.Errorf("build.local.ordering: must be fifo, tip, random or round_robin (got %q)", p.Ordering)
 	}
 
 	if p.GasFillPct != nil && (*p.GasFillPct == 0 || *p.GasFillPct > 100) {

@@ -67,6 +67,8 @@ export interface TxPoolConfig {
   max_pool_txs: number;
   max_txs_per_sender: number;
   tx_ttl_slots: number;
+  max_strikes?: number;
+  base_fee_ceiling_gwei?: number;
   forward_to_el: boolean;
 }
 
@@ -168,6 +170,8 @@ export interface TxSelectionSummary {
   base_fee?: string;
   blob_base_fee?: string;
   gas_budget: number;
+  ceiling_applied?: boolean;
+  bytes?: number;
   hashes?: string[];
 }
 

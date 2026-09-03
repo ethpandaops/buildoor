@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math/big"
 	"net/http"
 	"strconv"
 
@@ -251,6 +252,7 @@ func (h *APIHandler) GetTxPoolPreview(w http.ResponseWriter, r *http.Request) {
 		MaxBlobs:       maxBlobs,
 		MaxTxs:         cfg.TxPool.MaxTxsPerBlock,
 		GasFillPct:     cfg.TxPool.EffectiveGasFillPct(),
+		BaseFeeCeiling: gweiToWei(cfg.TxPool.BaseFeeCeilingGwei),
 		Ordering:       cfg.TxPool.NormalizedOrdering(),
 		Seed:           uint64(slot),
 		IncludeBlobTxs: availability.BlobBundle || cfg.LocalBuild.AllowBlobsWithoutBundle,
@@ -270,6 +272,15 @@ func (h *APIHandler) GetTxPoolPreview(w http.ResponseWriter, r *http.Request) {
 		MaxBlobs:   maxBlobs,
 		Ordering:   params.Ordering,
 	})
+}
+
+// gweiToWei converts a gwei amount to wei (nil for 0).
+func gweiToWei(gwei uint64) *big.Int {
+	if gwei == 0 {
+		return nil
+	}
+
+	return new(big.Int).Mul(new(big.Int).SetUint64(gwei), big.NewInt(1_000_000_000))
 }
 
 // ClearTxPool godoc

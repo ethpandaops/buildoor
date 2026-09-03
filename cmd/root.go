@@ -126,13 +126,14 @@ func init() {
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Bearer token required on the /rpc ingress (empty = unauthenticated)")
-	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip or random")
+	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip, random or round_robin")
 	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
 	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
 	rootCmd.PersistentFlags().Uint64("txpool-max-txs", defaults.TxPool.MaxPoolTxs, "Max queued transactions in the pool")
 	rootCmd.PersistentFlags().Uint64("txpool-max-txs-per-sender", defaults.TxPool.MaxTxsPerSender, "Max queued transactions per sender")
 	rootCmd.PersistentFlags().Uint64("txpool-tx-ttl-slots", defaults.TxPool.TxTTLSlots, "Drop queued transactions older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind)")
 	rootCmd.PersistentFlags().Uint64("txpool-max-strikes", defaults.TxPool.MaxStrikes, "Drop a queued transaction after this many attributed build failures (0 = never)")
+	rootCmd.PersistentFlags().Uint64("txpool-base-fee-ceiling-gwei", defaults.TxPool.BaseFeeCeilingGwei, "Above this next base fee (gwei) pool selections fill only to the EIP-1559 gas target, so a long max-fill run does not price its own transactions out (0 = off; exact lists are never reduced)")
 	rootCmd.PersistentFlags().Bool("txpool-forward-to-el", defaults.TxPool.ForwardToEL, "Also submit admitted transactions to the EL mempool (shadow mode for A/B comparisons)")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
@@ -279,16 +280,17 @@ func initConfig() error {
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
 		},
 		TxPool: config.TxPoolConfig{
-			Enabled:         v.GetBool("txpool-enabled"),
-			AuthToken:       v.GetString("txpool-auth-token"),
-			Ordering:        v.GetString("txpool-ordering"),
-			MaxTxsPerBlock:  v.GetUint64("txpool-block-max-txs"),
-			GasFillPct:      v.GetUint64("txpool-gas-fill-pct"),
-			MaxPoolTxs:      v.GetUint64("txpool-max-txs"),
-			MaxTxsPerSender: v.GetUint64("txpool-max-txs-per-sender"),
-			TxTTLSlots:      v.GetUint64("txpool-tx-ttl-slots"),
-			MaxStrikes:      v.GetUint64("txpool-max-strikes"),
-			ForwardToEL:     v.GetBool("txpool-forward-to-el"),
+			Enabled:            v.GetBool("txpool-enabled"),
+			AuthToken:          v.GetString("txpool-auth-token"),
+			Ordering:           v.GetString("txpool-ordering"),
+			MaxTxsPerBlock:     v.GetUint64("txpool-block-max-txs"),
+			GasFillPct:         v.GetUint64("txpool-gas-fill-pct"),
+			MaxPoolTxs:         v.GetUint64("txpool-max-txs"),
+			MaxTxsPerSender:    v.GetUint64("txpool-max-txs-per-sender"),
+			TxTTLSlots:         v.GetUint64("txpool-tx-ttl-slots"),
+			MaxStrikes:         v.GetUint64("txpool-max-strikes"),
+			BaseFeeCeilingGwei: v.GetUint64("txpool-base-fee-ceiling-gwei"),
+			ForwardToEL:        v.GetBool("txpool-forward-to-el"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),
@@ -363,7 +365,7 @@ func initConfig() error {
 	}
 
 	if config.NormalizedTxOrdering(cfg.TxPool.Ordering, "") == "" {
-		return fmt.Errorf("invalid --txpool-ordering %q: must be fifo, tip or random", cfg.TxPool.Ordering)
+		return fmt.Errorf("invalid --txpool-ordering %q: must be fifo, tip, random or round_robin", cfg.TxPool.Ordering)
 	}
 
 	if cfg.TxPool.GasFillPct == 0 || cfg.TxPool.GasFillPct > 100 {

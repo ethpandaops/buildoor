@@ -127,6 +127,9 @@ type ResolvedLocalBuildSettings struct {
 	// (global-only).
 	MaxAttempts uint64 `json:"max_attempts,omitempty"`
 	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
+	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
+	// 0 = off; exact lists are never reduced).
+	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
 	// Forced marks that the plan enabled the local build although it is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
@@ -428,6 +431,7 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
 		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
 		MaxStrikes:              cfg.TxPool.MaxStrikes,
+		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
 	}
 
 	if plan == nil || plan.Build == nil || plan.Build.Local == nil {

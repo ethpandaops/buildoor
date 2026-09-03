@@ -635,13 +635,16 @@ const (
 	// TxOrderingRandom shuffles senders with a per-slot seed, for ordering
 	// and gossip tests.
 	TxOrderingRandom = "random"
+	// TxOrderingRoundRobin takes one transaction per sender per round, in
+	// sender arrival order, so every sender progresses evenly.
+	TxOrderingRoundRobin = "round_robin"
 )
 
 // NormalizedTxOrdering returns the ordering, falling back to the given
 // default for unknown values.
 func NormalizedTxOrdering(ordering, fallback string) string {
 	switch ordering {
-	case TxOrderingFIFO, TxOrderingTip, TxOrderingRandom:
+	case TxOrderingFIFO, TxOrderingTip, TxOrderingRandom, TxOrderingRoundRobin:
 		return ordering
 	default:
 		return fallback
@@ -687,6 +690,13 @@ type TxPoolConfig struct {
 	// MaxStrikes drops a queued transaction after this many attributed build
 	// failures (0 = never drop).
 	MaxStrikes uint64 `yaml:"max_strikes" json:"max_strikes"`
+
+	// BaseFeeCeilingGwei, when non-zero, halves the fill to the EIP-1559 gas
+	// target once the next base fee exceeds it: every full block raises the
+	// base fee 12.5 percent, and a long max-fill run would otherwise price
+	// its own queued transactions out. A fill knob only: exact lists
+	// (explicit, queued) always get the whole block.
+	BaseFeeCeilingGwei uint64 `yaml:"base_fee_ceiling_gwei" json:"base_fee_ceiling_gwei"`
 
 	// ForwardToEL additionally submits every admitted transaction to the EL
 	// mempool (eth_sendRawTransaction) — a shadow mode for A/B comparisons

@@ -648,3 +648,61 @@ func TestSelectQueuedIsExactOrFails(t *testing.T) {
 	_, err = pool.SelectQueued(context.Background(), []common.Hash{b0.Hash()}, params)
 	require.ErrorIs(t, err, ErrDisabled)
 }
+
+func TestSelectRoundRobinAndCeiling(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	a := newAccount(t)
+	b := newAccount(t)
+	fund(el, a, 0, 100)
+	fund(el, b, 0, 100)
+
+	var order []common.Hash
+
+	// a0, a1, a2 arrive first, then b0, b1.
+	for _, item := range []struct {
+		acc   account
+		nonce uint64
+	}{{a, 0}, {a, 1}, {a, 2}, {b, 0}, {b, 1}} {
+		tx, raw := signTx(t, item.acc, txOpts{nonce: item.nonce})
+		_, err := pool.Add(raw)
+		require.NoError(t, err)
+
+		order = append(order, tx.Hash())
+	}
+
+	sel, err := pool.Select(context.Background(), &SelectParams{
+		ParentHash: common.Hash{0xaa},
+		Ordering:   config.TxOrderingRoundRobin,
+	})
+	require.NoError(t, err)
+	require.Len(t, sel.Selected, 5)
+
+	got := make([]common.Hash, 0, 5)
+	for _, tx := range sel.Selected {
+		got = append(got, tx.Hash)
+	}
+
+	// a0 b0 a1 b1 a2
+	require.Equal(t, []common.Hash{order[0], order[3], order[1], order[4], order[2]}, got)
+	require.Positive(t, sel.Bytes)
+
+	// Ceiling: the parent's base fee is 1 gwei and it sits at the gas target,
+	// so the next base fee is 1 gwei; a 0.5 gwei ceiling halves the fill.
+	sel, err = pool.Select(context.Background(), &SelectParams{
+		ParentHash:     common.Hash{0xaa},
+		BaseFeeCeiling: big.NewInt(500_000_000),
+	})
+	require.NoError(t, err)
+	require.True(t, sel.CeilingApplied)
+	require.Equal(t, uint64(15_000_000), sel.GasBudget)
+
+	sel, err = pool.Select(context.Background(), &SelectParams{
+		ParentHash:     common.Hash{0xaa},
+		BaseFeeCeiling: big.NewInt(2_000_000_000),
+	})
+	require.NoError(t, err)
+	require.False(t, sel.CeilingApplied)
+	require.Equal(t, uint64(30_000_000), sel.GasBudget)
+}

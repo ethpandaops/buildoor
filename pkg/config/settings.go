@@ -358,7 +358,7 @@ func validateValue(key string, v any) error {
 	if key == KeyTxPoolOrdering {
 		ordering, _ := v.(string)
 		if NormalizedTxOrdering(ordering, "") == "" {
-			return fmt.Errorf("invalid tx ordering %q (must be fifo, tip or random)", ordering)
+			return fmt.Errorf("invalid tx ordering %q (must be fifo, tip, random or round_robin)", ordering)
 		}
 	}
 

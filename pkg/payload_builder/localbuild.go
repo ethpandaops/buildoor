@@ -89,6 +89,8 @@ type LocalBuildRequest struct {
 	// attributed EL refusal.
 	MaxAttempts uint64
 	MaxStrikes  uint64
+	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
+	BaseFeeCeilingGwei uint64
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -391,16 +393,17 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot) (*LocalBuildRequest
 	}
 
 	req := &LocalBuildRequest{
-		TxSource:       settings.TxSource,
-		PayloadSource:  settings.PayloadSource,
-		BuildELPayload: settings.BuildELPayload,
-		MaxTxs:         settings.MaxTxs,
-		GasFillPct:     settings.GasFillPct,
-		Ordering:       settings.Ordering,
-		IncludeBlobTxs: availability.BlobBundle || settings.AllowBlobsWithoutBundle,
-		BlobEncoding:   availability.BlobEncoding,
-		MaxAttempts:    settings.MaxAttempts,
-		MaxStrikes:     settings.MaxStrikes,
+		TxSource:           settings.TxSource,
+		PayloadSource:      settings.PayloadSource,
+		BuildELPayload:     settings.BuildELPayload,
+		MaxTxs:             settings.MaxTxs,
+		GasFillPct:         settings.GasFillPct,
+		Ordering:           settings.Ordering,
+		IncludeBlobTxs:     availability.BlobBundle || settings.AllowBlobsWithoutBundle,
+		BlobEncoding:       availability.BlobEncoding,
+		MaxAttempts:        settings.MaxAttempts,
+		MaxStrikes:         settings.MaxStrikes,
+		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 
 	if len(settings.Queued) > 0 {
