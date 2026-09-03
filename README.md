@@ -161,9 +161,9 @@ on every client — enable it with `--http.api ...,testing` on geth/reth/erigon,
 `--rpc-http-api ...,TESTING` on besu, `--JsonRpc.EnabledModules ...,Testing` on
 nethermind) from a transaction source it controls, and choose whether bids use
 that payload or the EL's. Under the kurtosis ethereum-package the module flag
-can only be appended through `el_extra_params`: geth, besu and erigon accept the
-repeated flag (the appended list wins), nethermind rejects it — expose the
-namespace on an additional endpoint instead
+can only be appended through `el_extra_params`: geth, besu, erigon and ethrex
+accept the repeated flag (the appended list wins), nethermind rejects it — expose
+the namespace on an additional endpoint instead
 (`--JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing`
 and point `--el-rpc` at port 8547) — and reth rejects it without an alternative. Both extensions need `--el-rpc` and are off by
 default; the enable settings are refused while the EL does not expose the

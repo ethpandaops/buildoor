@@ -258,12 +258,16 @@ npm run clean
      silently filters (erigon → `dropped_by_el` recorded), hence the strict
      state-aware selection below.
    - **Enabling the namespace under kurtosis**: the ethereum-package appends
-     `el_extra_params` AFTER its own module flag. geth, besu and erigon take the
-     repeated flag (last wins), nethermind fails ("expects a single argument but
+     `el_extra_params` AFTER its own module flag. geth, besu, erigon and ethrex
+     take the repeated flag (last wins), nethermind fails ("expects a single argument but
      2 were provided") — use `--JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing`
      and point `--el-rpc` at 8547 (what `.github/e2e/kurtosis.yaml` does) — and
      reth fails ("cannot be used multiple times") with no workaround. The local
-     devnet therefore runs the buildoor-under-test participant on geth.
+     devnet therefore runs the buildoor-under-test participant on geth. Verified
+     building through the local path on the devnet: geth, nethermind (extra
+     endpoint), besu, erigon, ethrex; reth reports unavailable as designed.
+     `kurtosis service update --cmd` cannot be used to add the flag later: it
+     rebuilds the container without its file mounts.
    - **Availability gating**: `execution.Client.ProbeTestingAPI` calls the method
      with garbage params — `-32601` = unavailable, anything else = available —
      at startup, every 5 min (with the EL client version refresh) and via
