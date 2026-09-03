@@ -278,6 +278,11 @@ npm run clean
      order + count; Gloas `missed`/`orphaned` verdicts are mirrored. Verdict →
      `SlotResult.TxPlan.Status`, `buildoor_testing_plan_checks_total`, and an
      error log prefixed `TX PLAN CHECK FAILED`. Loud by design.
+   - **Inclusion path**: while the testing source is active the builder's
+     blocks are the ONLY inclusion path — a tx sent to the EL's normal RPC
+     stays in the public txpool forever. Every producer that needs its txs
+     mined (a load generator AND its wallet funding/refills/deploys) must go
+     through `/rpc`; buildoor's own lifecycle txs are teed in for this reason.
    - API: `GET/DELETE /api/buildoor/tx-queue`, `POST /api/config/testing`;
      per-slot overrides via the action plan `build` category (`source`,
      `fill`, `txs`). Metrics in `pkg/metrics`.

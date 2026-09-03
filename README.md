@@ -231,6 +231,16 @@ starting with `TX PLAN CHECK FAILED`.
 ordered hashes, must be queued). Recurring rules script patterns such as a
 full block every fourth slot.
 
+**Everything must go through the intake.** While the testing source is
+active the builder's blocks are the only way anything gets included: a
+transaction sent to the EL's normal RPC sits in the public txpool forever,
+because buildoor builds solely from its queue. That covers the obvious case
+(your load generator) and the easy one to miss (its wallet funding and
+refills, contract deployments, and any other tool pointed at the same
+network). Point the whole transaction source at `/rpc`, not just its sending
+path. buildoor's own lifecycle transactions are already teed into the queue
+for this reason.
+
 **Watch out for base fee.** Every full block raises the base fee by 12.5
 percent, and buildoor's own blocks are the only ones carrying its queue. Give
 your transaction source a high max fee or set
