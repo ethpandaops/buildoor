@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,13 +32,21 @@ var ErrQueueFull = errors.New("tx queue full")
 
 // Entry is one queued transaction: the decoded form for packing decisions and
 // the raw network encoding (blob sidecars included) for the build call.
+// Entries are shared with Snapshot callers, so the only mutable field is the
+// strike count and it is atomic.
 type Entry struct {
 	Tx      *types.Transaction
 	Raw     []byte
 	Sender  common.Address
 	AddedAt time.Time
-	Strikes int
+
+	// strikes counts attributed build failures. Written by Strike (under the
+	// queue mutex) and read concurrently by snapshot holders, hence atomic.
+	strikes atomic.Int32
 }
+
+// Strikes returns the transaction's attributed build failures.
+func (e *Entry) Strikes() int { return int(e.strikes.Load()) }
 
 // Hash returns the transaction hash.
 func (e *Entry) Hash() common.Hash { return e.Tx.Hash() }
@@ -225,8 +234,7 @@ func (q *Queue) Strike(hash common.Hash, maxStrikes int) (Eviction, bool) {
 		return Eviction{}, false
 	}
 
-	e.Strikes++
-	if e.Strikes < maxStrikes {
+	if int(e.strikes.Add(1)) < maxStrikes {
 		return Eviction{}, false
 	}
 

@@ -173,12 +173,17 @@ func (t *TestingBuilder) Build(
 		fill.GasPct = 50
 	}
 
-	states, err := t.senderStates(ctx, parent)
+	// One snapshot for the whole pack: senderStates and Pack must see the
+	// same queue, or a sender that arrives in between has no parent state
+	// and the slot fails.
+	snapshot := t.queue.Snapshot()
+
+	states, err := t.senderStates(ctx, parent, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	packed, err := tx_intake.Pack(t.queue, states, bctx, fill)
+	packed, err := tx_intake.Pack(t.queue, snapshot, states, bctx, fill)
 	if err != nil {
 		return nil, nil, fmt.Errorf("packing: %w", err)
 	}
@@ -260,6 +265,15 @@ func (t *TestingBuilder) buildWithRetries(
 
 		if ctx.Err() != nil {
 			return nil, nil, fmt.Errorf("testing_buildBlockV1 attempt %d: %w", attempt, err)
+		}
+
+		// An explicit list is a contract: the block holds exactly these
+		// transactions in this order. Dropping the offender would silently
+		// build a different block and then verify "match" against the
+		// reduced plan, so an exact plan fails instead of retrying.
+		if spec.Fill.Policy == tx_intake.PolicyAsGiven {
+			return nil, nil, fmt.Errorf(
+				"testing_buildBlockV1 refused the explicit transaction list (policy as_given, not trimmed): %w", err)
 		}
 
 		attribution := tx_intake.Attribute(err, entries)
@@ -447,10 +461,9 @@ func (t *TestingBuilder) maxBlobs(ctx context.Context, timestamp uint64) (int, e
 	return int(active.BlobSchedule.Max), nil
 }
 
-// senderStates fetches nonce and balance at the parent block for every
-// sender in the queue in one batch.
-func (t *TestingBuilder) senderStates(ctx context.Context, parent common.Hash) (map[common.Address]tx_intake.SenderState, error) {
-	snapshot := t.queue.Snapshot()
+// senderStates fetches nonce and balance at the parent block for every sender
+// in the given queue snapshot, in one batch.
+func (t *TestingBuilder) senderStates(ctx context.Context, parent common.Hash, snapshot map[common.Address][]*tx_intake.Entry) (map[common.Address]tx_intake.SenderState, error) {
 	states := make(map[common.Address]tx_intake.SenderState, len(snapshot))
 
 	if len(snapshot) == 0 {

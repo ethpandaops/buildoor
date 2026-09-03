@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +61,11 @@ func hashOf(t *testing.T, raw []byte) common.Hash {
 	require.NoError(t, tx.UnmarshalBinary(raw))
 
 	return tx.Hash()
+}
+
+// packNow mirrors the builder: one snapshot, states derived from it, then pack.
+func packNow(q *Queue, states map[common.Address]SenderState, bctx *BlockContext, spec FillSpec) (*Plan, error) {
+	return Pack(q, q.Snapshot(), states, bctx, spec)
 }
 
 func blockCtx(gasLimit uint64) *BlockContext {
@@ -145,7 +151,7 @@ func TestPackFIFORespectsNonceOrderAndGasCap(t *testing.T) {
 	}
 
 	states := map[common.Address]SenderState{a.addr: richState(0), b.addr: richState(0)}
-	plan, err := Pack(q, states, blockCtx(300_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	plan, err := packNow(q, states, blockCtx(300_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
 	require.NoError(t, err)
 
 	require.Equal(t, []common.Hash{hashOf(t, rawB0), hashOf(t, rawA0), hashOf(t, rawB1)}, plan.Hashes())
@@ -166,7 +172,7 @@ func TestPackStateNonceRuleAndGaps(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	plan, err := Pack(q, map[common.Address]SenderState{s.addr: richState(1)}, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	plan, err := packNow(q, map[common.Address]SenderState{s.addr: richState(1)}, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
 	require.NoError(t, err)
 
 	require.Equal(t, []common.Hash{hashOf(t, next)}, plan.Hashes())
@@ -193,13 +199,13 @@ func TestPackFeeAndBalanceFilters(t *testing.T) {
 		poor.addr:  {Nonce: 0, Balance: big.NewInt(1)},
 	}
 
-	plan, err := Pack(q, states, bctx, FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	plan, err := packNow(q, states, bctx, FillSpec{GasPct: 100, Policy: PolicyFIFO})
 	require.NoError(t, err)
 	require.Empty(t, plan.Entries)
 	require.Equal(t, 2, plan.Skipped[SkipFeeTooLow])
 
 	bctx.BaseFee = big.NewInt(7)
-	plan, err = Pack(q, states, bctx, FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	plan, err = packNow(q, states, bctx, FillSpec{GasPct: 100, Policy: PolicyFIFO})
 	require.NoError(t, err)
 	require.Len(t, plan.Entries, 1)
 	require.Equal(t, 1, plan.Skipped[SkipInsufficientFunds])
@@ -221,20 +227,20 @@ func TestPackAsGivenIsExactOrFails(t *testing.T) {
 	states := map[common.Address]SenderState{a.addr: richState(0), b.addr: richState(0)}
 	want := []common.Hash{hashOf(t, rawB0), hashOf(t, rawA0), hashOf(t, rawA1)}
 
-	plan, err := Pack(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: want})
+	plan, err := packNow(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: want})
 	require.NoError(t, err)
 	require.Equal(t, want, plan.Hashes())
 
 	// Out of nonce order for a sender: refused, never reordered.
-	_, err = Pack(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: []common.Hash{hashOf(t, rawA1), hashOf(t, rawA0)}})
+	_, err = packNow(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: []common.Hash{hashOf(t, rawA1), hashOf(t, rawA0)}})
 	require.ErrorContains(t, err, "has nonce 1")
 
 	// Unknown hash: refused.
-	_, err = Pack(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: []common.Hash{{9}}})
+	_, err = packNow(q, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: []common.Hash{{9}}})
 	require.ErrorContains(t, err, "is not queued")
 
 	// Does not fit: refused, never trimmed.
-	_, err = Pack(q, states, blockCtx(30_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: want})
+	_, err = packNow(q, states, blockCtx(30_000), FillSpec{GasPct: 100, Policy: PolicyAsGiven, Txs: want})
 	require.ErrorContains(t, err, "does not fit: gas_cap")
 }
 
@@ -356,4 +362,71 @@ func TestProxyInterceptsAndForwards(t *testing.T) {
 	require.Equal(t, `"0x1"`, string(batch[0].Result))
 	require.Equal(t, `"0x6"`, string(batch[1].Result))
 	require.Equal(t, `"0x5"`, string(batch[2].Result))
+}
+
+// A sender whose first transaction arrives between the snapshot and the pack
+// must not exist for this block: one snapshot is the whole input, so a late
+// arrival is simply not in it and the slot still builds.
+func TestPackUsesOnlyTheGivenSnapshot(t *testing.T) {
+	q := NewQueue(testChainID, 100)
+	early, late := newSender(t), newSender(t)
+
+	rawEarly := early.tx(t, 0, 21000, 10)
+	_, err := q.Add(rawEarly)
+	require.NoError(t, err)
+
+	// The builder's single snapshot, taken before the late sender shows up.
+	snapshot := q.Snapshot()
+	states := map[common.Address]SenderState{early.addr: richState(0)}
+
+	// A concurrent intake submission lands after the snapshot was taken.
+	_, err = q.Add(late.tx(t, 0, 21000, 10))
+	require.NoError(t, err)
+
+	plan, err := Pack(q, snapshot, states, blockCtx(1_000_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	require.NoError(t, err, "a sender arriving after the snapshot must not fail the build")
+	require.Equal(t, []common.Hash{hashOf(t, rawEarly)}, plan.Hashes())
+	require.Equal(t, 2, q.Stats().Txs, "the late transaction stays queued for the next block")
+}
+
+func TestStrikeIsRaceFree(t *testing.T) {
+	q := NewQueue(testChainID, 10)
+	s := newSender(t)
+
+	hash, err := q.Add(s.tx(t, 0, 21000, 10))
+	require.NoError(t, err)
+
+	entry := q.Lookup(hash)
+	require.NotNil(t, entry)
+
+	// Readers hold snapshot entries while the queue strikes them.
+	var wg sync.WaitGroup
+
+	for range 8 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for range 100 {
+				_ = entry.Strikes()
+				_ = q.Snapshot()
+			}
+		}()
+	}
+
+	for range 8 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for range 100 {
+				q.Strike(hash, 1_000_000)
+			}
+		}()
+	}
+
+	wg.Wait()
+	require.Equal(t, 800, entry.Strikes())
 }

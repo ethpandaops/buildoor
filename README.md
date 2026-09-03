@@ -209,8 +209,11 @@ sender's chain, and the policy orders the rest. `as_given` (or a per-slot
 any deviation is an error, never a trim.
 
 **Build.** The list goes to `testing_buildBlockV1`. geth refuses the whole
-block if one transaction is invalid; buildoor attributes the error to the
-sender or index, drops those, and retries within `--testing-max-attempts`.
+block if one transaction is invalid. Under a fill policy buildoor attributes
+the error to the sender or index, drops those, and retries within
+`--testing-max-attempts`. Under `as_given` it does not: an explicit list is a
+contract, so a refusal fails the build rather than quietly building a smaller
+block that would then verify as a "match" against the reduced plan.
 The built payload is checked against the plan before it is bid or served.
 Only geth implements the method today, and only on the HTTP port with
 `testing` in `--http.api`. Speculative build candidates are skipped in this

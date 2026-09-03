@@ -257,13 +257,18 @@ npm run clean
      base fee bound, blob cap from `eth_config`, byte cap, per-sender budget)
      and a policy (`fifo`, `fee`, `round_robin`, `as_given`). `as_given` and the
      per-slot `build.txs` list are EXACT: any deviation errors, never trims.
+     Pack takes the CALLER's queue snapshot (not its own): the snapshot and the
+     sender states must describe one moment, or a sender arriving in between
+     has no parent state and the whole slot fails.
    - **Build** (`TestingBuilder.Build`): bare forkchoiceUpdated to the parent
      (geth builds on its head only), pack, `testing_buildBlockV1` (returns the
      getPayload envelope shape → `engineall.GetPayloadResponse` via the fork
-     view), verify the payload holds exactly the plan. An EL refusal is
-     attributed (`tx_intake.Attribute`: sender address / tx index / cap
-     reason / bisect), the attributed txs get a strike, and the build retries
-     within `testing.max_attempts`. Runs under the slot deadline
+     view), verify the payload holds exactly the plan. Under a FILL policy an
+     EL refusal is attributed (`tx_intake.Attribute`: sender address / tx
+     index / cap reason / bisect), the attributed txs get a strike, and the
+     build retries within `testing.max_attempts`. Under `as_given` a refusal
+     FAILS the build instead — trimming would build a different block and then
+     verify "match" against the reduced plan. Runs under the slot deadline
      (`testing.build_deadline_ms`, default bid start − 300 ms); a miss means no
      payload (`testing.on_failure: skip`) unless `pool` fallback is chosen.
      Only the canonical candidate builds in this mode. The frozen plan forces

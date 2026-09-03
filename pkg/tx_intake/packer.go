@@ -98,10 +98,12 @@ func (p *Plan) Raw() [][]byte {
 	return out
 }
 
-// Pack selects the transactions for one block. states must hold every sender
-// present in the queue at the parent block; the parent state nonce decides
+// Pack selects the transactions for one block from the caller's queue
+// snapshot. Snapshot and states MUST describe the same moment — take the
+// snapshot once and derive states from it — otherwise a sender that arrives
+// in between has no state and the pack fails. The parent state nonce decides
 // what is still buildable, and stale entries are evicted here.
-func Pack(q *Queue, states map[common.Address]SenderState, bctx *BlockContext, spec FillSpec) (*Plan, error) {
+func Pack(q *Queue, snapshot map[common.Address][]*Entry, states map[common.Address]SenderState, bctx *BlockContext, spec FillSpec) (*Plan, error) {
 	if spec.GasPct == 0 || spec.GasPct > 100 {
 		return nil, fmt.Errorf("fill gas_pct must be 1..100, got %d", spec.GasPct)
 	}
@@ -124,7 +126,7 @@ func Pack(q *Queue, states map[common.Address]SenderState, bctx *BlockContext, s
 		states:   states,
 	}
 
-	chains, err := ps.prepareChains(q)
+	chains, err := ps.prepareChains(q, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +176,14 @@ type packer struct {
 // prepareChains applies the state-nonce rule per sender: nonces below the
 // parent state nonce are evicted, the chain starts at the state nonce and
 // stops at the first gap.
-func (ps *packer) prepareChains(q *Queue) ([]*senderChain, error) {
-	snapshot := q.Snapshot()
+func (ps *packer) prepareChains(q *Queue, snapshot map[common.Address][]*Entry) ([]*senderChain, error) {
 	chains := make([]*senderChain, 0, len(snapshot))
 
 	for sender, entries := range snapshot {
 		st, ok := ps.states[sender]
 		if !ok {
-			return nil, fmt.Errorf("no parent state for sender %s", sender.Hex())
+			return nil, fmt.Errorf("no parent state for sender %s "+
+				"(snapshot and states disagree; they must come from the same Snapshot call)", sender.Hex())
 		}
 
 		ps.plan.Evicted = append(ps.plan.Evicted, q.EvictBelow(sender, st.Nonce)...)

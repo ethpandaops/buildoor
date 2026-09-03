@@ -80,7 +80,7 @@ func (h *APIHandler) GetTxQueue(w http.ResponseWriter, r *http.Request) {
 					Gas:     e.Tx.Gas(),
 					Blobs:   len(e.Tx.BlobHashes()),
 					AgeMs:   now.Sub(e.AddedAt).Milliseconds(),
-					Strikes: e.Strikes,
+					Strikes: e.Strikes(),
 				})
 				listed++
 			}
