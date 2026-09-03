@@ -286,6 +286,10 @@ func (t *Tracker) run(
 			for slot := firstSlot; slot <= currentSlot; slot++ {
 				t.materializeBaseline(slot)
 				t.finalizeWaitingBaseline(slot - 1)
+
+				if slot > txPlanVerdictGraceSlots {
+					t.finalizeStaleTxPlan(slot - txPlanVerdictGraceSlots)
+				}
 			}
 
 			if currentSlot > lastTickedSlot {
@@ -349,6 +353,36 @@ func (t *Tracker) finalizeWaitingBaseline(slot phase0.Slot) {
 			result.Build.Status = BuildStatusNoAttributes
 			result.Build.At = time.Now()
 		}
+	})
+}
+
+// txPlanVerdictGraceSlots is how long a testing build's tx plan may stay
+// pending before the slot is recorded as never included. It exceeds the
+// inclusion tracker's reorg re-evaluation window, after which no verdict can
+// still arrive — without this a slot whose bid simply lost would sit at
+// "pending" for its whole retention window, the one silent outcome in an
+// otherwise loud feature.
+const txPlanVerdictGraceSlots = 20
+
+// finalizeStaleTxPlan records a tx plan that never reached the chain. It only
+// touches slots that already carry a still-pending plan, so it never creates a
+// record and never overwrites a verdict the verifier produced.
+func (t *Tracker) finalizeStaleTxPlan(slot phase0.Slot) {
+	if existing, ok := t.store.Get(slot); !ok ||
+		existing.TxPlan == nil || existing.TxPlan.Status != TxPlanPending {
+		return
+	}
+
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil || result.TxPlan.Status != TxPlanPending {
+			return
+		}
+
+		result.TxPlan.Status = TxPlanNotIncluded
+		result.TxPlan.Detail = "the slot passed without the built payload reaching the chain"
+		result.TxPlan.VerifiedAt = &now
 	})
 }
 

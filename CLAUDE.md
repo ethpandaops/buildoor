@@ -273,11 +273,18 @@ npm run clean
      payload (`testing.on_failure: skip`) unless `pool` fallback is chosen.
      Only the canonical candidate builds in this mode. The frozen plan forces
      `BuildStartImmediately` so the synchronous build starts at attributes time.
+   - `testing.base_fee_ceiling_gwei` reduces the fill to the 1559 target above
+     a ceiling (`applyBaseFeeCeiling`); it is a FILL knob and never shrinks an
+     `as_given` plan's budget.
    - **Verifier** (`tx_plan_verifier.Verifier`): on every `PayloadIncludedEvent`
      whose payload carries a `TxPlan`, fetch the block from the EL and compare
      order + count; Gloas `missed`/`orphaned` verdicts are mirrored. Verdict →
      `SlotResult.TxPlan.Status`, `buildoor_testing_plan_checks_total`, and an
-     error log prefixed `TX PLAN CHECK FAILED`. Loud by design.
+     error log prefixed `TX PLAN CHECK FAILED`. Loud by design. A plan whose
+     payload never reaches the chain (lost bid) would otherwise sit at
+     `pending` forever, so the slot-results tick records `not_included` once
+     the slot is `txPlanVerdictGraceSlots` behind the head — past the inclusion
+     tracker's reorg window, so it never races a real verdict.
    - **Inclusion path**: while the testing source is active the builder's
      blocks are the ONLY inclusion path — a tx sent to the EL's normal RPC
      stays in the public txpool forever. Every producer that needs its txs

@@ -244,9 +244,12 @@ for this reason.
 **Watch out for base fee.** Every full block raises the base fee by 12.5
 percent, and buildoor's own blocks are the only ones carrying its queue. Give
 your transaction source a high max fee or set
-`--testing-base-fee-ceiling-gwei` so a long run stays sustainable.
-buildoor's own lifecycle transactions go through the intake too, so its
-deposits and top-ups land in the blocks it builds.
+`--testing-base-fee-ceiling-gwei` so a long run stays sustainable. The
+ceiling only reduces the *fill* policies: an explicit `as_given` list always
+gets the whole block, since shrinking its budget would fail the operator's
+plan for an unrelated reason. buildoor's own lifecycle transactions go
+through the intake too, so its deposits and top-ups land in the blocks it
+builds.
 
 ```bash
 # geth: --http.api admin,engine,net,eth,web3,debug,txpool,testing

@@ -170,3 +170,30 @@ func TestFillPolicyRetriesAfterAttribution(t *testing.T) {
 	require.Len(t, plan.Dropped, 2, "both transactions of the attributed sender are dropped")
 	require.Equal(t, 1, entries[0].Strikes(), "a best-effort drop strikes the transaction")
 }
+
+// The base-fee ceiling is a fill knob: it packs to the 1559 target to keep a
+// long run sustainable. Applying it to an explicit list would halve that
+// plan's gas budget and fail it for an unrelated reason, so as_given always
+// gets the whole block.
+func TestBaseFeeCeilingSparesExactPlans(t *testing.T) {
+	ceiling := big.NewInt(50e9)
+	overCeiling := big.NewInt(100e9)
+
+	for _, tt := range []struct {
+		policy string
+		want   uint64
+	}{
+		{tx_intake.PolicyFIFO, 50},
+		{tx_intake.PolicyFee, 50},
+		{tx_intake.PolicyAsGiven, 100},
+	} {
+		t.Run(tt.policy, func(t *testing.T) {
+			fill := tx_intake.FillSpec{GasPct: 100, Policy: tt.policy}
+			require.Equal(t, tt.want, applyBaseFeeCeiling(fill, ceiling, overCeiling).GasPct)
+		})
+	}
+
+	// Below the ceiling nothing is reduced.
+	fill := tx_intake.FillSpec{GasPct: 100, Policy: tx_intake.PolicyFIFO}
+	require.Equal(t, uint64(100), applyBaseFeeCeiling(fill, ceiling, big.NewInt(7)).GasPct)
+}

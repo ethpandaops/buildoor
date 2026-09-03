@@ -164,13 +164,11 @@ func (t *TestingBuilder) Build(
 		plan.Evicted = append(plan.Evicted, t.queue.EvictExpired(spec.QueueMaxAge)...)
 	}
 
-	fill := spec.Fill
-	if spec.BaseFeeCeiling != nil && bctx.BaseFee.Cmp(spec.BaseFeeCeiling) > 0 && fill.GasPct > 50 {
+	fill := applyBaseFeeCeiling(spec.Fill, spec.BaseFeeCeiling, bctx.BaseFee)
+	if fill.GasPct != spec.Fill.GasPct {
 		t.log.WithFields(logrus.Fields{
-			"base_fee": bctx.BaseFee, "ceiling": spec.BaseFeeCeiling,
+			"base_fee": bctx.BaseFee, "ceiling": spec.BaseFeeCeiling, "gas_pct": fill.GasPct,
 		}).Warn("Next base fee above the ceiling, packing to the 1559 target instead of the full limit")
-
-		fill.GasPct = 50
 	}
 
 	// One snapshot for the whole pack: senderStates and Pack must see the
@@ -398,6 +396,23 @@ func (t *TestingBuilder) blockContext(ctx context.Context, parent *types.Header,
 	}
 
 	return bctx, nil
+}
+
+// applyBaseFeeCeiling reduces the fill to the EIP-1559 target once the next
+// base fee passes the configured ceiling, so a long max-fill run does not
+// price its own transactions out. It is a FILL knob: an explicit list is a
+// contract, and halving its gas budget would fail the operator's plan for an
+// unrelated reason, so as_given always gets the whole block.
+func applyBaseFeeCeiling(fill tx_intake.FillSpec, ceiling, baseFee *big.Int) tx_intake.FillSpec {
+	if fill.Policy == tx_intake.PolicyAsGiven || ceiling == nil || fill.GasPct <= 50 {
+		return fill
+	}
+
+	if baseFee.Cmp(ceiling) > 0 {
+		fill.GasPct = 50
+	}
+
+	return fill
 }
 
 // calcGasLimit mirrors geth's core.CalcGasLimit: the parent gas limit stepped
