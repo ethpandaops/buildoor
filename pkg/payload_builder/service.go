@@ -842,7 +842,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
 
 	if localReq != nil || localSkip != "" {
-		s.emitLocalBuild(slot, target, result, localReq, localSkip)
+		s.emitLocalBuild(slot, target, result, localReq, localSkip, err)
 	}
 
 	if err != nil {
@@ -1109,6 +1109,7 @@ func (s *Service) emitLocalBuild(
 	result *BuildResult,
 	req *LocalBuildRequest,
 	skipReason string,
+	buildErr error,
 ) {
 	event := &LocalBuildEvent{
 		Slot:      slot,
@@ -1138,8 +1139,14 @@ func (s *Service) emitLocalBuild(
 		event.SkipReason = skipReason
 		event.Fallback = true
 	case result == nil:
+		// The target failed before either build ran (forkchoice update,
+		// prelude): the local build shares that failure.
 		event.Status = LocalStatusFailed
 		event.Error = "build did not run"
+
+		if buildErr != nil {
+			event.Error = buildErr.Error()
+		}
 	case result.Local != nil:
 		event.Status = LocalStatusReady
 		event.Payload = result.Local
