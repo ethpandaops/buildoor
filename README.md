@@ -203,7 +203,10 @@ re-read from the EL and compared with the plan (verdict on the slot result's
 `tx_plan`, the `buildoor_tx_plan_checks_total` metric, and a `TX PLAN CHECK
 FAILED` error log on any deviation). A per-slot plan can name an exact ordered
 list of queued transaction hashes (`build.local.queued`); `.hack/txgen` signs
-transfers into the pool and prints their hashes for that purpose.
+transfers into the pool and prints their hashes for that purpose, and
+`.hack/payloadcheck` builds a payload on an EL and validates it through
+`engine_newPayload` (on the builder and on an independent EL) to prove the
+EL's testing path yields chain-valid blocks.
 
 The ingress answers `eth_sendRawTransaction` (and `eth_chainId`,
 `eth_getTransactionCount` pool-aware for `pending`, `txpool_*`) locally and
