@@ -134,8 +134,10 @@ func (p *Pool) evictIncluded(blockHash common.Hash) bool {
 
 		if ours {
 			p.stats.EvictedIncludedByUs++
+			p.evictedLocked("included_by_us")
 		} else {
 			p.stats.EvictedIncludedByOther++
+			p.evictedLocked("included_by_other")
 		}
 	}
 
@@ -183,6 +185,7 @@ func (p *Pool) pruneNonces(ctx context.Context, senders map[common.Address]struc
 			if tx.Tx.Nonce() < state.Nonce {
 				p.removeLocked(tx.Hash)
 				p.stats.EvictedNonceTooLow++
+				p.evictedLocked("nonce_too_low")
 			}
 		}
 	}
@@ -206,6 +209,7 @@ func (p *Pool) sweepTTL(currentSlot phase0.Slot) {
 		if tx.ArrivedSlot < cutoff {
 			p.removeLocked(hash)
 			p.stats.EvictedTTL++
+			p.evictedLocked("ttl")
 			dropped++
 		}
 	}

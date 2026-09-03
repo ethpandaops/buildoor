@@ -662,10 +662,13 @@ func (p *Pool) evictStale(ctx context.Context, hashes []common.Hash) {
 		switch block := included[hash]; {
 		case block == (common.Hash{}):
 			p.stats.EvictedNonceTooLow++
+			p.evictedLocked("nonce_too_low")
 		case p.isBuiltBlock(block):
 			p.stats.EvictedIncludedByUs++
+			p.evictedLocked("included_by_us")
 		default:
 			p.stats.EvictedIncludedByOther++
+			p.evictedLocked("included_by_other")
 		}
 	}
 

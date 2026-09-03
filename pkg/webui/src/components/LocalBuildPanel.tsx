@@ -223,6 +223,41 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
             </div>
           </div>
 
+          {/* Post-inclusion plan checks */}
+          {status?.plan_checks && (
+            <>
+              <div className="section-header mb-1">Tx plan checks</div>
+              <div className="row g-2 mb-3">
+                <div className="col-4">
+                  <div className="config-item">
+                    <div className="config-item-label">Checked</div>
+                    <div className="config-item-value">{status.plan_checks.checked}</div>
+                  </div>
+                </div>
+                <div className="col-4">
+                  <div className="config-item">
+                    <div className="config-item-label">Match</div>
+                    <div className="config-item-value text-success">{status.plan_checks.match}</div>
+                  </div>
+                </div>
+                <div className="col-4">
+                  <div className="config-item">
+                    <div className="config-item-label">Failed</div>
+                    <div className={`config-item-value ${
+                      status.plan_checks.mismatch + status.plan_checks.block_not_found + status.plan_checks.missed + status.plan_checks.orphaned > 0
+                        ? 'text-danger' : ''}`}>
+                      {status.plan_checks.mismatch + status.plan_checks.block_not_found + status.plan_checks.missed + status.plan_checks.orphaned}
+                    </div>
+                  </div>
+                </div>
+                <div className="col-12 form-text mt-0">
+                  Every included locally built block is re-read from the EL and compared with the
+                  submitted transaction list (order and count).
+                </div>
+              </div>
+            </>
+          )}
+
           {/* Sources */}
           <div className="d-flex justify-content-between align-items-center mb-2">
             <div className="section-header">Payload &amp; transaction source</div>

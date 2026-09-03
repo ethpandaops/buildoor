@@ -31,6 +31,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
@@ -312,12 +313,21 @@ and begins building blocks according to configuration.`,
 
 			builderSvc.SetTxPool(txPool)
 
+			// buildoor's own lifecycle transactions must be in the pool too,
+			// or its pool-built blocks would never carry its deposits.
+			rpcClient.SetTxTee(txPool)
+
 			txIngress = txpoolrpc.NewServer(txPool, rpcClient, cfg.TxPool.AuthToken, buildversion.GetBuildVersion(), logger)
 		}
 
 		// Setting writes that enable the local build or the pool are vetoed
 		// while their EL dependency is missing.
 		settingsSvc.AddGuard(builderSvc)
+
+		// Post-inclusion check of locally built blocks: the canonical block
+		// must hold exactly the transactions buildoor submitted. Started
+		// after the results tracker below, which records the verdicts.
+		var planVerifier *tx_plan_verifier.Verifier
 
 		if builderAPIAvailable {
 			// Pre-Gloas proposer settings resolve from Builder API validator
@@ -456,6 +466,14 @@ and begins building blocks according to configuration.`,
 			builderAPISrv.SetResultRecorder(resultTracker)
 		}
 
+		if rpcClient != nil {
+			planVerifier = tx_plan_verifier.New(inclusionTracker, rpcClient, resultTracker, logger)
+			if err := planVerifier.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start tx plan verifier: %w", err)
+			}
+			defer planVerifier.Stop() //nolint:errcheck // cleanup
+		}
+
 		// 13. Initialize and start validator ranges resolver.
 		valRanges := validatorranges.NewResolver(&cfg.ValidatorRanges, logger)
 		valRanges.Start(ctx)
@@ -511,7 +529,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txIngress)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txIngress, planVerifier)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

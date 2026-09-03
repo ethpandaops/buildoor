@@ -69,6 +69,16 @@ const BUILD_BADGES: Record<string, string> = {
   no_attributes: 'warning',
 };
 
+const TX_PLAN_BADGES: Record<string, string> = {
+  pending: 'secondary',
+  match: 'success',
+  mismatch: 'danger',
+  block_not_found: 'danger',
+  not_included: 'warning',
+  missed: 'danger',
+  orphaned: 'danger',
+};
+
 const PAYLOAD_STATUS_BADGES: Record<string, string> = {
   canonical: 'success',
   missed: 'danger',
@@ -743,6 +753,41 @@ const ResultView: React.FC<{
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {result.tx_plan && (
+        <div className="card mb-3">
+          <div className="card-header py-1 d-flex align-items-center gap-2">
+            <strong className="small">Tx plan check</strong>
+            <span
+              className={badgeClass(TX_PLAN_BADGES[result.tx_plan.status] || 'secondary')}
+              title="Post-inclusion check: does the canonical block hold exactly the transactions buildoor submitted, in order?"
+            >
+              {result.tx_plan.status}
+            </span>
+            <span className="text-muted small">
+              {result.tx_plan.expected_count} planned ({result.tx_plan.tx_source})
+              {result.tx_plan.included_count !== undefined && result.tx_plan.status !== 'pending'
+                ? `, ${result.tx_plan.included_count} in block`
+                : ''}
+            </span>
+            {result.tx_plan.verified_at && (
+              <span className="text-muted small ms-auto">checked {formatDateTime(result.tx_plan.verified_at)}</span>
+            )}
+          </div>
+          {(result.tx_plan.detail || (result.tx_plan.first_mismatch ?? -1) >= 0) && (
+            <div className="card-body py-2">
+              {(result.tx_plan.first_mismatch ?? -1) >= 0 && (
+                <KV label="First mismatch">position {result.tx_plan.first_mismatch}</KV>
+              )}
+              {result.tx_plan.detail && (
+                <div className={`small ${result.tx_plan.status === 'match' ? 'text-muted' : 'text-danger'}`}>
+                  {result.tx_plan.detail}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </>

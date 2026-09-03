@@ -17,6 +17,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
+	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -1161,6 +1162,25 @@ func (s *Service) emitLocalBuild(
 
 	if result != nil {
 		event.ELPayload = result.EL
+	}
+
+	reason := event.SkipReason
+	if event.Status == LocalStatusFailed {
+		reason = "error"
+	}
+
+	metrics.LocalBuildOutcomes.WithLabelValues(event.Status, reason).Inc()
+
+	if result != nil && result.Source != "" {
+		metrics.LocalBuildSelected.WithLabelValues(result.Source).Inc()
+	}
+
+	if p := event.Payload; p != nil && p.ExecutionPayload != nil {
+		metrics.LocalBuildTxs.Observe(float64(len(p.ExecutionPayload.Transactions)))
+
+		if p.ExecutionPayload.GasLimit > 0 {
+			metrics.LocalBuildFillRatio.Set(float64(p.ExecutionPayload.GasUsed) / float64(p.ExecutionPayload.GasLimit))
+		}
 	}
 
 	if event.Status != LocalStatusReady {

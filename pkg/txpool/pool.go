@@ -20,6 +20,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 )
@@ -345,6 +346,8 @@ func (p *Pool) Add(raw []byte) (common.Hash, error) {
 	p.stats.Admitted++
 	p.stats.LastAdmittedAt = pooled.Arrived
 	p.version.Add(1)
+	metrics.TxPoolAdmitted.Inc()
+	metrics.TxPoolPending.Set(float64(len(p.byHash)))
 
 	if p.cfg.TxPool.ForwardToEL {
 		go p.forwardToEL(raw, pooled.Hash)
@@ -450,6 +453,13 @@ func (p *Pool) reject(reason string) {
 
 func (p *Pool) rejectLocked(reason string) {
 	p.stats.Rejected[reason]++
+	metrics.TxPoolRejected.WithLabelValues(reason).Inc()
+}
+
+// evictedLocked accounts one eviction. Must hold mu.
+func (p *Pool) evictedLocked(reason string) {
+	metrics.TxPoolEvicted.WithLabelValues(reason).Inc()
+	metrics.TxPoolPending.Set(float64(len(p.byHash)))
 }
 
 // forwardToEL shadow-submits an admitted transaction to the EL mempool.
@@ -480,6 +490,7 @@ func (p *Pool) Remove(hash common.Hash) bool {
 	}
 
 	p.stats.Removed++
+	p.evictedLocked("removed")
 	p.version.Add(1)
 
 	return true
@@ -524,6 +535,7 @@ func (p *Pool) Strike(hash common.Hash, maxStrikes uint64) bool {
 
 	p.removeLocked(hash)
 	p.stats.EvictedStrikes++
+	p.evictedLocked("strikes")
 	p.version.Add(1)
 
 	return true
@@ -538,6 +550,8 @@ func (p *Pool) Clear() int {
 	p.byHash = make(map[common.Hash]*PooledTx, 1024)
 	p.bySender = make(map[common.Address]*senderQueue, 64)
 	p.stats.Cleared += uint64(n)
+	metrics.TxPoolEvicted.WithLabelValues("cleared").Add(float64(n))
+	metrics.TxPoolPending.Set(0)
 	p.version.Add(1)
 
 	return n

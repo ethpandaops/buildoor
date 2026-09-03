@@ -96,6 +96,14 @@ export interface LocalBuildStatus {
   tx_source: string;
   build_el_payload: boolean;
   txpool: TxPoolStatus;
+  plan_checks?: {
+    checked: number;
+    match: number;
+    mismatch: number;
+    block_not_found: number;
+    missed: number;
+    orphaned: number;
+  };
 }
 
 // Pool aggregates + lifetime counters (SSE txpool_stats and GET /txpool).
@@ -1143,6 +1151,22 @@ export interface SlotInclusionResult {
   payload_check_slot?: number | string;
 }
 
+export type TxPlanStatus = 'pending' | 'match' | 'mismatch' | 'block_not_found' | 'not_included' | 'missed' | 'orphaned';
+
+// Post-inclusion verdict of a locally built payload: does the canonical
+// block hold exactly the submitted transactions, in order?
+export interface TxPlanResult {
+  tx_source: string;
+  expected_count: number;
+  expected_hashes: string[];
+  truncated?: boolean;
+  status: TxPlanStatus;
+  included_count?: number;
+  first_mismatch?: number;
+  detail?: string;
+  verified_at?: string;
+}
+
 export interface SlotResult {
   slot: number;
   epoch: number;
@@ -1156,6 +1180,7 @@ export interface SlotResult {
   block_submissions?: SlotBlockSubmission[];
   reveal_attempts?: SlotRevealAttempt[];
   inclusion?: SlotInclusionResult;
+  tx_plan?: TxPlanResult;
   dropped_attempts?: Record<string, number>;
   updated_at: string;
 }

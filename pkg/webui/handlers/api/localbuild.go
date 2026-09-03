@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
 
@@ -20,6 +21,9 @@ type LocalBuildStatusResponse struct {
 	TxSource       string                                 `json:"tx_source"`
 	BuildELPayload bool                                   `json:"build_el_payload"`
 	TxPool         TxPoolStatus                           `json:"txpool"`
+	// PlanChecks is the process-lifetime tally of post-inclusion checks of
+	// locally built blocks (nil without an EL RPC).
+	PlanChecks *tx_plan_verifier.Counters `json:"plan_checks,omitempty"`
 }
 
 // TxPoolStatus is the pool's availability and toggle state.
@@ -82,14 +86,21 @@ func fillLocalBuildStatus(status *ServiceStatusEvent, builderSvc *payload_builde
 func (h *APIHandler) GetLocalBuildStatus(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
 
-	writeJSON(w, http.StatusOK, LocalBuildStatusResponse{
+	resp := LocalBuildStatusResponse{
 		Availability:   h.builderSvc.LocalBuildAvailability(),
 		Enabled:        cfg.LocalBuild.Enabled,
 		PayloadSource:  cfg.LocalBuild.NormalizedPayloadSource(),
 		TxSource:       cfg.LocalBuild.NormalizedTxSource(),
 		BuildELPayload: cfg.LocalBuild.BuildELPayload,
 		TxPool:         txPoolStatus(h.builderSvc),
-	})
+	}
+
+	if h.planVerifier != nil {
+		counters := h.planVerifier.Counters()
+		resp.PlanChecks = &counters
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // ProbeLocalBuild godoc

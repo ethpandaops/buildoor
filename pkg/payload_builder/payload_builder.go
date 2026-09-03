@@ -19,6 +19,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
@@ -523,6 +524,9 @@ func (b *PayloadBuilder) buildLocal(
 	if b.localClient == nil {
 		return localOutcome{skipReason: LocalSkipUnavailable}
 	}
+
+	started := time.Now()
+	defer func() { metrics.LocalBuildSeconds.Observe(time.Since(started).Seconds()) }()
 
 	info := &LocalBuildInfo{TxSource: req.TxSource, SubmittedTxs: -1}
 

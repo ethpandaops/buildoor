@@ -296,6 +296,10 @@ func (t *Tracker) run(
 			for slot := firstSlot; slot <= currentSlot; slot++ {
 				t.materializeBaseline(slot)
 				t.finalizeWaitingBaseline(slot - 1)
+
+				if slot > txPlanVerdictGraceSlots {
+					t.finalizeStaleTxPlan(slot - txPlanVerdictGraceSlots)
+				}
 			}
 
 			if currentSlot > lastTickedSlot {
@@ -847,7 +851,13 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 		payloadStatus = PayloadStatusPending
 	}
 
+	txPlan := txPlanResultFrom(event.Payload)
+
 	t.upsert(slot, func(result *SlotResult) {
+		if txPlan != nil {
+			result.TxPlan = txPlan
+		}
+
 		result.Inclusion = &InclusionResult{
 			Source:          won.Source,
 			BlockHash:       won.BlockHash,
@@ -858,6 +868,77 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 			Timestamp:       time.UnixMilli(won.Timestamp),
 			PayloadStatus:   payloadStatus,
 		}
+	})
+}
+
+// txPlanResultFrom seeds the pending tx plan verdict of an included payload
+// that was built from an explicit transaction list (nil otherwise).
+func txPlanResultFrom(payload *payload_builder.Payload) *TxPlanResult {
+	if payload == nil || payload.Local == nil || payload.Local.ExpectedHashes == nil {
+		return nil
+	}
+
+	hashes := payload.Local.ExpectedHashes
+
+	out := &TxPlanResult{
+		TxSource:      payload.Local.TxSource,
+		ExpectedCount: len(hashes),
+		Status:        TxPlanPending,
+		FirstMismatch: -1,
+	}
+
+	if len(hashes) > maxTxPlanHashes {
+		hashes = hashes[:maxTxPlanHashes]
+		out.Truncated = true
+	}
+
+	out.ExpectedHashes = append([]string(nil), hashes...)
+
+	return out
+}
+
+// txPlanVerdictGraceSlots is how long a pending tx plan may wait for its EL
+// check before the slot is recorded as not_included: past the inclusion
+// tracker's reorg window, so a late verdict can no longer arrive.
+const txPlanVerdictGraceSlots = 20
+
+// finalizeStaleTxPlan records not_included for a slot whose plan is still
+// pending once the grace window passed. A slot without a pending plan is
+// never touched (no record is created).
+func (t *Tracker) finalizeStaleTxPlan(slot phase0.Slot) {
+	if existing, ok := t.store.Get(slot); !ok ||
+		existing.TxPlan == nil || existing.TxPlan.Status != TxPlanPending {
+		return
+	}
+
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil || result.TxPlan.Status != TxPlanPending {
+			return
+		}
+
+		result.TxPlan.Status = TxPlanNotIncluded
+		result.TxPlan.Detail = "the slot passed without the EL check completing"
+		result.TxPlan.VerifiedAt = &now
+	})
+}
+
+// RecordTxPlanCheck records the post-inclusion verdict of a slot's tx plan.
+// A slot without a pending plan (no explicit-list payload) is left alone.
+func (t *Tracker) RecordTxPlanCheck(slot phase0.Slot, status TxPlanStatus, includedCount, firstMismatch int, detail string) {
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil {
+			return
+		}
+
+		result.TxPlan.Status = status
+		result.TxPlan.IncludedCount = includedCount
+		result.TxPlan.FirstMismatch = firstMismatch
+		result.TxPlan.Detail = detail
+		result.TxPlan.VerifiedAt = &now
 	})
 }
 
