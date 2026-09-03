@@ -597,6 +597,13 @@ type LocalBuildConfig struct {
 	// (default; from the EL client identity), network or canonical.
 	// Startup-only.
 	BlobEncoding string `yaml:"blob_encoding" json:"blob_encoding"`
+
+	// MaxAttempts bounds the testing_buildBlockV1 calls per build for the
+	// txpool source: when the EL refuses the list, the refusal is attributed
+	// to the offending sender or position, those transactions are dropped
+	// from the attempt (and striked in the pool) and the build retries.
+	// Exact sources (explicit, queued) never retry: a refusal fails them.
+	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the
@@ -676,6 +683,10 @@ type TxPoolConfig struct {
 	// its slow rebroadcast, so every later transaction of the sender stalls.
 	// The pool caps bound memory instead.
 	TxTTLSlots uint64 `yaml:"tx_ttl_slots" json:"tx_ttl_slots"`
+
+	// MaxStrikes drops a queued transaction after this many attributed build
+	// failures (0 = never drop).
+	MaxStrikes uint64 `yaml:"max_strikes" json:"max_strikes"`
 
 	// ForwardToEL additionally submits every admitted transaction to the EL
 	// mempool (eth_sendRawTransaction) — a shadow mode for A/B comparisons

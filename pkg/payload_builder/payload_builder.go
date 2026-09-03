@@ -526,7 +526,13 @@ func (b *PayloadBuilder) buildLocal(
 
 	info := &LocalBuildInfo{TxSource: req.TxSource, SubmittedTxs: -1}
 
-	var txs [][]byte
+	var (
+		txs [][]byte
+		// poolSelected are the pool entries behind txs (txpool source only);
+		// submitted is the list error attribution works on — the pool entries
+		// once txs holds nothing but them (no inclusion-list prefix).
+		poolSelected, submitted []*txpool.PooledTx
+	)
 
 	switch req.TxSource {
 	case config.TxSourceExplicit:
@@ -593,6 +599,11 @@ func (b *PayloadBuilder) buildLocal(
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
 		txs = selection.Txs
+		poolSelected = selection.Selected
+
+		if selection.InclusionListTxs == 0 {
+			submitted = poolSelected
+		}
 	}
 
 	// Inclusion-list transactions (FOCIL) are mandatory for validity; the
@@ -615,19 +626,85 @@ func (b *PayloadBuilder) buildLocal(
 
 	parentHash := common.Hash(attrs.ParentBlockHash)
 
-	resp, err := b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
-	if err != nil && info.InclusionListTxs > 0 && txs != nil {
-		// A failing inclusion-list transaction takes the whole call down on
-		// most ELs; retry without the list (a spec-violating payload, flagged).
-		b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
-			Warn("Local build failed with the inclusion list, retrying without it")
+	// The EL refuses the whole call on one bad transaction (geth, ethrex) or
+	// fails its post-check (nethermind, besu). For the txpool source the
+	// refusal is attributed to the offending sender or position, those
+	// transactions are dropped from the attempt (striked in the pool) and
+	// the call retried within MaxAttempts. Exact sources never retry: a
+	// refusal fails them, since dropping would build a block that is not the
+	// plan.
+	maxAttempts := max(req.MaxAttempts, 1)
+	if req.TxSource != config.TxSourceTxPool {
+		maxAttempts = 1
+	}
 
-		txs = txs[info.InclusionListTxs:]
-		info.InclusionListDropped = true
-		info.SubmittedTxs = len(txs)
-		info.ExpectedHashes = txHashes(txs)
+	var (
+		resp *engineall.GetPayloadResponse
+		err  error
+	)
+
+	for attempt := 1; ; attempt++ {
+		info.Attempts = attempt
 
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
+		if err == nil || ctx.Err() != nil {
+			break
+		}
+
+		if info.InclusionListTxs > 0 && !info.InclusionListDropped && txs != nil {
+			// A failing inclusion-list transaction takes the whole call down
+			// on most ELs; retry without the list (a spec-violating payload,
+			// flagged).
+			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+				Warn("Local build failed with the inclusion list, retrying without it")
+
+			txs = txs[info.InclusionListTxs:]
+			info.InclusionListDropped = true
+			info.SubmittedTxs = len(txs)
+			info.ExpectedHashes = txHashes(txs)
+			submitted = poolSelected
+
+			continue
+		}
+
+		if attempt >= int(maxAttempts) || len(submitted) == 0 {
+			break
+		}
+
+		attribution := txpool.Attribute(err, submitted)
+		kept, dropped := attribution.Apply(submitted)
+
+		if len(dropped) == 0 {
+			break
+		}
+
+		for _, tx := range dropped {
+			info.Dropped = append(info.Dropped, DroppedTx{Hash: tx.Hash.Hex(), Reason: attribution.Reason})
+			b.txPool.Strike(tx.Hash, req.MaxStrikes)
+		}
+
+		b.log.WithError(err).WithFields(logrus.Fields{
+			"slot":    attrs.ProposalSlot,
+			"attempt": attempt,
+			"reason":  attribution.Reason,
+			"dropped": len(dropped),
+			"kept":    len(kept),
+		}).Warn("EL refused the transaction list, retrying without the attributed transactions")
+
+		submitted = kept
+		txs = make([][]byte, 0, len(kept))
+
+		for _, tx := range kept {
+			raw, encErr := txpool.EncodeTx(tx.Tx, req.BlobEncoding)
+			if encErr != nil {
+				return localOutcome{info: info, err: fmt.Errorf("encode %s: %w", tx.Hash.Hex(), encErr)}
+			}
+
+			txs = append(txs, raw)
+		}
+
+		info.SubmittedTxs = len(txs)
+		info.ExpectedHashes = txHashes(txs)
 	}
 
 	if err != nil {

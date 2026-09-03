@@ -2,6 +2,7 @@ package payload_builder
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"math/big"
 	"testing"
@@ -18,9 +19,11 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
+	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
 
 func TestLocalBuildRequestRunEL(t *testing.T) {
@@ -108,10 +111,11 @@ func TestSelectPayload(t *testing.T) {
 
 // fakeLocalClient records the testing_buildBlockV1 calls and answers with a
 // minimal payload echoing the submitted transactions (or fails the first N
-// calls).
+// calls with failErr, "nonce too low" by default).
 type fakeLocalClient struct {
 	calls    [][][]byte
 	failNext int
+	failErr  error
 	dropLast bool
 }
 
@@ -122,6 +126,10 @@ func (f *fakeLocalClient) BuildBlockV1(_ context.Context, v enginev.DataVersion,
 
 	if f.failNext > 0 {
 		f.failNext--
+
+		if f.failErr != nil {
+			return nil, f.failErr
+		}
 
 		return nil, errors.New("nonce too low")
 	}
@@ -191,7 +199,8 @@ func newLocalTestBuilder(client LocalBuildClient) (*PayloadBuilder, *beacon.Payl
 	cfg := config.DefaultConfig()
 	cfg.ExtraData = "buildoor/"
 
-	b := NewPayloadBuilder(nil, nil, client, nil, &stubChain{}, common.Address{}, cfg, logrus.New(), nil)
+	chainSvc := &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}
+	b := NewPayloadBuilder(nil, nil, client, nil, chainSvc, common.Address{}, cfg, logrus.New(), nil)
 
 	attrs := &beacon.PayloadAttributesEvent{
 		ProposalSlot:    100,
@@ -324,4 +333,111 @@ func TestBuildLocalTxSources(t *testing.T) {
 		out := b.buildLocal(context.Background(), attrs, prelude, &LocalBuildRequest{TxSource: config.TxSourceEmpty})
 		require.Equal(t, LocalSkipUnavailable, out.skipReason)
 	})
+}
+
+// fakePoolEL is the txpool ELClient for builder-level pool tests.
+type fakePoolEL struct {
+	states map[common.Address]*execution.AccountState
+}
+
+func (f *fakePoolEL) GetChainID(context.Context) (*big.Int, error) { return big.NewInt(1), nil }
+func (f *fakePoolEL) HeaderByHash(context.Context, common.Hash) (*types.Header, error) {
+	return &types.Header{Number: big.NewInt(1), GasLimit: 30_000_000, GasUsed: 15_000_000, BaseFee: big.NewInt(1)}, nil
+}
+
+func (f *fakePoolEL) AccountStatesAt(_ context.Context, addrs []common.Address, _ common.Hash, _ uint64,
+) (map[common.Address]*execution.AccountState, error) {
+	out := make(map[common.Address]*execution.AccountState, len(addrs))
+	for _, a := range addrs {
+		out[a] = &execution.AccountState{Nonce: 0, Balance: new(big.Int).Mul(big.NewInt(100), big.NewInt(1e18))}
+	}
+
+	return out, nil
+}
+
+func (f *fakePoolEL) BlobBaseFee(context.Context) (*big.Int, error) { return big.NewInt(1), nil }
+func (f *fakePoolEL) BlockTransactions(context.Context, common.Hash) (*execution.BlockTxList, bool, error) {
+	return nil, false, nil
+}
+
+func (f *fakePoolEL) TransactionBlockHashes(context.Context, []common.Hash) (map[common.Hash]common.Hash, error) {
+	return map[common.Hash]common.Hash{}, nil
+}
+
+func (f *fakePoolEL) SendRawTransaction(context.Context, []byte) (common.Hash, error) {
+	return common.Hash{}, nil
+}
+
+func TestBuildLocalAttributedRetry(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TxPool.Enabled = true
+
+	pool := txpool.NewPool(cfg, &fakePoolEL{}, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
+	require.NoError(t, pool.Start(context.Background()))
+
+	t.Cleanup(func() { _ = pool.Stop() })
+
+	keyA, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	keyB, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	sign := func(key *ecdsa.PrivateKey, nonce uint64) *types.Transaction {
+		tx, err := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(1)), &types.DynamicFeeTx{
+			ChainID: big.NewInt(1), Nonce: nonce, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 21000,
+		})
+		require.NoError(t, err)
+
+		raw, err := tx.MarshalBinary()
+		require.NoError(t, err)
+
+		_, err = pool.Add(raw)
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	txA0 := sign(keyA, 0)
+	txB0 := sign(keyB, 0)
+	txA1 := sign(keyA, 1)
+	addrA := crypto.PubkeyToAddress(keyA.PublicKey)
+
+	// The EL refuses sender A's nonce on the first attempt.
+	client := &fakeLocalClient{failNext: 1, failErr: errors.New("nonce too low: address " + addrA.Hex() + ", tx: 0 state: 1")}
+	b, attrs, prelude := newLocalTestBuilder(client)
+	b.txPool = pool
+
+	out := b.buildLocal(context.Background(), attrs, prelude, &LocalBuildRequest{
+		TxSource:    config.TxSourceTxPool,
+		MaxAttempts: 3,
+		MaxStrikes:  3,
+		Ordering:    config.TxOrderingFIFO,
+		GasFillPct:  100,
+	})
+	require.NoError(t, out.err)
+	require.NotNil(t, out.payload)
+	require.Len(t, client.calls, 2)
+	require.Len(t, client.calls[0], 3, "first attempt carries every pooled transaction")
+	require.Len(t, client.calls[1], 1, "the retry carries only sender B")
+	require.Equal(t, 2, out.info.Attempts)
+	require.Len(t, out.info.Dropped, 2)
+	require.Equal(t, "nonce_too_low", out.info.Dropped[0].Reason)
+	require.Equal(t, []string{txB0.Hash().Hex()}, out.info.ExpectedHashes)
+	require.Equal(t, 1, pool.Get(txA0.Hash()).Strikes())
+	require.Equal(t, 1, pool.Get(txA1.Hash()).Strikes())
+
+	// Exact sources never retry.
+	client = &fakeLocalClient{failNext: 1, failErr: errors.New("nonce too low: address " + addrA.Hex())}
+	b, attrs, prelude = newLocalTestBuilder(client)
+	b.txPool = pool
+
+	out = b.buildLocal(context.Background(), attrs, prelude, &LocalBuildRequest{
+		TxSource:    config.TxSourceQueued,
+		Queued:      []common.Hash{txA0.Hash(), txB0.Hash()},
+		MaxAttempts: 3,
+	})
+	require.Error(t, out.err)
+	require.Len(t, client.calls, 1)
+	require.Equal(t, 1, pool.Get(txA0.Hash()).Strikes(), "no strike for an exact plan's refusal")
 }

@@ -123,6 +123,10 @@ type ResolvedLocalBuildSettings struct {
 	// AllowBlobsWithoutBundle includes blob transactions on ELs whose testing
 	// path returns no blobs bundle.
 	AllowBlobsWithoutBundle bool `json:"allow_blobs_without_bundle,omitempty"`
+	// MaxAttempts / MaxStrikes are the retry policy of the txpool source
+	// (global-only).
+	MaxAttempts uint64 `json:"max_attempts,omitempty"`
+	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
 	// Forced marks that the plan enabled the local build although it is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
@@ -422,6 +426,8 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		GasFillPct:              cfg.TxPool.EffectiveGasFillPct(),
 		Ordering:                cfg.TxPool.NormalizedOrdering(),
 		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
+		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
+		MaxStrikes:              cfg.TxPool.MaxStrikes,
 	}
 
 	if plan == nil || plan.Build == nil || plan.Build.Local == nil {

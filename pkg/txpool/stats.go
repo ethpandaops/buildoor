@@ -20,6 +20,7 @@ type counters struct {
 	EvictedIncludedByOther uint64
 	EvictedNonceTooLow     uint64
 	EvictedTTL             uint64
+	EvictedStrikes         uint64
 	Rejected               map[string]uint64
 	LastAdmittedAt         time.Time
 }
@@ -45,6 +46,7 @@ type Stats struct {
 	EvictedIncludedByOther uint64            `json:"evicted_included_by_other"`
 	EvictedNonceTooLow     uint64            `json:"evicted_nonce_too_low"`
 	EvictedTTL             uint64            `json:"evicted_ttl"`
+	EvictedStrikes         uint64            `json:"evicted_strikes"`
 	Rejected               map[string]uint64 `json:"rejected"`
 
 	LastAdmittedAt *time.Time `json:"last_admitted_at,omitempty"`
@@ -68,6 +70,7 @@ func (p *Pool) Stats() Stats {
 		EvictedIncludedByOther: p.stats.EvictedIncludedByOther,
 		EvictedNonceTooLow:     p.stats.EvictedNonceTooLow,
 		EvictedTTL:             p.stats.EvictedTTL,
+		EvictedStrikes:         p.stats.EvictedStrikes,
 		Rejected:               make(map[string]uint64, len(p.stats.Rejected)),
 		Version:                p.version.Load(),
 	}
@@ -116,6 +119,7 @@ type TxSummary struct {
 	Arrived        time.Time `json:"arrived"`
 	ArrivedSlot    uint64    `json:"arrived_slot"`
 	Seq            uint64    `json:"seq"`
+	Strikes        int       `json:"strikes,omitempty"`
 }
 
 // Summary renders the queued transaction for the API.
@@ -133,6 +137,7 @@ func (t *PooledTx) Summary() TxSummary {
 		Arrived:        t.Arrived,
 		ArrivedSlot:    uint64(t.ArrivedSlot),
 		Seq:            t.Seq,
+		Strikes:        t.Strikes(),
 	}
 
 	if to := t.Tx.To(); to != nil {

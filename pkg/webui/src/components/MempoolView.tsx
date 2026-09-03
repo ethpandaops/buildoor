@@ -248,6 +248,7 @@ export const MempoolView: React.FC = () => {
             <StatCard label="Leaked" value={stats?.evicted_included_by_other ?? 0} hint="Included by a block we did not build (forward mode or duplicate submission elsewhere)" />
             <StatCard label="Nonce too low" value={stats?.evicted_nonce_too_low ?? 0} hint="Evicted because the chain passed their nonce" />
             <StatCard label="Expired" value={stats?.evicted_ttl ?? 0} hint="Evicted by the slot TTL" />
+            <StatCard label="Struck out" value={stats?.evicted_strikes ?? 0} hint="Dropped after repeated attributed EL refusals" />
           </div>
           {stats && Object.keys(stats.rejected).length > 0 && (
             <div className="mt-2 small">
@@ -307,6 +308,7 @@ export const MempoolView: React.FC = () => {
                     <th className="text-end">Value (ETH)</th>
                     <th className="text-end">Blobs</th>
                     <th className="text-end">Size</th>
+                    <th className="text-end" title="Attributed EL refusals">Strikes</th>
                     <th>Arrived</th>
                     {isLoggedIn && <th></th>}
                   </tr>
@@ -327,6 +329,7 @@ export const MempoolView: React.FC = () => {
                       <td className="text-end">{weiToEth(tx.value_wei)}</td>
                       <td className="text-end">{tx.blobs ?? 0}</td>
                       <td className="text-end">{formatBytes(tx.size)}</td>
+                      <td className="text-end">{tx.strikes ? <span className="badge bg-warning text-dark">{tx.strikes}</span> : ''}</td>
                       <td title={`${tx.arrived} (slot ${tx.arrived_slot})`}>{relativeTime(tx.arrived)} <span className="text-muted">s{tx.arrived_slot}</span></td>
                       {isLoggedIn && (
                         <td className="text-end">

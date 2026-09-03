@@ -436,6 +436,8 @@ const ResultView: React.FC<{
                           {build.local_build.info.inclusion_list_txs ? ` · ${build.local_build.info.inclusion_list_txs} inclusion-list txs` : ''}
                           {build.local_build.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
                           {build.local_build.info.dropped_by_el ? ` · ${build.local_build.info.dropped_by_el} dropped by the EL` : ''}
+                          {build.local_build.info.attempts && build.local_build.info.attempts > 1 ? ` · ${build.local_build.info.attempts} attempts` : ''}
+                          {build.local_build.info.dropped?.length ? ` · dropped after EL refusal: ${build.local_build.info.dropped.map((d) => `${d.hash.slice(0, 10)}… (${d.reason})`).join(', ')}` : ''}
                         </div>
                       )}
                     </div>

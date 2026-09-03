@@ -47,6 +47,7 @@ const (
 	KeyLocalBuildTxSource         = "local_build.tx_source"
 	KeyLocalBuildBuildELPayload   = "local_build.build_el_payload"
 	KeyLocalBuildAllowBlobsNoBund = "local_build.allow_blobs_without_bundle"
+	KeyLocalBuildMaxAttempts      = "local_build.max_attempts"
 
 	KeyTxPoolEnabled         = "txpool.enabled"
 	KeyTxPoolOrdering        = "txpool.ordering"
@@ -55,6 +56,7 @@ const (
 	KeyTxPoolMaxPoolTxs      = "txpool.max_pool_txs"
 	KeyTxPoolMaxTxsPerSender = "txpool.max_txs_per_sender"
 	KeyTxPoolTxTTLSlots      = "txpool.tx_ttl_slots"
+	KeyTxPoolMaxStrikes      = "txpool.max_strikes"
 	KeyTxPoolForwardToEL     = "txpool.forward_to_el"
 
 	KeyPayloadBuildTime              = "payload_build_time"

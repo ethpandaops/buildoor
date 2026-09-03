@@ -89,7 +89,14 @@ type PooledTx struct {
 	Arrived     time.Time
 	ArrivedSlot phase0.Slot
 	Seq         uint64 // arrival order (fifo ordering)
+
+	// strikes counts attributed build failures. Written under the pool
+	// mutex, read by snapshot holders, hence atomic.
+	strikes atomic.Int32
 }
+
+// Strikes returns the transaction's attributed build failures.
+func (t *PooledTx) Strikes() int { return int(t.strikes.Load()) }
 
 // senderQueue is one sender's queued transactions in ascending nonce order.
 type senderQueue struct {
@@ -494,6 +501,30 @@ func (p *Pool) removeLocked(hash common.Hash) bool {
 			delete(p.bySender, tx.Sender)
 		}
 	}
+
+	return true
+}
+
+// Strike counts an attributed build failure against a transaction and drops
+// it once it reaches maxStrikes (0 = never drop). Reports whether it was
+// dropped.
+func (p *Pool) Strike(hash common.Hash, maxStrikes uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	tx, ok := p.byHash[hash]
+	if !ok {
+		return false
+	}
+
+	strikes := tx.strikes.Add(1)
+	if maxStrikes == 0 || uint64(strikes) < maxStrikes {
+		return false
+	}
+
+	p.removeLocked(hash)
+	p.stats.EvictedStrikes++
+	p.version.Add(1)
 
 	return true
 }

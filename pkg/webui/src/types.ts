@@ -116,6 +116,7 @@ export interface TxPoolStats {
   evicted_included_by_other: number;
   evicted_nonce_too_low: number;
   evicted_ttl: number;
+  evicted_strikes?: number;
   rejected: Record<string, number>;
   last_admitted_at?: string;
   version: number;
@@ -137,6 +138,7 @@ export interface TxPoolTx {
   arrived: string;
   arrived_slot: number;
   seq: number;
+  strikes?: number;
 }
 
 export interface TxPoolResponse {
@@ -179,6 +181,8 @@ export interface LocalBuildInfo {
   inclusion_list_dropped?: boolean;
   dropped_by_el?: number;
   submitted_txs: number;
+  attempts?: number;
+  dropped?: { hash: string; reason: string }[];
   built_at?: string;
 }
 

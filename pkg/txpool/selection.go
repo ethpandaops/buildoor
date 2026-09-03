@@ -268,7 +268,7 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 	encoded := make([][]byte, 0, len(selected))
 
 	for _, tx := range selected {
-		raw, err := encodeTx(tx.Tx, params.BlobEncoding)
+		raw, err := EncodeTx(tx.Tx, params.BlobEncoding)
 		if err != nil {
 			return nil, fmt.Errorf("select: encode %s: %w", tx.Hash.Hex(), err)
 		}
@@ -404,7 +404,7 @@ func (p *Pool) SelectQueued(ctx context.Context, hashes []common.Hash, params *S
 			return nil, fmt.Errorf("select queued: tx %d (%s): sender %s cannot cover the cost", i, tx.Hash.Hex(), tx.Sender.Hex())
 		}
 
-		raw, err := encodeTx(tx.Tx, params.BlobEncoding)
+		raw, err := EncodeTx(tx.Tx, params.BlobEncoding)
 		if err != nil {
 			return nil, fmt.Errorf("select queued: encode %s: %w", tx.Hash.Hex(), err)
 		}
@@ -601,9 +601,9 @@ func effectiveTip(tx *types.Transaction, baseFee *big.Int) *big.Int {
 	return tip
 }
 
-// encodeTx encodes a transaction for the testing call: the network form keeps
+// EncodeTx encodes a transaction for the testing call: the network form keeps
 // a blob transaction's sidecar, the canonical form strips it.
-func encodeTx(tx *types.Transaction, blobEncoding string) ([]byte, error) {
+func EncodeTx(tx *types.Transaction, blobEncoding string) ([]byte, error) {
 	if tx.Type() == types.BlobTxType && blobEncoding == config.BlobEncodingCanonical {
 		return tx.WithoutBlobTxSidecar().MarshalBinary()
 	}

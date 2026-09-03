@@ -58,12 +58,14 @@ func DefaultConfig() *Config {
 			TxSource:       TxSourceTxPool,
 			BuildELPayload: true,
 			BlobEncoding:   BlobEncodingAuto,
+			MaxAttempts:    3,
 		},
 		TxPool: TxPoolConfig{
 			Ordering:        TxOrderingFIFO,
 			GasFillPct:      100,
 			MaxPoolTxs:      10000,
 			MaxTxsPerSender: 256,
+			MaxStrikes:      3,
 			TxTTLSlots:      0, // never: expiring queued txs leaves nonce gaps behind (see TxPoolConfig)
 		},
 		Reveal: RevealConfig{

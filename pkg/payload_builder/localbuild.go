@@ -85,6 +85,10 @@ type LocalBuildRequest struct {
 	IncludeBlobTxs bool
 	// BlobEncoding is the blob transaction encoding the EL expects.
 	BlobEncoding string
+	// MaxAttempts / MaxStrikes: retry policy of the txpool source after an
+	// attributed EL refusal.
+	MaxAttempts uint64
+	MaxStrikes  uint64
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -121,10 +125,22 @@ type LocalBuildInfo struct {
 	// SubmittedTxs is how many transactions were handed to the EL (-1 for the
 	// el_mempool source, where the EL chooses).
 	SubmittedTxs int `json:"submitted_txs"`
+	// Attempts is how many testing_buildBlockV1 calls the build took.
+	Attempts int `json:"attempts,omitempty"`
+	// Dropped lists the pool transactions removed from the attempt after an
+	// attributed EL refusal (txpool source only), with the failure class.
+	Dropped []DroppedTx `json:"dropped,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
 	// build runs during the engine build's wait, so this is usually well
 	// before the payload's ReadyAt (the hand-over to the consumers).
 	BuiltAt time.Time `json:"built_at"`
+}
+
+// DroppedTx is a pool transaction removed from a build attempt after the EL
+// refused the list.
+type DroppedTx struct {
+	Hash   string `json:"hash"`
+	Reason string `json:"reason"`
 }
 
 // BuildResult is the outcome of one build target: the payload feeding the
@@ -383,6 +399,8 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot) (*LocalBuildRequest
 		Ordering:       settings.Ordering,
 		IncludeBlobTxs: availability.BlobBundle || settings.AllowBlobsWithoutBundle,
 		BlobEncoding:   availability.BlobEncoding,
+		MaxAttempts:    settings.MaxAttempts,
+		MaxStrikes:     settings.MaxStrikes,
 	}
 
 	if len(settings.Queued) > 0 {

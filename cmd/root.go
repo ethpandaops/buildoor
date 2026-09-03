@@ -122,6 +122,7 @@ func init() {
 	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, empty or el_mempool")
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
+	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Bearer token required on the /rpc ingress (empty = unauthenticated)")
@@ -131,6 +132,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("txpool-max-txs", defaults.TxPool.MaxPoolTxs, "Max queued transactions in the pool")
 	rootCmd.PersistentFlags().Uint64("txpool-max-txs-per-sender", defaults.TxPool.MaxTxsPerSender, "Max queued transactions per sender")
 	rootCmd.PersistentFlags().Uint64("txpool-tx-ttl-slots", defaults.TxPool.TxTTLSlots, "Drop queued transactions older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-strikes", defaults.TxPool.MaxStrikes, "Drop a queued transaction after this many attributed build failures (0 = never)")
 	rootCmd.PersistentFlags().Bool("txpool-forward-to-el", defaults.TxPool.ForwardToEL, "Also submit admitted transactions to the EL mempool (shadow mode for A/B comparisons)")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
@@ -274,6 +276,7 @@ func initConfig() error {
 			BuildELPayload:          v.GetBool("local-build-el-payload"),
 			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
+			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:         v.GetBool("txpool-enabled"),
@@ -284,6 +287,7 @@ func initConfig() error {
 			MaxPoolTxs:      v.GetUint64("txpool-max-txs"),
 			MaxTxsPerSender: v.GetUint64("txpool-max-txs-per-sender"),
 			TxTTLSlots:      v.GetUint64("txpool-tx-ttl-slots"),
+			MaxStrikes:      v.GetUint64("txpool-max-strikes"),
 			ForwardToEL:     v.GetBool("txpool-forward-to-el"),
 		},
 		Reveal: config.RevealConfig{

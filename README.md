@@ -177,6 +177,7 @@ namespace (probed at startup and every 5 minutes, or on demand from the UI).
 | `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
+| `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
 | `--txpool-auth-token` | | Bearer token required on `/rpc` |
 | `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random` |
@@ -184,6 +185,7 @@ namespace (probed at startup and every 5 minutes, or on demand from the UI).
 | `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |
 | `--txpool-max-txs` | `10000` | Pool capacity |
 | `--txpool-max-txs-per-sender` | `256` | Per-sender queue cap |
+| `--txpool-max-strikes` | `3` | Drop a queued tx after this many attributed build failures (0 = never) |
 | `--txpool-tx-ttl-slots` | `0` | Drop queued txs older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind) |
 | `--txpool-forward-to-el` | `false` | Also submit admitted txs to the EL mempool (A/B shadow mode) |
 
