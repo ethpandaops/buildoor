@@ -44,27 +44,56 @@ type ELProxy interface {
 	RawCall(ctx context.Context, method string, params []any) ([]byte, error)
 }
 
+// Authorizer decides whether an ingress request may proceed. The three modes
+// are open (every caller), the authenticatoor JWT the mutating API endpoints
+// use, and a static shared secret.
+type Authorizer interface {
+	// Authorize reports whether the request's Authorization header is
+	// acceptable.
+	Authorize(r *http.Request) bool
+}
+
+// OpenAuthorizer accepts every request.
+type OpenAuthorizer struct{}
+
+// Authorize implements Authorizer.
+func (OpenAuthorizer) Authorize(*http.Request) bool { return true }
+
+// StaticAuthorizer requires "Authorization: Bearer <token>" with the
+// configured shared secret.
+type StaticAuthorizer struct {
+	Token string
+}
+
+// Authorize implements Authorizer.
+func (a StaticAuthorizer) Authorize(r *http.Request) bool {
+	return a.Token != "" && r.Header.Get("Authorization") == "Bearer "+a.Token
+}
+
 // Server is the ingress HTTP handler.
 type Server struct {
-	log       logrus.FieldLogger
-	pool      *txpool.Pool
-	el        ELProxy
-	authToken string
-	version   string
+	log     logrus.FieldLogger
+	pool    *txpool.Pool
+	el      ELProxy
+	auth    Authorizer
+	version string
 }
 
 var _ http.Handler = (*Server)(nil)
 
 // NewServer creates the ingress for the given pool. el may be nil, in which
-// case read methods answer "method not found". authToken, when non-empty,
-// is required as a bearer token.
-func NewServer(pool *txpool.Pool, el ELProxy, authToken, version string, log logrus.FieldLogger) *Server {
+// case read methods answer "method not found". A nil auth means open.
+func NewServer(pool *txpool.Pool, el ELProxy, auth Authorizer, version string, log logrus.FieldLogger) *Server {
+	if auth == nil {
+		auth = OpenAuthorizer{}
+	}
+
 	return &Server{
-		log:       log.WithField("component", "txpool-rpc"),
-		pool:      pool,
-		el:        el,
-		authToken: authToken,
-		version:   version,
+		log:     log.WithField("component", "txpool-rpc"),
+		pool:    pool,
+		el:      el,
+		auth:    auth,
+		version: version,
 	}
 }
 
@@ -96,7 +125,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.authToken != "" && r.Header.Get("Authorization") != "Bearer "+s.authToken {
+	if !s.auth.Authorize(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 
 		return

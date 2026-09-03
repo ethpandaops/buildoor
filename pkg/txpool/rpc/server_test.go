@@ -78,6 +78,15 @@ func (f *fakeEL) RawCall(_ context.Context, method string, params []any) ([]byte
 }
 
 func newServer(t *testing.T, authToken string) (*Server, *fakeEL, *txpool.Pool) {
+	var auth Authorizer
+	if authToken != "" {
+		auth = StaticAuthorizer{Token: authToken}
+	}
+
+	return newServerWith(t, auth)
+}
+
+func newServerWith(t *testing.T, auth Authorizer) (*Server, *fakeEL, *txpool.Pool) {
 	t.Helper()
 
 	el := &fakeEL{nonce: 5}
@@ -89,8 +98,13 @@ func newServer(t *testing.T, authToken string) (*Server, *fakeEL, *txpool.Pool) 
 
 	t.Cleanup(func() { _ = pool.Stop() })
 
-	return NewServer(pool, el, authToken, "test", logrus.New()), el, pool
+	return NewServer(pool, el, auth, "test", logrus.New()), el, pool
 }
+
+// denyAuthorizer stands in for an auth-provider check that rejects.
+type denyAuthorizer struct{}
+
+func (denyAuthorizer) Authorize(*http.Request) bool { return false }
 
 func call(t *testing.T, srv http.Handler, body string, headers ...string) (int, string) {
 	t.Helper()
@@ -220,15 +234,34 @@ func TestBatch(t *testing.T) {
 	require.NotNil(t, responses[2]["error"])
 }
 
-func TestAuthToken(t *testing.T) {
+func TestAuthModes(t *testing.T) {
+	// static
 	srv, _, _ := newServer(t, "secret")
 
 	code, _ := call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`)
 	require.Equal(t, http.StatusUnauthorized, code)
 
+	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer wrong")
+	require.Equal(t, http.StatusUnauthorized, code)
+
 	code, body := call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer secret")
 	require.Equal(t, http.StatusOK, code)
 	require.Contains(t, body, "0x1267")
+
+	// open
+	srv, _, _ = newServerWith(t, nil)
+	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`)
+	require.Equal(t, http.StatusOK, code)
+
+	// a rejecting authorizer (auth-provider mode without a valid JWT)
+	srv, _, _ = newServerWith(t, denyAuthorizer{})
+	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer secret")
+	require.Equal(t, http.StatusUnauthorized, code)
+
+	// an empty static token never matches
+	srv, _, _ = newServerWith(t, StaticAuthorizer{})
+	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer ")
+	require.Equal(t, http.StatusUnauthorized, code)
 }
 
 func TestMalformedRequests(t *testing.T) {

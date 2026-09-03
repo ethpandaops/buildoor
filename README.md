@@ -179,7 +179,8 @@ namespace (probed at startup and every 5 minutes, or on demand from the UI).
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
-| `--txpool-auth-token` | | Bearer token required on `/rpc` |
+| `--txpool-auth` | `open` | Ingress authentication: `open`, `auth_token` (the authenticatoor JWT of the API, needs `--auth-provider-url`) or `static` |
+| `--txpool-auth-token` | | Shared bearer secret for `--txpool-auth=static` |
 | `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random`, `round_robin` |
 | `--txpool-block-max-txs` | `0` | Max pool txs per local block (0 = unlimited) |
 | `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |

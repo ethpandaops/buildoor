@@ -287,8 +287,10 @@ npm run clean
      follows beacon head + payload-available events: included txs are dropped
      (`included_by_us` vs `included_by_other` via `NoteBuiltBlock`), touched
      senders' passed nonces pruned, the optional TTL applied (`txpool.tx_ttl_slots`, default 0 = never: expiring queued txs leaves nonce gaps that stall the sender until the generator rebroadcasts). Ingress (`pkg/txpool/rpc/`):
-     JSON-RPC 2.0 (single + batch) at `POST /rpc` on the API port, unauthenticated
-     like the Builder API routes (optional bearer `txpool.auth_token`):
+     JSON-RPC 2.0 (single + batch) at `POST /rpc` on the API port; auth per
+     `txpool.auth` = `open` (default) | `auth_token` (the authenticatoor JWT the
+     mutating API endpoints use, `txpoolrpc.Authorizer` implemented in webui.go)
+     | `static` (`txpool.auth_token` bearer secret):
      `eth_sendRawTransaction` (network encoding), `eth_chainId`, `net_version`,
      `web3_clientVersion`, pool-aware `eth_getTransactionCount(..,"pending")`,
      `eth_getTransactionByHash`, `txpool_status/content` locally; read-only
@@ -637,7 +639,7 @@ Key config sections:
   (el | local | local_or_el), `--local-build-tx-source` (txpool | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
-  `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,
+  `--txpool-auth` + `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,
   `--txpool-gas-fill-pct`, `--txpool-max-txs`, `--txpool-max-txs-per-sender`,
   `--txpool-tx-ttl-slots`, `--txpool-forward-to-el`. Both require `--el-rpc`;
   mutable via `local_build.*` / `txpool.*` settings keys

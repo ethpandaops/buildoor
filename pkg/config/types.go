@@ -658,8 +658,14 @@ type TxPoolConfig struct {
 	// transactions but stops admission and selection. Requires --el-rpc.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// AuthToken, when set, requires "Authorization: Bearer <token>" on the
-	// ingress. Startup-only; never serialized.
+	// Auth selects how the /rpc ingress authenticates callers: open (no
+	// check, the default), auth_token (the same authenticatoor JWT as the
+	// mutating API endpoints, requires --auth-provider-url) or static (the
+	// shared secret in AuthToken). Startup-only.
+	Auth string `yaml:"auth" json:"auth"`
+
+	// AuthToken is the shared secret callers send as "Authorization: Bearer
+	// <token>" in static mode. Startup-only; never serialized.
 	AuthToken string `yaml:"auth_token" json:"-"`
 
 	// Ordering is the block selection order: fifo (default), tip or random.
@@ -702,6 +708,27 @@ type TxPoolConfig struct {
 	// mempool (eth_sendRawTransaction) — a shadow mode for A/B comparisons
 	// that defeats the pool's purpose, hence off by default.
 	ForwardToEL bool `yaml:"forward_to_el" json:"forward_to_el"`
+}
+
+// Ingress authentication modes.
+const (
+	// TxPoolAuthOpen accepts every caller.
+	TxPoolAuthOpen = "open"
+	// TxPoolAuthToken requires the authenticatoor JWT the API endpoints use.
+	TxPoolAuthToken = "auth_token"
+	// TxPoolAuthStatic requires the configured shared bearer secret.
+	TxPoolAuthStatic = "static"
+)
+
+// NormalizedAuth returns the ingress auth mode, falling back to open for
+// unknown values.
+func (c *TxPoolConfig) NormalizedAuth() string {
+	switch c.Auth {
+	case TxPoolAuthOpen, TxPoolAuthToken, TxPoolAuthStatic:
+		return c.Auth
+	default:
+		return TxPoolAuthOpen
+	}
 }
 
 // NormalizedOrdering applies the config's own ordering with the fifo fallback.

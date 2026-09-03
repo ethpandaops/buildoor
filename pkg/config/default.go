@@ -61,6 +61,7 @@ func DefaultConfig() *Config {
 			MaxAttempts:    3,
 		},
 		TxPool: TxPoolConfig{
+			Auth:            TxPoolAuthOpen,
 			Ordering:        TxOrderingFIFO,
 			GasFillPct:      100,
 			MaxPoolTxs:      10000,

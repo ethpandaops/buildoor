@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -33,12 +32,10 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
-	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
-	buildversion "github.com/ethpandaops/buildoor/version"
 )
 
 var runCmd = &cobra.Command{
@@ -297,10 +294,7 @@ and begins building blocks according to configuration.`,
 		// it can be toggled at runtime; the local build's availability is
 		// probed against the EL (the testing namespace is disabled by default
 		// on every client) and gates the enable settings.
-		var (
-			txPool    *txpool.Pool
-			txIngress http.Handler
-		)
+		var txPool *txpool.Pool
 
 		if rpcClient != nil {
 			builderSvc.SetLocalBuildClient(rpcClient)
@@ -316,8 +310,6 @@ and begins building blocks according to configuration.`,
 			// buildoor's own lifecycle transactions must be in the pool too,
 			// or its pool-built blocks would never carry its deposits.
 			rpcClient.SetTxTee(txPool)
-
-			txIngress = txpoolrpc.NewServer(txPool, rpcClient, cfg.TxPool.AuthToken, buildversion.GetBuildVersion(), logger)
 		}
 
 		// Setting writes that enable the local build or the pool are vetoed
@@ -529,7 +521,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txIngress, planVerifier)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txPool, rpcClient, planVerifier)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

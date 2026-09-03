@@ -125,7 +125,8 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
-	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Bearer token required on the /rpc ingress (empty = unauthenticated)")
+	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Authentication of the /rpc ingress: open, auth_token (the authenticatoor JWT of the API, needs --auth-provider-url) or static (--txpool-auth-token)")
+	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Shared bearer secret callers of the /rpc ingress must send in --txpool-auth=static mode")
 	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip, random or round_robin")
 	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
 	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
@@ -281,6 +282,7 @@ func initConfig() error {
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:            v.GetBool("txpool-enabled"),
+			Auth:               v.GetString("txpool-auth"),
 			AuthToken:          v.GetString("txpool-auth-token"),
 			Ordering:           v.GetString("txpool-ordering"),
 			MaxTxsPerBlock:     v.GetUint64("txpool-block-max-txs"),
@@ -362,6 +364,18 @@ func initConfig() error {
 	if cfg.LocalBuild.BlobEncoding != config.NormalizedBlobEncoding(cfg.LocalBuild.BlobEncoding) {
 		return fmt.Errorf("invalid --local-build-blob-encoding %q: must be auto, network or canonical",
 			cfg.LocalBuild.BlobEncoding)
+	}
+
+	if cfg.TxPool.Auth != cfg.TxPool.NormalizedAuth() {
+		return fmt.Errorf("invalid --txpool-auth %q: must be open, auth_token or static", cfg.TxPool.Auth)
+	}
+
+	if cfg.TxPool.Auth == config.TxPoolAuthStatic && cfg.TxPool.AuthToken == "" {
+		return fmt.Errorf("--txpool-auth=static requires --txpool-auth-token")
+	}
+
+	if cfg.TxPool.Auth == config.TxPoolAuthToken && cfg.AuthProviderURL == "" {
+		return fmt.Errorf("--txpool-auth=auth_token requires --auth-provider-url")
 	}
 
 	if config.NormalizedTxOrdering(cfg.TxPool.Ordering, "") == "" {
