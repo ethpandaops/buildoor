@@ -3,6 +3,7 @@ package payload_builder
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,6 +55,7 @@ type LocalBuildClient interface {
 		attrs *engineall.PayloadAttributes, transactions [][]byte, extraData []byte,
 	) (*engineall.GetPayloadResponse, error)
 	ProbeTestingAPI(ctx context.Context) execution.TestingAPIStatus
+	ClientVersion(ctx context.Context) (string, error)
 }
 
 var _ LocalBuildClient = (*execution.Client)(nil)
@@ -243,6 +245,34 @@ var defaultBlobProfile = elBlobProfile{
 	enableHint: "enable the testing JSON-RPC namespace",
 }
 
+// elCodeFromClientVersion maps a web3_clientVersion string to the two-letter
+// client code of engine_getClientVersionV1 ("" when unrecognized).
+func elCodeFromClientVersion(version string) string {
+	name := strings.ToLower(version)
+	if i := strings.IndexByte(name, '/'); i > 0 {
+		name = name[:i]
+	}
+
+	switch name {
+	case "geth", "go-ethereum":
+		return "GE"
+	case "reth":
+		return "RH"
+	case "besu":
+		return "BU"
+	case "erigon":
+		return "EG"
+	case "ethrex":
+		return "EX"
+	case "nethermind":
+		return "NM"
+	case "nimbus", "nimbus-eth1":
+		return "NB"
+	default:
+		return ""
+	}
+}
+
 // localBuildState is the service's view of the local build extension.
 type localBuildState struct {
 	mu           sync.RWMutex
@@ -307,9 +337,18 @@ func (s *Service) ProbeLocalBuild(ctx context.Context) LocalBuildAvailability {
 
 	if v := s.GetELClientVersion(); v != nil {
 		elCode = v.Code
-		if p, ok := elBlobProfiles[v.Code]; ok {
-			profile = p
+	}
+
+	if elCode == "" {
+		// Not every EL answers engine_getClientVersionV1 (nethermind and besu
+		// on the devnets); the RPC's web3_clientVersion names it too.
+		if version, err := client.ClientVersion(probeCtx); err == nil {
+			elCode = elCodeFromClientVersion(version)
 		}
+	}
+
+	if p, ok := elBlobProfiles[elCode]; ok {
+		profile = p
 	}
 
 	encoding := config.NormalizedBlobEncoding(s.cfg.LocalBuild.BlobEncoding)

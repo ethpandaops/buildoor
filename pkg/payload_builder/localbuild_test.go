@@ -170,6 +170,25 @@ func (f *fakeLocalClient) ProbeTestingAPI(context.Context) execution.TestingAPIS
 	return execution.TestingAPIStatus{Available: true}
 }
 
+func (f *fakeLocalClient) ClientVersion(context.Context) (string, error) {
+	return "Geth/v1.17.6-unstable/linux-amd64/go1.26.5", nil
+}
+
+func TestELCodeFromClientVersion(t *testing.T) {
+	for version, code := range map[string]string{
+		"Geth/v1.17.6-unstable-aa1f2fcf-20260813/linux-amd64/go1.26.5":                      "GE",
+		"Nethermind/v1.40.0-unstable+93ca2644-hp/linux-x64/dotnet10.0.11":                   "NM",
+		"besu/v26.9-develop-0d7d0f5/linux-x86_64/openjdk-java-25":                           "BU",
+		"reth/v2.5.0-3d270d9/x86_64-unknown-linux-gnu":                                      "RH",
+		"ethrex/v22.0.0-glamsterdam-devnet-8-092813de/x86_64-unknown-linux-gnu/rustc-v1.91": "EX",
+		"erigon/3.7.0/linux-amd64/go1.26.7":                                                 "EG",
+		"something/else":                                                                    "",
+		"":                                                                                  "",
+	} {
+		require.Equal(t, code, elCodeFromClientVersion(version), version)
+	}
+}
+
 // signedTx returns the network encoding of a freshly signed transaction, so
 // the fake's echoed payload decodes in the header reconstruction.
 func signedTx(t *testing.T, nonce uint64) []byte {

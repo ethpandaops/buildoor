@@ -188,6 +188,17 @@ func (c *Client) TransactionBlockHashes(ctx context.Context, hashes []common.Has
 	return out, nil
 }
 
+// ClientVersion returns the EL's web3_clientVersion string (e.g.
+// "Geth/v1.17.6-.../linux-amd64/go1.26.5").
+func (c *Client) ClientVersion(ctx context.Context) (string, error) {
+	var version string
+	if err := c.rpcClient.CallContext(ctx, &version, "web3_clientVersion"); err != nil {
+		return "", fmt.Errorf("failed to get client version: %w", err)
+	}
+
+	return version, nil
+}
+
 // SendRawTransaction submits an already-encoded transaction to the EL mempool.
 func (c *Client) SendRawTransaction(ctx context.Context, raw []byte) (common.Hash, error) {
 	var hash common.Hash
