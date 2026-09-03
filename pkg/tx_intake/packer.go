@@ -271,12 +271,6 @@ func (ps *packer) tryAdd(e *Entry) string {
 	return ""
 }
 
-// chainStops reports whether a skip reason ends the sender's chain for this
-// block: every later nonce depends on the skipped one.
-func chainStops(reason string) bool {
-	return reason != SkipBlobCap
-}
-
 // candidateHeap orders sender chains by their head transaction.
 type candidateHeap struct {
 	chains []*senderChain
@@ -332,11 +326,12 @@ func (ps *packer) packByPriority(chains []*senderChain, policy string) {
 		}
 
 		if reason != "" {
-			ps.plan.Skipped[reason]++
-			if chainStops(reason) {
-				ps.plan.Skipped[reason] += len(c.entries) - c.next - 1
-				continue
-			}
+			// A skipped transaction is not in the block, so every later nonce
+			// of that sender would sit at a gap: the chain ends here and
+			// retries as a whole once the cap frees.
+			ps.plan.Skipped[reason] += len(c.entries) - c.next
+
+			continue
 		}
 
 		c.next++
@@ -364,11 +359,11 @@ func (ps *packer) packRoundRobin(chains []*senderChain) {
 			}
 
 			if reason != "" {
-				ps.plan.Skipped[reason]++
-				if chainStops(reason) {
-					ps.plan.Skipped[reason] += len(c.entries) - c.next - 1
-					continue
-				}
+				// A skipped transaction is not in the block, so every later
+				// nonce of that sender would sit at a gap: the chain ends here
+				// and retries as a whole once the cap frees.
+				ps.plan.Skipped[reason] += len(c.entries) - c.next
+				continue
 			}
 
 			c.next++

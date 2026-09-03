@@ -241,11 +241,17 @@ npm run clean
    - **Intake** (`tx_intake.Proxy`, served at `POST /rpc` on the API port): a
      JSON-RPC 2.0 endpoint transaction sources point at instead of the EL.
      `eth_sendRawTransaction` → queue; `eth_getTransactionCount(_, "pending")` →
-     EL latest nonce advanced over the queued chain; everything else forwarded
-     to `--el-rpc` verbatim (batches too). The EL's public txpool never sees
-     these transactions, so only buildoor's blocks can carry them. The
-     builder's own lifecycle transactions are teed into the queue
-     (`execution.Client.SetTxIntake`) for the same reason.
+     EL latest nonce advanced over the queued chain; the sender-facing read
+     namespaces (`eth_`/`net_`/`web3_`/`txpool_`/`rpc_`) forwarded to
+     `--el-rpc` verbatim (batches too). Everything else — `testing_`,
+     `debug_`, `admin_`, `miner_`, `personal_`, `engine_` — is REFUSED: the
+     intake is a submission endpoint, and in this mode the EL serves
+     `testing_`, which would otherwise let any caller build blocks on it.
+     Gated by the API's auth handler when one is configured (`requireAuth` in
+     `webui.go`). The EL's public txpool never sees these transactions, so only
+     buildoor's blocks can carry them. The builder's own lifecycle transactions
+     are teed into the queue (`execution.Client.SetTxIntake`) for the same
+     reason.
    - **Queue** (`tx_intake.Queue`): per-sender nonce chains keyed by
      (sender, nonce) and hash; same hash idempotent, same (sender, nonce)
      replaced by the newer tx. NOTHING is removed at build time — the parent
@@ -255,7 +261,9 @@ npm run clean
    - **Packer** (`tx_intake.Pack`): deterministic pre-filter with the caps geth
      will enforce (gas limit stepped toward the target, next base fee, blob
      base fee bound, blob cap from `eth_config`, byte cap, per-sender budget)
-     and a policy (`fifo`, `fee`, `round_robin`, `as_given`). `as_given` and the
+     and a policy (`fifo`, `fee`, `round_robin`, `as_given`). ANY skip ends
+     that sender's chain for the block: the skipped nonce is not in it, so
+     every later nonce would sit at a gap and geth would refuse the list. `as_given` and the
      per-slot `build.txs` list are EXACT: any deviation errors, never trims.
      Pack takes the CALLER's queue snapshot (not its own): the snapshot and the
      sender states must describe one moment, or a sender arriving in between

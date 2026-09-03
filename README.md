@@ -196,9 +196,18 @@ proposed, and it checks the chain honored the plan.
 own scripts) at `POST http://<buildoor>:<api-port>/rpc` instead of the EL.
 It is a JSON-RPC 2.0 endpoint: `eth_sendRawTransaction` lands in buildoor's
 private queue, `eth_getTransactionCount(addr, "pending")` answers from the
-queue on top of the EL's latest nonce, and every other method is forwarded to
-`--el-rpc` verbatim (batches included). Transactions never touch the EL's
-public txpool, so nobody else can include them.
+queue on top of the EL's latest nonce, and the read methods a sender needs
+(`eth_`, `net_`, `web3_`, `txpool_`, `rpc_`) are forwarded to `--el-rpc`
+verbatim (batches included). Transactions never touch the EL's public txpool,
+so nobody else can include them.
+
+It is a submission endpoint, not a general EL proxy. Everything that drives
+the node (`testing_`, `debug_`, `admin_`, `miner_`, `personal_`, `engine_`) is
+refused, so publishing the intake never publishes those — which matters most
+for `testing_`, since the EL has to serve it in this mode. When
+`--auth-provider-url` is set the intake requires the same token as the
+mutating API endpoints; with no auth provider the API is open and the intake
+follows it.
 
 **Packing.** At payload_attributes time buildoor puts the EL on the parent,
 reads every queued sender's nonce and balance at that parent, and packs the

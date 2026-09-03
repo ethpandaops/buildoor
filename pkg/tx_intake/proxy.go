@@ -8,12 +8,33 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/sirupsen/logrus"
 )
+
+// forwardableNamespaces are the JSON-RPC namespaces the intake forwards. It
+// is a transaction submission endpoint, not a general EL proxy: everything
+// that inspects or drives the node beyond what a sender needs (testing,
+// debug, admin, miner, personal, engine) is refused, so publishing the intake
+// never publishes those. This matters most for the testing namespace, which
+// the EL must serve in testing-build mode and which would otherwise let any
+// caller build blocks on it.
+var forwardableNamespaces = []string{"eth_", "net_", "web3_", "txpool_", "rpc_"}
+
+// forwardable reports whether the intake proxies the given method.
+func forwardable(method string) bool {
+	for _, ns := range forwardableNamespaces {
+		if strings.HasPrefix(method, ns) {
+			return true
+		}
+	}
+
+	return false
+}
 
 // maxBodyBytes bounds an intake request body. Blob transactions with full
 // sidecars are large and submitters may batch them.
@@ -135,6 +156,9 @@ func (p *Proxy) handle(ctx context.Context, reqs []json.RawMessage) []json.RawMe
 			responses[i] = p.sendRawTransaction(&req)
 		case req.Method == "eth_getTransactionCount" && isPendingTag(req.Params):
 			responses[i] = p.pendingNonce(ctx, &req)
+		case !forwardable(req.Method):
+			responses[i] = errorResponse(req.ID, -32601,
+				"method "+req.Method+" is not available through the tx intake")
 		default:
 			forwardIdx = append(forwardIdx, i)
 		}

@@ -69,7 +69,8 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	// Tx intake: the JSON-RPC endpoint transaction sources point at instead
 	// of the EL, so testing builds control exactly what a block holds.
 	if tb := builderSvc.TestingBuilder(); tb != nil {
-		router.Handle("/rpc", tx_intake.NewProxy(tb.Queue(), settingsSvc.Load().ELRPC, logrus.StandardLogger())).Methods(http.MethodPost)
+		intake := tx_intake.NewProxy(tb.Queue(), settingsSvc.Load().ELRPC, logrus.StandardLogger())
+		router.Handle("/rpc", requireAuth(authHandler, intake)).Methods(http.MethodPost)
 	}
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
@@ -197,4 +198,19 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}()
 
 	return apiHandler
+}
+
+// requireAuth gates a handler on the same token the mutating API endpoints
+// use, so an operator who protects the API also protects the tx intake. With
+// no auth provider configured the API is open and the intake follows it.
+func requireAuth(authHandler *auth.AuthHandler, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authHandler.IsOpen() && authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

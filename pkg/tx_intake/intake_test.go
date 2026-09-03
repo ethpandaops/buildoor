@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -429,4 +430,77 @@ func TestStrikeIsRaceFree(t *testing.T) {
 
 	wg.Wait()
 	require.Equal(t, 800, entry.Strikes())
+}
+
+// A transaction skipped for any reason is not in the block, so the sender's
+// later nonces would sit at a gap. The chain must end at the skip rather
+// than emit a plan geth is guaranteed to refuse.
+func TestPackSkippedTxEndsTheSenderChain(t *testing.T) {
+	q := NewQueue(testChainID, 100)
+	blobby, plain := newSender(t), newSender(t)
+
+	// blobby: an oversized-gas head, then a small tx that would fit.
+	big := blobby.tx(t, 0, 900_000, 10)
+	small := blobby.tx(t, 1, 21_000, 10)
+	// plain: a small tx that must still be packed.
+	other := plain.tx(t, 0, 21_000, 10)
+
+	for _, raw := range [][]byte{big, small, other} {
+		_, err := q.Add(raw)
+		require.NoError(t, err)
+		time.Sleep(time.Millisecond)
+	}
+
+	states := map[common.Address]SenderState{blobby.addr: richState(0), plain.addr: richState(0)}
+
+	// A gas cap that rejects the head but would admit the follower.
+	plan, err := packNow(q, states, blockCtx(100_000), FillSpec{GasPct: 100, Policy: PolicyFIFO})
+	require.NoError(t, err)
+
+	require.Equal(t, []common.Hash{hashOf(t, other)}, plan.Hashes(),
+		"the skipped head must take its sender's later nonces with it, and must not block other senders")
+	require.Equal(t, 2, plan.Skipped[SkipGasCap], "the head and its stranded follower are both counted")
+}
+
+// The intake is a submission endpoint, not a general EL proxy: publishing it
+// must not publish the namespaces that drive the node — above all "testing",
+// which the EL serves in testing-build mode and which would otherwise let any
+// caller build blocks on it.
+func TestProxyRefusesNonSubmissionNamespaces(t *testing.T) {
+	forwarded := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded++
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x1"}`))
+	}))
+	defer upstream.Close()
+
+	srv := httptest.NewServer(NewProxy(NewQueue(testChainID, 10), upstream.URL, logrus.New()))
+	defer srv.Close()
+
+	call := func(method string) string {
+		resp, err := http.Post(srv.URL, "application/json",
+			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"`+method+`","params":[]}`))
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		return string(body)
+	}
+
+	for _, method := range []string{
+		"testing_buildBlockV1", "testing_commitBlockV1",
+		"debug_setHead", "admin_nodeInfo", "miner_setGasPrice", "personal_unlockAccount", "engine_forkchoiceUpdatedV3",
+	} {
+		require.Contains(t, call(method), "not available through the tx intake", method)
+	}
+
+	require.Zero(t, forwarded, "a refused method must never reach the EL")
+
+	for _, method := range []string{"eth_chainId", "net_version", "web3_clientVersion", "txpool_status", "rpc_modules"} {
+		require.Contains(t, call(method), `"result"`, method)
+	}
+
+	require.Equal(t, 5, forwarded)
 }
