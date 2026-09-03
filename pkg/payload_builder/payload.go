@@ -35,6 +35,13 @@ type Payload struct {
 	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
 	ExecutionRequests *eth2all.ExecutionRequests
 
+	// Source records how the payload was built: el (engine API, the EL's
+	// mempool) or local (testing_buildBlockV1 from a buildoor-chosen list).
+	Source string
+	// Local describes the local build's transaction assembly (nil for engine
+	// payloads).
+	Local *LocalBuildInfo
+
 	// Metadata not carried by the objects above.
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
 	FeeRecipient common.Address // resolved proposer fee recipient for the bid

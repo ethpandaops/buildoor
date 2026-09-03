@@ -44,7 +44,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, txIngress http.Handler) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
@@ -59,6 +59,13 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	// Builder API routes (served on same port as the webui)
 	if builderAPISvc != nil {
 		builderAPISvc.RegisterRoutes(router)
+	}
+
+	// Transaction pool JSON-RPC ingress (eth_sendRawTransaction + read
+	// passthrough), unauthenticated like the Builder API routes; the ingress
+	// enforces its own optional bearer token.
+	if txIngress != nil {
+		router.Handle("/rpc", txIngress).Methods(http.MethodPost)
 	}
 
 	// API routes
@@ -101,6 +108,14 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids/{index}", apiHandler.GetSlotBidArtifact).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/envelope", apiHandler.GetSlotEnvelopeArtifact).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/head-votes/{slot}", apiHandler.GetHeadVoteDetail).Methods(http.MethodGet)
+
+	// Local build extension (testing_buildBlockV1) + owned transaction pool
+	apiRouter.HandleFunc("/buildoor/local-build/status", apiHandler.GetLocalBuildStatus).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/local-build/probe", apiHandler.ProbeLocalBuild).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.GetTxPool).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.ClearTxPool).Methods(http.MethodDelete)
+	apiRouter.HandleFunc("/buildoor/txpool/preview", apiHandler.GetTxPoolPreview).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool/{hash}", apiHandler.DropTxPoolTx).Methods(http.MethodDelete)
 
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)

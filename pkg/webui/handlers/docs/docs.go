@@ -783,6 +783,57 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/local-build/probe": {
+            "post": {
+                "description": "Probes the EL RPC for the testing namespace now (instead of\nwaiting for the periodic check) and returns the resulting\navailability. Requires authentication; audited.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Re-probe the EL for testing_buildBlockV1",
+                "operationId": "probeLocalBuild",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/payload_builder.LocalBuildAvailability"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/local-build/status": {
+            "get": {
+                "description": "Returns whether the EL exposes testing_buildBlockV1 (probed),\nthe per-EL blob handling, the effective local build settings\nand the transaction pool's availability and toggle state.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Get the local build (testing_buildBlockV1) status",
+                "operationId": "getLocalBuildStatus",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.LocalBuildStatusResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/overview": {
             "get": {
                 "description": "Returns a single-payload summary used by the multi-instance overview UI:\nrunning state, builder pubkey, current slot, EL client info, available/enabled\nservices, balances, and recent build stats.",
@@ -1183,6 +1234,201 @@ const docTemplate = `{
                     },
                     "406": {
                         "description": "No acceptable content type",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool": {
+            "get": {
+                "description": "Returns the pool's aggregate stats (pending count, senders, gas\nsum, value, blobs, lifetime counters) and a page of queued\ntransactions.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "List the transaction pool content",
+                "operationId": "getTxPool",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Offset (default 0)",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit (default 50, max 500)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Filter by sender address",
+                        "name": "sender",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "arrival (default) | sender | tip",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.TxPoolResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Clears the transaction pool. Requires authentication; audited.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Drop every queued transaction",
+                "operationId": "clearTxPool",
+                "responses": {
+                    "200": {
+                        "description": "dropped count",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool/preview": {
+            "get": {
+                "description": "Runs the pool selection against the current head with the\nlive settings and returns what a local block built now would\ncontain (count, gas sum, skipped-by-reason), without building.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Preview the next local block's selection",
+                "operationId": "getTxPoolPreview",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.TxPoolPreviewResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured or no head",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Selection failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool/{hash}": {
+            "delete": {
+                "description": "Removes the transaction with the given hash from the pool.\nRequires authentication; audited.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Drop one queued transaction",
+                "operationId": "dropTxPoolTx",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Transaction hash",
+                        "name": "hash",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "removed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "boolean"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not found",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1865,6 +2111,14 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "local": {
+                    "description": "Local overrides the local build extension (testing_buildBlockV1) for\nthis slot; absent = inherit the global local_build settings. The EL's\navailability of the testing namespace still wins at build time.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.LocalBuildPlan"
+                        }
+                    ]
+                },
                 "reorg_parent_payload": {
                     "description": "ReorgParentPayload builds on the grandparent (n-2) execution payload\ninstead of the immediate parent: the FCU head block hash and the payload\nattributes' withdrawals are taken from the PARENT slot's payload\nattributes (whose parent is n-2), while every other property comes from\nthe current slot. This is a deliberate parent-payload reorg attempt —\nrejected by mainnet forkchoice, but useful for exercising the reveal /\ninclusion path against a withheld parent.",
                     "type": "boolean"
@@ -1961,6 +2215,44 @@ const docTemplate = `{
                             "$ref": "#/definitions/action_plan.ResolvedTransforms"
                         }
                     ]
+                }
+            }
+        },
+        "action_plan.LocalBuildPlan": {
+            "type": "object",
+            "properties": {
+                "build_el_payload": {
+                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "description": "Enabled forces the local build on or off for the slot.",
+                    "type": "boolean"
+                },
+                "gas_fill_pct": {
+                    "type": "integer"
+                },
+                "max_txs": {
+                    "description": "Pool selection tweaks (tx source txpool).",
+                    "type": "integer"
+                },
+                "ordering": {
+                    "type": "string"
+                },
+                "payload_source": {
+                    "description": "PayloadSource: el | local | local_or_el.",
+                    "type": "string"
+                },
+                "transactions": {
+                    "description": "Transactions is the exact raw transaction list (0x-hex, network\nencoding) the slot's local payload is built from.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tx_source": {
+                    "description": "TxSource: txpool | empty | el_mempool | explicit (explicit requires\nTransactions; a non-empty Transactions list implies explicit).",
+                    "type": "string"
                 }
             }
         },
@@ -2111,6 +2403,14 @@ const docTemplate = `{
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
                     "type": "boolean"
                 },
+                "local": {
+                    "description": "Local is the effective local build (testing_buildBlockV1) instruction,\nmerged from the global local_build/txpool settings and the plan's\nbuild.local overrides. Always non-nil; Enabled=false when the extension\nis off for the slot. The EL's runtime availability of the testing\nnamespace is checked by the builder, not here.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedLocalBuildSettings"
+                        }
+                    ]
+                },
                 "plan_involved": {
                     "description": "PlanInvolved marks decisions where a per-slot plan existed or any\nconsumer was effectively active — i.e. skips worth surfacing.",
                     "type": "boolean"
@@ -2159,6 +2459,51 @@ const docTemplate = `{
                 "total_value_gwei": {
                     "description": "TotalValueGwei, when set, is the absolute total proposer-visible bid\nvalue (before the Gloas execution-payment split).",
                     "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedLocalBuildSettings": {
+            "type": "object",
+            "properties": {
+                "allow_blobs_without_bundle": {
+                    "description": "AllowBlobsWithoutBundle includes blob transactions on ELs whose testing\npath returns no blobs bundle.",
+                    "type": "boolean"
+                },
+                "build_el_payload": {
+                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "forced": {
+                    "description": "Forced marks that the plan enabled the local build although it is\nglobally disabled.",
+                    "type": "boolean"
+                },
+                "gas_fill_pct": {
+                    "type": "integer"
+                },
+                "max_txs": {
+                    "description": "Pool selection parameters (tx source txpool).",
+                    "type": "integer"
+                },
+                "ordering": {
+                    "type": "string"
+                },
+                "payload_source": {
+                    "description": "PayloadSource: el | local | local_or_el.",
+                    "type": "string"
+                },
+                "transactions": {
+                    "description": "Transactions is the explicit list (0x-hex) for the explicit source.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "tx_source": {
+                    "description": "TxSource: txpool | empty | el_mempool | explicit.",
+                    "type": "string"
                 }
             }
         },
@@ -2604,6 +2949,29 @@ const docTemplate = `{
                 }
             }
         },
+        "api.LocalBuildStatusResponse": {
+            "type": "object",
+            "properties": {
+                "availability": {
+                    "$ref": "#/definitions/payload_builder.LocalBuildAvailability"
+                },
+                "build_el_payload": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "payload_source": {
+                    "type": "string"
+                },
+                "tx_source": {
+                    "type": "string"
+                },
+                "txpool": {
+                    "$ref": "#/definitions/api.TxPoolStatus"
+                }
+            }
+        },
         "api.OverviewBalances": {
             "type": "object",
             "properties": {
@@ -2977,6 +3345,67 @@ const docTemplate = `{
                 }
             }
         },
+        "api.TxPoolPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "ordering": {
+                    "type": "string"
+                },
+                "parent_hash": {
+                    "type": "string"
+                },
+                "selection": {
+                    "$ref": "#/definitions/txpool.Summary"
+                }
+            }
+        },
+        "api.TxPoolResponse": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "stats": {
+                    "$ref": "#/definitions/txpool.Stats"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "txs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/txpool.TxSummary"
+                    }
+                }
+            }
+        },
+        "api.TxPoolStatus": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "ingress_path": {
+                    "description": "IngressPath is where generators submit transactions (relative to the\nAPI base URL).",
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
         "api.UpdateActionPlanRequest": {
             "type": "object",
             "properties": {
@@ -3269,6 +3698,79 @@ const docTemplate = `{
                 }
             }
         },
+        "payload_builder.LocalBuildAvailability": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "description": "Available is true when testing_buildBlockV1 answered the probe.",
+                    "type": "boolean"
+                },
+                "blob_bundle": {
+                    "description": "BlobBundle is false on ELs whose testing path returns an empty blobs\nbundle (reth, ethrex).",
+                    "type": "boolean"
+                },
+                "blob_encoding": {
+                    "description": "BlobEncoding is the effective blob transaction encoding for the EL.",
+                    "type": "string"
+                },
+                "checked_at": {
+                    "description": "CheckedAt is the last probe time (zero before the first probe).",
+                    "type": "string"
+                },
+                "configured": {
+                    "description": "Configured is true when an EL RPC client exists (--el-rpc).",
+                    "type": "boolean"
+                },
+                "el_code": {
+                    "description": "ELCode is the EL's engine_getClientVersionV1 code (GE, RH, ...).",
+                    "type": "string"
+                },
+                "enable_hint": {
+                    "description": "EnableHint is the EL flag that exposes the namespace.",
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason explains an unavailable state.",
+                    "type": "string"
+                }
+            }
+        },
+        "payload_builder.LocalBuildInfo": {
+            "type": "object",
+            "properties": {
+                "dropped_by_el": {
+                    "description": "DroppedByEL counts submitted transactions the EL left out of the payload\n(ELs that silently filter instead of failing the call).",
+                    "type": "integer"
+                },
+                "explicit_txs": {
+                    "description": "ExplicitTxs is the explicit list length (tx source explicit).",
+                    "type": "integer"
+                },
+                "inclusion_list_dropped": {
+                    "description": "InclusionListDropped marks that the build only succeeded after the\ninclusion list was dropped (a spec-violating payload, for testing).",
+                    "type": "boolean"
+                },
+                "inclusion_list_txs": {
+                    "description": "InclusionListTxs is how many inclusion-list transactions were prepended.",
+                    "type": "integer"
+                },
+                "selection": {
+                    "description": "Selection is the pool selection summary (tx source txpool).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/txpool.Summary"
+                        }
+                    ]
+                },
+                "submitted_txs": {
+                    "description": "SubmittedTxs is how many transactions were handed to the EL (-1 for the\nel_mempool source, where the EL chooses).",
+                    "type": "integer"
+                },
+                "tx_source": {
+                    "type": "string"
+                }
+            }
+        },
         "slot_results.AttributesSnapshot": {
             "type": "object",
             "properties": {
@@ -3454,6 +3956,10 @@ const docTemplate = `{
                     "description": "0x-hex",
                     "type": "string"
                 },
+                "fallback": {
+                    "description": "Fallback marks that the local payload was wanted but the engine payload\nwas used (local build failed or skipped).",
+                    "type": "boolean"
+                },
                 "fee_recipient": {
                     "type": "string"
                 },
@@ -3462,6 +3968,14 @@ const docTemplate = `{
                 },
                 "gas_used": {
                     "type": "integer"
+                },
+                "local_build": {
+                    "description": "LocalBuild is the local build's outcome for this target when the\nextension was requested for the slot (ready, failed or skipped).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.LocalBuildOutcome"
+                        }
+                    ]
                 },
                 "num_blobs": {
                     "type": "integer"
@@ -3486,6 +4000,10 @@ const docTemplate = `{
                 },
                 "skip_reason": {
                     "description": "action_plan.BuildSkipReason* when skipped",
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source records which build produced the payload feeding the consumers:\nel (engine API) or local (testing_buildBlockV1). Empty pre-ready.",
                     "type": "string"
                 },
                 "state_root": {
@@ -3553,6 +4071,64 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value_wei": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.LocalBuildOutcome": {
+            "type": "object",
+            "properties": {
+                "artifact_idx": {
+                    "description": "ArtifactIdx is the per-slot payload artifact index of the local payload.",
+                    "type": "integer"
+                },
+                "at": {
+                    "type": "string"
+                },
+                "block_hash": {
+                    "type": "string"
+                },
+                "block_value_wei": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "info": {
+                    "description": "Info is the transaction assembly detail (selection summary, explicit\nlist size, inclusion-list handling, EL drops).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/payload_builder.LocalBuildInfo"
+                        }
+                    ]
+                },
+                "num_blobs": {
+                    "type": "integer"
+                },
+                "num_transactions": {
+                    "type": "integer"
+                },
+                "payload_source": {
+                    "type": "string"
+                },
+                "selected": {
+                    "description": "Selected marks that the local payload fed the consumers.",
+                    "type": "boolean"
+                },
+                "skip_reason": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "ready | failed | skipped",
+                    "type": "string"
+                },
+                "tx_source": {
                     "type": "string"
                 }
             }
@@ -3694,6 +4270,162 @@ const docTemplate = `{
                 "SubmissionStatusAccepted",
                 "SubmissionStatusFailed"
             ]
+        },
+        "txpool.Stats": {
+            "type": "object",
+            "properties": {
+                "admitted": {
+                    "type": "integer"
+                },
+                "blob_txs": {
+                    "type": "integer"
+                },
+                "blobs": {
+                    "type": "integer"
+                },
+                "bytes": {
+                    "type": "integer"
+                },
+                "cleared": {
+                    "type": "integer"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "evicted_included_by_other": {
+                    "type": "integer"
+                },
+                "evicted_included_by_us": {
+                    "type": "integer"
+                },
+                "evicted_nonce_too_low": {
+                    "type": "integer"
+                },
+                "evicted_ttl": {
+                    "type": "integer"
+                },
+                "gas_sum": {
+                    "type": "integer"
+                },
+                "last_admitted_at": {
+                    "type": "string"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "rejected": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "removed": {
+                    "type": "integer"
+                },
+                "replaced": {
+                    "type": "integer"
+                },
+                "senders": {
+                    "type": "integer"
+                },
+                "value_wei": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.Summary": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "string"
+                },
+                "blob_base_fee": {
+                    "type": "string"
+                },
+                "blobs": {
+                    "type": "integer"
+                },
+                "gas_budget": {
+                    "type": "integer"
+                },
+                "gas_sum": {
+                    "type": "integer"
+                },
+                "hashes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "inclusion_list_txs": {
+                    "type": "integer"
+                },
+                "pool_size": {
+                    "type": "integer"
+                },
+                "selected": {
+                    "type": "integer"
+                },
+                "skipped": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
+        "txpool.TxSummary": {
+            "type": "object",
+            "properties": {
+                "arrived": {
+                    "type": "string"
+                },
+                "arrived_slot": {
+                    "type": "integer"
+                },
+                "blobs": {
+                    "type": "integer"
+                },
+                "gas": {
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "max_fee_per_blob_gas": {
+                    "type": "string"
+                },
+                "max_fee_per_gas": {
+                    "type": "string"
+                },
+                "max_priority_fee_per_gas": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "integer"
+                },
+                "to": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "integer"
+                },
+                "value_wei": {
+                    "type": "string"
+                }
+            }
         }
     }
 }`

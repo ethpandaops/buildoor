@@ -235,6 +235,77 @@ npm run clean
    bid-gossip-legal gas limit (EL parent gas limit stepped toward the
    proposer target).
 
+0d. **Local build + owned transaction pool** — opt-in extensions, both off by
+   default and both riding on the EL JSON-RPC client (`--el-rpc`).
+   - **Local build** (`payload_builder/localbuild.go`, `rpc/execution/testing_build.go`):
+     an ADDITIONAL payload per build target through the EL's `testing_buildBlockV1`
+     (execution-apis `testing` namespace — public RPC port, disabled by default on
+     every client, never on authrpc). It starts once the engine build's
+     forkchoiceUpdated pinned the EL head to the parent (geth and ethrex require
+     `parentHash == head`) and runs during the engine build's wait; without an
+     engine build (`local_build.build_el_payload=false` + payload source `local`) a
+     head-only FCU is issued first. `local_build.payload_source` decides which
+     payload feeds `PayloadReady` (bids/reveals): `el` (default; the local payload
+     is an inspection-only SHADOW), `local` (strict — no payload when the local
+     build fails), `local_or_el` (fallback, recorded). Tx source:
+     `txpool` | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     (action plan `build.local.transactions`, validated at plan-update time). FOCIL
+     inclusion-list txs are prepended; a failure with them retries once without
+     (flagged `inclusion_list_dropped`). Consumers still receive exactly one
+     payload per target; `Payload.Source`/`Payload.Local` and the `LocalBuildEvent`
+     (`SubscribeLocalBuild`) carry the rest. Every EL either fails the whole call on
+     one invalid tx (geth, ethrex), drops + post-checks (nethermind, besu) or
+     silently filters (erigon → `dropped_by_el` recorded), hence the strict
+     state-aware selection below.
+   - **Enabling the namespace under kurtosis**: the ethereum-package appends
+     `el_extra_params` AFTER its own module flag. geth, besu and erigon take the
+     repeated flag (last wins), nethermind fails ("expects a single argument but
+     2 were provided") — use `--JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing`
+     and point `--el-rpc` at 8547 (what `.github/e2e/kurtosis.yaml` does) — and
+     reth fails ("cannot be used multiple times") with no workaround. The local
+     devnet therefore runs the buildoor-under-test participant on geth.
+   - **Availability gating**: `execution.Client.ProbeTestingAPI` calls the method
+     with garbage params — `-32601` = unavailable, anything else = available —
+     at startup, every 5 min (with the EL client version refresh) and via
+     `POST /api/buildoor/local-build/probe`. The builder service implements
+     `config.SettingGuard`: `local_build.enabled=true` is refused (400) while
+     unavailable, `txpool.enabled=true` without `--el-rpc`. At build time
+     availability wins over plans (skip reason `unavailable`, engine payload used).
+     The EL identity (`engine_getClientVersionV1` code) selects the blob tx
+     encoding (`network` = sidecar carried: geth/besu/nethermind; `canonical`:
+     reth/ethrex, whose testing path returns NO blobs bundle → blob txs skipped as
+     `blob_unsupported` unless `local_build.allow_blobs_without_bundle`).
+   - **Transaction pool** (`pkg/txpool/`): owned mempool, runtime-toggleable
+     (`txpool.enabled`, content kept while off). Admission is STATELESS (decode,
+     chain id, signature, sidecar required for blob txs, size, caps, same-nonce
+     replacement needs a 10% fee bump; duplicates answer `already known` — the
+     substring spamoor treats as success). Nonce/balance/fee floors are checked at
+     SELECTION time against the parent state (`Select`: batched
+     `eth_getTransactionCount`/`eth_getBalance` at the parent hash, next base fee
+     from the parent header, `eth_blobBaseFee`; per-sender contiguous runs merged
+     `fifo` | `tip` | `random` under gas/blob/count budgets). The eviction loop
+     follows beacon head + payload-available events: included txs are dropped
+     (`included_by_us` vs `included_by_other` via `NoteBuiltBlock`), touched
+     senders' passed nonces pruned, the optional TTL applied (`txpool.tx_ttl_slots`, default 0 = never: expiring queued txs leaves nonce gaps that stall the sender until the generator rebroadcasts). Ingress (`pkg/txpool/rpc/`):
+     JSON-RPC 2.0 (single + batch) at `POST /rpc` on the API port, unauthenticated
+     like the Builder API routes (optional bearer `txpool.auth_token`):
+     `eth_sendRawTransaction` (network encoding), `eth_chainId`, `net_version`,
+     `web3_clientVersion`, pool-aware `eth_getTransactionCount(..,"pending")`,
+     `eth_getTransactionByHash`, `txpool_status/content` locally; read-only
+     `eth_*`/`net_*`/`web3_*` proxied to `--el-rpc`; everything else `-32601`.
+     buildoor must be the generator's ONLY host (`-h "name(buildoor)http://…/rpc"`):
+     spamoor fans every submission out to all its hosts, so an additional EL host
+     leaks the transactions into the EL mempool (visible as
+     `evicted_included_by_other` on the pool stats).
+   - Per-slot: action plan `build.local` (`enabled`, `payload_source`, `tx_source`,
+     `transactions`, `build_el_payload`, `max_txs`, `gas_fill_pct`, `ordering`)
+     resolves into `FrozenPlan.Build.Local` (rules carry it too). Slot results:
+     `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
+     artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),
+     `txpool_stats` (on pool change), `service_status` gains
+     `local_build_*`/`txpool_*`. WebUI: Mempool tab, Local Build dashboard card,
+     plan/rule editor section.
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
@@ -550,6 +621,14 @@ Key config sections:
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
+- **Local build / tx pool**: `--local-build-enabled`, `--local-build-payload-source`
+  (el | local | local_or_el), `--local-build-tx-source` (txpool | empty |
+  el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
+  `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
+  `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,
+  `--txpool-gas-fill-pct`, `--txpool-max-txs`, `--txpool-max-txs-per-sender`,
+  `--txpool-tx-ttl-slots`, `--txpool-forward-to-el`. Both require `--el-rpc`;
+  mutable via `local_build.*` / `txpool.*` settings keys
 - **State persistence**: `--state-db <path>` (optional SQLite; see below)
 
 ### Settings Service & State Persistence (`--state-db`)
@@ -661,6 +740,8 @@ buildoor/
 │   │                      # slot clock, won-block view, won_blocks migration) +
 │   │                      # ArtifactStore (raw SSZ payload/bids/envelope, async
 │   │                      # batched writer into the slot_artifacts table)
+│   ├── txpool/            # owned transaction pool (stateless admission, state-aware
+│   │   │                  # selection, head-driven eviction) + rpc/ JSON-RPC ingress
 │   ├── builder/           # Core payload building logic
 │   ├── builderapi/        # Builder API host (route table, shared stores, stats)
 │   │   ├── legacy/        # pre-Gloas dialect (Electra/Fulu): registerValidators,
@@ -780,6 +861,16 @@ To make frontend changes:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
   JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
   is JSON-only metadata
+- `GET /api/buildoor/local-build/status` - Probed `testing_buildBlockV1`
+  availability (+ per-EL enable hint, blob handling), effective local build
+  settings, pool availability/toggle. `POST /api/buildoor/local-build/probe`
+  re-probes now (auth + audit)
+- `GET /api/buildoor/txpool?offset=&limit=&sender=&sort=` - Pool stats (pending,
+  senders, gas sum, value, blobs, lifetime counters) + a page of queued txs;
+  `GET /api/buildoor/txpool/preview` dry-runs the selection on the current head;
+  `DELETE /api/buildoor/txpool` / `DELETE /api/buildoor/txpool/{hash}` drop
+  (auth + audit)
+- `POST /rpc` - Transaction pool JSON-RPC ingress (NOT under `/api`; see 0d)
 - `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
   arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
   client name into fixed-width time buckets from the slot start (default
@@ -816,6 +907,12 @@ To make frontend changes:
 - `action_plan_rules_updated` - Fired on committed recurring-rule mutations; data
   is the authoritative `{rules: [...]}` set. The plan grid refetches its range
   because rules change the effective plan of every uncovered slot
+- `local_build` - One build target's local build outcome (slot-scoped, replayed):
+  status/skip reason/error, tx + payload source, whether it fed the bids or was
+  a fallback, headline properties of the local and the EL payload, the
+  selection summary
+- `txpool_stats` - Pool aggregates + counters, sent at connect and whenever the
+  pool's version changed (checked once per second)
 - `slot_result_updated` - Fired when a slot's result record changes (coalesced to
   ~1/s per slot); data is the full SlotResult. SSE is an invalidation channel —
   the REST range endpoints are the source of truth

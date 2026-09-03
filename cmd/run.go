@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -30,10 +31,13 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/txpool"
+	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/wallet"
 	"github.com/ethpandaops/buildoor/pkg/webui"
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
+	buildversion "github.com/ethpandaops/buildoor/version"
 )
 
 var runCmd = &cobra.Command{
@@ -100,22 +104,26 @@ and begins building blocks according to configuration.`,
 
 		// Initialize RPC client and wallet when prerequisites are available.
 		// This makes lifecycle management available for on-the-fly toggling
-		// even when not enabled at startup via --lifecycle.
+		// even when not enabled at startup via --lifecycle. The EL RPC client
+		// also serves the local build extension (testing_buildBlockV1) and the
+		// transaction pool, so it is opened whenever --el-rpc is set.
 		lifecycleAvailable := cfg.ELRPC != "" && cfg.WalletPrivkey != ""
 
 		if cfg.LifecycleEnabled && !lifecycleAvailable {
 			return fmt.Errorf("--el-rpc and --wallet-privkey are required when lifecycle is enabled")
 		}
 
-		if lifecycleAvailable {
-			logger.Info("Connecting to EL RPC for lifecycle management...")
+		if cfg.ELRPC != "" {
+			logger.Info("Connecting to EL RPC...")
 
 			rpcClient, err = execution.NewClient(ctx, cfg.ELRPC, logger)
 			if err != nil {
 				return fmt.Errorf("failed to connect to EL RPC: %w", err)
 			}
 			defer rpcClient.Close()
+		}
 
+		if lifecycleAvailable {
 			w, err = wallet.NewWallet(cfg.WalletPrivkey, rpcClient, logger)
 			if err != nil {
 				return fmt.Errorf("invalid wallet key: %w", err)
@@ -282,6 +290,34 @@ and begins building blocks according to configuration.`,
 		if err != nil {
 			return fmt.Errorf("failed to initialize builder: %w", err)
 		}
+
+		// 9a. Local build extension + owned transaction pool: both ride on the
+		// EL JSON-RPC client. The pool object exists whenever --el-rpc is set so
+		// it can be toggled at runtime; the local build's availability is
+		// probed against the EL (the testing namespace is disabled by default
+		// on every client) and gates the enable settings.
+		var (
+			txPool    *txpool.Pool
+			txIngress http.Handler
+		)
+
+		if rpcClient != nil {
+			builderSvc.SetLocalBuildClient(rpcClient)
+
+			txPool = txpool.NewPool(cfg, rpcClient, chainSvc, clClient, logger)
+			if err := txPool.Start(ctx); err != nil {
+				return fmt.Errorf("failed to start transaction pool: %w", err)
+			}
+			defer txPool.Stop() //nolint:errcheck // cleanup
+
+			builderSvc.SetTxPool(txPool)
+
+			txIngress = txpoolrpc.NewServer(txPool, rpcClient, cfg.TxPool.AuthToken, buildversion.GetBuildVersion(), logger)
+		}
+
+		// Setting writes that enable the local build or the pool are vetoed
+		// while their EL dependency is missing.
+		settingsSvc.AddGuard(builderSvc)
 
 		if builderAPIAvailable {
 			// Pre-Gloas proposer settings resolve from Builder API validator
@@ -452,6 +488,10 @@ and begins building blocks according to configuration.`,
 				lifecycleMgr.Reconcile()
 			}
 
+			if txPool != nil {
+				txPool.SetEnabled(cfg.TxPool.Enabled)
+			}
+
 			// The derived key set follows the target/derivation settings.
 			keyRegistry.Refresh()
 		})
@@ -471,7 +511,7 @@ and begins building blocks according to configuration.`,
 				AuthProviderURL: cfg.AuthProviderURL,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
-			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker)
+			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txIngress)
 
 			// Connect Builder API server to event stream (if both are enabled)
 			if builderAPISrv != nil && apiHandler != nil {

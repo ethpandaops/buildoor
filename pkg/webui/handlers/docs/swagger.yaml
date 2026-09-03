@@ -62,6 +62,13 @@ definitions:
           grandparent_empty) -> mode (auto, always, never). Absent keys inherit
           the global policy.
         type: object
+      local:
+        allOf:
+        - $ref: '#/definitions/action_plan.LocalBuildPlan'
+        description: |-
+          Local overrides the local build extension (testing_buildBlockV1) for
+          this slot; absent = inherit the global local_build settings. The EL's
+          availability of the testing namespace still wins at build time.
       reorg_parent_payload:
         description: |-
           ReorgParentPayload builds on the grandparent (n-2) execution payload
@@ -158,6 +165,38 @@ definitions:
         description: |-
           Transforms carries the effective jq transform expressions (empty when no
           transform plan applies). Nil only when no plan expression is set.
+    type: object
+  action_plan.LocalBuildPlan:
+    properties:
+      build_el_payload:
+        description: BuildELPayload keeps the engine build when the payload source
+          is local.
+        type: boolean
+      enabled:
+        description: Enabled forces the local build on or off for the slot.
+        type: boolean
+      gas_fill_pct:
+        type: integer
+      max_txs:
+        description: Pool selection tweaks (tx source txpool).
+        type: integer
+      ordering:
+        type: string
+      payload_source:
+        description: 'PayloadSource: el | local | local_or_el.'
+        type: string
+      transactions:
+        description: |-
+          Transactions is the exact raw transaction list (0x-hex, network
+          encoding) the slot's local payload is built from.
+        items:
+          type: string
+        type: array
+      tx_source:
+        description: |-
+          TxSource: txpool | empty | el_mempool | explicit (explicit requires
+          Transactions; a non-empty Transactions list implies explicit).
+        type: string
     type: object
   action_plan.Mode:
     enum:
@@ -283,6 +322,15 @@ definitions:
           Forced marks builds the plan pushed past the schedule (they never
           consume the next_n budget).
         type: boolean
+      local:
+        allOf:
+        - $ref: '#/definitions/action_plan.ResolvedLocalBuildSettings'
+        description: |-
+          Local is the effective local build (testing_buildBlockV1) instruction,
+          merged from the global local_build/txpool settings and the plan's
+          build.local overrides. Always non-nil; Enabled=false when the extension
+          is off for the slot. The EL's runtime availability of the testing
+          namespace is checked by the builder, not here.
       plan_involved:
         description: |-
           PlanInvolved marks decisions where a per-slot plan existed or any
@@ -339,6 +387,43 @@ definitions:
           TotalValueGwei, when set, is the absolute total proposer-visible bid
           value (before the Gloas execution-payment split).
         type: integer
+    type: object
+  action_plan.ResolvedLocalBuildSettings:
+    properties:
+      allow_blobs_without_bundle:
+        description: |-
+          AllowBlobsWithoutBundle includes blob transactions on ELs whose testing
+          path returns no blobs bundle.
+        type: boolean
+      build_el_payload:
+        description: BuildELPayload keeps the engine build when the payload source
+          is local.
+        type: boolean
+      enabled:
+        type: boolean
+      forced:
+        description: |-
+          Forced marks that the plan enabled the local build although it is
+          globally disabled.
+        type: boolean
+      gas_fill_pct:
+        type: integer
+      max_txs:
+        description: Pool selection parameters (tx source txpool).
+        type: integer
+      ordering:
+        type: string
+      payload_source:
+        description: 'PayloadSource: el | local | local_or_el.'
+        type: string
+      transactions:
+        description: Transactions is the explicit list (0x-hex) for the explicit source.
+        items:
+          type: string
+        type: array
+      tx_source:
+        description: 'TxSource: txpool | empty | el_mempool | explicit.'
+        type: string
     type: object
   action_plan.ResolvedRevealSettings:
     properties:
@@ -656,6 +741,21 @@ definitions:
       withdrawable_epoch:
         type: integer
     type: object
+  api.LocalBuildStatusResponse:
+    properties:
+      availability:
+        $ref: '#/definitions/payload_builder.LocalBuildAvailability'
+      build_el_payload:
+        type: boolean
+      enabled:
+        type: boolean
+      payload_source:
+        type: string
+      tx_source:
+        type: string
+      txpool:
+        $ref: '#/definitions/api.TxPoolStatus'
+    type: object
   api.OverviewBalances:
     properties:
       cl_balance_gwei:
@@ -913,6 +1013,48 @@ definitions:
       target:
         type: string
     type: object
+  api.TxPoolPreviewResponse:
+    properties:
+      gas_limit:
+        type: integer
+      max_blobs:
+        type: integer
+      ordering:
+        type: string
+      parent_hash:
+        type: string
+      selection:
+        $ref: '#/definitions/txpool.Summary'
+    type: object
+  api.TxPoolResponse:
+    properties:
+      limit:
+        type: integer
+      offset:
+        type: integer
+      stats:
+        $ref: '#/definitions/txpool.Stats'
+      total:
+        type: integer
+      txs:
+        items:
+          $ref: '#/definitions/txpool.TxSummary'
+        type: array
+    type: object
+  api.TxPoolStatus:
+    properties:
+      available:
+        type: boolean
+      enabled:
+        type: boolean
+      ingress_path:
+        description: |-
+          IngressPath is where generators submit transactions (relative to the
+          API base URL).
+        type: string
+      reason:
+        type: string
+    type: object
   api.UpdateActionPlanRequest:
     properties:
       updates:
@@ -1118,6 +1260,67 @@ definitions:
       value_wei:
         type: string
     type: object
+  payload_builder.LocalBuildAvailability:
+    properties:
+      available:
+        description: Available is true when testing_buildBlockV1 answered the probe.
+        type: boolean
+      blob_bundle:
+        description: |-
+          BlobBundle is false on ELs whose testing path returns an empty blobs
+          bundle (reth, ethrex).
+        type: boolean
+      blob_encoding:
+        description: BlobEncoding is the effective blob transaction encoding for the
+          EL.
+        type: string
+      checked_at:
+        description: CheckedAt is the last probe time (zero before the first probe).
+        type: string
+      configured:
+        description: Configured is true when an EL RPC client exists (--el-rpc).
+        type: boolean
+      el_code:
+        description: ELCode is the EL's engine_getClientVersionV1 code (GE, RH, ...).
+        type: string
+      enable_hint:
+        description: EnableHint is the EL flag that exposes the namespace.
+        type: string
+      reason:
+        description: Reason explains an unavailable state.
+        type: string
+    type: object
+  payload_builder.LocalBuildInfo:
+    properties:
+      dropped_by_el:
+        description: |-
+          DroppedByEL counts submitted transactions the EL left out of the payload
+          (ELs that silently filter instead of failing the call).
+        type: integer
+      explicit_txs:
+        description: ExplicitTxs is the explicit list length (tx source explicit).
+        type: integer
+      inclusion_list_dropped:
+        description: |-
+          InclusionListDropped marks that the build only succeeded after the
+          inclusion list was dropped (a spec-violating payload, for testing).
+        type: boolean
+      inclusion_list_txs:
+        description: InclusionListTxs is how many inclusion-list transactions were
+          prepended.
+        type: integer
+      selection:
+        allOf:
+        - $ref: '#/definitions/txpool.Summary'
+        description: Selection is the pool selection summary (tx source txpool).
+      submitted_txs:
+        description: |-
+          SubmittedTxs is how many transactions were handed to the EL (-1 for the
+          el_mempool source, where the EL chooses).
+        type: integer
+      tx_source:
+        type: string
+    type: object
   slot_results.AttributesSnapshot:
     properties:
       num_inclusion_list_txs:
@@ -1265,12 +1468,23 @@ definitions:
       extra_data:
         description: 0x-hex
         type: string
+      fallback:
+        description: |-
+          Fallback marks that the local payload was wanted but the engine payload
+          was used (local build failed or skipped).
+        type: boolean
       fee_recipient:
         type: string
       gas_limit:
         type: integer
       gas_used:
         type: integer
+      local_build:
+        allOf:
+        - $ref: '#/definitions/slot_results.LocalBuildOutcome'
+        description: |-
+          LocalBuild is the local build's outcome for this target when the
+          extension was requested for the slot (ready, failed or skipped).
       num_blobs:
         type: integer
       num_execution_requests:
@@ -1287,6 +1501,11 @@ definitions:
         type: string
       skip_reason:
         description: action_plan.BuildSkipReason* when skipped
+        type: string
+      source:
+        description: |-
+          Source records which build produced the payload feeding the consumers:
+          el (engine API) or local (testing_buildBlockV1). Empty pre-ready.
         type: string
       state_root:
         type: string
@@ -1339,6 +1558,47 @@ definitions:
       value_eth:
         type: string
       value_wei:
+        type: string
+    type: object
+  slot_results.LocalBuildOutcome:
+    properties:
+      artifact_idx:
+        description: ArtifactIdx is the per-slot payload artifact index of the local
+          payload.
+        type: integer
+      at:
+        type: string
+      block_hash:
+        type: string
+      block_value_wei:
+        type: string
+      error:
+        type: string
+      gas_limit:
+        type: integer
+      gas_used:
+        type: integer
+      info:
+        allOf:
+        - $ref: '#/definitions/payload_builder.LocalBuildInfo'
+        description: |-
+          Info is the transaction assembly detail (selection summary, explicit
+          list size, inclusion-list handling, EL drops).
+      num_blobs:
+        type: integer
+      num_transactions:
+        type: integer
+      payload_source:
+        type: string
+      selected:
+        description: Selected marks that the local payload fed the consumers.
+        type: boolean
+      skip_reason:
+        type: string
+      status:
+        description: ready | failed | skipped
+        type: string
+      tx_source:
         type: string
     type: object
   slot_results.PayloadStatus:
@@ -1443,6 +1703,109 @@ definitions:
     - SubmissionStatusReceived
     - SubmissionStatusAccepted
     - SubmissionStatusFailed
+  txpool.Stats:
+    properties:
+      admitted:
+        type: integer
+      blob_txs:
+        type: integer
+      blobs:
+        type: integer
+      bytes:
+        type: integer
+      cleared:
+        type: integer
+      enabled:
+        type: boolean
+      evicted_included_by_other:
+        type: integer
+      evicted_included_by_us:
+        type: integer
+      evicted_nonce_too_low:
+        type: integer
+      evicted_ttl:
+        type: integer
+      gas_sum:
+        type: integer
+      last_admitted_at:
+        type: string
+      pending:
+        type: integer
+      rejected:
+        additionalProperties:
+          type: integer
+        type: object
+      removed:
+        type: integer
+      replaced:
+        type: integer
+      senders:
+        type: integer
+      value_wei:
+        type: string
+      version:
+        type: integer
+    type: object
+  txpool.Summary:
+    properties:
+      base_fee:
+        type: string
+      blob_base_fee:
+        type: string
+      blobs:
+        type: integer
+      gas_budget:
+        type: integer
+      gas_sum:
+        type: integer
+      hashes:
+        items:
+          type: string
+        type: array
+      inclusion_list_txs:
+        type: integer
+      pool_size:
+        type: integer
+      selected:
+        type: integer
+      skipped:
+        additionalProperties:
+          type: integer
+        type: object
+    type: object
+  txpool.TxSummary:
+    properties:
+      arrived:
+        type: string
+      arrived_slot:
+        type: integer
+      blobs:
+        type: integer
+      gas:
+        type: integer
+      hash:
+        type: string
+      max_fee_per_blob_gas:
+        type: string
+      max_fee_per_gas:
+        type: string
+      max_priority_fee_per_gas:
+        type: string
+      nonce:
+        type: integer
+      sender:
+        type: string
+      seq:
+        type: integer
+      size:
+        type: integer
+      to:
+        type: string
+      type:
+        type: integer
+      value_wei:
+        type: string
+    type: object
 info:
   contact: {}
 paths:
@@ -2007,6 +2370,46 @@ paths:
       summary: Per-name head-vote arrival heatmap for a slot
       tags:
       - Stats
+  /api/buildoor/local-build/probe:
+    post:
+      description: |-
+        Probes the EL RPC for the testing namespace now (instead of
+        waiting for the periodic check) and returns the resulting
+        availability. Requires authentication; audited.
+      operationId: probeLocalBuild
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/payload_builder.LocalBuildAvailability'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Re-probe the EL for testing_buildBlockV1
+      tags:
+      - LocalBuild
+  /api/buildoor/local-build/status:
+    get:
+      description: |-
+        Returns whether the EL exposes testing_buildBlockV1 (probed),
+        the per-EL blob handling, the effective local build settings
+        and the transaction pool's availability and toggle state.
+      operationId: getLocalBuildStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.LocalBuildStatusResponse'
+      summary: Get the local build (testing_buildBlockV1) status
+      tags:
+      - LocalBuild
   /api/buildoor/overview:
     get:
       description: |-
@@ -2312,6 +2715,144 @@ paths:
       summary: Get one of a slot's built candidate payloads
       tags:
       - ActionPlan
+  /api/buildoor/txpool:
+    delete:
+      description: Clears the transaction pool. Requires authentication; audited.
+      operationId: clearTxPool
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: dropped count
+          schema:
+            additionalProperties:
+              type: integer
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Pool not configured
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Drop every queued transaction
+      tags:
+      - LocalBuild
+    get:
+      description: |-
+        Returns the pool's aggregate stats (pending count, senders, gas
+        sum, value, blobs, lifetime counters) and a page of queued
+        transactions.
+      operationId: getTxPool
+      parameters:
+      - description: Offset (default 0)
+        in: query
+        name: offset
+        type: integer
+      - description: Limit (default 50, max 500)
+        in: query
+        name: limit
+        type: integer
+      - description: Filter by sender address
+        in: query
+        name: sender
+        type: string
+      - description: arrival (default) | sender | tip
+        in: query
+        name: sort
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TxPoolResponse'
+        "404":
+          description: Pool not configured
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List the transaction pool content
+      tags:
+      - LocalBuild
+  /api/buildoor/txpool/{hash}:
+    delete:
+      description: |-
+        Removes the transaction with the given hash from the pool.
+        Requires authentication; audited.
+      operationId: dropTxPoolTx
+      parameters:
+      - description: Transaction hash
+        in: path
+        name: hash
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: removed
+          schema:
+            additionalProperties:
+              type: boolean
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Drop one queued transaction
+      tags:
+      - LocalBuild
+  /api/buildoor/txpool/preview:
+    get:
+      description: |-
+        Runs the pool selection against the current head with the
+        live settings and returns what a local block built now would
+        contain (count, gas sum, skipped-by-reason), without building.
+      operationId: getTxPoolPreview
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TxPoolPreviewResponse'
+        "404":
+          description: Pool not configured or no head
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Selection failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Preview the next local block's selection
+      tags:
+      - LocalBuild
   /api/buildoor/validators:
     get:
       description: Returns the list of validators registered via the Builder API (fee

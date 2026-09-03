@@ -53,6 +53,19 @@ func DefaultConfig() *Config {
 			Parallel:                  true,
 			AutoWeakHeadPct:           40,
 		},
+		LocalBuild: LocalBuildConfig{
+			PayloadSource:  PayloadSourceEL,
+			TxSource:       TxSourceTxPool,
+			BuildELPayload: true,
+			BlobEncoding:   BlobEncodingAuto,
+		},
+		TxPool: TxPoolConfig{
+			Ordering:        TxOrderingFIFO,
+			GasFillPct:      100,
+			MaxPoolTxs:      10000,
+			MaxTxsPerSender: 256,
+			TxTTLSlots:      0, // never: expiring queued txs leaves nonce gaps behind (see TxPoolConfig)
+		},
 		Reveal: RevealConfig{
 			Enabled: true,
 			// Reveal as soon as the payment quorum is reached, falling back

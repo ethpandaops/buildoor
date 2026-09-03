@@ -42,6 +42,21 @@ const (
 	KeyBuildAutoWeakHeadPct           = "build.auto_weak_head_pct"
 	KeyBuildEnforceBidGasLimit        = "build.enforce_bid_gas_limit"
 
+	KeyLocalBuildEnabled          = "local_build.enabled"
+	KeyLocalBuildPayloadSource    = "local_build.payload_source"
+	KeyLocalBuildTxSource         = "local_build.tx_source"
+	KeyLocalBuildBuildELPayload   = "local_build.build_el_payload"
+	KeyLocalBuildAllowBlobsNoBund = "local_build.allow_blobs_without_bundle"
+
+	KeyTxPoolEnabled         = "txpool.enabled"
+	KeyTxPoolOrdering        = "txpool.ordering"
+	KeyTxPoolMaxTxsPerBlock  = "txpool.max_txs_per_block"
+	KeyTxPoolGasFillPct      = "txpool.gas_fill_pct"
+	KeyTxPoolMaxPoolTxs      = "txpool.max_pool_txs"
+	KeyTxPoolMaxTxsPerSender = "txpool.max_txs_per_sender"
+	KeyTxPoolTxTTLSlots      = "txpool.tx_ttl_slots"
+	KeyTxPoolForwardToEL     = "txpool.forward_to_el"
+
 	KeyPayloadBuildTime              = "payload_build_time"
 	KeyExtraData                     = "extra_data"
 	KeyBuilderAPISubsidy             = "builder_api.block_value_subsidy_gwei"

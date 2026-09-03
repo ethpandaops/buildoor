@@ -48,6 +48,7 @@ export function getEventTypeClass(type: string): string {
   const classes: Record<string, string> = {
     // Errors → wider red block.
     'payload_build_failed': 'event-error',
+    'local_build_failed': 'event-error',
     'bid_failed': 'event-error',
     'reveal_failed': 'event-error',
     'lifecycle_error': 'event-error',
@@ -60,6 +61,7 @@ export function getEventTypeClass(type: string): string {
     'payload_attributes': 'event-color-payload-attributes', // payload-attributes dot
     'payload_build_started': 'event-color-build',          // build-delay line
     'payload_ready': 'event-color-build',                  // payload-created dot
+    'local_build': 'event-color-build',                    // local build outcome
     'bid_submitted': 'event-color-bid',                    // bid-submitted dot
     'bid_event': 'event-color-external-bid',               // external-bid dot
     'payload_available': 'event-color-payload-available',  // payload-available dot
@@ -86,6 +88,8 @@ const EVENT_TYPE_CATEGORY: Record<string, string> = {
   payload_attributes: 'attributes',
   payload_build_started: 'build',
   payload_ready: 'build',
+  local_build: 'build',
+  local_build_failed: 'error',
   bid_submitted: 'bid',
   bid_event: 'external_bid',
   payload_available: 'available',

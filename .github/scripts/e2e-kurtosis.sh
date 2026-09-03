@@ -16,6 +16,12 @@ readonly POSTGLOAS_TIMEOUT_SECONDS="${POSTGLOAS_TIMEOUT_SECONDS:-600}"
 readonly GLOAS_SLOT=8
 readonly CL_SERVICE="${CL_SERVICE:-cl-1-lodestar-nethermind}"
 readonly EL_SERVICE="${EL_SERVICE:-el-1-nethermind-lodestar}"
+# Phase 4 feeds buildoor's transaction pool with a one-shot spamoor on the
+# enclave's docker network; the account is the ethereum-package's prefunded
+# key #1 (#0 is buildoor's lifecycle wallet).
+readonly SPAMOOR_IMAGE="${SPAMOOR_IMAGE:-ethpandaops/spamoor:master}"
+readonly SPAMOOR_PRIVKEY="${SPAMOOR_PRIVKEY:-39725efee3fb28614de3bacaffe4cc4bd8c436257e2c8bb887c4b5c4be45e76d}"
+readonly SPAMOOR_TX_COUNT="${SPAMOOR_TX_COUNT:-200}"
 
 # Upper bound for "any later slot" win filters.
 readonly MAX_SLOT=1000000000
@@ -283,5 +289,72 @@ until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/builder-pref
   sleep 2
 done
 echo "Builder preferences present"
+
+# Phase 4: the local build extension. buildoor builds an additional payload
+# through the EL's testing_buildBlockV1 from its own transaction pool, and
+# with payload source "local" that payload is what the p2p bids commit to —
+# so a won slot contains exactly the transactions spamoor handed to
+# buildoor's /rpc ingress, none of which ever entered the EL mempool.
+echo "== Phase 4: post-Gloas p2p bidding from the local transaction pool"
+
+local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/local-build/status")
+printf '%s\n' "$local_status" >"$ARTIFACT_DIR/local-build-status.json"
+if ! jq -e '.availability.available == true' <<<"$local_status" >/dev/null; then
+  echo "testing_buildBlockV1 is not available on the EL: $(jq -r '.availability.reason' <<<"$local_status")" >&2
+  exit 1
+fi
+jq -e '.txpool.available == true' <<<"$local_status" >/dev/null
+
+update_settings '{"epbs_enabled": true, "builder_api_enabled": false, "txpool.enabled": true, "local_build.enabled": true, "local_build.payload_source": "local", "local_build.tx_source": "txpool"}'
+local_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
+
+# Fill the pool. buildoor's /rpc is spamoor's ONLY host: it proxies the
+# read-only calls spamoor follows the chain with, and any additional host
+# would receive every transaction too (spamoor fans submissions out to all
+# hosts), leaking them into the EL mempool.
+docker run --rm --network "kt-$ENCLAVE_NAME" "$SPAMOOR_IMAGE" eoatx \
+  -h "name(buildoor)http://buildoor:8080/rpc" \
+  -p "$SPAMOOR_PRIVKEY" \
+  --count "$SPAMOOR_TX_COUNT" --throughput 20 --max-pending 100 --max-wallets 10 \
+  --timeout 10m >"$ARTIFACT_DIR/spamoor.log" 2>&1 &
+spamoor_pid=$!
+
+pool_deadline=$((SECONDS + 120))
+until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1" \
+  | tee "$ARTIFACT_DIR/txpool.json" | jq -e '.stats.admitted > 0' >/dev/null; do
+  if (( SECONDS >= pool_deadline )); then
+    echo "No transactions reached the pool ingress within 120s" >&2
+    cat "$ARTIFACT_DIR/spamoor.log" >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+echo "Transaction pool is being fed"
+
+local_block=$(wait_for_win post-gloas-local-pool epbs "$local_from" "$MAX_SLOT" "$POSTGLOAS_TIMEOUT_SECONDS")
+local_slot=$(jq -r '.slot' <<<"$local_block")
+verify_block post-gloas-local-pool "$local_block"
+# The won payload came from the local build (testing_buildBlockV1) fed by the
+# pool, carried at least one pool transaction, and the pool records the
+# block as one of ours.
+assert_slot_result post-gloas-local-pool "$local_slot" \
+  '(.build.source == "local")
+   and (.build.local_build.status == "ready")
+   and (.build.local_build.selected == true)
+   and (.build.local_build.tx_source == "txpool")
+   and ((.build.local_build.info.selection.selected // 0) > 0)
+   and ((.build.num_transactions // 0) > 0)
+   and ((.bids // []) | map(select(.transport == "p2p" and .status == "submitted")) | length > 0)
+   and ((.reveal_attempts // []) | map(select(.status == "published")) | length > 0)'
+
+kill "$spamoor_pid" 2>/dev/null || true
+wait "$spamoor_pid" 2>/dev/null || true
+
+pool_stats=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1")
+printf '%s\n' "$pool_stats" >"$ARTIFACT_DIR/txpool-final.json"
+# Pool transactions only ever land through our own blocks: none of them was
+# included by a block we did not build.
+jq -e '.stats.evicted_included_by_us > 0 and .stats.evicted_included_by_other == 0' <<<"$pool_stats" >/dev/null
+echo "Pool transactions were included only through our own blocks"
 
 echo "Kurtosis end-to-end test passed"

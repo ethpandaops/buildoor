@@ -93,6 +93,37 @@ type ResolvedBuildSettings struct {
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
 	CandidateModes map[string]string `json:"candidate_modes,omitempty"`
+
+	// Local is the effective local build (testing_buildBlockV1) instruction,
+	// merged from the global local_build/txpool settings and the plan's
+	// build.local overrides. Always non-nil; Enabled=false when the extension
+	// is off for the slot. The EL's runtime availability of the testing
+	// namespace is checked by the builder, not here.
+	Local *ResolvedLocalBuildSettings `json:"local,omitempty"`
+}
+
+// ResolvedLocalBuildSettings are the effective local build parameters for a
+// slot.
+type ResolvedLocalBuildSettings struct {
+	Enabled bool `json:"enabled"`
+	// PayloadSource: el | local | local_or_el.
+	PayloadSource string `json:"payload_source"`
+	// TxSource: txpool | empty | el_mempool | explicit.
+	TxSource string `json:"tx_source"`
+	// Transactions is the explicit list (0x-hex) for the explicit source.
+	Transactions []string `json:"transactions,omitempty"`
+	// BuildELPayload keeps the engine build when the payload source is local.
+	BuildELPayload bool `json:"build_el_payload"`
+	// Pool selection parameters (tx source txpool).
+	MaxTxs     uint64 `json:"max_txs,omitempty"`
+	GasFillPct uint64 `json:"gas_fill_pct"`
+	Ordering   string `json:"ordering"`
+	// AllowBlobsWithoutBundle includes blob transactions on ELs whose testing
+	// path returns no blobs bundle.
+	AllowBlobsWithoutBundle bool `json:"allow_blobs_without_bundle,omitempty"`
+	// Forced marks that the plan enabled the local build although it is
+	// globally disabled.
+	Forced bool `json:"forced,omitempty"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -286,6 +317,7 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	}
 
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
+	build.Local = resolveLocalBuild(frozen.Plan, cfg)
 
 	// A plan that explicitly activates (mode custom) an available consumer
 	// forces the build past the schedule. A merely-inherited active consumer
@@ -373,6 +405,64 @@ func resolveCandidateModes(plan *SlotPlan, cfg *config.Config) map[string]string
 	}
 
 	return modes
+}
+
+// resolveLocalBuild merges the global local_build/txpool settings with the
+// plan's build.local overrides into the slot's effective local build
+// instruction.
+func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSettings {
+	local := &ResolvedLocalBuildSettings{
+		Enabled:                 cfg.LocalBuild.Enabled,
+		PayloadSource:           cfg.LocalBuild.NormalizedPayloadSource(),
+		TxSource:                cfg.LocalBuild.NormalizedTxSource(),
+		BuildELPayload:          cfg.LocalBuild.BuildELPayload,
+		MaxTxs:                  cfg.TxPool.MaxTxsPerBlock,
+		GasFillPct:              cfg.TxPool.EffectiveGasFillPct(),
+		Ordering:                cfg.TxPool.NormalizedOrdering(),
+		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
+	}
+
+	if plan == nil || plan.Build == nil || plan.Build.Local == nil {
+		return local
+	}
+
+	override := plan.Build.Local
+
+	if override.Enabled != nil {
+		local.Enabled = *override.Enabled
+		local.Forced = *override.Enabled && !cfg.LocalBuild.Enabled
+	}
+
+	if source := config.NormalizedPayloadSource(override.PayloadSource, ""); source != "" {
+		local.PayloadSource = source
+	}
+
+	if source := config.NormalizedTxSource(override.EffectiveTxSource(), ""); source != "" {
+		local.TxSource = source
+	}
+
+	if len(override.Transactions) > 0 {
+		local.Transactions = make([]string, len(override.Transactions))
+		copy(local.Transactions, override.Transactions)
+	}
+
+	if override.BuildELPayload != nil {
+		local.BuildELPayload = *override.BuildELPayload
+	}
+
+	if override.MaxTxs != nil {
+		local.MaxTxs = *override.MaxTxs
+	}
+
+	if override.GasFillPct != nil && *override.GasFillPct > 0 && *override.GasFillPct <= 100 {
+		local.GasFillPct = *override.GasFillPct
+	}
+
+	if ordering := config.NormalizedTxOrdering(override.Ordering, ""); ordering != "" {
+		local.Ordering = ordering
+	}
+
+	return local
 }
 
 // planForcesConsumer reports whether the plan explicitly activates (mode

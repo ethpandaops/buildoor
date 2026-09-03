@@ -50,9 +50,17 @@ type Config struct {
 	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
 	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
 	Build             BuildConfig       `yaml:"build" json:"build"`   // Payload build candidate policy
-	Debug             bool              `yaml:"debug" json:"debug"`
-	Pprof             bool              `yaml:"pprof" json:"pprof"`
-	PayloadBuildTime  uint64            `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	// LocalBuild is the opt-in local block building extension: an additional
+	// payload per slot built through the EL's testing_buildBlockV1 from a
+	// chosen transaction source, and the selector deciding which payload
+	// (EL or local) feeds bids and reveals.
+	LocalBuild LocalBuildConfig `yaml:"local_build" json:"local_build"`
+	// TxPool is the opt-in owned transaction pool fed through the JSON-RPC
+	// ingress; the local build's txpool source selects from it.
+	TxPool           TxPoolConfig `yaml:"txpool" json:"txpool"`
+	Debug            bool         `yaml:"debug" json:"debug"`
+	Pprof            bool         `yaml:"pprof" json:"pprof"`
+	PayloadBuildTime uint64       `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
@@ -471,6 +479,218 @@ func (c *RevealConfig) NormalizedBroadcastValidation() string {
 	default:
 		return BroadcastValidationGossip
 	}
+}
+
+// Payload sources: which built payload feeds the slot's bids and reveals when
+// the local build extension is enabled.
+const (
+	// PayloadSourceEL uses the engine-API payload (the EL's own mempool build);
+	// the local payload is built as an inspection-only shadow.
+	PayloadSourceEL = "el"
+	// PayloadSourceLocal uses the local payload; a failed or skipped local
+	// build leaves the slot without a payload.
+	PayloadSourceLocal = "local"
+	// PayloadSourceLocalOrEL uses the local payload when it succeeded and
+	// falls back to the engine payload otherwise.
+	PayloadSourceLocalOrEL = "local_or_el"
+)
+
+// NormalizedPayloadSource returns the payload source, falling back to the
+// given default for unknown values (UI overrides are free-form strings).
+func NormalizedPayloadSource(source, fallback string) string {
+	switch source {
+	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL:
+		return source
+	default:
+		return fallback
+	}
+}
+
+// Transaction sources for the local build: where the explicit transaction
+// list handed to testing_buildBlockV1 comes from.
+const (
+	// TxSourceTxPool selects from the owned transaction pool.
+	TxSourceTxPool = "txpool"
+	// TxSourceEmpty builds an empty block (transactions: []).
+	TxSourceEmpty = "empty"
+	// TxSourceELMempool lets the EL fill the block from its own mempool
+	// through the testing path (transactions: null).
+	TxSourceELMempool = "el_mempool"
+	// TxSourceExplicit uses the exact transaction list of the slot's action
+	// plan; only reachable through a plan, never as a global default.
+	TxSourceExplicit = "explicit"
+)
+
+// NormalizedTxSource returns the transaction source, falling back to the given
+// default for unknown values. The explicit source is accepted so plan values
+// normalize, but it is meaningless as a global setting.
+func NormalizedTxSource(source, fallback string) string {
+	switch source {
+	case TxSourceTxPool, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit:
+		return source
+	default:
+		return fallback
+	}
+}
+
+// Blob transaction encodings handed to testing_buildBlockV1.
+const (
+	// BlobEncodingAuto picks the encoding from the EL client identity.
+	BlobEncodingAuto = "auto"
+	// BlobEncodingNetwork carries the sidecar (blobs, commitments, proofs)
+	// with each blob transaction — required by geth, besu and nethermind to
+	// produce the blobs bundle.
+	BlobEncodingNetwork = "network"
+	// BlobEncodingCanonical strips the sidecar — the only form reth and
+	// ethrex decode (their blobs bundle stays empty).
+	BlobEncodingCanonical = "canonical"
+)
+
+// NormalizedBlobEncoding returns the blob encoding, falling back to auto for
+// unknown values.
+func NormalizedBlobEncoding(encoding string) string {
+	switch encoding {
+	case BlobEncodingAuto, BlobEncodingNetwork, BlobEncodingCanonical:
+		return encoding
+	default:
+		return BlobEncodingAuto
+	}
+}
+
+// LocalBuildConfig configures the local block building extension. It is an
+// addition to the unchanged engine-API build, gated at runtime on the EL
+// actually exposing the testing namespace.
+type LocalBuildConfig struct {
+	// Enabled builds an additional local payload per slot through
+	// testing_buildBlockV1. Refused (and ineffective) while the EL does not
+	// expose the testing namespace.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// PayloadSource decides which payload feeds bids and reveals: el
+	// (default; the local payload is an inspection-only shadow), local, or
+	// local_or_el (local when it succeeded, else the engine payload).
+	PayloadSource string `yaml:"payload_source" json:"payload_source"`
+
+	// TxSource is where the local build's transaction list comes from:
+	// txpool (default), empty or el_mempool. Per-slot plans may also supply
+	// an explicit list.
+	TxSource string `yaml:"tx_source" json:"tx_source"`
+
+	// BuildELPayload keeps the engine-API build running when PayloadSource is
+	// local (default true, so the EL payload stays available for
+	// comparison). Set to false to skip the engine build and its wait when
+	// only the local payload matters. Ignored for el and local_or_el, which
+	// need the engine payload.
+	BuildELPayload bool `yaml:"build_el_payload" json:"build_el_payload"`
+
+	// AllowBlobsWithoutBundle includes blob transactions in local builds on
+	// ELs whose testing endpoint returns an empty blobs bundle (reth, ethrex):
+	// the payload then commits to blobs buildoor cannot reveal — a deliberate
+	// "unavailable blobs" scenario. Default false skips those transactions.
+	AllowBlobsWithoutBundle bool `yaml:"allow_blobs_without_bundle" json:"allow_blobs_without_bundle"`
+
+	// BlobEncoding is the blob transaction encoding handed to the EL: auto
+	// (default; from the EL client identity), network or canonical.
+	// Startup-only.
+	BlobEncoding string `yaml:"blob_encoding" json:"blob_encoding"`
+}
+
+// NormalizedPayloadSource applies the config's own payload source with the
+// el fallback.
+func (c *LocalBuildConfig) NormalizedPayloadSource() string {
+	return NormalizedPayloadSource(c.PayloadSource, PayloadSourceEL)
+}
+
+// NormalizedTxSource applies the config's own transaction source with the
+// txpool fallback; the explicit source is not a valid global value and maps
+// to txpool as well.
+func (c *LocalBuildConfig) NormalizedTxSource() string {
+	source := NormalizedTxSource(c.TxSource, TxSourceTxPool)
+	if source == TxSourceExplicit {
+		return TxSourceTxPool
+	}
+
+	return source
+}
+
+// Transaction orderings for the local pool's block selection.
+const (
+	// TxOrderingFIFO orders by arrival (per-sender nonce order preserved) —
+	// what a test scenario expects.
+	TxOrderingFIFO = "fifo"
+	// TxOrderingTip orders by effective priority fee, highest first — what a
+	// real builder does.
+	TxOrderingTip = "tip"
+	// TxOrderingRandom shuffles senders with a per-slot seed, for ordering
+	// and gossip tests.
+	TxOrderingRandom = "random"
+)
+
+// NormalizedTxOrdering returns the ordering, falling back to the given
+// default for unknown values.
+func NormalizedTxOrdering(ordering, fallback string) string {
+	switch ordering {
+	case TxOrderingFIFO, TxOrderingTip, TxOrderingRandom:
+		return ordering
+	default:
+		return fallback
+	}
+}
+
+// TxPoolConfig configures the owned transaction pool and its JSON-RPC ingress.
+type TxPoolConfig struct {
+	// Enabled admits transactions through the ingress and offers the pool to
+	// the local build. Runtime-toggleable; disabling keeps the queued
+	// transactions but stops admission and selection. Requires --el-rpc.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// AuthToken, when set, requires "Authorization: Bearer <token>" on the
+	// ingress. Startup-only; never serialized.
+	AuthToken string `yaml:"auth_token" json:"-"`
+
+	// Ordering is the block selection order: fifo (default), tip or random.
+	Ordering string `yaml:"ordering" json:"ordering"`
+
+	// MaxTxsPerBlock caps how many pool transactions one local block takes
+	// (0 = unlimited).
+	MaxTxsPerBlock uint64 `yaml:"max_txs_per_block" json:"max_txs_per_block"`
+
+	// GasFillPct is the share of the block gas limit the selection fills
+	// (1-100, default 100).
+	GasFillPct uint64 `yaml:"gas_fill_pct" json:"gas_fill_pct"`
+
+	// MaxPoolTxs caps the total number of pooled transactions.
+	MaxPoolTxs uint64 `yaml:"max_pool_txs" json:"max_pool_txs"`
+
+	// MaxTxsPerSender caps the queued transactions of one sender.
+	MaxTxsPerSender uint64 `yaml:"max_txs_per_sender" json:"max_txs_per_sender"`
+
+	// TxTTLSlots drops transactions older than this many slots (0 = never,
+	// the default). Pool transactions only land when buildoor wins a slot,
+	// which can take long; expiring the queued ones leaves nonce gaps behind
+	// that a generator tracking nonces locally (spamoor) only closes through
+	// its slow rebroadcast, so every later transaction of the sender stalls.
+	// The pool caps bound memory instead.
+	TxTTLSlots uint64 `yaml:"tx_ttl_slots" json:"tx_ttl_slots"`
+
+	// ForwardToEL additionally submits every admitted transaction to the EL
+	// mempool (eth_sendRawTransaction) — a shadow mode for A/B comparisons
+	// that defeats the pool's purpose, hence off by default.
+	ForwardToEL bool `yaml:"forward_to_el" json:"forward_to_el"`
+}
+
+// NormalizedOrdering applies the config's own ordering with the fifo fallback.
+func (c *TxPoolConfig) NormalizedOrdering() string {
+	return NormalizedTxOrdering(c.Ordering, TxOrderingFIFO)
+}
+
+// EffectiveGasFillPct clamps the fill percentage into 1..100 (0 = 100).
+func (c *TxPoolConfig) EffectiveGasFillPct() uint64 {
+	if c.GasFillPct == 0 || c.GasFillPct > 100 {
+		return 100
+	}
+
+	return c.GasFillPct
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

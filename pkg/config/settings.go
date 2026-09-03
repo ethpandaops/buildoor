@@ -50,6 +50,17 @@ type Service struct {
 	seq         int64
 	keyState    map[string]*keyState
 	subscribers []func()
+	guards      []SettingGuard
+}
+
+// SettingGuard vetoes setting writes against runtime state the config layer
+// cannot know — e.g. enabling the local build while the EL does not expose the
+// testing namespace. Guards run after the static validation of every write;
+// the first error rejects the whole update.
+type SettingGuard interface {
+	// GuardSetting returns an error when the decoded value must not be
+	// applied to the key.
+	GuardSetting(key string, value any) error
 }
 
 // New constructs the settings service.
@@ -171,6 +182,14 @@ func (s *Service) Load() *Config {
 	return s.effective
 }
 
+// AddGuard registers a runtime guard consulted on every setting write.
+func (s *Service) AddGuard(g SettingGuard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.guards = append(s.guards, g)
+}
+
 // OnChange registers a callback invoked (outside the service lock) after every
 // applied change. Used to trigger module-side resets and re-reads.
 func (s *Service) OnChange(fn func()) {
@@ -209,6 +228,13 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		if err := validateValue(key, v); err != nil {
 			s.mu.Unlock()
 			return err
+		}
+
+		for _, g := range s.guards {
+			if err := g.GuardSetting(key, v); err != nil {
+				s.mu.Unlock()
+				return err
+			}
 		}
 
 		decoded[key] = v
@@ -311,6 +337,34 @@ func validateValue(key string, v any) error {
 		epochs, _ := v.(uint64)
 		if epochs == 0 {
 			return fmt.Errorf("%s must be greater than 0", key)
+		}
+	}
+
+	if key == KeyLocalBuildPayloadSource {
+		source, _ := v.(string)
+		if NormalizedPayloadSource(source, "") == "" {
+			return fmt.Errorf("invalid payload source %q (must be el, local or local_or_el)", source)
+		}
+	}
+
+	if key == KeyLocalBuildTxSource {
+		source, _ := v.(string)
+		if normalized := NormalizedTxSource(source, ""); normalized == "" || normalized == TxSourceExplicit {
+			return fmt.Errorf("invalid tx source %q (must be txpool, empty or el_mempool)", source)
+		}
+	}
+
+	if key == KeyTxPoolOrdering {
+		ordering, _ := v.(string)
+		if NormalizedTxOrdering(ordering, "") == "" {
+			return fmt.Errorf("invalid tx ordering %q (must be fifo, tip or random)", ordering)
+		}
+	}
+
+	if key == KeyTxPoolGasFillPct {
+		pct, _ := v.(uint64)
+		if pct == 0 || pct > 100 {
+			return fmt.Errorf("%s must be between 1 and 100", key)
 		}
 	}
 

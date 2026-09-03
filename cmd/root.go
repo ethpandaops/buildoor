@@ -116,6 +116,23 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
 
+	// Local block building extension (testing_buildBlockV1) and the owned transaction pool
+	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
+	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, or local_or_el")
+	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, empty or el_mempool")
+	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
+	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
+	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
+	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
+	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Bearer token required on the /rpc ingress (empty = unauthenticated)")
+	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip or random")
+	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
+	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs", defaults.TxPool.MaxPoolTxs, "Max queued transactions in the pool")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs-per-sender", defaults.TxPool.MaxTxsPerSender, "Max queued transactions per sender")
+	rootCmd.PersistentFlags().Uint64("txpool-tx-ttl-slots", defaults.TxPool.TxTTLSlots, "Drop queued transactions older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind)")
+	rootCmd.PersistentFlags().Bool("txpool-forward-to-el", defaults.TxPool.ForwardToEL, "Also submit admitted transactions to the EL mempool (shadow mode for A/B comparisons)")
+
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
 	rootCmd.PersistentFlags().String("reveal-gate-mode", defaults.Reveal.GateMode, "Reveal gate: time, vote, vote_or_time or vote_and_time")
@@ -250,6 +267,25 @@ func initConfig() error {
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
 		},
+		LocalBuild: config.LocalBuildConfig{
+			Enabled:                 v.GetBool("local-build-enabled"),
+			PayloadSource:           v.GetString("local-build-payload-source"),
+			TxSource:                v.GetString("local-build-tx-source"),
+			BuildELPayload:          v.GetBool("local-build-el-payload"),
+			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
+			BlobEncoding:            v.GetString("local-build-blob-encoding"),
+		},
+		TxPool: config.TxPoolConfig{
+			Enabled:         v.GetBool("txpool-enabled"),
+			AuthToken:       v.GetString("txpool-auth-token"),
+			Ordering:        v.GetString("txpool-ordering"),
+			MaxTxsPerBlock:  v.GetUint64("txpool-block-max-txs"),
+			GasFillPct:      v.GetUint64("txpool-gas-fill-pct"),
+			MaxPoolTxs:      v.GetUint64("txpool-max-txs"),
+			MaxTxsPerSender: v.GetUint64("txpool-max-txs-per-sender"),
+			TxTTLSlots:      v.GetUint64("txpool-tx-ttl-slots"),
+			ForwardToEL:     v.GetBool("txpool-forward-to-el"),
+		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),
 			GateMode:            v.GetString("reveal-gate-mode"),
@@ -304,6 +340,34 @@ func initConfig() error {
 	if cfg.Reveal.BroadcastValidation != cfg.Reveal.NormalizedBroadcastValidation() {
 		return fmt.Errorf("invalid --reveal-broadcast-validation %q: must be gossip, consensus or consensus_and_equivocation",
 			cfg.Reveal.BroadcastValidation)
+	}
+
+	if config.NormalizedPayloadSource(cfg.LocalBuild.PayloadSource, "") == "" {
+		return fmt.Errorf("invalid --local-build-payload-source %q: must be el, local or local_or_el",
+			cfg.LocalBuild.PayloadSource)
+	}
+
+	if source := config.NormalizedTxSource(cfg.LocalBuild.TxSource, ""); source == "" || source == config.TxSourceExplicit {
+		return fmt.Errorf("invalid --local-build-tx-source %q: must be txpool, empty or el_mempool",
+			cfg.LocalBuild.TxSource)
+	}
+
+	if cfg.LocalBuild.BlobEncoding != config.NormalizedBlobEncoding(cfg.LocalBuild.BlobEncoding) {
+		return fmt.Errorf("invalid --local-build-blob-encoding %q: must be auto, network or canonical",
+			cfg.LocalBuild.BlobEncoding)
+	}
+
+	if config.NormalizedTxOrdering(cfg.TxPool.Ordering, "") == "" {
+		return fmt.Errorf("invalid --txpool-ordering %q: must be fifo, tip or random", cfg.TxPool.Ordering)
+	}
+
+	if cfg.TxPool.GasFillPct == 0 || cfg.TxPool.GasFillPct > 100 {
+		return fmt.Errorf("invalid --txpool-gas-fill-pct %d: must be between 1 and 100", cfg.TxPool.GasFillPct)
+	}
+
+	if (cfg.LocalBuild.Enabled || cfg.TxPool.Enabled) && cfg.ELRPC == "" {
+		return fmt.Errorf("--el-rpc is required when --local-build-enabled or --txpool-enabled is set " +
+			"(testing_buildBlockV1 and the pool's state lookups live on the EL JSON-RPC)")
 	}
 
 	return nil
