@@ -286,6 +286,10 @@ func (t *Tracker) run(
 			for slot := firstSlot; slot <= currentSlot; slot++ {
 				t.materializeBaseline(slot)
 				t.finalizeWaitingBaseline(slot - 1)
+
+				if slot > txPlanVerdictGraceSlots {
+					t.finalizeStaleTxPlan(slot - txPlanVerdictGraceSlots)
+				}
 			}
 
 			if currentSlot > lastTickedSlot {
@@ -352,6 +356,36 @@ func (t *Tracker) finalizeWaitingBaseline(slot phase0.Slot) {
 	})
 }
 
+// txPlanVerdictGraceSlots is how long a testing build's tx plan may stay
+// pending before the slot is recorded as never included. It exceeds the
+// inclusion tracker's reorg re-evaluation window, after which no verdict can
+// still arrive — without this a slot whose bid simply lost would sit at
+// "pending" for its whole retention window, the one silent outcome in an
+// otherwise loud feature.
+const txPlanVerdictGraceSlots = 20
+
+// finalizeStaleTxPlan records a tx plan that never reached the chain. It only
+// touches slots that already carry a still-pending plan, so it never creates a
+// record and never overwrites a verdict the verifier produced.
+func (t *Tracker) finalizeStaleTxPlan(slot phase0.Slot) {
+	if existing, ok := t.store.Get(slot); !ok ||
+		existing.TxPlan == nil || existing.TxPlan.Status != TxPlanPending {
+		return
+	}
+
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil || result.TxPlan.Status != TxPlanPending {
+			return
+		}
+
+		result.TxPlan.Status = TxPlanNotIncluded
+		result.TxPlan.Detail = "the slot passed without the built payload reaching the chain"
+		result.TxPlan.VerifiedAt = &now
+	})
+}
+
 func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	if payload == nil || payload.Attributes == nil {
 		return
@@ -414,6 +448,8 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 
 	outcome.Candidate = string(payload.Candidate)
 
+	txPlan := txPlanResultFrom(payload)
+
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
 		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,
 			PayloadArtifactMeta{
@@ -430,6 +466,10 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	}
 
 	t.upsert(slot, func(result *SlotResult) {
+		if txPlan != nil {
+			result.TxPlan = txPlan
+		}
+
 		upsertBuildOutcome(result, outcome)
 		result.Build = primaryBuildOutcome(result)
 	})
@@ -1042,4 +1082,69 @@ func (t *Tracker) pruneForEpoch(epoch phase0.Epoch) {
 		cutoff := phase0.Slot((uint64(epoch) - retention) * slotsPerEpoch)
 		t.artifacts.PruneBefore(cutoff)
 	}
+}
+
+// txPlanResultFrom snapshots a testing build's plan onto the slot result.
+func txPlanResultFrom(payload *payload_builder.Payload) *TxPlanResult {
+	plan := payload.TxPlan
+	if plan == nil {
+		return nil
+	}
+
+	out := &TxPlanResult{
+		Policy:        plan.Policy,
+		ExpectedCount: len(plan.Hashes),
+		GasSum:        plan.GasSum,
+		GasCap:        plan.GasCap,
+		Blobs:         plan.Blobs,
+		Attempts:      plan.Attempts,
+		BuildMs:       plan.BuildMs,
+		Skipped:       plan.Skipped,
+		Status:        TxPlanPending,
+		FirstMismatch: -1,
+	}
+
+	if ep := payload.ExecutionPayload; ep != nil {
+		out.GasUsed = ep.GasUsed
+		out.GasLimit = ep.GasLimit
+	}
+
+	n := len(plan.Hashes)
+	if n > maxTxPlanHashes {
+		n = maxTxPlanHashes
+		out.Truncated = true
+	}
+
+	out.ExpectedHashes = make([]string, n)
+	for i := range n {
+		out.ExpectedHashes[i] = plan.Hashes[i].Hex()
+	}
+
+	for _, ev := range plan.Evicted {
+		out.Evicted = append(out.Evicted, TxPlanEviction{Hash: ev.Hash.Hex(), Reason: ev.Reason})
+	}
+
+	for _, d := range plan.Dropped {
+		out.Dropped = append(out.Dropped, TxPlanEviction{Hash: d.Hash.Hex(), Reason: d.Reason})
+	}
+
+	return out
+}
+
+// RecordTxPlanCheck records the verification verdict of a slot's testing
+// build against the chain.
+func (t *Tracker) RecordTxPlanCheck(slot phase0.Slot, status TxPlanStatus, includedCount, firstMismatch int, detail string) {
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil {
+			return
+		}
+
+		result.TxPlan.Status = status
+		result.TxPlan.IncludedCount = includedCount
+		result.TxPlan.FirstMismatch = firstMismatch
+		result.TxPlan.Detail = detail
+		result.TxPlan.VerifiedAt = &now
+	})
 }

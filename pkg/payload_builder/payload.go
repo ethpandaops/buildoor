@@ -24,6 +24,9 @@ import (
 type Payload struct {
 	// Attributes is the payload_attributes event this build was triggered by.
 	Attributes *beacon.PayloadAttributesEvent
+	// TxPlan is the exact transaction list a testing build committed to
+	// (nil for txpool builds). The included block is verified against it.
+	TxPlan *TxPlan
 	// Candidate classifies the parent tuple this payload was built on
 	// relative to the chain view at build time (parent/grandparent x
 	// full/empty). Empty when the tuple matched no known candidate.

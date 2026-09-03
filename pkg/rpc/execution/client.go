@@ -12,6 +12,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/tx_intake"
 )
 
 // Client handles standard JSON-RPC calls for wallet/transaction operations.
@@ -20,7 +22,16 @@ type Client struct {
 	ethClient *ethclient.Client
 	rpcClient *rpc.Client
 	rpcURL    string
+	intake    *tx_intake.Queue // optional: builder's own txs also enter the testing build queue
 	log       logrus.FieldLogger
+}
+
+// SetTxIntake makes every transaction this client sends also enter the tx
+// intake queue. With the testing build source the builder's own blocks hold
+// only queued transactions, so its lifecycle deposits and top-ups would
+// otherwise never land in a block it builds itself.
+func (c *Client) SetTxIntake(q *tx_intake.Queue) {
+	c.intake = q
 }
 
 // NewClient creates a new standard EL JSON-RPC client (no JWT).
@@ -97,6 +108,17 @@ func (c *Client) GetLatestBlock(ctx context.Context) (*types.Block, error) {
 func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	if err := c.ethClient.SendTransaction(ctx, tx); err != nil {
 		return fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	if c.intake != nil {
+		raw, err := tx.MarshalBinary()
+		if err != nil {
+			return fmt.Errorf("encoding transaction for the tx intake: %w", err)
+		}
+
+		if _, err := c.intake.Add(raw); err != nil {
+			return fmt.Errorf("queueing transaction in the tx intake: %w", err)
+		}
 	}
 
 	return nil

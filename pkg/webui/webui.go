@@ -23,6 +23,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_intake"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
@@ -44,7 +46,7 @@ var (
 	staticEmbedFS embed.FS
 )
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, verifier *tx_plan_verifier.Verifier) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
@@ -62,7 +64,14 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}
 
 	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker)
+	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker, verifier)
+
+	// Tx intake: the JSON-RPC endpoint transaction sources point at instead
+	// of the EL, so testing builds control exactly what a block holds.
+	if tb := builderSvc.TestingBuilder(); tb != nil {
+		intake := tx_intake.NewProxy(tb.Queue(), settingsSvc.Load().ELRPC, logrus.StandardLogger())
+		router.Handle("/rpc", requireAuth(authHandler, intake)).Methods(http.MethodPost)
+	}
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
 	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)
@@ -78,6 +87,9 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 
 	// Shared builder config endpoint (build start time, payload build delay)
 	apiRouter.HandleFunc("/config/builder", apiHandler.UpdateBuilderConfig).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/config/testing", apiHandler.UpdateTestingConfig).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/tx-queue", apiHandler.GetTxQueue).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/tx-queue", apiHandler.FlushTxQueue).Methods(http.MethodDelete)
 
 	// Service toggle endpoint (enable/disable ePBS and Builder API)
 	apiRouter.HandleFunc("/services/toggle", apiHandler.ToggleServices).Methods(http.MethodPost)
@@ -186,4 +198,19 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}()
 
 	return apiHandler
+}
+
+// requireAuth gates a handler on the same token the mutating API endpoints
+// use, so an operator who protects the API also protects the tx intake. With
+// no auth provider configured the API is open and the intake follows it.
+func requireAuth(authHandler *auth.AuthHandler, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !authHandler.IsOpen() && authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

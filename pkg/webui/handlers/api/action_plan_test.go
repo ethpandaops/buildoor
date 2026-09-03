@@ -97,7 +97,7 @@ func newPlanAPITestEnv(t *testing.T) *planAPITestEnv {
 	require.NoError(t, err)
 
 	handler := NewAPIHandler(authHandler, nil, stateDB, nil, nil, nil, nil, chainSvc,
-		nil, nil, nil, nil, nil, nil, nil, planSvc, tracker)
+		nil, nil, nil, nil, nil, nil, nil, planSvc, tracker, nil)
 
 	return &planAPITestEnv{
 		handler: handler,
@@ -484,7 +484,7 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	require.NoError(t, err)
 
 	handler := NewAPIHandler(authHandler, settingsSvc, stateDB, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	post := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/api/config/settings",

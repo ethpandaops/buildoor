@@ -60,6 +60,10 @@ type ResolvedTransforms struct {
 	Envelope string `json:"envelope,omitempty"`
 }
 
+// BuildStartImmediately is a build start time far enough in the past that
+// the scheduler builds as soon as the slot's attributes are known.
+const BuildStartImmediately int64 = -1 << 31
+
 // ResolvedBuildSettings is the effective build decision and timing for a slot.
 // The plan service is the single scheduling authority: it resolves the global
 // schedule (all/every_nth/next_n, start slot), the per-slot plan's force/
@@ -93,6 +97,22 @@ type ResolvedBuildSettings struct {
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
 	CandidateModes map[string]string `json:"candidate_modes,omitempty"`
+
+	// Source is the effective build source for the slot: pool or testing.
+	Source string `json:"source,omitempty"`
+
+	// Fill is the effective testing packing for the slot (testing source
+	// only): the global testing.* config merged with the plan's overrides.
+	Fill ResolvedFill `json:"fill,omitempty"`
+}
+
+// ResolvedFill is the effective testing packing instruction for a slot.
+type ResolvedFill struct {
+	GasPct   uint64   `json:"gas_pct"`
+	MaxTxs   uint64   `json:"max_txs,omitempty"`
+	MaxBlobs uint64   `json:"max_blobs,omitempty"`
+	Policy   string   `json:"policy"`
+	Txs      []string `json:"txs,omitempty"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -283,6 +303,14 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	// suppresses the build decision itself.
 	if frozen.Plan != nil && frozen.Plan.Build != nil {
 		build.ReorgParentPayload = frozen.Plan.Build.ReorgParentPayload
+	}
+
+	build.Source, build.Fill = resolveSource(frozen.Plan, cfg)
+
+	// A testing build is synchronous on the EL and must finish before the
+	// slot's deadline, so it starts the moment the attributes arrive.
+	if build.Source == config.BuildSourceTesting {
+		build.BuildStartTimeMs = BuildStartImmediately
 	}
 
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
@@ -589,4 +617,51 @@ func applyOverride[T any](target *T, override *T) {
 	if override != nil {
 		*target = *override
 	}
+}
+
+// resolveSource merges the global build source and testing packing config
+// with the plan's per-slot overrides. An explicit tx list forces the testing
+// source with policy as_given.
+func resolveSource(plan *SlotPlan, cfg *config.Config) (string, ResolvedFill) {
+	source := cfg.Build.Source
+	fill := ResolvedFill{
+		GasPct:   cfg.Testing.FillGasPct,
+		MaxTxs:   cfg.Testing.MaxTxs,
+		MaxBlobs: cfg.Testing.MaxBlobs,
+		Policy:   cfg.Testing.Policy,
+	}
+
+	if plan == nil || plan.Build == nil {
+		return source, fill
+	}
+
+	if plan.Build.Source != nil {
+		source = *plan.Build.Source
+	}
+
+	if f := plan.Build.Fill; f != nil {
+		if f.GasPct != nil {
+			fill.GasPct = *f.GasPct
+		}
+
+		if f.MaxTxs != nil {
+			fill.MaxTxs = *f.MaxTxs
+		}
+
+		if f.MaxBlobs != nil {
+			fill.MaxBlobs = *f.MaxBlobs
+		}
+
+		if f.Policy != nil {
+			fill.Policy = *f.Policy
+		}
+	}
+
+	if len(plan.Build.Txs) > 0 {
+		source = config.BuildSourceTesting
+		fill.Policy = "as_given"
+		fill.Txs = append([]string(nil), plan.Build.Txs...)
+	}
+
+	return source, fill
 }

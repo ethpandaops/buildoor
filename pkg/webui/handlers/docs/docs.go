@@ -1798,6 +1798,87 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/buildoor/tx-queue": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "buildoor"
+                ],
+                "summary": "Tx intake queue",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "include per-sender entries",
+                        "name": "senders",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.TxQueueResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "buildoor"
+                ],
+                "summary": "Flush the tx intake queue",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/config/testing": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "config"
+                ],
+                "summary": "Update testing build settings",
+                "parameters": [
+                    {
+                        "description": "settings",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateTestingConfigRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1865,9 +1946,28 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "fill": {
+                    "description": "Fill overrides the testing build's packing for this slot (nil fields\ninherit the global testing.* config).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.FillPlan"
+                        }
+                    ]
+                },
                 "reorg_parent_payload": {
                     "description": "ReorgParentPayload builds on the grandparent (n-2) execution payload\ninstead of the immediate parent: the FCU head block hash and the payload\nattributes' withdrawals are taken from the PARENT slot's payload\nattributes (whose parent is n-2), while every other property comes from\nthe current slot. This is a deliberate parent-payload reorg attempt —\nrejected by mainnet forkchoice, but useful for exercising the reveal /\ninclusion path against a withheld parent.",
                     "type": "boolean"
+                },
+                "source": {
+                    "description": "Source overrides the global build source for this slot: pool or\ntesting (nil inherits config build.source).",
+                    "type": "string"
+                },
+                "txs": {
+                    "description": "Txs is the explicit, ordered transaction list (hashes, must be queued\nin the tx intake) the slot's testing build packs, exactly and in this\norder; it implies policy as_given. Any deviation fails the build.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -1908,6 +2008,23 @@ const docTemplate = `{
                 "value_subsidy_gwei": {
                     "description": "ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot.",
                     "type": "integer"
+                }
+            }
+        },
+        "action_plan.FillPlan": {
+            "type": "object",
+            "properties": {
+                "gas_pct": {
+                    "type": "integer"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "max_txs": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "type": "string"
                 }
             }
         },
@@ -2107,6 +2224,14 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "fill": {
+                    "description": "Fill is the effective testing packing for the slot (testing source\nonly): the global testing.* config merged with the plan's overrides.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedFill"
+                        }
+                    ]
+                },
                 "forced": {
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
                     "type": "boolean"
@@ -2121,6 +2246,10 @@ const docTemplate = `{
                 },
                 "skip_reason": {
                     "description": "SkipReason is one of the BuildSkipReason* constants when Build is\nfalse, empty otherwise.",
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is the effective build source for the slot: pool or testing.",
                     "type": "string"
                 }
             }
@@ -2159,6 +2288,29 @@ const docTemplate = `{
                 "total_value_gwei": {
                     "description": "TotalValueGwei, when set, is the absolute total proposer-visible bid\nvalue (before the Gloas execution-payment split).",
                     "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedFill": {
+            "type": "object",
+            "properties": {
+                "gas_pct": {
+                    "type": "integer"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "max_txs": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "type": "string"
+                },
+                "txs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2977,6 +3129,61 @@ const docTemplate = `{
                 }
             }
         },
+        "api.TxQueueResponse": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean"
+                },
+                "plan_checks": {
+                    "$ref": "#/definitions/tx_plan_verifier.Counters"
+                },
+                "recent_evictions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/tx_intake.Eviction"
+                    }
+                },
+                "senders": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/api.TxQueueSenderEntry"
+                        }
+                    }
+                },
+                "source": {
+                    "type": "string"
+                },
+                "stats": {
+                    "$ref": "#/definitions/tx_intake.Stats"
+                }
+            }
+        },
+        "api.TxQueueSenderEntry": {
+            "type": "object",
+            "properties": {
+                "age_ms": {
+                    "type": "integer"
+                },
+                "blobs": {
+                    "type": "integer"
+                },
+                "gas": {
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "strikes": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.UpdateActionPlanRequest": {
             "type": "object",
             "properties": {
@@ -3062,6 +3269,44 @@ const docTemplate = `{
                 },
                 "start_slot": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.UpdateTestingConfigRequest": {
+            "type": "object",
+            "properties": {
+                "base_fee_ceiling_gwei": {
+                    "type": "integer"
+                },
+                "build_deadline_ms": {
+                    "type": "integer"
+                },
+                "fill_gas_pct": {
+                    "type": "integer"
+                },
+                "max_attempts": {
+                    "type": "integer"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "max_strikes": {
+                    "type": "integer"
+                },
+                "max_txs": {
+                    "type": "integer"
+                },
+                "on_failure": {
+                    "type": "string"
+                },
+                "policy": {
+                    "type": "string"
+                },
+                "queue_max_age_slots": {
+                    "type": "integer"
+                },
+                "source": {
+                    "type": "string"
                 }
             }
         },
@@ -3677,6 +3922,14 @@ const docTemplate = `{
                 "slot": {
                     "type": "integer"
                 },
+                "tx_plan": {
+                    "description": "TxPlan is the testing build's committed transaction list and its\nverification against the included block (nil for pool builds).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.TxPlanResult"
+                        }
+                    ]
+                },
                 "updated_at": {
                     "type": "string"
                 }
@@ -3694,6 +3947,181 @@ const docTemplate = `{
                 "SubmissionStatusAccepted",
                 "SubmissionStatusFailed"
             ]
+        },
+        "slot_results.TxPlanEviction": {
+            "type": "object",
+            "properties": {
+                "hash": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.TxPlanResult": {
+            "type": "object",
+            "properties": {
+                "attempts": {
+                    "type": "integer"
+                },
+                "blobs": {
+                    "type": "integer"
+                },
+                "build_ms": {
+                    "type": "integer"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "dropped": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.TxPlanEviction"
+                    }
+                },
+                "evicted": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.TxPlanEviction"
+                    }
+                },
+                "expected_count": {
+                    "type": "integer"
+                },
+                "expected_hashes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "first_mismatch": {
+                    "type": "integer"
+                },
+                "gas_cap": {
+                    "type": "integer"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "gas_sum": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "included_count": {
+                    "type": "integer"
+                },
+                "policy": {
+                    "type": "string"
+                },
+                "skipped": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.TxPlanStatus"
+                },
+                "truncated": {
+                    "type": "boolean"
+                },
+                "verified_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.TxPlanStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "match",
+                "mismatch",
+                "block_not_found",
+                "not_included",
+                "missed",
+                "orphaned"
+            ],
+            "x-enum-varnames": [
+                "TxPlanPending",
+                "TxPlanMatch",
+                "TxPlanMismatch",
+                "TxPlanBlockNotFound",
+                "TxPlanNotIncluded",
+                "TxPlanMissed",
+                "TxPlanOrphaned"
+            ]
+        },
+        "tx_intake.Eviction": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "hash": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "sender": {
+                    "type": "string"
+                }
+            }
+        },
+        "tx_intake.Stats": {
+            "type": "object",
+            "properties": {
+                "added_total": {
+                    "type": "integer"
+                },
+                "evictions_total": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "oldest_age_ms": {
+                    "type": "integer"
+                },
+                "senders": {
+                    "type": "integer"
+                },
+                "txs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "tx_plan_verifier.Counters": {
+            "type": "object",
+            "properties": {
+                "block_not_found": {
+                    "type": "integer"
+                },
+                "checked": {
+                    "type": "integer"
+                },
+                "match": {
+                    "type": "integer"
+                },
+                "mismatch": {
+                    "type": "integer"
+                },
+                "missed": {
+                    "type": "integer"
+                },
+                "orphaned": {
+                    "type": "integer"
+                }
+            }
         }
     }
 }`

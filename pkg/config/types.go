@@ -47,9 +47,10 @@ type Config struct {
 	TopupAmount       uint64            `yaml:"topup_amount" json:"topup_amount"`               // Gwei
 	DepositMaxFeeGwei uint64            `yaml:"deposit_max_fee" json:"deposit_max_fee"`
 	Schedule          ScheduleConfig    `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig       `yaml:"build" json:"build"`   // Payload build candidate policy
+	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`       // Time-scheduled ePBS config
+	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"`   // Payload reveal config (shared by p2p bidder + Builder API)
+	Build             BuildConfig       `yaml:"build" json:"build"`     // Payload build candidate policy
+	Testing           TestingConfig     `yaml:"testing" json:"testing"` // Testing build source (tx intake + testing_buildBlockV1)
 	Debug             bool              `yaml:"debug" json:"debug"`
 	Pprof             bool              `yaml:"pprof" json:"pprof"`
 	PayloadBuildTime  uint64            `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
@@ -367,6 +368,57 @@ type BuildConfig struct {
 	// the proposer's target) when the EL ignored the target. Disabled by
 	// default: the override rewrites the block header after building.
 	EnforceBidGasLimit bool `yaml:"enforce_bid_gas_limit" json:"enforce_bid_gas_limit"`
+
+	// Source selects where a payload's transactions come from: "pool" builds
+	// through forkchoiceUpdated + getPayload from the EL's txpool, "testing"
+	// builds an explicit transaction list from the tx intake queue through
+	// geth's testing_buildBlockV1 (see TestingConfig).
+	Source string `yaml:"source" json:"source"`
+}
+
+// Build sources.
+const (
+	BuildSourcePool    = "pool"
+	BuildSourceTesting = "testing"
+)
+
+// Testing build failure policies.
+const (
+	TestingOnFailureSkip = "skip" // no payload for the slot (fail closed)
+	TestingOnFailurePool = "pool" // fall back to the txpool build
+)
+
+// TestingConfig tunes the testing build source: how the intake queue is
+// packed into a block and how a failed or late build is handled.
+type TestingConfig struct {
+	// FillGasPct is the share of the block gas limit to pack, 1..100.
+	FillGasPct uint64 `yaml:"fill_gas_pct" json:"fill_gas_pct"`
+	// MaxTxs caps the transactions per block (0 = unlimited).
+	MaxTxs uint64 `yaml:"max_txs" json:"max_txs"`
+	// MaxBlobs caps the blobs per block (0 = the fork's blob limit).
+	MaxBlobs uint64 `yaml:"max_blobs" json:"max_blobs"`
+	// Policy orders the queue into the block: fifo, fee, round_robin or
+	// as_given (explicit per-slot list).
+	Policy string `yaml:"policy" json:"policy"`
+	// BaseFeeCeilingGwei, when non-zero, halves the fill to the EIP-1559
+	// target once the next base fee exceeds it, so a long max-fill run does
+	// not price every queued transaction out.
+	BaseFeeCeilingGwei uint64 `yaml:"base_fee_ceiling_gwei" json:"base_fee_ceiling_gwei"`
+	// BuildDeadlineMs is the latest build completion, milliseconds relative
+	// to slot start (signed). 0 = auto: the ePBS bid start minus 300 ms.
+	BuildDeadlineMs int64 `yaml:"build_deadline_ms" json:"build_deadline_ms"`
+	// OnFailure decides what a failed or late testing build does: skip the
+	// slot (default) or fall back to the txpool build.
+	OnFailure string `yaml:"on_failure" json:"on_failure"`
+	// QueueMaxTxs bounds the intake queue; over it submissions are rejected.
+	QueueMaxTxs uint64 `yaml:"queue_max_txs" json:"queue_max_txs"`
+	// QueueMaxAgeSlots evicts queued transactions older than this many slots.
+	QueueMaxAgeSlots uint64 `yaml:"queue_max_age_slots" json:"queue_max_age_slots"`
+	// MaxAttempts bounds the build retries after an attributed EL failure.
+	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
+	// MaxStrikes evicts a queued transaction after this many attributed
+	// build failures.
+	MaxStrikes uint64 `yaml:"max_strikes" json:"max_strikes"`
 }
 
 // CandidateMode returns the normalized mode configured for the given
@@ -493,4 +545,14 @@ type BuilderStats struct {
 	RevealsSuccess uint64
 	RevealsFailed  uint64
 	RevealsSkipped uint64
+}
+
+// ValidTestingPolicy reports whether p is a known intake packing policy.
+func ValidTestingPolicy(p string) bool {
+	switch p {
+	case "fifo", "fee", "round_robin", "as_given":
+		return true
+	default:
+		return false
+	}
 }

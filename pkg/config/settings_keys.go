@@ -41,6 +41,18 @@ const (
 	KeyBuildSpeculativeBuildTime      = "build.speculative_build_time_ms"
 	KeyBuildAutoWeakHeadPct           = "build.auto_weak_head_pct"
 	KeyBuildEnforceBidGasLimit        = "build.enforce_bid_gas_limit"
+	KeyBuildSource                    = "build.source"
+
+	KeyTestingFillGasPct         = "testing.fill_gas_pct"
+	KeyTestingMaxTxs             = "testing.max_txs"
+	KeyTestingMaxBlobs           = "testing.max_blobs"
+	KeyTestingPolicy             = "testing.policy"
+	KeyTestingBaseFeeCeilingGwei = "testing.base_fee_ceiling_gwei"
+	KeyTestingBuildDeadlineMs    = "testing.build_deadline_ms"
+	KeyTestingOnFailure          = "testing.on_failure"
+	KeyTestingQueueMaxAgeSlots   = "testing.queue_max_age_slots"
+	KeyTestingMaxAttempts        = "testing.max_attempts"
+	KeyTestingMaxStrikes         = "testing.max_strikes"
 
 	KeyPayloadBuildTime              = "payload_build_time"
 	KeyExtraData                     = "extra_data"

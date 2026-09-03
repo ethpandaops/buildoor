@@ -6,6 +6,7 @@ package action_plan
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -362,6 +363,41 @@ type BuildPlan struct {
 	// grandparent_empty) -> mode (auto, always, never). Absent keys inherit
 	// the global policy.
 	Candidates map[string]string `json:"candidates,omitempty"`
+
+	// Source overrides the global build source for this slot: pool or
+	// testing (nil inherits config build.source).
+	Source *string `json:"source,omitempty"`
+
+	// Fill overrides the testing build's packing for this slot (nil fields
+	// inherit the global testing.* config).
+	Fill *FillPlan `json:"fill,omitempty"`
+
+	// Txs is the explicit, ordered transaction list (hashes, must be queued
+	// in the tx intake) the slot's testing build packs, exactly and in this
+	// order; it implies policy as_given. Any deviation fails the build.
+	Txs []string `json:"txs,omitempty"`
+}
+
+// FillPlan is the per-slot override of the testing packing knobs.
+type FillPlan struct {
+	GasPct   *uint64 `json:"gas_pct,omitempty"`
+	MaxTxs   *uint64 `json:"max_txs,omitempty"`
+	MaxBlobs *uint64 `json:"max_blobs,omitempty"`
+	Policy   *string `json:"policy,omitempty"`
+}
+
+func (p *FillPlan) clone() *FillPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.GasPct = cloneScalar(p.GasPct)
+	c.MaxTxs = cloneScalar(p.MaxTxs)
+	c.MaxBlobs = cloneScalar(p.MaxBlobs)
+	c.Policy = cloneScalar(p.Policy)
+
+	return &c
 }
 
 func (p *BuildPlan) clone() *BuildPlan {
@@ -378,13 +414,18 @@ func (p *BuildPlan) clone() *BuildPlan {
 		}
 	}
 
+	c.Source = cloneScalar(p.Source)
+	c.Fill = p.Fill.clone()
+	c.Txs = append([]string(nil), p.Txs...)
+
 	return &c
 }
 
 // isZero reports whether the build plan carries no active instruction; such a
 // plan is dropped rather than persisted.
 func (p *BuildPlan) isZero() bool {
-	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0)
+	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0 &&
+		p.Source == nil && p.Fill == nil && len(p.Txs) == 0)
 }
 
 func (p *BuildPlan) validate() error {
@@ -395,6 +436,30 @@ func (p *BuildPlan) validate() error {
 
 		if config.NormalizedCandidateMode(mode, "") == "" {
 			return fmt.Errorf("build.candidates.%s: mode must be auto, always or never (got %q)", key, mode)
+		}
+	}
+
+	if p.Source != nil && *p.Source != config.BuildSourcePool && *p.Source != config.BuildSourceTesting {
+		return fmt.Errorf("build.source: must be pool or testing (got %q)", *p.Source)
+	}
+
+	if p.Fill != nil {
+		if p.Fill.GasPct != nil && (*p.Fill.GasPct == 0 || *p.Fill.GasPct > 100) {
+			return fmt.Errorf("build.fill.gas_pct: must be 1..100 (got %d)", *p.Fill.GasPct)
+		}
+
+		if p.Fill.Policy != nil && !config.ValidTestingPolicy(*p.Fill.Policy) {
+			return fmt.Errorf("build.fill.policy: must be fifo, fee, round_robin or as_given (got %q)", *p.Fill.Policy)
+		}
+	}
+
+	for i, h := range p.Txs {
+		if len(h) != 66 || !strings.HasPrefix(h, "0x") {
+			return fmt.Errorf("build.txs[%d]: %q is not a 0x-prefixed 32-byte hash", i, h)
+		}
+
+		if _, err := hex.DecodeString(h[2:]); err != nil {
+			return fmt.Errorf("build.txs[%d]: %q is not hex", i, h)
 		}
 	}
 

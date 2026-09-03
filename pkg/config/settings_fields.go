@@ -116,6 +116,18 @@ func Fields() []Field {
 		newField(KeyBuildSpeculativeBuildTime, "build-speculative-build-time", func(c *Config) *uint64 { return &c.Build.SpeculativeBuildTimeMs }),
 		newField(KeyBuildAutoWeakHeadPct, "build-auto-weak-head-pct", func(c *Config) *uint64 { return &c.Build.AutoWeakHeadPct }),
 		newField(KeyBuildEnforceBidGasLimit, "build-enforce-bid-gas-limit", func(c *Config) *bool { return &c.Build.EnforceBidGasLimit }),
+		newField(KeyBuildSource, "build-source", func(c *Config) *string { return &c.Build.Source }),
+
+		newField(KeyTestingFillGasPct, "testing-fill-gas-pct", func(c *Config) *uint64 { return &c.Testing.FillGasPct }),
+		newField(KeyTestingMaxTxs, "testing-max-txs", func(c *Config) *uint64 { return &c.Testing.MaxTxs }),
+		newField(KeyTestingMaxBlobs, "testing-max-blobs", func(c *Config) *uint64 { return &c.Testing.MaxBlobs }),
+		newField(KeyTestingPolicy, "testing-policy", func(c *Config) *string { return &c.Testing.Policy }),
+		newField(KeyTestingBaseFeeCeilingGwei, "testing-base-fee-ceiling-gwei", func(c *Config) *uint64 { return &c.Testing.BaseFeeCeilingGwei }),
+		newField(KeyTestingBuildDeadlineMs, "testing-build-deadline", func(c *Config) *int64 { return &c.Testing.BuildDeadlineMs }),
+		newField(KeyTestingOnFailure, "testing-on-failure", func(c *Config) *string { return &c.Testing.OnFailure }),
+		newField(KeyTestingQueueMaxAgeSlots, "testing-queue-max-age-slots", func(c *Config) *uint64 { return &c.Testing.QueueMaxAgeSlots }),
+		newField(KeyTestingMaxAttempts, "testing-max-attempts", func(c *Config) *uint64 { return &c.Testing.MaxAttempts }),
+		newField(KeyTestingMaxStrikes, "testing-max-strikes", func(c *Config) *uint64 { return &c.Testing.MaxStrikes }),
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),

@@ -3,6 +3,8 @@ package payload_builder
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +19,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
+	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/tx_intake"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -45,6 +49,7 @@ type Service struct {
 	engineClient           EngineClient
 	feeRecipient           common.Address
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
+	testing                *TestingBuilder            // tx intake builder for the testing source (register before Start)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
 	payloadReadyDispatcher *utils.Dispatcher[*Payload]
@@ -149,6 +154,7 @@ func (s *Service) Start(ctx context.Context) error {
 		s.log,
 		s.settingsResolvers,
 	)
+	s.payloadBuilder.testing = s.testing
 
 	// Start event stream
 	if err := s.clClient.Events().Start(s.ctx); err != nil {
@@ -786,6 +792,13 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// agree on the parent.
 	event := s.effectiveBuildAttributes(slot, target.attrs)
 
+	// Resolved before the build is announced: a slot the testing source will
+	// not build must not leave an in-progress marker with no outcome.
+	spec, skip := s.testingSpec(slot, target)
+	if skip {
+		return
+	}
+
 	s.log.WithFields(logrus.Fields{
 		"slot":        slot,
 		"candidate":   target.candidate,
@@ -806,11 +819,28 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// make the getPayload call time out spuriously.
 	buildTimeMs := s.candidateBuildTime(target)
 	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
+
+	if spec != nil {
+		// A testing build is synchronous on the EL and bounded by the slot's
+		// deadline, not by the pool build wait.
+		buildTimeout = time.Until(spec.Deadline) + buildCallTimeout
+	}
+
 	ctx, cancel := context.WithTimeout(s.ctx, buildTimeout)
 
 	defer cancel()
 
-	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs)
+	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, spec)
+	if err != nil && spec != nil {
+		metrics.TestingBuildFailures.WithLabelValues(testingFailureReason(ctx, err)).Inc()
+	}
+
+	if err != nil && spec != nil && s.cfg.Testing.OnFailure == config.TestingOnFailurePool {
+		s.log.WithError(err).WithField("slot", slot).Error("Testing build failed, falling back to the pool build")
+
+		payloadEvent, err = s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, nil)
+	}
+
 	if err != nil {
 		s.log.WithError(err).WithFields(logrus.Fields{
 			"slot":      slot,
@@ -853,6 +883,111 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	}
 
 	s.emitPayloadReady(slot, payloadEvent)
+}
+
+// testingSpec resolves the slot's testing build instruction from the frozen
+// plan, or nil for a pool build. skip is true when the candidate must not be
+// built at all: the testing source builds the canonical candidate only,
+// because geth builds on its current head and a speculative parent would
+// fight the CL over the EL head.
+func (s *Service) testingSpec(slot phase0.Slot, target *buildTarget) (spec *TestingBuildSpec, skip bool) {
+	frozen := s.planSvc.Freeze(slot)
+	if frozen.Build == nil || frozen.Build.Source != config.BuildSourceTesting {
+		return nil, false
+	}
+
+	if target.candidate != chain.CandidateParentFull && target.candidate != "" {
+		s.log.WithFields(logrus.Fields{
+			"slot":      slot,
+			"candidate": target.candidate,
+		}).Info("Testing source builds the canonical candidate only, skipping speculative candidate")
+
+		return nil, true
+	}
+
+	deadline := s.testingDeadline(slot)
+	if time.Now().After(deadline) {
+		s.log.WithFields(logrus.Fields{
+			"slot":     slot,
+			"deadline": deadline,
+			"late_ms":  time.Since(deadline).Milliseconds(),
+		}).Error("Testing build deadline already passed, not building")
+
+		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
+			Slot:      slot,
+			Candidate: string(target.candidate),
+			Error:     "testing build deadline passed before the build could start",
+			FailedAt:  time.Now(),
+		})
+
+		return nil, true
+	}
+
+	fill := frozen.Build.Fill
+	spec = &TestingBuildSpec{
+		Fill: tx_intake.FillSpec{
+			GasPct:   fill.GasPct,
+			MaxTxs:   fill.MaxTxs,
+			MaxBlobs: fill.MaxBlobs,
+			Policy:   fill.Policy,
+		},
+		Deadline:    deadline,
+		MaxAttempts: int(s.cfg.Testing.MaxAttempts),
+		MaxStrikes:  int(s.cfg.Testing.MaxStrikes),
+		QueueMaxAge: time.Duration(s.cfg.Testing.QueueMaxAgeSlots) * s.chainSvc.GetChainSpec().SecondsPerSlot,
+	}
+
+	for _, h := range fill.Txs {
+		spec.Fill.Txs = append(spec.Fill.Txs, common.HexToHash(h))
+	}
+
+	if gwei := s.cfg.Testing.BaseFeeCeilingGwei; gwei != 0 {
+		spec.BaseFeeCeiling = new(big.Int).Mul(new(big.Int).SetUint64(gwei), big.NewInt(1_000_000_000))
+	}
+
+	return spec, false
+}
+
+// testingFailureReason buckets a testing build error for metrics.
+func testingFailureReason(ctx context.Context, err error) string {
+	switch {
+	case ctx.Err() != nil:
+		return "deadline"
+	case strings.Contains(err.Error(), "packing"):
+		return "packing"
+	case strings.Contains(err.Error(), "testing_buildBlockV1"):
+		return "el_refused"
+	case strings.Contains(err.Error(), "not at parent"):
+		return "el_not_at_parent"
+	default:
+		return "other"
+	}
+}
+
+// testingDeadline is the latest completion time of the slot's testing build.
+// The configured offset wins; otherwise it follows whoever will ask for the
+// payload. With ePBS that is the bid window, so the build must be done before
+// bidding opens. Without it the Builder API asks, and getHeader can arrive as
+// early as the slot start — taking the ePBS-derived bound there would put the
+// deadline before the slot began and skip every build.
+func (s *Service) testingDeadline(slot phase0.Slot) time.Time {
+	ms := s.cfg.Testing.BuildDeadlineMs
+	if ms == 0 && s.cfg.EPBSEnabled {
+		ms = s.cfg.EPBS.BidStartTime - 300
+	}
+
+	return s.chainSvc.SlotToTime(slot).Add(time.Duration(ms) * time.Millisecond)
+}
+
+// SetTestingBuilder attaches the tx intake builder used by the testing build
+// source. Register before Start.
+func (s *Service) SetTestingBuilder(t *TestingBuilder) {
+	s.testing = t
+}
+
+// TestingBuilder returns the attached testing builder (nil without --el-rpc).
+func (s *Service) TestingBuilder() *TestingBuilder {
+	return s.testing
 }
 
 // applyPayloadTransform rewrites the built execution payload with the slot's

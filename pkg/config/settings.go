@@ -307,6 +307,29 @@ func validateValue(key string, v any) error {
 		}
 	}
 
+	switch key {
+	case KeyBuildSource:
+		if src, _ := v.(string); src != BuildSourcePool && src != BuildSourceTesting {
+			return fmt.Errorf("invalid build source %q (pool or testing)", src)
+		}
+	case KeyTestingPolicy:
+		if policy, _ := v.(string); !ValidTestingPolicy(policy) {
+			return fmt.Errorf("invalid testing policy %q (fifo, fee, round_robin or as_given)", policy)
+		}
+	case KeyTestingOnFailure:
+		if mode, _ := v.(string); mode != TestingOnFailureSkip && mode != TestingOnFailurePool {
+			return fmt.Errorf("invalid testing on_failure %q (skip or pool)", mode)
+		}
+	case KeyTestingFillGasPct:
+		if pct, _ := v.(uint64); pct == 0 || pct > 100 {
+			return fmt.Errorf("testing fill_gas_pct must be 1..100, got %d", pct)
+		}
+	case KeyTestingMaxAttempts, KeyTestingMaxStrikes:
+		if n, _ := v.(uint64); n == 0 {
+			return fmt.Errorf("%s must be > 0", key)
+		}
+	}
+
 	if key == KeySlotResultRetentionEpochs || key == KeySlotArtifactRetentionEpochs {
 		epochs, _ := v.(uint64)
 		if epochs == 0 {
