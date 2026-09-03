@@ -792,6 +792,13 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// agree on the parent.
 	event := s.effectiveBuildAttributes(slot, target.attrs)
 
+	// Resolved before the build is announced: a slot the testing source will
+	// not build must not leave an in-progress marker with no outcome.
+	spec, skip := s.testingSpec(slot, target)
+	if skip {
+		return
+	}
+
 	s.log.WithFields(logrus.Fields{
 		"slot":        slot,
 		"candidate":   target.candidate,
@@ -812,11 +819,6 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// make the getPayload call time out spuriously.
 	buildTimeMs := s.candidateBuildTime(target)
 	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
-
-	spec, skip := s.testingSpec(slot, target)
-	if skip {
-		return
-	}
 
 	if spec != nil {
 		// A testing build is synchronous on the EL and bounded by the slot's
@@ -962,11 +964,15 @@ func testingFailureReason(ctx context.Context, err error) string {
 	}
 }
 
-// testingDeadline is the latest completion time of the slot's testing build:
-// the configured offset, else the ePBS bid start minus 300 ms.
+// testingDeadline is the latest completion time of the slot's testing build.
+// The configured offset wins; otherwise it follows whoever will ask for the
+// payload. With ePBS that is the bid window, so the build must be done before
+// bidding opens. Without it the Builder API asks, and getHeader can arrive as
+// early as the slot start — taking the ePBS-derived bound there would put the
+// deadline before the slot began and skip every build.
 func (s *Service) testingDeadline(slot phase0.Slot) time.Time {
 	ms := s.cfg.Testing.BuildDeadlineMs
-	if ms == 0 {
+	if ms == 0 && s.cfg.EPBSEnabled {
 		ms = s.cfg.EPBS.BidStartTime - 300
 	}
 

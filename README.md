@@ -176,7 +176,7 @@ build fails. See [Testing build source](#testing-build-source).
 | `--testing-max-blobs` | `0` | Max blobs per block (0 = the fork's blob limit) |
 | `--testing-policy` | `fifo` | Packing order: `fifo`, `fee`, `round_robin`, `as_given` |
 | `--testing-base-fee-ceiling-gwei` | `0` | Above this next base fee the fill drops to the 1559 target (0 = off) |
-| `--testing-build-deadline` | `0` | Latest build completion in ms relative to slot start (0 = ePBS bid start minus 300 ms) |
+| `--testing-build-deadline` | `0` | Latest build completion in ms relative to slot start (0 = ePBS bid start minus 300 ms when ePBS is on, else the slot start) |
 | `--testing-on-failure` | `skip` | `skip` the slot or fall back to the `pool` build |
 | `--testing-queue-max-txs` | `100000` | Intake queue capacity; submissions beyond it are rejected |
 | `--testing-queue-max-age-slots` | `64` | Queued transactions older than this are evicted |

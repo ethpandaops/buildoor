@@ -277,8 +277,14 @@ npm run clean
      build retries within `testing.max_attempts`. Under `as_given` a refusal
      FAILS the build instead — trimming would build a different block and then
      verify "match" against the reduced plan. Runs under the slot deadline
-     (`testing.build_deadline_ms`, default bid start − 300 ms); a miss means no
-     payload (`testing.on_failure: skip`) unless `pool` fallback is chosen.
+     (`testing.build_deadline_ms`); its default follows whoever asks for the
+     payload: ePBS bid start − 300 ms when ePBS is enabled, else the SLOT
+     START (the Builder API's getHeader can come that early, and the
+     ePBS-derived bound would sit before the slot began and skip every build).
+     A miss means no payload (`testing.on_failure: skip`) unless `pool`
+     fallback is chosen. The spec resolves BEFORE `payload_build_started`
+     fires, so a slot the testing source will not build leaves no dangling
+     in-progress marker.
      Only the canonical candidate builds in this mode. The frozen plan forces
      `BuildStartImmediately` so the synchronous build starts at attributes time.
    - `testing.base_fee_ceiling_gwei` reduces the fill to the 1559 target above

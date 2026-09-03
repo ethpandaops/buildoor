@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -18,6 +20,10 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+
+	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/tx_intake"
 )
 
@@ -197,3 +203,47 @@ func TestBaseFeeCeilingSparesExactPlans(t *testing.T) {
 	fill := tx_intake.FillSpec{GasPct: 100, Policy: tx_intake.PolicyFIFO}
 	require.Equal(t, uint64(100), applyBaseFeeCeiling(fill, ceiling, big.NewInt(7)).GasPct)
 }
+
+// The default deadline follows whoever will ask for the payload. Taking the
+// ePBS bid window when ePBS is off would put it before the slot even began,
+// skipping every build in a Builder-API-only run.
+func TestTestingDeadlineDefaultFollowsTheConsumer(t *testing.T) {
+	slotStart := time.Unix(1_700_000_000, 0)
+
+	for _, tt := range []struct {
+		name     string
+		cfg      config.Config
+		wantFrom time.Duration
+	}{
+		{
+			name:     "epbs on: before the bid window",
+			cfg:      config.Config{EPBSEnabled: true, EPBS: config.EPBSConfig{BidStartTime: -400}},
+			wantFrom: -700 * time.Millisecond,
+		},
+		{
+			name:     "epbs off: the slot start",
+			cfg:      config.Config{EPBS: config.EPBSConfig{BidStartTime: -400}},
+			wantFrom: 0,
+		},
+		{
+			name:     "explicit wins either way",
+			cfg:      config.Config{EPBSEnabled: true, Testing: config.TestingConfig{BuildDeadlineMs: 1500}},
+			wantFrom: 1500 * time.Millisecond,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			s := &Service{cfg: &cfg, chainSvc: &fixedSlotChain{start: slotStart}}
+			require.Equal(t, slotStart.Add(tt.wantFrom), s.testingDeadline(1))
+		})
+	}
+}
+
+// fixedSlotChain answers only the slot clock the deadline needs.
+type fixedSlotChain struct {
+	chain.Service
+
+	start time.Time
+}
+
+func (c *fixedSlotChain) SlotToTime(phase0.Slot) time.Time { return c.start }
