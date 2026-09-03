@@ -174,6 +174,7 @@ export interface LocalBuildInfo {
   tx_source: string;
   selection?: TxSelectionSummary;
   explicit_txs?: number;
+  expected_hashes?: string[];
   inclusion_list_txs?: number;
   inclusion_list_dropped?: boolean;
   dropped_by_el?: number;
@@ -828,6 +829,7 @@ export interface LocalBuildPlan {
   payload_source?: string; // el | local | local_or_el
   tx_source?: string; // txpool | empty | el_mempool | explicit
   transactions?: string[]; // 0x-hex raw transactions (tx_source explicit)
+  queued?: string[]; // ordered pool tx hashes, exact or the build fails (tx_source queued)
   build_el_payload?: boolean;
   max_txs?: number;
   gas_fill_pct?: number;
@@ -929,6 +931,7 @@ export interface ResolvedLocalBuildSettings {
   payload_source: string;
   tx_source: string;
   transactions?: string[];
+  queued?: string[];
   build_el_payload: boolean;
   max_txs?: number;
   gas_fill_pct: number;

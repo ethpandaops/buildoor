@@ -519,6 +519,10 @@ const (
 	// TxSourceExplicit uses the exact transaction list of the slot's action
 	// plan; only reachable through a plan, never as a global default.
 	TxSourceExplicit = "explicit"
+	// TxSourceQueued uses an ordered list of transaction hashes that must be
+	// queued in the pool, exactly and in that order; only reachable through a
+	// plan. Any deviation fails the build, nothing is trimmed.
+	TxSourceQueued = "queued"
 )
 
 // NormalizedTxSource returns the transaction source, falling back to the given
@@ -526,7 +530,7 @@ const (
 // normalize, but it is meaningless as a global setting.
 func NormalizedTxSource(source, fallback string) string {
 	switch source {
-	case TxSourceTxPool, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit:
+	case TxSourceTxPool, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
 		return source
 	default:
 		return fallback
@@ -606,7 +610,7 @@ func (c *LocalBuildConfig) NormalizedPayloadSource() string {
 // to txpool as well.
 func (c *LocalBuildConfig) NormalizedTxSource() string {
 	source := NormalizedTxSource(c.TxSource, TxSourceTxPool)
-	if source == TxSourceExplicit {
+	if source == TxSourceExplicit || source == TxSourceQueued {
 		return TxSourceTxPool
 	}
 

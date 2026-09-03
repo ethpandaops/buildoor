@@ -586,3 +586,65 @@ func TestListAndClear(t *testing.T) {
 	require.Equal(t, 3, pool.Clear())
 	require.Equal(t, 0, pool.Stats().Pending)
 }
+
+func TestSelectQueuedIsExactOrFails(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	a := newAccount(t)
+	b := newAccount(t)
+	fund(el, a, 0, 100)
+	fund(el, b, 0, 100)
+
+	a0, raw := signTx(t, a, txOpts{nonce: 0})
+	_, err := pool.Add(raw)
+	require.NoError(t, err)
+
+	a1, raw := signTx(t, a, txOpts{nonce: 1})
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	b0, raw := signTx(t, b, txOpts{nonce: 0})
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	params := &SelectParams{ParentHash: common.Hash{0xaa}}
+
+	// Interleaved order across senders, nonce order within a sender.
+	sel, err := pool.SelectQueued(context.Background(), []common.Hash{a0.Hash(), b0.Hash(), a1.Hash()}, params)
+	require.NoError(t, err)
+	require.Len(t, sel.Txs, 3)
+	require.Equal(t, []common.Hash{a0.Hash(), b0.Hash(), a1.Hash()},
+		[]common.Hash{sel.Selected[0].Hash, sel.Selected[1].Hash, sel.Selected[2].Hash})
+	require.Equal(t, uint64(63000), sel.GasSum)
+
+	// Nonce order violated: a1 before a0.
+	_, err = pool.SelectQueued(context.Background(), []common.Hash{a1.Hash(), a0.Hash()}, params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "expects 0 at this position")
+
+	// Unknown hash.
+	_, err = pool.SelectQueued(context.Background(), []common.Hash{{0xff}}, params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "is not queued")
+
+	// Gas limit: the exact list must fit the whole block, the fill percentage
+	// does not apply.
+	el.header.GasLimit = 30_000
+	el.header.GasUsed = 15_000
+	_, err = pool.SelectQueued(context.Background(), []common.Hash{a0.Hash(), b0.Hash()}, params)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "does not fit the gas limit")
+
+	// Stale nonce (chain moved on) is a deviation too, never trimmed.
+	el.header.GasLimit = 30_000_000
+	el.header.GasUsed = 15_000_000
+	el.states[a.addr].Nonce = 1
+	_, err = pool.SelectQueued(context.Background(), []common.Hash{a0.Hash()}, params)
+	require.Error(t, err)
+
+	// A disabled pool refuses.
+	pool.SetEnabled(false)
+	_, err = pool.SelectQueued(context.Background(), []common.Hash{b0.Hash()}, params)
+	require.ErrorIs(t, err, ErrDisabled)
+}

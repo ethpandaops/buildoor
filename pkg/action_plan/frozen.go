@@ -112,6 +112,8 @@ type ResolvedLocalBuildSettings struct {
 	TxSource string `json:"tx_source"`
 	// Transactions is the explicit list (0x-hex) for the explicit source.
 	Transactions []string `json:"transactions,omitempty"`
+	// Queued is the exact ordered hash list for the queued source.
+	Queued []string `json:"queued,omitempty"`
 	// BuildELPayload keeps the engine build when the payload source is local.
 	BuildELPayload bool `json:"build_el_payload"`
 	// Pool selection parameters (tx source txpool).
@@ -444,6 +446,11 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 	if len(override.Transactions) > 0 {
 		local.Transactions = make([]string, len(override.Transactions))
 		copy(local.Transactions, override.Transactions)
+	}
+
+	if len(override.Queued) > 0 {
+		local.Queued = make([]string, len(override.Queued))
+		copy(local.Queued, override.Queued)
 	}
 
 	if override.BuildELPayload != nil {

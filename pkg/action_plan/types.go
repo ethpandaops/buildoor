@@ -384,6 +384,11 @@ type LocalBuildPlan struct {
 	// Transactions is the exact raw transaction list (0x-hex, network
 	// encoding) the slot's local payload is built from.
 	Transactions []string `json:"transactions,omitempty"`
+	// Queued is the exact ordered list of transaction hashes (0x-hex) the
+	// slot's local payload is built from; every hash must be queued in the
+	// pool at build time and the order must respect each sender's nonces.
+	// Implies tx_source queued. Any deviation fails the build, never trims.
+	Queued []string `json:"queued,omitempty"`
 	// BuildELPayload keeps the engine build when the payload source is local.
 	BuildELPayload *bool `json:"build_el_payload,omitempty"`
 	// Pool selection tweaks (tx source txpool).
@@ -408,20 +413,30 @@ func (p *LocalBuildPlan) clone() *LocalBuildPlan {
 		copy(c.Transactions, p.Transactions)
 	}
 
+	if p.Queued != nil {
+		c.Queued = make([]string, len(p.Queued))
+		copy(c.Queued, p.Queued)
+	}
+
 	return &c
 }
 
 func (p *LocalBuildPlan) isZero() bool {
 	return p == nil || (p.Enabled == nil && p.PayloadSource == "" && p.TxSource == "" &&
-		len(p.Transactions) == 0 && p.BuildELPayload == nil && p.MaxTxs == nil &&
+		len(p.Transactions) == 0 && len(p.Queued) == 0 && p.BuildELPayload == nil && p.MaxTxs == nil &&
 		p.GasFillPct == nil && p.Ordering == "")
 }
 
 // EffectiveTxSource returns the plan's transaction source, resolving an
-// explicit transaction list to the explicit source.
+// explicit transaction list to the explicit source and a queued-hash list to
+// the queued source.
 func (p *LocalBuildPlan) EffectiveTxSource() string {
 	if len(p.Transactions) > 0 {
 		return config.TxSourceExplicit
+	}
+
+	if len(p.Queued) > 0 {
+		return config.TxSourceQueued
 	}
 
 	return p.TxSource
@@ -442,6 +457,28 @@ func (p *LocalBuildPlan) validate() error {
 
 	if len(p.Transactions) > 0 && p.TxSource != "" && p.TxSource != config.TxSourceExplicit {
 		return fmt.Errorf("build.local.transactions: only allowed with tx_source explicit (got %q)", p.TxSource)
+	}
+
+	if p.TxSource == config.TxSourceQueued && len(p.Queued) == 0 {
+		return errors.New("build.local.tx_source: queued requires build.local.queued")
+	}
+
+	if len(p.Queued) > 0 && p.TxSource != "" && p.TxSource != config.TxSourceQueued {
+		return fmt.Errorf("build.local.queued: only allowed with tx_source queued (got %q)", p.TxSource)
+	}
+
+	if len(p.Queued) > 0 && len(p.Transactions) > 0 {
+		return errors.New("build.local: transactions and queued are mutually exclusive")
+	}
+
+	for i, h := range p.Queued {
+		if len(h) != 66 || !strings.HasPrefix(h, "0x") {
+			return fmt.Errorf("build.local.queued[%d]: %q is not a 0x-prefixed 32-byte hash", i, h)
+		}
+
+		if _, err := hexutil.Decode(h); err != nil {
+			return fmt.Errorf("build.local.queued[%d]: %w", i, err)
+		}
 	}
 
 	if p.Ordering != "" && config.NormalizedTxOrdering(p.Ordering, "") == "" {

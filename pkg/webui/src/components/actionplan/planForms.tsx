@@ -338,6 +338,7 @@ export interface LocalBuildFormState {
   payload_source: string;
   tx_source: string;
   transactions: string; // one 0x-hex raw transaction per line
+  queued: string; // one pool tx hash per line, exact order
   build_el_payload: '' | 'true' | 'false';
   max_txs: string;
   gas_fill_pct: string;
@@ -349,6 +350,7 @@ export const EMPTY_LOCAL_BUILD_STATE: LocalBuildFormState = {
   payload_source: '',
   tx_source: '',
   transactions: '',
+  queued: '',
   build_el_payload: '',
   max_txs: '',
   gas_fill_pct: '',
@@ -360,8 +362,9 @@ export function initLocalBuildState(plan: LocalBuildPlan | undefined): LocalBuil
   return {
     enabled: plan.enabled === undefined ? '' : plan.enabled ? 'true' : 'false',
     payload_source: plan.payload_source ?? '',
-    tx_source: plan.tx_source ?? (plan.transactions?.length ? 'explicit' : ''),
+    tx_source: plan.tx_source ?? (plan.transactions?.length ? 'explicit' : plan.queued?.length ? 'queued' : ''),
     transactions: (plan.transactions ?? []).join('\n'),
+    queued: (plan.queued ?? []).join('\n'),
     build_el_payload: plan.build_el_payload === undefined ? '' : plan.build_el_payload ? 'true' : 'false',
     max_txs: plan.max_txs === undefined ? '' : String(plan.max_txs),
     gas_fill_pct: plan.gas_fill_pct === undefined ? '' : String(plan.gas_fill_pct),
@@ -379,9 +382,16 @@ export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildP
     .split(/\s+/)
     .map((t) => t.trim())
     .filter((t) => t !== '');
+  const queued = state.queued
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '');
   if (state.tx_source === 'explicit' || (state.tx_source === '' && txs.length > 0)) {
     plan.tx_source = 'explicit';
     plan.transactions = txs;
+  } else if (state.tx_source === 'queued' || (state.tx_source === '' && queued.length > 0)) {
+    plan.tx_source = 'queued';
+    plan.queued = queued;
   } else if (state.tx_source) {
     plan.tx_source = state.tx_source;
   }
@@ -402,6 +412,7 @@ export const LocalBuildForm: React.FC<{
 }> = ({ bulk, state, disabled, available, unavailableReason, onChange }) => {
   const set = (patch: Partial<LocalBuildFormState>) => onChange({ ...state, ...patch });
   const isExplicit = state.tx_source === 'explicit';
+  const isQueued = state.tx_source === 'queued';
 
   return (
     <div className="mb-3">
@@ -457,9 +468,27 @@ export const LocalBuildForm: React.FC<{
               <option value="txpool">txpool</option>
               <option value="empty">empty block</option>
               <option value="el_mempool">EL mempool (testing path)</option>
-              <option value="explicit">explicit list</option>
+              <option value="explicit">explicit list (raw txs)</option>
+              <option value="queued">queued list (pool tx hashes, exact order)</option>
             </select>
           </div>
+          {isQueued && (
+            <div className="col-12">
+              <label className="form-label small mb-0">Queued tx hashes (one per line, exact block order)</label>
+              <textarea
+                className="form-control form-control-sm font-monospace"
+                rows={4}
+                value={state.queued}
+                disabled={disabled}
+                placeholder="0x…"
+                onChange={(e) => set({ queued: e.target.value })}
+              />
+              <div className="form-text mt-0">
+                Every hash must be queued in the pool at build time and respect the senders' nonce
+                order; any deviation fails the build instead of trimming the list.
+              </div>
+            </div>
+          )}
           {isExplicit && (
             <div className="col-12">
               <label className="form-label small mb-0">Transactions (0x-hex raw, one per line)</label>

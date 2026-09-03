@@ -347,7 +347,8 @@ func initConfig() error {
 			cfg.LocalBuild.PayloadSource)
 	}
 
-	if source := config.NormalizedTxSource(cfg.LocalBuild.TxSource, ""); source == "" || source == config.TxSourceExplicit {
+	if source := config.NormalizedTxSource(cfg.LocalBuild.TxSource, ""); source == "" ||
+		source == config.TxSourceExplicit || source == config.TxSourceQueued {
 		return fmt.Errorf("invalid --local-build-tx-source %q: must be txpool, empty or el_mempool",
 			cfg.LocalBuild.TxSource)
 	}

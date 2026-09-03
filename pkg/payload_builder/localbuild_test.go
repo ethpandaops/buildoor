@@ -227,6 +227,7 @@ func TestBuildLocalTxSources(t *testing.T) {
 		require.Equal(t, 2, out.info.SubmittedTxs)
 		require.Equal(t, 2, out.info.ExplicitTxs)
 		require.Equal(t, 0, out.info.DroppedByEL)
+		require.Equal(t, txHashes(txs), out.info.ExpectedHashes)
 		require.Equal(t, big.NewInt(42), out.payload.BlockValue)
 	})
 
@@ -279,16 +280,32 @@ func TestBuildLocalTxSources(t *testing.T) {
 		require.Equal(t, 1, out.info.InclusionListTxs)
 	})
 
-	t.Run("silently filtering EL is detected", func(t *testing.T) {
+	t.Run("silently filtering EL fails the build", func(t *testing.T) {
 		client := &fakeLocalClient{dropLast: true}
 		b, attrs, prelude := newLocalTestBuilder(client)
 
+		txs := [][]byte{signedTx(t, 0), signedTx(t, 1), signedTx(t, 2)}
+
 		out := b.buildLocal(context.Background(), attrs, prelude, &LocalBuildRequest{
 			TxSource:     config.TxSourceExplicit,
-			Transactions: [][]byte{signedTx(t, 0), signedTx(t, 1), signedTx(t, 2)},
+			Transactions: txs,
 		})
-		require.NoError(t, out.err)
+		require.Error(t, out.err)
+		require.Contains(t, out.err.Error(), "deviates from the plan")
+		require.Nil(t, out.payload, "a payload that is not the plan is never handed to the bidders")
 		require.Equal(t, 1, out.info.DroppedByEL)
+		require.Equal(t, txHashes(txs), out.info.ExpectedHashes)
+	})
+
+	t.Run("queued source without a pool is skipped", func(t *testing.T) {
+		client := &fakeLocalClient{}
+		b, attrs, prelude := newLocalTestBuilder(client)
+
+		out := b.buildLocal(context.Background(), attrs, prelude, &LocalBuildRequest{
+			TxSource: config.TxSourceQueued,
+			Queued:   []common.Hash{{1}},
+		})
+		require.Equal(t, LocalSkipTxPoolUnavailable, out.skipReason)
 	})
 
 	t.Run("EL error propagates", func(t *testing.T) {

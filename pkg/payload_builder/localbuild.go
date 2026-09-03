@@ -65,6 +65,9 @@ type LocalBuildRequest struct {
 	TxSource string
 	// Transactions is the explicit transaction list (tx source explicit).
 	Transactions [][]byte
+	// Queued is the exact ordered list of pool transaction hashes (tx source
+	// queued).
+	Queued []common.Hash
 	// PayloadSource decides which payload feeds consumers: el, local or
 	// local_or_el.
 	PayloadSource string
@@ -100,8 +103,13 @@ type LocalBuildInfo struct {
 	TxSource string `json:"tx_source"`
 	// Selection is the pool selection summary (tx source txpool).
 	Selection *txpool.Summary `json:"selection,omitempty"`
-	// ExplicitTxs is the explicit list length (tx source explicit).
+	// ExplicitTxs is the explicit list length (tx source explicit / queued).
 	ExplicitTxs int `json:"explicit_txs,omitempty"`
+	// ExpectedHashes are the hashes of the transactions handed to the EL, in
+	// order (nil for the el_mempool source, where the EL chooses). The built
+	// payload is checked against this list before it is used, and the
+	// included block after inclusion.
+	ExpectedHashes []string `json:"expected_hashes,omitempty"`
 	// InclusionListTxs is how many inclusion-list transactions were prepended.
 	InclusionListTxs int `json:"inclusion_list_txs,omitempty"`
 	// InclusionListDropped marks that the build only succeeded after the
@@ -375,6 +383,15 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot) (*LocalBuildRequest
 		Ordering:       settings.Ordering,
 		IncludeBlobTxs: availability.BlobBundle || settings.AllowBlobsWithoutBundle,
 		BlobEncoding:   availability.BlobEncoding,
+	}
+
+	if len(settings.Queued) > 0 {
+		req.TxSource = config.TxSourceQueued
+		req.Queued = make([]common.Hash, 0, len(settings.Queued))
+
+		for _, hexHash := range settings.Queued {
+			req.Queued = append(req.Queued, common.HexToHash(hexHash))
+		}
 	}
 
 	if len(settings.Transactions) > 0 {

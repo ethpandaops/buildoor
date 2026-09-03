@@ -349,7 +349,8 @@ func validateValue(key string, v any) error {
 
 	if key == KeyLocalBuildTxSource {
 		source, _ := v.(string)
-		if normalized := NormalizedTxSource(source, ""); normalized == "" || normalized == TxSourceExplicit {
+		if normalized := NormalizedTxSource(source, ""); normalized == "" ||
+			normalized == TxSourceExplicit || normalized == TxSourceQueued {
 			return fmt.Errorf("invalid tx source %q (must be txpool, empty or el_mempool)", source)
 		}
 	}

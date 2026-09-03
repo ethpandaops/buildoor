@@ -2,6 +2,7 @@ package txpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand/v2"
@@ -275,6 +276,149 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		encoded = append(encoded, raw)
 	}
 
+	sel.Txs = p.prependInclusionList(sel, encoded, params.InclusionList)
+
+	return sel, nil
+}
+
+// SelectQueued assembles exactly the given queued transactions in the given
+// order. It is a contract, never a fill: every hash must be queued, each
+// sender's transactions must appear in nonce order starting at the sender's
+// parent-state nonce, every transaction must clear the fee floors and its
+// sender's balance, and the list must fit the block's gas and blob caps (the
+// fill percentage does not apply). Any deviation is an error and nothing is
+// trimmed.
+func (p *Pool) SelectQueued(ctx context.Context, hashes []common.Hash, params *SelectParams) (*Selection, error) {
+	if len(hashes) == 0 {
+		return nil, errors.New("select queued: empty transaction list")
+	}
+
+	if !p.enabled.Load() {
+		return nil, ErrDisabled
+	}
+
+	entries := make([]*PooledTx, len(hashes))
+	senders := make([]common.Address, 0, len(hashes))
+	seen := make(map[common.Address]struct{}, len(hashes))
+
+	for i, hash := range hashes {
+		tx := p.Get(hash)
+		if tx == nil {
+			return nil, fmt.Errorf("select queued: tx %d (%s) is not queued", i, hash.Hex())
+		}
+
+		entries[i] = tx
+
+		if _, ok := seen[tx.Sender]; !ok {
+			seen[tx.Sender] = struct{}{}
+			senders = append(senders, tx.Sender)
+		}
+	}
+
+	parent, err := p.elClient.HeaderByHash(ctx, params.ParentHash)
+	if err != nil {
+		return nil, fmt.Errorf("select queued: %w", err)
+	}
+
+	sel := &Selection{
+		Skipped:  make(map[string]int, 8),
+		Snapshot: time.Now(),
+		BaseFee:  calcNextBaseFee(parent),
+		PoolSize: p.Stats().Pending,
+	}
+
+	sel.GasBudget = params.GasLimit
+	if sel.GasBudget == 0 {
+		sel.GasBudget = parent.GasLimit
+	}
+
+	if params.IncludeBlobTxs {
+		for _, tx := range entries {
+			if tx.Tx.Type() == types.BlobTxType {
+				blobFee, err := p.elClient.BlobBaseFee(ctx)
+				if err != nil {
+					return nil, fmt.Errorf("select queued: %w", err)
+				}
+
+				sel.BlobBaseFee = blobFee
+
+				break
+			}
+		}
+	}
+
+	states, err := p.elClient.AccountStatesAt(ctx, senders, params.ParentHash, parent.Number.Uint64())
+	if err != nil {
+		return nil, fmt.Errorf("select queued: %w", err)
+	}
+
+	expected := make(map[common.Address]uint64, len(senders))
+	balance := make(map[common.Address]*big.Int, len(senders))
+
+	for _, sender := range senders {
+		state := states[sender]
+		if state == nil {
+			return nil, fmt.Errorf("select queued: no parent state for sender %s", sender.Hex())
+		}
+
+		expected[sender] = state.Nonce
+		balance[sender] = new(big.Int).Set(state.Balance)
+	}
+
+	var gasUsed uint64
+
+	blobs := 0
+	encoded := make([][]byte, 0, len(entries))
+
+	for i, tx := range entries {
+		nonce := tx.Tx.Nonce()
+		if want := expected[tx.Sender]; nonce != want {
+			return nil, fmt.Errorf("select queued: tx %d (%s) has nonce %d, sender %s expects %d at this position",
+				i, tx.Hash.Hex(), nonce, tx.Sender.Hex(), want)
+		}
+
+		if tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0 {
+			return nil, fmt.Errorf("select queued: tx %d (%s) does not clear the base fee %s", i, tx.Hash.Hex(), sel.BaseFee)
+		}
+
+		txBlobs := len(tx.Tx.BlobHashes())
+		if txBlobs > 0 {
+			if !params.IncludeBlobTxs {
+				return nil, fmt.Errorf("select queued: tx %d (%s) is a blob transaction the EL cannot bundle", i, tx.Hash.Hex())
+			}
+
+			if sel.BlobBaseFee != nil && tx.Tx.BlobGasFeeCap().Cmp(sel.BlobBaseFee) < 0 {
+				return nil, fmt.Errorf("select queued: tx %d (%s) does not clear the blob base fee", i, tx.Hash.Hex())
+			}
+
+			if uint64(blobs+txBlobs) > params.MaxBlobs {
+				return nil, fmt.Errorf("select queued: tx %d (%s) exceeds the blob cap %d", i, tx.Hash.Hex(), params.MaxBlobs)
+			}
+		}
+
+		if gasUsed+tx.Tx.Gas() > sel.GasBudget {
+			return nil, fmt.Errorf("select queued: tx %d (%s) does not fit the gas limit %d", i, tx.Hash.Hex(), sel.GasBudget)
+		}
+
+		if balance[tx.Sender].Cmp(tx.Tx.Cost()) < 0 {
+			return nil, fmt.Errorf("select queued: tx %d (%s): sender %s cannot cover the cost", i, tx.Hash.Hex(), tx.Sender.Hex())
+		}
+
+		raw, err := encodeTx(tx.Tx, params.BlobEncoding)
+		if err != nil {
+			return nil, fmt.Errorf("select queued: encode %s: %w", tx.Hash.Hex(), err)
+		}
+
+		balance[tx.Sender].Sub(balance[tx.Sender], tx.Tx.Cost())
+		expected[tx.Sender]++
+		gasUsed += tx.Tx.Gas()
+		blobs += txBlobs
+		encoded = append(encoded, raw)
+		sel.Selected = append(sel.Selected, tx)
+	}
+
+	sel.GasSum = gasUsed
+	sel.Blobs = blobs
 	sel.Txs = p.prependInclusionList(sel, encoded, params.InclusionList)
 
 	return sel, nil

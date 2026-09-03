@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
@@ -536,6 +537,28 @@ func (b *PayloadBuilder) buildLocal(
 
 		info.ExplicitTxs = len(txs)
 
+	case config.TxSourceQueued:
+		if b.txPool == nil {
+			return localOutcome{skipReason: LocalSkipTxPoolUnavailable}
+		}
+
+		selection, err := b.txPool.SelectQueued(ctx, req.Queued, &txpool.SelectParams{
+			ParentHash:     common.Hash(attrs.ParentBlockHash),
+			GasLimit:       b.localGasLimit(ctx, attrs, prelude),
+			MaxBlobs:       b.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)),
+			InclusionList:  attrs.InclusionListTransactions,
+			IncludeBlobTxs: req.IncludeBlobTxs,
+			BlobEncoding:   req.BlobEncoding,
+		})
+		if err != nil {
+			return localOutcome{info: info, err: fmt.Errorf("queued list: %w", err)}
+		}
+
+		info.Selection = selection.Summary()
+		info.InclusionListTxs = selection.InclusionListTxs
+		info.ExplicitTxs = len(selection.Selected)
+		txs = selection.Txs
+
 	case config.TxSourceEmpty:
 		txs = [][]byte{}
 
@@ -587,6 +610,7 @@ func (b *PayloadBuilder) buildLocal(
 
 	if txs != nil {
 		info.SubmittedTxs = len(txs)
+		info.ExpectedHashes = txHashes(txs)
 	}
 
 	parentHash := common.Hash(attrs.ParentBlockHash)
@@ -601,6 +625,7 @@ func (b *PayloadBuilder) buildLocal(
 		txs = txs[info.InclusionListTxs:]
 		info.InclusionListDropped = true
 		info.SubmittedTxs = len(txs)
+		info.ExpectedHashes = txHashes(txs)
 
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
 	}
@@ -618,13 +643,67 @@ func (b *PayloadBuilder) buildLocal(
 	payload.Local = info
 	info.BuiltAt = payload.ReadyAt
 
-	if txs != nil && payload.ExecutionPayload != nil && len(payload.ExecutionPayload.Transactions) < len(txs) {
-		info.DroppedByEL = len(txs) - len(payload.ExecutionPayload.Transactions)
+	// The submitted list is a contract: the payload must hold exactly these
+	// transactions in this order. ELs that silently filter (erigon) or
+	// reorder would otherwise bid a block that is not the plan; the bid is
+	// refused instead and the deviation recorded.
+	if txs != nil {
+		if err := verifyBuiltPayload(payload, info.ExpectedHashes); err != nil {
+			info.DroppedByEL = max(0, len(txs)-len(payload.ExecutionPayload.Transactions))
+
+			return localOutcome{info: info, err: err}
+		}
 	}
 
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
 	return localOutcome{payload: payload, info: info}
+}
+
+// txHashes decodes network-encoded transactions into their hashes, in order.
+// Undecodable entries map to the zero hash (the EL refuses them anyway).
+func txHashes(txs [][]byte) []string {
+	out := make([]string, len(txs))
+
+	for i, raw := range txs {
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(raw); err != nil {
+			out[i] = (common.Hash{}).Hex()
+
+			continue
+		}
+
+		out[i] = tx.Hash().Hex()
+	}
+
+	return out
+}
+
+// verifyBuiltPayload checks that the payload holds exactly the expected
+// transactions, in order.
+func verifyBuiltPayload(payload *Payload, expected []string) error {
+	if payload.ExecutionPayload == nil {
+		return errors.New("local payload deviates from the plan: no execution payload")
+	}
+
+	actual := payload.ExecutionPayload.Transactions
+	if len(actual) != len(expected) {
+		return fmt.Errorf("local payload deviates from the plan: %d transactions built, %d submitted",
+			len(actual), len(expected))
+	}
+
+	for i, raw := range actual {
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(raw); err != nil {
+			return fmt.Errorf("local payload deviates from the plan: tx %d does not decode: %w", i, err)
+		}
+
+		if got := tx.Hash().Hex(); got != expected[i] {
+			return fmt.Errorf("local payload deviates from the plan: tx %d is %s, submitted %s", i, got, expected[i])
+		}
+	}
+
+	return nil
 }
 
 // localGasLimit predicts the gas limit the local payload will carry so the
