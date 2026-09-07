@@ -26,7 +26,13 @@ participants:
 
 network_params:
   preset: minimal
-  genesis_delay: 20
+  # buildoor is launched after both participants and must be listening before
+  # slot 0: the lodestar VCs register their validators with the builder once
+  # at the start of epoch 0 and retry only at the next epoch boundary, which
+  # is already Gloas (gloas_fork_epoch 1), so a late buildoor loses the whole
+  # pre-Gloas Builder API phase (slots 0-7). Two nodes take ~90 s to come up
+  # on a GitHub runner.
+  genesis_delay: 120
   gloas_fork_epoch: 1
 
 mev_type: buildoor
