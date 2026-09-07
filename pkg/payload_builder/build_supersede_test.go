@@ -208,7 +208,9 @@ func TestSupersedeSynthesizedBuild_WithdrawsEmittedPayload(t *testing.T) {
 	}
 
 	svc.scheduledBuildMu.Lock()
+	build.seq = 7
 	build.payload = payload
+	build.readyFired = true
 	svc.payloadCache.Store(payload)
 	svc.scheduledBuildMu.Unlock()
 
@@ -229,8 +231,75 @@ func TestSupersedeSynthesizedBuild_WithdrawsEmittedPayload(t *testing.T) {
 		assert.Equal(t, phase0.Slot(133), event.Slot)
 		assert.Equal(t, string(chain.CandidateParentFull), event.Candidate)
 		assert.Equal(t, errBuildSuperseded, event.Error)
+		assert.Equal(t, uint64(7), event.BuildSeq, "the failure carries the superseded build's seq")
 	default:
 		t.Fatal("a finished build must be reported as superseded")
+	}
+}
+
+// TestSupersedeSynthesizedBuild_FailureFollowsInFlightReady covers the window
+// between caching the payload and finishing its ready dispatch: the supersede
+// withdraws the payload but leaves the failure report to the build goroutine,
+// so consumers always see the ready event before the superseded failure.
+func TestSupersedeSynthesizedBuild_FailureFollowsInFlightReady(t *testing.T) {
+	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	svc := supersedeTestService(t, &stubChainService{spec: spec})
+
+	synthesized := synthesizedAttrs()
+	build, _ := registerBuild(svc, synthesized, true)
+
+	payload := &Payload{
+		Attributes: synthesized,
+		BlockHash:  phase0.Hash32{0xb0, 0xd7},
+		Candidate:  chain.CandidateParentFull,
+		ReadyAt:    time.Now(),
+	}
+
+	// Cached, ready event still being dispatched (readyFired not yet set).
+	svc.scheduledBuildMu.Lock()
+	build.seq = 3
+	build.payload = payload
+	svc.payloadCache.Store(payload)
+	svc.scheduledBuildMu.Unlock()
+
+	failedSub := svc.SubscribePayloadBuildFailed(4, false)
+	defer failedSub.Unsubscribe()
+
+	real := *synthesized
+	real.Synthesized = false
+	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
+
+	require.True(t, svc.supersedeSynthesizedBuild(&real))
+	assert.Nil(t, svc.payloadCache.Get(133), "withdrawn immediately")
+
+	select {
+	case <-failedSub.Channel():
+		t.Fatal("the failure must wait for the build's ready dispatch to finish")
+	default:
+	}
+
+	// The build goroutine finishes its ready dispatch and reports the abort.
+	svc.completeBuild(build)
+
+	select {
+	case event := <-failedSub.Channel():
+		assert.Equal(t, errBuildSuperseded, event.Error)
+		assert.Equal(t, uint64(3), event.BuildSeq)
+	default:
+		t.Fatal("the finished ready dispatch must be followed by the superseded failure")
+	}
+
+	// A build that was never aborted reports nothing on completion.
+	other := synthesizedAttrs()
+	other.ParentBlockHash = phase0.Hash32{0xbb}
+	otherBuild, _ := registerBuild(svc, other, false)
+	otherBuild.payload = &Payload{Attributes: other, Candidate: chain.CandidateParentEmpty}
+	svc.completeBuild(otherBuild)
+
+	select {
+	case <-failedSub.Channel():
+		t.Fatal("an unaborted build must not report a failure")
+	default:
 	}
 }
 
@@ -265,7 +334,7 @@ func TestHandlePayloadAttributes_RebuildsAfterSupersede(t *testing.T) {
 	// (it fails against the offline clients, which is fine: it ran).
 	require.Eventually(t, func() bool {
 		build := svc.startedBuild(133, key)
-		return build != nil && build != stale && !build.synthesized
+		return build != nil && build != stale && !build.synthesized && build.seq > stale.seq
 	}, 2*time.Second, 10*time.Millisecond, "a new build from the node's attributes must start")
 
 	select {

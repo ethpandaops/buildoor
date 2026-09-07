@@ -82,6 +82,9 @@ type Service struct {
 	// lastBuiltSlot tracks the most recently built slot (WebUI status).
 	lastBuiltSlot atomic.Uint64
 
+	// buildSeq numbers every candidate build (PayloadBuildStartedEvent.BuildSeq).
+	buildSeq atomic.Uint64
+
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
 	elClientVersion   *ELClientVersion
@@ -493,11 +496,13 @@ func newSlotBuildState() *slotBuildState {
 // beacon node's own attributes for the same tuple while it runs or after it
 // emitted its payload; the fields are guarded by Service.scheduledBuildMu.
 type candidateBuild struct {
+	seq         uint64                         // BuildSeq of the build's events
 	attrs       *beacon.PayloadAttributesEvent // attributes the build ran from
 	synthesized bool                           // attrs were synthesized locally
 	cancel      context.CancelFunc             // aborts the in-flight engine build
 	aborted     bool                           // superseded: the payload must not be emitted
-	payload     *Payload                       // emitted payload (nil while building or failed)
+	payload     *Payload                       // cached payload (nil while building or failed)
+	readyFired  bool                           // the payload's ready event was dispatched
 }
 
 // errBuildSuperseded is the recorded failure reason of a build superseded by
@@ -817,6 +822,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	defer cancel()
 
 	build := &candidateBuild{
+		seq:         s.buildSeq.Add(1),
 		attrs:       target.attrs,
 		synthesized: target.derived || target.attrs.Synthesized,
 		cancel:      cancel,
@@ -844,12 +850,13 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		Slot:      slot,
 		Candidate: string(target.candidate),
 		StartedAt: time.Now(),
+		BuildSeq:  build.seq,
 	})
 
 	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs)
 	if err != nil {
 		if s.buildAborted(build) {
-			s.reportBuildSuperseded(slot, target.candidate)
+			s.reportBuildSuperseded(slot, target.candidate, build.seq)
 			return
 		}
 
@@ -865,10 +872,13 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Candidate: string(target.candidate),
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
+			BuildSeq:  build.seq,
 		})
 
 		return
 	}
+
+	payloadEvent.BuildSeq = build.seq
 
 	// Classify the payload by the parent it was actually built on (the plan's
 	// parent-reorg tweak may have redirected it).
@@ -888,6 +898,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Candidate: string(target.candidate),
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
+			BuildSeq:  build.seq,
 		})
 
 		return
@@ -899,7 +910,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	s.scheduledBuildMu.Lock()
 	if build.aborted {
 		s.scheduledBuildMu.Unlock()
-		s.reportBuildSuperseded(slot, target.candidate)
+		s.reportBuildSuperseded(slot, target.candidate, build.seq)
 
 		return
 	}
@@ -909,6 +920,23 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	s.scheduledBuildMu.Unlock()
 
 	s.emitPayloadReady(slot, payloadEvent)
+	s.completeBuild(build)
+}
+
+// completeBuild marks the build's ready event as dispatched. A supersede that
+// withdrew the payload while the ready event was in flight left the failure
+// report to this goroutine, so the superseded failure always follows the
+// same build's ready event (a consumer never ends on "ready" for a withdrawn
+// payload).
+func (s *Service) completeBuild(build *candidateBuild) {
+	s.scheduledBuildMu.Lock()
+	build.readyFired = true
+	aborted := build.aborted
+	s.scheduledBuildMu.Unlock()
+
+	if aborted {
+		s.reportBuildSuperseded(build.payload.Attributes.ProposalSlot, build.payload.Candidate, build.seq)
+	}
 }
 
 // buildAborted reports whether the build was superseded while running.
@@ -921,11 +949,14 @@ func (s *Service) buildAborted(build *candidateBuild) bool {
 
 // reportBuildSuperseded records a superseded build as failed so its
 // in-progress (or already ready) rendering is not left standing for a
-// payload that will never be bid.
-func (s *Service) reportBuildSuperseded(slot phase0.Slot, candidate chain.CandidateKey) {
+// payload that will never be bid. Fired exactly once per superseded build,
+// after that build's ready event when one was dispatched; the seq lets
+// consumers drop it when the replacement build already reported.
+func (s *Service) reportBuildSuperseded(slot phase0.Slot, candidate chain.CandidateKey, seq uint64) {
 	s.log.WithFields(logrus.Fields{
 		"slot":      slot,
 		"candidate": candidate,
+		"build_seq": seq,
 	}).Info("Payload build superseded by beacon node attributes")
 
 	s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
@@ -933,6 +964,7 @@ func (s *Service) reportBuildSuperseded(slot phase0.Slot, candidate chain.Candid
 		Candidate: string(candidate),
 		Error:     errBuildSuperseded,
 		FailedAt:  time.Now(),
+		BuildSeq:  seq,
 	})
 }
 
@@ -982,7 +1014,12 @@ func (s *Service) supersedeSynthesizedBuild(event *beacon.PayloadAttributesEvent
 	build.cancel()
 	delete(state.started, tuple)
 
+	// The build goroutine reports the abort itself while it is still running
+	// or still dispatching its ready event; only a fully published build is
+	// reported here, which keeps the failure after the ready event.
 	emitted := build.payload
+	reportHere := emitted != nil && build.readyFired
+
 	if emitted != nil {
 		s.payloadCache.Remove(emitted)
 	}
@@ -1000,10 +1037,8 @@ func (s *Service) supersedeSynthesizedBuild(event *beacon.PayloadAttributesEvent
 	s.log.WithFields(fields).Warn("Beacon node attributes differ from the synthesized " +
 		"attributes the build ran from, aborting it and rebuilding")
 
-	// The build goroutine reports itself while running; an already finished
-	// build is reported here.
-	if emitted != nil {
-		s.reportBuildSuperseded(slot, emitted.Candidate)
+	if reportHere {
+		s.reportBuildSuperseded(slot, emitted.Candidate, build.seq)
 	}
 
 	return true

@@ -94,6 +94,14 @@ type BuildOutcome struct {
 	Status     BuildStatus `json:"status"`
 	SkipReason string      `json:"skip_reason,omitempty"` // action_plan.BuildSkipReason* when skipped
 
+	// BuildSeq is the producing build's sequence number (payload_builder
+	// PayloadBuildStartedEvent.BuildSeq): a slot's candidate can be built
+	// more than once (a superseded build and its replacement), and the
+	// events of the two builds arrive over separate subscriptions in no
+	// fixed order, so an outcome from an older build never overwrites a
+	// newer build's. In-memory only: seqs restart with the process.
+	BuildSeq uint64 `json:"-"`
+
 	// Candidate classifies which build-parent candidate this outcome belongs
 	// to (parent_full, parent_empty, grandparent_full, grandparent_empty;
 	// empty = unclassified or single-build slot).
