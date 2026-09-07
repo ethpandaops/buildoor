@@ -82,6 +82,9 @@ type Service struct {
 	// lastBuiltSlot tracks the most recently built slot (WebUI status).
 	lastBuiltSlot atomic.Uint64
 
+	// buildSeq numbers every candidate build (PayloadBuildStartedEvent.BuildSeq).
+	buildSeq atomic.Uint64
+
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
 	elClientVersion   *ELClientVersion
@@ -414,6 +417,13 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 		s.markPayloadWon(event.ParentBlockHash, payload.Attributes.ProposalSlot)
 	}
 
+	// The beacon node's own attributes supersede a build that started from
+	// synthesized ones for the same parent (the fallback won the race against
+	// a late node event); the tuple is released so the paths below rebuild.
+	if !event.Synthesized {
+		s.supersedeSynthesizedBuild(event)
+	}
+
 	// Arm the missing-block fallback for the NEXT proposal slot: if its
 	// block goes missing entirely, some clients never emit fresh attributes
 	// and this slot's attributes get re-used instead.
@@ -472,13 +482,32 @@ func (s *Service) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEv
 type slotBuildState struct {
 	passScheduled bool
 	buildStartMs  int64
-	started       map[beacon.AttrParentKey]bool
+	started       map[beacon.AttrParentKey]*candidateBuild
 	readyFired    bool // OnSlotBuilt/stat accounting fired (once per slot)
 }
 
 func newSlotBuildState() *slotBuildState {
-	return &slotBuildState{started: make(map[beacon.AttrParentKey]bool, 4)}
+	return &slotBuildState{started: make(map[beacon.AttrParentKey]*candidateBuild, 4)}
 }
+
+// candidateBuild is one started candidate build of a slot, tracked by the
+// parent tuple it builds on. A build from locally synthesized attributes
+// (missing-block fallback or candidate synthesis) can be superseded by the
+// beacon node's own attributes for the same tuple while it runs or after it
+// emitted its payload; the fields are guarded by Service.scheduledBuildMu.
+type candidateBuild struct {
+	seq         uint64                         // BuildSeq of the build's events
+	attrs       *beacon.PayloadAttributesEvent // attributes the build ran from
+	synthesized bool                           // attrs were synthesized locally
+	cancel      context.CancelFunc             // aborts the in-flight engine build
+	aborted     bool                           // superseded: the payload must not be emitted
+	payload     *Payload                       // cached payload (nil while building or failed)
+	readyFired  bool                           // the payload's ready event was dispatched
+}
+
+// errBuildSuperseded is the recorded failure reason of a build superseded by
+// the beacon node's attributes.
+const errBuildSuperseded = "superseded by beacon node attributes"
 
 // maybeLateBuild activates a candidate build for an attributes variant that
 // arrived after the slot's build pass already ran: the chain moved (reorg,
@@ -489,7 +518,7 @@ func (s *Service) maybeLateBuild(slot phase0.Slot, event *beacon.PayloadAttribut
 
 	s.scheduledBuildMu.Lock()
 	state := s.slotBuilds[slot]
-	alreadyStarted := state != nil && state.started[beacon.AttrParentKeyOf(event)]
+	alreadyStarted := state != nil && state.started[beacon.AttrParentKeyOf(event)] != nil
 	s.scheduledBuildMu.Unlock()
 
 	if alreadyStarted || time.Now().After(s.slotEndTime(slot)) {
@@ -635,6 +664,7 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 
 	synthesized := *parent
 	synthesized.ProposalSlot = targetSlot
+	synthesized.Synthesized = true
 	synthesized.Timestamp = parent.Timestamp +
 		skippedSlots*uint64(s.chainSvc.GetChainSpec().SecondsPerSlot.Seconds())
 
@@ -647,14 +677,18 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 			"Cannot resolve proposer for synthesized attributes, keeping the source slot's")
 	}
 
-	// The randao mix rotates at epoch boundaries; a value copied across one
-	// is invalid and any payload built from it will be rejected.
+	// The epoch transition changes the state the attributes derive from: the
+	// expected withdrawals move with the rewards applied to the swept
+	// validators and the randao mix rotates. Copied across an epoch boundary
+	// they are stale and a payload built from them is rejected; the build
+	// stays only until the beacon node's own attributes supersede it.
 	spec := s.chainSvc.GetChainSpec()
 	if uint64(targetSlot)/spec.SlotsPerEpoch != uint64(parent.ProposalSlot)/spec.SlotsPerEpoch {
 		s.log.WithFields(logrus.Fields{
 			"slot":       targetSlot,
 			"attrs_from": parent.ProposalSlot,
-		}).Warn("Synthesized attributes cross an epoch boundary, prev_randao may be stale")
+		}).Warn("Synthesized attributes cross an epoch boundary, " +
+			"withdrawals and prev_randao may be stale")
 	}
 
 	if !events.InjectPayloadAttributes(&synthesized) {
@@ -771,12 +805,29 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	}
 
 	tuple := beacon.AttrParentKeyOf(target.attrs)
-	if state.started[tuple] {
+	if state.started[tuple] != nil {
 		s.scheduledBuildMu.Unlock()
 		return
 	}
 
-	state.started[tuple] = true
+	// Size the build deadline to the target's build time plus a margin for the
+	// engine getPayload and finality lookups, so a long PayloadBuildTime doesn't
+	// make the getPayload call time out spuriously. The cancel func is
+	// registered with the build so a superseding attributes event can abort
+	// the engine build while it runs.
+	buildTimeMs := s.candidateBuildTime(target)
+	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
+	ctx, cancel := context.WithTimeout(s.ctx, buildTimeout)
+
+	defer cancel()
+
+	build := &candidateBuild{
+		seq:         s.buildSeq.Add(1),
+		attrs:       target.attrs,
+		synthesized: target.derived || target.attrs.Synthesized,
+		cancel:      cancel,
+	}
+	state.started[tuple] = build
 	s.scheduledBuildMu.Unlock()
 
 	// The frozen plan (idempotent Freeze) decides whether to build this slot's
@@ -799,19 +850,16 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		Slot:      slot,
 		Candidate: string(target.candidate),
 		StartedAt: time.Now(),
+		BuildSeq:  build.seq,
 	})
-
-	// Size the build deadline to the target's build time plus a margin for the
-	// engine getPayload and finality lookups, so a long PayloadBuildTime doesn't
-	// make the getPayload call time out spuriously.
-	buildTimeMs := s.candidateBuildTime(target)
-	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
-	ctx, cancel := context.WithTimeout(s.ctx, buildTimeout)
-
-	defer cancel()
 
 	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs)
 	if err != nil {
+		if s.buildAborted(build) {
+			s.reportBuildSuperseded(slot, target.candidate, build.seq)
+			return
+		}
+
 		s.log.WithError(err).WithFields(logrus.Fields{
 			"slot":      slot,
 			"candidate": target.candidate,
@@ -824,10 +872,13 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Candidate: string(target.candidate),
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
+			BuildSeq:  build.seq,
 		})
 
 		return
 	}
+
+	payloadEvent.BuildSeq = build.seq
 
 	// Classify the payload by the parent it was actually built on (the plan's
 	// parent-reorg tweak may have redirected it).
@@ -847,12 +898,150 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 			Candidate: string(target.candidate),
 			Error:     err.Error(),
 			FailedAt:  time.Now(),
+			BuildSeq:  build.seq,
 		})
 
 		return
 	}
 
+	// Publish under the build lock: a supersede that raced the build's end
+	// either sees the payload here (and withdraws it) or the build sees the
+	// abort (and never emits).
+	s.scheduledBuildMu.Lock()
+	if build.aborted {
+		s.scheduledBuildMu.Unlock()
+		s.reportBuildSuperseded(slot, target.candidate, build.seq)
+
+		return
+	}
+
+	build.payload = payloadEvent
+	s.payloadCache.Store(payloadEvent)
+	s.scheduledBuildMu.Unlock()
+
 	s.emitPayloadReady(slot, payloadEvent)
+	s.completeBuild(build)
+}
+
+// completeBuild marks the build's ready event as dispatched. A supersede that
+// withdrew the payload while the ready event was in flight left the failure
+// report to this goroutine, so the superseded failure always follows the
+// same build's ready event (a consumer never ends on "ready" for a withdrawn
+// payload).
+func (s *Service) completeBuild(build *candidateBuild) {
+	s.scheduledBuildMu.Lock()
+	build.readyFired = true
+	aborted := build.aborted
+	s.scheduledBuildMu.Unlock()
+
+	if aborted {
+		s.reportBuildSuperseded(build.payload.Attributes.ProposalSlot, build.payload.Candidate, build.seq)
+	}
+}
+
+// buildAborted reports whether the build was superseded while running.
+func (s *Service) buildAborted(build *candidateBuild) bool {
+	s.scheduledBuildMu.Lock()
+	defer s.scheduledBuildMu.Unlock()
+
+	return build.aborted
+}
+
+// reportBuildSuperseded records a superseded build as failed so its
+// in-progress (or already ready) rendering is not left standing for a
+// payload that will never be bid. Fired exactly once per superseded build,
+// after that build's ready event when one was dispatched; the seq lets
+// consumers drop it when the replacement build already reported.
+func (s *Service) reportBuildSuperseded(slot phase0.Slot, candidate chain.CandidateKey, seq uint64) {
+	s.log.WithFields(logrus.Fields{
+		"slot":      slot,
+		"candidate": candidate,
+		"build_seq": seq,
+	}).Info("Payload build superseded by beacon node attributes")
+
+	s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
+		Slot:      slot,
+		Candidate: string(candidate),
+		Error:     errBuildSuperseded,
+		FailedAt:  time.Now(),
+		BuildSeq:  seq,
+	})
+}
+
+// supersedeSynthesizedBuild aborts the slot's started build on the event's
+// parent tuple when that build ran from locally synthesized attributes and
+// the beacon node's own attributes disagree with them. The missing-block
+// fallback copies the previous slot's attributes, which are wrong whenever
+// the state moved in between (an epoch transition changes the expected
+// withdrawals), and the beacon node can emit its real attributes after the
+// fallback fired: the in-flight engine build is cancelled, an already
+// emitted payload is withdrawn from the cache so no bid commits to it, and
+// the tuple is released so the caller's normal path builds again from the
+// real attributes. Identical build inputs keep the running build (nothing to
+// fix) and just clear its synthesized marker. Returns whether a build was
+// superseded.
+func (s *Service) supersedeSynthesizedBuild(event *beacon.PayloadAttributesEvent) bool {
+	slot := event.ProposalSlot
+	tuple := beacon.AttrParentKeyOf(event)
+
+	s.scheduledBuildMu.Lock()
+
+	state := s.slotBuilds[slot]
+	if state == nil {
+		s.scheduledBuildMu.Unlock()
+		return false
+	}
+
+	build := state.started[tuple]
+	if build == nil || !build.synthesized {
+		s.scheduledBuildMu.Unlock()
+		return false
+	}
+
+	if build.attrs.BuildInputsEqual(event) {
+		build.synthesized = false
+		s.scheduledBuildMu.Unlock()
+
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+		}).Debug("Beacon node attributes match the synthesized build, keeping it")
+
+		return false
+	}
+
+	build.aborted = true
+	build.cancel()
+	delete(state.started, tuple)
+
+	// The build goroutine reports the abort itself while it is still running
+	// or still dispatching its ready event; only a fully published build is
+	// reported here, which keeps the failure after the ready event.
+	emitted := build.payload
+	reportHere := emitted != nil && build.readyFired
+
+	if emitted != nil {
+		s.payloadCache.Remove(emitted)
+	}
+	s.scheduledBuildMu.Unlock()
+
+	fields := logrus.Fields{
+		"slot":        slot,
+		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
+		"withdrawals": len(event.Withdrawals),
+	}
+	if emitted != nil {
+		fields["block_hash"] = fmt.Sprintf("%x", emitted.BlockHash[:8])
+	}
+
+	s.log.WithFields(fields).Warn("Beacon node attributes differ from the synthesized " +
+		"attributes the build ran from, aborting it and rebuilding")
+
+	if reportHere {
+		s.reportBuildSuperseded(slot, emitted.Candidate, build.seq)
+	}
+
+	return true
 }
 
 // applyPayloadTransform rewrites the built execution payload with the slot's
@@ -980,10 +1169,8 @@ func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEven
 // accounting (next_n schedule budget, slots-built stat) fires once per slot
 // regardless of how many candidate payloads it produced.
 func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
-	// Store in cache
-	s.payloadCache.Store(payloadEvent)
-
-	// Emit the payload ready event to subscribers
+	// Emit the payload ready event to subscribers (the payload is already
+	// cached by the build that produced it).
 	s.payloadReadyDispatcher.Fire(payloadEvent)
 
 	s.log.WithFields(logrus.Fields{

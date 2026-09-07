@@ -1,4 +1,11 @@
 participants:
+  # Two identical nodes. buildoor is wired to node 1 (cl-1/el-1) and publishes
+  # its p2p bids through node 1's beacon API, which only gossips them to peers:
+  # since lodestar v1.47.0 (ChainSafe/lodestar#9998) the API publish path no
+  # longer feeds the node's own bid pool and gossipsub never loops a
+  # self-published message back, so node 1's validators are blind to buildoor's
+  # p2p bids. The post-Gloas p2p phase is therefore won on node 2's proposals,
+  # whose bid pool is fed by gossip from node 1.
   - el_type: nethermind
     el_image: ethpandaops/nethermind:glamsterdam-devnet-8
     cl_type: lodestar
@@ -6,6 +13,7 @@ participants:
     vc_image: ethpandaops/lodestar:glamsterdam-devnet-8
     validator_count: 32
     supernode: true
+    count: 2
     # From Gloas the external builder is configured on the VALIDATOR client and
     # the beacon node requests bids from it on the validator's behalf, so the
     # CL-side --builder.urls the package wires up only covers the pre-Gloas
@@ -18,7 +26,13 @@ participants:
 
 network_params:
   preset: minimal
-  genesis_delay: 20
+  # buildoor is launched after both participants and must be listening before
+  # slot 0: the lodestar VCs register their validators with the builder once
+  # at the start of epoch 0 and retry only at the next epoch boundary, which
+  # is already Gloas (gloas_fork_epoch 1), so a late buildoor loses the whole
+  # pre-Gloas Builder API phase (slots 0-7). Two nodes take ~90 s to come up
+  # on a GitHub runner.
+  genesis_delay: 120
   gloas_fork_epoch: 1
 
 mev_type: buildoor

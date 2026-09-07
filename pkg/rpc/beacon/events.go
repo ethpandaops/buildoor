@@ -2,6 +2,7 @@ package beacon
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -113,6 +114,50 @@ type PayloadAttributesEvent struct {
 	ParentBeaconBlockRoot     phase0.Root
 	TargetGasLimit            uint64
 	InclusionListTransactions [][]byte
+
+	// Synthesized marks an event the builder derived locally (the
+	// missing-block fallback copies the previous slot's attributes) instead
+	// of receiving it from the beacon node. Never set on node-received
+	// events: a node-received event for the same parent tuple supersedes a
+	// synthesized one.
+	Synthesized bool
+}
+
+// BuildInputsEqual reports whether two events describe the same payload to
+// build: every attribute the execution layer or the bid depends on matches.
+// The proposal slot, the parent tuple and the informational parent block
+// number (backfilled by sanitization) are not compared; callers compare
+// variants of one slot and parent tuple.
+func (e *PayloadAttributesEvent) BuildInputsEqual(other *PayloadAttributesEvent) bool {
+	if e.ProposerIndex != other.ProposerIndex ||
+		e.Timestamp != other.Timestamp ||
+		e.PrevRandao != other.PrevRandao ||
+		e.SuggestedFeeRecipient != other.SuggestedFeeRecipient ||
+		e.ParentBeaconBlockRoot != other.ParentBeaconBlockRoot ||
+		e.TargetGasLimit != other.TargetGasLimit ||
+		len(e.Withdrawals) != len(other.Withdrawals) ||
+		len(e.InclusionListTransactions) != len(other.InclusionListTransactions) {
+		return false
+	}
+
+	for i, w := range e.Withdrawals {
+		o := other.Withdrawals[i]
+		if (w == nil) != (o == nil) {
+			return false
+		}
+
+		if w != nil && *w != *o {
+			return false
+		}
+	}
+
+	for i, tx := range e.InclusionListTransactions {
+		if !bytes.Equal(tx, other.InclusionListTransactions[i]) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // payloadAttributesEventJSON is used for JSON unmarshaling of payload_attributes events.

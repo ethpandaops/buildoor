@@ -413,6 +413,7 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	}
 
 	outcome.Candidate = string(payload.Candidate)
+	outcome.BuildSeq = payload.BuildSeq
 
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
 		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,
@@ -430,9 +431,32 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	}
 
 	t.upsert(slot, func(result *SlotResult) {
+		if staleBuildOutcome(result, outcome) {
+			return
+		}
+
 		upsertBuildOutcome(result, outcome)
 		result.Build = primaryBuildOutcome(result)
 	})
+}
+
+// staleBuildOutcome reports whether the result already holds an outcome of
+// the same candidate build slot produced by a NEWER build (higher BuildSeq):
+// such an outcome belongs to a superseded build whose late events must not
+// overwrite its replacement's. Outcomes without a seq (legacy or baseline
+// records) never count as newer.
+func staleBuildOutcome(result *SlotResult, outcome *BuildOutcome) bool {
+	if outcome.BuildSeq == 0 {
+		return false
+	}
+
+	for _, existing := range result.Builds {
+		if buildOutcomesMatch(existing, outcome) {
+			return existing.BuildSeq > outcome.BuildSeq
+		}
+	}
+
+	return false
 }
 
 // buildCandidatePriority orders candidate keys from most to least canonical
@@ -557,12 +581,16 @@ func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedE
 			Status:    BuildStatusStarted,
 			Candidate: event.Candidate,
 			At:        event.StartedAt,
+			BuildSeq:  event.BuildSeq,
 		}
 
 		// Track per-candidate progress; a candidate already past started
-		// (ready/failed) is never regressed.
+		// (ready/failed) is never regressed by the same build's events. A
+		// NEWER build of the candidate (a rebuild after a supersede) starts
+		// the candidate over.
 		for _, existing := range result.Builds {
-			if existing.Candidate == event.Candidate && existing.Status != BuildStatusStarted {
+			if existing.Candidate == event.Candidate && existing.Status != BuildStatusStarted &&
+				!(event.BuildSeq != 0 && event.BuildSeq > existing.BuildSeq) {
 				return
 			}
 		}
@@ -587,12 +615,20 @@ func (t *Tracker) handleBuildFailed(event *payload_builder.PayloadBuildFailedEve
 			Candidate: event.Candidate,
 			Error:     event.Error,
 			At:        event.FailedAt,
+			BuildSeq:  event.BuildSeq,
+		}
+
+		if staleBuildOutcome(result, outcome) {
+			return
 		}
 
 		upsertBuildOutcome(result, outcome)
 
-		// Another candidate's ready payload keeps the primary slot outcome.
-		if result.Build != nil && result.Build.Status == BuildStatusReady {
+		// Another candidate's ready payload keeps the primary slot outcome;
+		// the same candidate's ready payload was withdrawn (a superseded
+		// build), so its failure replaces it.
+		if result.Build != nil && result.Build.Status == BuildStatusReady &&
+			result.Build.Candidate != event.Candidate {
 			return
 		}
 

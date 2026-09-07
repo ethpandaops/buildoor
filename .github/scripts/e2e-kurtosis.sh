@@ -234,6 +234,11 @@ jq -e '.data.PRESET_BASE == "minimal" and (.data.GLOAS_FORK_EPOCH | tonumber) ==
 # both are active cannot tell us which one the proposer actually used. The
 # post-Gloas phases therefore run one flow at a time, toggled through the
 # settings API, and only accept wins from slots frozen after the toggle.
+#
+# The p2p phase needs the enclave's second node: buildoor publishes its bids
+# through node 1's beacon API, which only gossips them to peers (lodestar >=
+# v1.47.0 no longer feeds its own bid pool from the API path), so node 1's
+# validators never see them and the win comes from a node 2 proposal.
 
 echo "== Phase 1: pre-Gloas Builder API (getHeader / blinded block)"
 pre_block=$(wait_for_win pre-gloas builder_api 0 $((GLOAS_SLOT - 1)) "$PREGLOAS_TIMEOUT_SECONDS")

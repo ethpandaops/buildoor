@@ -40,6 +40,7 @@ type Payload struct {
 	FeeRecipient common.Address // resolved proposer fee recipient for the bid
 	BlockValue   *big.Int       // EL-reported block value (wei)
 	ReadyAt      time.Time      // when the payload became ready
+	BuildSeq     uint64         // see PayloadBuildStartedEvent.BuildSeq
 
 	// activity is the bid/reveal log, appended by the payload_bidder and read by
 	// the WebUI. The mutex also makes Payload copy-unsafe, enforcing the
