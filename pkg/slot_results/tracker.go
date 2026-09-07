@@ -591,8 +591,11 @@ func (t *Tracker) handleBuildFailed(event *payload_builder.PayloadBuildFailedEve
 
 		upsertBuildOutcome(result, outcome)
 
-		// Another candidate's ready payload keeps the primary slot outcome.
-		if result.Build != nil && result.Build.Status == BuildStatusReady {
+		// Another candidate's ready payload keeps the primary slot outcome;
+		// the same candidate's ready payload was withdrawn (a superseded
+		// build), so its failure replaces it.
+		if result.Build != nil && result.Build.Status == BuildStatusReady &&
+			result.Build.Candidate != event.Candidate {
 			return
 		}
 
