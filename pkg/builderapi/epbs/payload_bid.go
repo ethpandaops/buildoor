@@ -45,7 +45,7 @@ type GetExecutionPayloadBidResponse struct {
 //
 // If the request body contains a SignedRequestAuthV1, it is validated:
 //   - auth.message.slot must match the requested slot
-//   - auth.message.builder_url must match cfg.BuilderURL (if configured)
+//   - auth.message.data must match the hostname of cfg.BuilderURL (if configured)
 //   - BLS signature must verify against the proposer_pubkey path parameter
 func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/execution_payload_bid/...")
@@ -195,12 +195,12 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 			writeError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.slot does not match the requested slot")
 			return
 		}
-		if h.cfg.BuilderURL != "" && string(signedAuth.Message.Data) != h.cfg.BuilderURL {
+		if h.cfg.BuilderURL != "" && !matchesAuthData(signedAuth.Message.Data, h.cfg.BuilderURL) {
 			log.WithFields(logrus.Fields{
-				"auth_url":    string(signedAuth.Message.Data),
+				"auth_data":   string(signedAuth.Message.Data),
 				"builder_url": h.cfg.BuilderURL,
-			}).Warn("getExecutionPayloadBid: SignedRequestAuth data (builder_url) mismatch")
-			writeError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.data does not match this builder's URL")
+			}).Warn("getExecutionPayloadBid: SignedRequestAuth data mismatch")
+			writeError(w, http.StatusBadRequest, "invalid SignedRequestAuthV1: auth.message.data does not match this builder's hostname")
 			return
 		}
 
