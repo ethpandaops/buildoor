@@ -435,9 +435,11 @@ npm run clean
      preference (0 when never submitted, per spec) unless
      `builder_api.ignore_preference_limit` deliberately serves beyond it (a
      spec-violating bid clients should reject); gossip bids stay
-     `execution_payment = 0` per spec. An unset `--builder-api-url` skips the
-     SignedRequestAuth builder_url match on BOTH ePBS handlers (bids and
-     preferences alike)
+     `execution_payment = 0` per spec. `auth.message.data` must be the
+     hostname of `--builder-api-url` (the builder-specs default, see
+     `epbs/auth_data.go`) or, for validator clients predating that default,
+     the URL bytes verbatim. An unset `--builder-api-url` skips the match on
+     BOTH ePBS handlers (bids and preferences alike)
    - Outcomes are recorded through the narrow `SlotResultRecorder` interface
      (implemented by the slot results tracker): bids `served` only after a
      successful response write, `suppressed`/`failed`/`cancelled` otherwise, with

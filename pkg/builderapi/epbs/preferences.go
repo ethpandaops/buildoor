@@ -16,9 +16,10 @@ import (
 // It records the validator's latest max_execution_payment after authenticating
 // the request via the embedded SignedRequestAuthV1. Per the Gloas builder-specs,
 // the builder MUST verify the auth signature against the validator_pubkey path
-// param (401 on failure) and MUST check that auth.message.builder_url matches its
-// own URL (400 on failure). Like getExecutionPayloadBid, the URL check is skipped
-// when no --builder-api-url is configured. The preference is stored only after
+// param (401 on failure) and MUST check that auth.message.data matches the value
+// it expects, by default the hostname of its own URL (400 on failure). Like
+// getExecutionPayloadBid, the check is skipped when no --builder-api-url is
+// configured. The preference is stored only after
 // the checks pass. On success it returns 202.
 func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.Request) {
 	log := h.log.WithField("path", "/eth/v1/builder/builder_preferences")
@@ -66,14 +67,14 @@ func (h *Handler) HandleSubmitBuilderPreferences(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Check auth.message.data (the builder URL) matches this builder's URL
+	// Check auth.message.data matches the hostname of this builder's URL
 	// (400 on mismatch, skipped when no URL is configured).
-	if h.cfg.BuilderURL != "" && string(req.Auth.Message.Data) != h.cfg.BuilderURL {
+	if h.cfg.BuilderURL != "" && !matchesAuthData(req.Auth.Message.Data, h.cfg.BuilderURL) {
 		log.WithFields(logrus.Fields{
-			"auth_url":    string(req.Auth.Message.Data),
+			"auth_data":   string(req.Auth.Message.Data),
 			"builder_url": h.cfg.BuilderURL,
-		}).Warn("submitBuilderPreferences: builder_url mismatch")
-		writeError(w, http.StatusBadRequest, "auth.message.data does not match this builder's URL")
+		}).Warn("submitBuilderPreferences: auth data mismatch")
+		writeError(w, http.StatusBadRequest, "auth.message.data does not match this builder's hostname")
 		return
 	}
 
