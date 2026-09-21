@@ -178,6 +178,10 @@ and begins building blocks according to configuration.`,
 		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
 		cfg.ApplySlotDefaults(slotTimeMs)
 
+		if err := config.ValidateTimingBounds(cfg, chainSpec.SecondsPerSlot); err != nil {
+			return fmt.Errorf("invalid timing configuration: %w", err)
+		}
+
 		logger.WithFields(logrus.Fields{
 			"slot_time_ms":       slotTimeMs,
 			"build_start_time":   cfg.EPBS.BuildStartTime,
@@ -205,7 +209,7 @@ and begins building blocks according to configuration.`,
 			supplied[f.Key] = v.IsSet(f.FlagKey)
 		}
 
-		settingsSvc, err := config.NewService(cfg, defaults, supplied, stateDB, logger)
+		settingsSvc, err := config.NewService(cfg, defaults, supplied, chainSpec.SecondsPerSlot, stateDB, logger)
 		if err != nil {
 			return fmt.Errorf("failed to init settings service: %w", err)
 		}
