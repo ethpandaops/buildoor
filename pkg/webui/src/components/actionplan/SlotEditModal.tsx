@@ -1,3 +1,4 @@
+import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
 import React, { useState } from 'react';
 import type {
   FrozenPlan,
@@ -12,6 +13,10 @@ import {
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
   BuildForm,
+  LocalBuildForm,
+  initLocalBuildState,
+  localBuildPlanFromState,
+  type LocalBuildFormState,
   CategoryForm,
   initCategoryState,
   resolveCategory,
@@ -62,6 +67,16 @@ const BUILD_BADGES: Record<string, string> = {
   started: 'primary',
   waiting_attributes: 'info',
   no_attributes: 'warning',
+};
+
+const TX_PLAN_BADGES: Record<string, string> = {
+  pending: 'secondary',
+  match: 'success',
+  mismatch: 'danger',
+  block_not_found: 'danger',
+  not_included: 'warning',
+  missed: 'danger',
+  orphaned: 'danger',
 };
 
 const PAYLOAD_STATUS_BADGES: Record<string, string> = {
@@ -172,6 +187,14 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           {frozen.build.reorg_parent_payload && (
             <span className={`ms-1 ${badgeClass('warning')}`} title="Built on the grandparent (n-2) payload">
               reorg parent
+            </span>
+          )}
+          {frozen.build.local?.enabled && (
+            <span
+              className={`ms-1 ${badgeClass('info')}`}
+              title={`Local build via testing_buildBlockV1: payload source ${frozen.build.local.payload_source}, tx source ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
+            >
+              local: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
             </span>
           )}
         </KV>
@@ -350,7 +373,87 @@ const ResultView: React.FC<{
               )}
               {build.timestamp !== undefined && <KV label="Timestamp">{build.timestamp}</KV>}
               {build.extra_data && <KV label="Extra Data">{build.extra_data}</KV>}
+              {build.source && (
+                <KV label="Source">
+                  {build.source}
+                  {build.fallback && (
+                    <span className={`ms-1 ${badgeClass('warning')}`} title="Local payload wanted, EL payload used">
+                      fallback
+                    </span>
+                  )}
+                </KV>
+              )}
               <KV label="At">{formatDateTime(build.at)}</KV>
+              {build.local_build && (
+                <div className="col-12">
+                  <div className="config-item">
+                    <div className="config-item-label d-flex align-items-center gap-2">
+                      Local build (testing_buildBlockV1)
+                      <span className={badgeClass(
+                        build.local_build.status === 'ready' ? 'success' :
+                        build.local_build.status === 'failed' ? 'danger' : 'secondary'
+                      )}>
+                        {build.local_build.status}
+                        {build.local_build.skip_reason ? ` (${build.local_build.skip_reason})` : ''}
+                      </span>
+                      {build.local_build.selected && <span className={badgeClass('info')}>fed bids</span>}
+                      {build.local_build.status === 'ready' && !build.local_build.selected && (
+                        <span className={badgeClass('secondary')}>shadow</span>
+                      )}
+                      {build.local_build.artifact_idx !== undefined && !build.local_build.selected && (
+                        <span className="ms-auto">
+                          <ArtifactLinks
+                            url={`${baseUrl}/payload?source=local`}
+                            filename={`slot-${slot}-payload-local.ssz`}
+                            onError={onArtifactError}
+                          />
+                        </span>
+                      )}
+                    </div>
+                    <div className="config-item-value small">
+                      {build.local_build.error && (
+                        <div className="text-danger">{build.local_build.error}</div>
+                      )}
+                      <div>
+                        source <code>{build.local_build.tx_source || '—'}</code>, payload source{' '}
+                        <code>{build.local_build.payload_source || '—'}</code>
+                        {build.local_build.block_hash && (
+                          <>
+                            {' · '}{build.local_build.num_transactions ?? 0} txs, {build.local_build.num_blobs ?? 0} blobs,{' '}
+                            {weiToEth(build.local_build.block_value_wei)}
+                            {build.local_build.gas_used !== undefined && (
+                              <> · gas {build.local_build.gas_used.toLocaleString()} / {(build.local_build.gas_limit ?? 0).toLocaleString()}</>
+                            )}
+                          </>
+                        )}
+                      </div>
+                      {build.local_build.block_hash && (
+                        <div className="font-monospace ap-break">{build.local_build.block_hash}</div>
+                      )}
+                      {build.local_build.info && (
+                        <div className="text-muted">
+                          submitted {build.local_build.info.submitted_txs < 0 ? 'EL mempool' : `${build.local_build.info.submitted_txs} txs`}
+                          {build.local_build.info.selection && (
+                            <>
+                              {' · '}selected {build.local_build.info.selection.selected} of {build.local_build.info.selection.pool_size} pooled
+                              {' '}(gas {build.local_build.info.selection.gas_sum.toLocaleString()})
+                              {build.local_build.info.selection.skipped && Object.keys(build.local_build.info.selection.skipped).length > 0 && (
+                                <> · skipped {Object.entries(build.local_build.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ')}</>
+                              )}
+                            </>
+                          )}
+                          {build.local_build.info.explicit_txs ? ` · explicit list of ${build.local_build.info.explicit_txs}` : ''}
+                          {build.local_build.info.inclusion_list_txs ? ` · ${build.local_build.info.inclusion_list_txs} inclusion-list txs` : ''}
+                          {build.local_build.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
+                          {build.local_build.info.dropped_by_el ? ` · ${build.local_build.info.dropped_by_el} dropped by the EL` : ''}
+                          {build.local_build.info.attempts && build.local_build.info.attempts > 1 ? ` · ${build.local_build.info.attempts} attempts` : ''}
+                          {build.local_build.info.dropped?.length ? ` · dropped after EL refusal: ${build.local_build.info.dropped.map((d) => `${d.hash.slice(0, 10)}… (${d.reason})`).join(', ')}` : ''}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
               {build.parent_hash && (
                 <div className="col-12">
                   <div className="config-item">
@@ -652,6 +755,41 @@ const ResultView: React.FC<{
           </div>
         </div>
       )}
+
+      {result.tx_plan && (
+        <div className="card mb-3">
+          <div className="card-header py-1 d-flex align-items-center gap-2">
+            <strong className="small">Tx plan check</strong>
+            <span
+              className={badgeClass(TX_PLAN_BADGES[result.tx_plan.status] || 'secondary')}
+              title="Post-inclusion check: does the canonical block hold exactly the transactions buildoor submitted, in order?"
+            >
+              {result.tx_plan.status}
+            </span>
+            <span className="text-muted small">
+              {result.tx_plan.expected_count} planned ({result.tx_plan.tx_source})
+              {result.tx_plan.included_count !== undefined && result.tx_plan.status !== 'pending'
+                ? `, ${result.tx_plan.included_count} in block`
+                : ''}
+            </span>
+            {result.tx_plan.verified_at && (
+              <span className="text-muted small ms-auto">checked {formatDateTime(result.tx_plan.verified_at)}</span>
+            )}
+          </div>
+          {(result.tx_plan.detail || (result.tx_plan.first_mismatch ?? -1) >= 0) && (
+            <div className="card-body py-2">
+              {(result.tx_plan.first_mismatch ?? -1) >= 0 && (
+                <KV label="First mismatch">position {result.tx_plan.first_mismatch}</KV>
+              )}
+              {result.tx_plan.detail && (
+                <div className={`small ${result.tx_plan.status === 'match' ? 'text-muted' : 'text-danger'}`}>
+                  {result.tx_plan.detail}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 };
@@ -705,6 +843,13 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(() =>
     bulk ? 'unchanged' : effectivePlan?.build?.reorg_parent_payload ? 'on' : 'off'
   );
+
+  // Local build (testing_buildBlockV1) overrides. Bulk starts empty and only
+  // writes when something is set; single mode edits the slot's own overrides.
+  const [localBuild, setLocalBuild] = useState<LocalBuildFormState>(() =>
+    initLocalBuildState(bulk ? undefined : effectivePlan?.build?.local)
+  );
+  const { status: localBuildStatus } = useLocalBuildStatus();
 
   // Per-candidate build policy overrides ('' = inherit the global policy).
   // Single-slot editing only: a bulk category replace would clobber unrelated
@@ -774,7 +919,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
     applyTargets(update);
 
     const updateRec = update as unknown as Record<string, unknown>;
-    const setPaths: Record<string, number | string | boolean | null> = {};
+    const setPaths: Record<string, number | string | boolean | object | null> = {};
 
     const outcomes: Array<[string, CategoryOutcome]> = [
       ['bid', resolveCategory('bid', BID_FIELDS, bidState, initialPlan?.bid as unknown as Record<string, unknown> | undefined, isSingle, true)],
@@ -815,6 +960,12 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
       candidateEntries.some(([key, mode]) => initialCandidates[key] !== mode)
     );
 
+    const localPlan = localBuildPlanFromState(localBuild);
+    const initialLocal = initialPlan?.build?.local;
+    const localChanged = bulk
+      ? localPlan !== undefined
+      : JSON.stringify(localPlan ?? null) !== JSON.stringify(initialLocal ?? null);
+
     if (candidatesChanged) {
       const buildObj: Record<string, unknown> = {};
       const wantReorg = buildReorg === 'on';
@@ -825,8 +976,23 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
         buildObj.candidates = Object.fromEntries(candidateEntries);
       }
 
+      if (localPlan) buildObj.local = localPlan;
+
       updateRec['build'] = Object.keys(buildObj).length > 0 ? buildObj : null;
       hasChange = true;
+    } else if (localChanged) {
+      // The local overrides are a sub-object of the build category, written
+      // as one fine-grained set path (null clears them).
+      setPaths['build.local'] = localPlan ?? null;
+      hasChange = true;
+
+      if (buildReorg !== 'unchanged') {
+        const initialReorg = initialPlan?.build?.reorg_parent_payload === true;
+        const wantOn = buildReorg === 'on';
+        if (!isSingle || wantOn !== initialReorg) {
+          setPaths['build.reorg_parent_payload'] = wantOn;
+        }
+      }
     } else if (buildReorg !== 'unchanged') {
       const initialReorg = initialPlan?.build?.reorg_parent_payload === true;
       const wantOn = buildReorg === 'on';
@@ -975,6 +1141,14 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     value={buildReorg}
                     disabled={formDisabled}
                     onChange={setBuildReorg}
+                  />
+                  <LocalBuildForm
+                    bulk={bulk}
+                    state={localBuild}
+                    disabled={formDisabled}
+                    available={localBuildStatus?.availability.available ?? false}
+                    unavailableReason={localBuildStatus?.availability.reason}
+                    onChange={setLocalBuild}
                   />
                   {!bulk && (
                     <div className="mb-3">

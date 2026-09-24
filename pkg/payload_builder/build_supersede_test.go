@@ -58,7 +58,7 @@ func supersedeTestService(t *testing.T, chainSvc chain.Service) *Service {
 	require.NoError(t, err)
 
 	svc.ctx = context.Background()
-	svc.payloadBuilder = NewPayloadBuilder(clClient, nil, chainSvc, common.Address{}, cfg, log, nil)
+	svc.payloadBuilder = NewPayloadBuilder(clClient, nil, nil, nil, chainSvc, common.Address{}, cfg, log, nil)
 
 	return svc
 }

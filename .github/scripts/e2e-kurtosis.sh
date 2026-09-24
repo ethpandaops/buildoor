@@ -16,6 +16,20 @@ readonly POSTGLOAS_TIMEOUT_SECONDS="${POSTGLOAS_TIMEOUT_SECONDS:-600}"
 readonly GLOAS_SLOT=8
 readonly CL_SERVICE="${CL_SERVICE:-cl-1-lodestar-nethermind}"
 readonly EL_SERVICE="${EL_SERVICE:-el-1-nethermind-lodestar}"
+# Phase 4 feeds buildoor's transaction pool with a continuously running
+# spamoor on the enclave's docker network; the account is the
+# ethereum-package's prefunded key #1 (#0 is buildoor's lifecycle wallet).
+readonly SPAMOOR_IMAGE="${SPAMOOR_IMAGE:-ethpandaops/spamoor:master}"
+readonly SPAMOOR_PRIVKEY="${SPAMOOR_PRIVKEY:-39725efee3fb28614de3bacaffe4cc4bd8c436257e2c8bb887c4b5c4be45e76d}"
+readonly SPAMOOR_THROUGHPUT="${SPAMOOR_THROUGHPUT:-20}"
+# Phase 4 ends once MIN_VERIFIED_BLOCKS won blocks after the switch verified
+# as exact tx plan matches (same transactions, same order, same count) with
+# at least MIN_TXS_PER_BLOCK transactions each. Only node 2's proposals can
+# take buildoor's p2p bids here, so the bar is lower than on a single-node
+# devnet where buildoor wins every slot.
+readonly MIN_VERIFIED_BLOCKS="${MIN_VERIFIED_BLOCKS:-3}"
+readonly MIN_TXS_PER_BLOCK="${MIN_TXS_PER_BLOCK:-10}"
+readonly LOCAL_POOL_TIMEOUT_SECONDS="${LOCAL_POOL_TIMEOUT_SECONDS:-600}"
 
 # Upper bound for "any later slot" win filters.
 readonly MAX_SLOT=1000000000
@@ -27,11 +41,13 @@ readonly MAX_SLOT=1000000000
 readonly SETTINGS_LEAD_SLOTS=2
 
 mkdir -p "$ARTIFACT_DIR"
+spamoor_pid=""
 
 dump_diagnostics() {
   local exit_code=$?
   trap - EXIT
   set +e
+  [[ -n "$spamoor_pid" ]] && kill "$spamoor_pid" 2>/dev/null
   kurtosis enclave inspect "$ENCLAVE_NAME" >"$ARTIFACT_DIR/enclave.txt" 2>&1
   kurtosis service logs --all-services --all "$ENCLAVE_NAME" >"$ARTIFACT_DIR/services.log" 2>&1
   if [[ "${KEEP_ENCLAVE:-false}" != "true" ]]; then
@@ -288,5 +304,144 @@ until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/builder-pref
   sleep 2
 done
 echo "Builder preferences present"
+
+# Phase 4: the local build extension. buildoor builds an additional payload
+# through the EL's testing_buildBlockV1 from its own transaction pool, and
+# with payload source "local" that payload is what the p2p bids commit to —
+# so a won slot contains exactly the transactions spamoor handed to
+# buildoor's /rpc ingress, none of which ever entered the EL mempool.
+echo "== Phase 4: post-Gloas p2p bidding from the local transaction pool"
+
+local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/local-build/status")
+printf '%s\n' "$local_status" >"$ARTIFACT_DIR/local-build-status.json"
+if ! jq -e '.availability.available == true' <<<"$local_status" >/dev/null; then
+  echo "testing_buildBlockV1 is not available on the EL: $(jq -r '.availability.reason' <<<"$local_status")" >&2
+  exit 1
+fi
+jq -e '.txpool.available == true' <<<"$local_status" >/dev/null
+
+update_settings '{"epbs_enabled": true, "builder_api_enabled": false, "txpool.enabled": true, "local_build.enabled": true, "local_build.payload_source": "local", "local_build.tx_source": "txpool"}'
+local_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
+
+# Fill the pool. buildoor's /rpc is spamoor's ONLY host: it proxies the
+# read-only calls spamoor follows the chain with, and any additional host
+# would receive every transaction too (spamoor fans submissions out to all
+# hosts), leaking them into the EL mempool.
+# spamoor runs until the phase is done: the verification below needs
+# sustained load across several won blocks, not a one-shot burst.
+docker run --rm --network "kt-$ENCLAVE_NAME" "$SPAMOOR_IMAGE" eoatx \
+  -h "name(buildoor)http://buildoor:8080/rpc" \
+  -p "$SPAMOOR_PRIVKEY" \
+  --throughput "$SPAMOOR_THROUGHPUT" --max-pending 100 --max-wallets 10 \
+  --basefee 100 --tipfee 2 --rebroadcast 30 \
+  --timeout 30m >"$ARTIFACT_DIR/spamoor.log" 2>&1 &
+spamoor_pid=$!
+
+pool_deadline=$((SECONDS + 120))
+until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1" \
+  | tee "$ARTIFACT_DIR/txpool.json" | jq -e '.stats.admitted > 0' >/dev/null; do
+  if (( SECONDS >= pool_deadline )); then
+    echo "No transactions reached the pool ingress within 120s" >&2
+    cat "$ARTIFACT_DIR/spamoor.log" >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+echo "Transaction pool is being fed"
+
+local_block=$(wait_for_win post-gloas-local-pool epbs "$local_from" "$MAX_SLOT" "$POSTGLOAS_TIMEOUT_SECONDS")
+local_slot=$(jq -r '.slot' <<<"$local_block")
+verify_block post-gloas-local-pool "$local_block"
+# The won payload came from the local build (testing_buildBlockV1) fed by the
+# pool, carried at least one pool transaction, and the pool records the
+# block as one of ours.
+assert_slot_result post-gloas-local-pool "$local_slot" \
+  '(.build.source == "local")
+   and (.build.local_build.status == "ready")
+   and (.build.local_build.selected == true)
+   and (.build.local_build.tx_source == "txpool")
+   and ((.build.local_build.info.selection.selected // 0) > 0)
+   and ((.build.num_transactions // 0) > 0)
+   and ((.bids // []) | map(select(.transport == "p2p" and .status == "submitted")) | length > 0)
+   and ((.reveal_attempts // []) | map(select(.status == "published")) | length > 0)'
+
+# The verifier re-reads every included local payload from the EL and compares
+# the block's transaction list with the plan buildoor built it from. The
+# phase requires every checked block after the switch to match and
+# MIN_VERIFIED_BLOCKS of them to carry at least MIN_TXS_PER_BLOCK
+# transactions, so the pool path is proven under sustained load rather than
+# on a single lucky block. Anything but match or a still-pending check
+# (mismatch, block_not_found, missed, orphaned, not_included) fails.
+echo "Waiting for $MIN_VERIFIED_BLOCKS verified pool blocks (>= $MIN_TXS_PER_BLOCK txs each)"
+plan_deadline=$((SECONDS + LOCAL_POOL_TIMEOUT_SECONDS))
+while true; do
+  now_slot=$(current_slot)
+  results=$(curl --fail --silent --show-error \
+    "$BUILDOOR_URL/api/buildoor/slot-results?min_slot=$local_from&max_slot=$now_slot")
+  printf '%s\n' "$results" >"$ARTIFACT_DIR/local-pool-slot-results.json"
+
+  bad=$(jq -c '[.results[] | select(.tx_plan != null)
+                 | select(.tx_plan.status != "match" and .tx_plan.status != "pending")
+                 | {slot, status: .tx_plan.status, detail: .tx_plan.detail}]' <<<"$results")
+  if [[ "$bad" != "[]" ]]; then
+    echo "TX PLAN CHECK FAILED: $bad" >&2
+    exit 1
+  fi
+
+  verified=$(jq --argjson min "$MIN_TXS_PER_BLOCK" \
+    '[.results[] | select(.tx_plan != null and .tx_plan.status == "match"
+                          and .tx_plan.included_count >= $min)] | length' <<<"$results")
+  echo "slot $now_slot: verified pool blocks so far: $verified"
+  if (( verified >= MIN_VERIFIED_BLOCKS )); then
+    break
+  fi
+
+  if (( SECONDS >= plan_deadline )); then
+    echo "Only $verified verified pool blocks within ${LOCAL_POOL_TIMEOUT_SECONDS}s" >&2
+    jq -c '.results[] | {slot, build: .build.status, source: .build.source,
+                         txs: .build.num_transactions, plan: .tx_plan.status,
+                         included: .tx_plan.included_count}' <<<"$results" >&2
+    exit 1
+  fi
+
+  sleep 6
+done
+
+# Cross-check the verifier itself on the EL: the last verified block's
+# transaction list must equal the plan buildoor recorded for it.
+echo "Cross-checking one verified pool block on the EL"
+checked_block=$(jq -c '[.results[] | select(.tx_plan != null and .tx_plan.status == "match"
+                                              and .tx_plan.included_count >= 1)] | last' <<<"$results")
+checked_hash=$(jq -r '.inclusion.block_hash' <<<"$checked_block")
+expected_txs=$(jq -c '.tx_plan.expected_hashes | map(ascii_downcase)' <<<"$checked_block")
+actual_txs=$(json_rpc "$EXECUTION_URL" eth_getBlockByHash "[\"$checked_hash\",false]" \
+  | jq -c '.result.transactions | map(ascii_downcase)')
+if [[ "$expected_txs" != "$actual_txs" ]]; then
+  echo "EL block $checked_hash transaction list differs from the plan" >&2
+  echo "expected: $expected_txs" >&2
+  echo "actual:   $actual_txs" >&2
+  exit 1
+fi
+echo "EL block $checked_hash holds exactly the planned transactions"
+
+kill "$spamoor_pid" 2>/dev/null || true
+wait "$spamoor_pid" 2>/dev/null || true
+spamoor_pid=""
+
+# The verifier's own tally agrees: no check ever failed since startup.
+local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/local-build/status")
+printf '%s\n' "$local_status" >"$ARTIFACT_DIR/local-build-status-final.json"
+jq -e --argjson min "$MIN_VERIFIED_BLOCKS" \
+  '.plan_checks.match >= $min and .plan_checks.mismatch == 0
+   and .plan_checks.block_not_found == 0 and .plan_checks.missed == 0
+   and .plan_checks.orphaned == 0' <<<"$local_status" >/dev/null
+echo "Plan checks: $(jq -c '.plan_checks' <<<"$local_status")"
+
+pool_stats=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1")
+printf '%s\n' "$pool_stats" >"$ARTIFACT_DIR/txpool-final.json"
+# Pool transactions only ever land through our own blocks: none of them was
+# included by a block we did not build.
+jq -e '.stats.evicted_included_by_us > 0 and .stats.evicted_included_by_other == 0' <<<"$pool_stats" >/dev/null
+echo "Pool transactions were included only through our own blocks"
 
 echo "Kurtosis end-to-end test passed"

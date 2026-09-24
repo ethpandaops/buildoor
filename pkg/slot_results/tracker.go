@@ -124,6 +124,7 @@ func (t *Tracker) Start(ctx context.Context) error {
 	startedSub := t.builderSvc.SubscribePayloadBuildStarted(16, true)
 	failedSub := t.builderSvc.SubscribePayloadBuildFailed(16, true)
 	skippedSub := t.builderSvc.SubscribeBuildSkipped(16, true)
+	localBuildSub := t.builderSvc.SubscribeLocalBuild(16, true)
 	epochSub := t.chainSvc.SubscribeEpochStats()
 
 	var bidSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent]
@@ -141,7 +142,7 @@ func (t *Tracker) Start(ctx context.Context) error {
 
 	t.wg.Add(1)
 
-	go t.run(readySub, startedSub, failedSub, skippedSub, bidSub, revealSub,
+	go t.run(readySub, startedSub, failedSub, skippedSub, localBuildSub, bidSub, revealSub,
 		includedSub, payloadStatusSub, epochSub)
 
 	t.log.Info("Slot results tracker started")
@@ -169,6 +170,7 @@ func (t *Tracker) run(
 	startedSub *utils.Subscription[*payload_builder.PayloadBuildStartedEvent],
 	failedSub *utils.Subscription[*payload_builder.PayloadBuildFailedEvent],
 	skippedSub *utils.Subscription[*payload_builder.BuildSkippedEvent],
+	localBuildSub *utils.Subscription[*payload_builder.LocalBuildEvent],
 	bidSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent],
 	revealSub *utils.Subscription[*payload_bidder.RevealResult],
 	includedSub *utils.Subscription[*payload_bidder.PayloadIncludedEvent],
@@ -180,6 +182,7 @@ func (t *Tracker) run(
 	defer startedSub.Unsubscribe()
 	defer failedSub.Unsubscribe()
 	defer skippedSub.Unsubscribe()
+	defer localBuildSub.Unsubscribe()
 	defer includedSub.Unsubscribe()
 	defer payloadStatusSub.Unsubscribe()
 	defer epochSub.Unsubscribe()
@@ -238,6 +241,13 @@ func (t *Tracker) run(
 
 			t.handleBuildSkipped(event)
 
+		case event, ok := <-localBuildSub.Channel():
+			if !ok {
+				return
+			}
+
+			t.handleLocalBuild(event)
+
 		case event, ok := <-bidCh:
 			if !ok {
 				return
@@ -286,6 +296,10 @@ func (t *Tracker) run(
 			for slot := firstSlot; slot <= currentSlot; slot++ {
 				t.materializeBaseline(slot)
 				t.finalizeWaitingBaseline(slot - 1)
+
+				if slot > txPlanVerdictGraceSlots {
+					t.finalizeStaleTxPlan(slot - txPlanVerdictGraceSlots)
+				}
 			}
 
 			if currentSlot > lastTickedSlot {
@@ -413,6 +427,7 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	}
 
 	outcome.Candidate = string(payload.Candidate)
+	outcome.Source = payload.Source
 	outcome.BuildSeq = payload.BuildSeq
 
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
@@ -421,6 +436,7 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 				Candidate:       string(payload.Candidate),
 				ParentBlockRoot: fmt.Sprintf("%#x", payload.Attributes.ParentBlockRoot),
 				ParentBlockHash: fmt.Sprintf("%#x", payload.Attributes.ParentBlockHash),
+				Source:          payload.Source,
 				At:              payload.ReadyAt.UnixMilli(),
 			})
 		if err != nil {
@@ -474,7 +490,15 @@ var buildCandidatePriority = map[string]int{
 func upsertBuildOutcome(result *SlotResult, outcome *BuildOutcome) {
 	for i, existing := range result.Builds {
 		if buildOutcomesMatch(existing, outcome) {
+			// The local build outcome arrives on its own event; keep it when
+			// the lifecycle entry is replaced.
+			if outcome.LocalBuild == nil {
+				outcome.LocalBuild = existing.LocalBuild
+				outcome.Fallback = outcome.Fallback || existing.Fallback
+			}
+
 			result.Builds[i] = outcome
+
 			return
 		}
 	}
@@ -573,6 +597,113 @@ func (t *Tracker) fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedEx
 			attempt.KeyIndex = &keyIndex
 		}
 	}
+}
+
+// handleLocalBuild records the local build's outcome on the target's build
+// entry and captures the local payload as its own artifact (the shadow build
+// stays inspectable even when the engine payload fed the bids).
+func (t *Tracker) handleLocalBuild(event *payload_builder.LocalBuildEvent) {
+	if event == nil {
+		return
+	}
+
+	outcome := &LocalBuildOutcome{
+		Status:        event.Status,
+		SkipReason:    event.SkipReason,
+		Error:         event.Error,
+		TxSource:      event.TxSource,
+		PayloadSource: event.PayloadSource,
+		Selected:      event.Selected,
+		Info:          event.Info,
+		At:            event.At,
+	}
+
+	var attrs *beacon.PayloadAttributesEvent
+
+	if p := event.Payload; p != nil {
+		attrs = p.Attributes
+		outcome.BlockHash = fmt.Sprintf("%#x", p.BlockHash)
+
+		if p.BlockValue != nil {
+			outcome.BlockValueWei = p.BlockValue.String()
+		}
+
+		if ep := p.ExecutionPayload; ep != nil {
+			outcome.NumTransactions = len(ep.Transactions)
+			outcome.GasUsed = ep.GasUsed
+			outcome.GasLimit = ep.GasLimit
+		}
+
+		if p.BlobsBundle != nil {
+			outcome.NumBlobs = len(p.BlobsBundle.Commitments)
+		}
+
+		// The selected local payload is captured by the ready handler as the
+		// target's primary payload; the shadow one gets its own artifact here.
+		if !event.Selected && t.cfg.SlotArtifactCaptureEnabled && p.ExecutionPayload != nil && attrs != nil {
+			idx, err := t.artifacts.StorePayload(attrs.ProposalSlot, p.ExecutionPayload.Version, p.ExecutionPayload,
+				PayloadArtifactMeta{
+					Candidate:       event.Candidate,
+					ParentBlockRoot: fmt.Sprintf("%#x", attrs.ParentBlockRoot),
+					ParentBlockHash: fmt.Sprintf("%#x", attrs.ParentBlockHash),
+					Source:          payload_builder.SourceLocal,
+					At:              p.ReadyAt.UnixMilli(),
+				})
+			if err != nil {
+				t.log.WithError(err).WithField("slot", attrs.ProposalSlot).Warn("Failed to store local payload artifact")
+			} else {
+				outcome.ArtifactIdx = &idx
+			}
+		}
+	} else if event.ELPayload != nil {
+		attrs = event.ELPayload.Attributes
+	}
+
+	t.upsert(event.Slot, func(result *SlotResult) {
+		build := findBuildOutcome(result, event.Candidate, attrs)
+		if build == nil {
+			build = &BuildOutcome{
+				Status:    BuildStatusStarted,
+				Candidate: event.Candidate,
+				At:        event.At,
+			}
+
+			if attrs != nil {
+				build.Attributes = attributesSnapshot(attrs)
+			}
+
+			result.Builds = append(result.Builds, build)
+		}
+
+		build.LocalBuild = outcome
+		build.Fallback = event.Fallback
+
+		result.Build = primaryBuildOutcome(result)
+	})
+}
+
+// findBuildOutcome locates the result's build entry for a target: by the
+// attributes parent tuple when known, else by candidate key.
+func findBuildOutcome(result *SlotResult, candidate string, attrs *beacon.PayloadAttributesEvent) *BuildOutcome {
+	if attrs != nil {
+		root := fmt.Sprintf("%#x", attrs.ParentBlockRoot)
+		hash := fmt.Sprintf("%#x", attrs.ParentBlockHash)
+
+		for _, build := range result.Builds {
+			if build.Attributes != nil && build.Attributes.ParentBlockRoot == root &&
+				build.Attributes.ParentBlockHash == hash {
+				return build
+			}
+		}
+	}
+
+	for _, build := range result.Builds {
+		if build.Candidate == candidate && (attrs == nil || build.Attributes == nil) {
+			return build
+		}
+	}
+
+	return nil
 }
 
 func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
@@ -756,7 +887,13 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 		payloadStatus = PayloadStatusPending
 	}
 
+	txPlan := txPlanResultFrom(event.Payload)
+
 	t.upsert(slot, func(result *SlotResult) {
+		if txPlan != nil {
+			result.TxPlan = txPlan
+		}
+
 		result.Inclusion = &InclusionResult{
 			Source:          won.Source,
 			BlockHash:       won.BlockHash,
@@ -767,6 +904,77 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 			Timestamp:       time.UnixMilli(won.Timestamp),
 			PayloadStatus:   payloadStatus,
 		}
+	})
+}
+
+// txPlanResultFrom seeds the pending tx plan verdict of an included payload
+// that was built from an explicit transaction list (nil otherwise).
+func txPlanResultFrom(payload *payload_builder.Payload) *TxPlanResult {
+	if payload == nil || payload.Local == nil || payload.Local.ExpectedHashes == nil {
+		return nil
+	}
+
+	hashes := payload.Local.ExpectedHashes
+
+	out := &TxPlanResult{
+		TxSource:      payload.Local.TxSource,
+		ExpectedCount: len(hashes),
+		Status:        TxPlanPending,
+		FirstMismatch: -1,
+	}
+
+	if len(hashes) > maxTxPlanHashes {
+		hashes = hashes[:maxTxPlanHashes]
+		out.Truncated = true
+	}
+
+	out.ExpectedHashes = append([]string(nil), hashes...)
+
+	return out
+}
+
+// txPlanVerdictGraceSlots is how long a pending tx plan may wait for its EL
+// check before the slot is recorded as not_included: past the inclusion
+// tracker's reorg window, so a late verdict can no longer arrive.
+const txPlanVerdictGraceSlots = 20
+
+// finalizeStaleTxPlan records not_included for a slot whose plan is still
+// pending once the grace window passed. A slot without a pending plan is
+// never touched (no record is created).
+func (t *Tracker) finalizeStaleTxPlan(slot phase0.Slot) {
+	if existing, ok := t.store.Get(slot); !ok ||
+		existing.TxPlan == nil || existing.TxPlan.Status != TxPlanPending {
+		return
+	}
+
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil || result.TxPlan.Status != TxPlanPending {
+			return
+		}
+
+		result.TxPlan.Status = TxPlanNotIncluded
+		result.TxPlan.Detail = "the slot passed without the EL check completing"
+		result.TxPlan.VerifiedAt = &now
+	})
+}
+
+// RecordTxPlanCheck records the post-inclusion verdict of a slot's tx plan.
+// A slot without a pending plan (no explicit-list payload) is left alone.
+func (t *Tracker) RecordTxPlanCheck(slot phase0.Slot, status TxPlanStatus, includedCount, firstMismatch int, detail string) {
+	now := time.Now()
+
+	t.upsert(slot, func(result *SlotResult) {
+		if result.TxPlan == nil {
+			return
+		}
+
+		result.TxPlan.Status = status
+		result.TxPlan.IncludedCount = includedCount
+		result.TxPlan.FirstMismatch = firstMismatch
+		result.TxPlan.Detail = detail
+		result.TxPlan.VerifiedAt = &now
 	})
 }
 

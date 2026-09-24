@@ -7,6 +7,7 @@ import { EventLog } from '../components/EventLog';
 import { ConfigPanel } from '../components/ConfigPanel';
 import { BuilderInfo } from '../components/BuilderInfo';
 import { BuilderConfigPanel } from '../components/BuilderConfigPanel';
+import { LocalBuildPanel } from '../components/LocalBuildPanel';
 import { RevealConfigPanel } from '../components/RevealConfigPanel';
 import { BuilderAPIConfigPanel } from '../components/BuilderAPIConfigPanel';
 import { StatsPanel } from '../components/StatsPanel';
@@ -146,6 +147,9 @@ const DashboardPage: React.FC = () => {
 
           {/* Payload Builder */}
           <BuilderConfigPanel config={config} />
+
+          {/* Local build extension (testing_buildBlockV1) + transaction pool */}
+          <LocalBuildPanel config={config} serviceStatus={serviceStatus} />
 
           {/* ePBS Bidder */}
           <ConfigPanel config={config} serviceStatus={serviceStatus} />

@@ -160,7 +160,11 @@ type PayloadArtifactMeta struct {
 	Candidate       string `json:"candidate,omitempty"`
 	ParentBlockRoot string `json:"parent_block_root,omitempty"`
 	ParentBlockHash string `json:"parent_block_hash,omitempty"`
-	At              int64  `json:"at"` // unix milliseconds
+	// Source is the build that produced the payload: empty/el for the engine
+	// payload, local for the testing_buildBlockV1 payload. A local payload on
+	// the same parent tuple gets its own artifact index.
+	Source string `json:"source,omitempty"`
+	At     int64  `json:"at"` // unix milliseconds
 }
 
 // StorePayload captures one built execution payload and returns its per-slot
@@ -178,6 +182,9 @@ func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion,
 	}
 
 	tuple := meta.ParentBlockRoot + "/" + meta.ParentBlockHash
+	if meta.Source != "" && meta.Source != "el" {
+		tuple += "/" + meta.Source
+	}
 
 	s.mu.Lock()
 
@@ -431,9 +438,17 @@ func (s *ArtifactStore) ListBids(slot phase0.Slot) ([]db.SlotArtifact, error) {
 }
 
 // PayloadIndexForCandidate returns the per-slot payload artifact index built
-// for the given candidate key, scanning the slot's payload artifact metadata.
-// Returns false when the slot has no payload artifact for that candidate.
+// for the given candidate key (any source), scanning the slot's payload
+// artifact metadata. Returns false when the slot has no such artifact.
 func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate string) (int, bool) {
+	return s.PayloadIndexFor(slot, candidate, "")
+}
+
+// PayloadIndexFor returns the per-slot payload artifact index matching the
+// candidate key (empty = any) and source (empty = the engine payload, "local"
+// = the local build's payload), scanning the slot's payload artifact
+// metadata. Returns false when no artifact matches.
+func (s *ArtifactStore) PayloadIndexFor(slot phase0.Slot, candidate, source string) (int, bool) {
 	s.mu.Lock()
 
 	metas := make([]db.SlotArtifact, 0, 4)
@@ -459,15 +474,30 @@ func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate str
 		metas = stored
 	}
 
+	if source == "el" {
+		source = ""
+	}
+
 	for _, artifact := range metas {
 		var meta PayloadArtifactMeta
 		if err := json.Unmarshal([]byte(artifact.Meta), &meta); err != nil {
 			continue
 		}
 
-		if meta.Candidate == candidate {
-			return artifact.Idx, true
+		metaSource := meta.Source
+		if metaSource == "el" {
+			metaSource = ""
 		}
+
+		if candidate != "" && meta.Candidate != candidate {
+			continue
+		}
+
+		if metaSource != source {
+			continue
+		}
+
+		return artifact.Idx, true
 	}
 
 	return 0, false

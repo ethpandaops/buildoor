@@ -4,6 +4,7 @@ export type ViewType =
   | 'dashboard'
   | 'action-plan'
   | 'bids-won'
+  | 'mempool'
   | 'builder-keys'
   | 'validators'
   | 'proposer-preferences'
@@ -15,6 +16,7 @@ const VIEW_PATHS: Record<ViewType, string> = {
   dashboard: '/',
   'action-plan': '/action-plan',
   'bids-won': '/bids-won',
+  mempool: '/mempool',
   'builder-keys': '/builder-keys',
   validators: '/validators',
   'proposer-preferences': '/proposer-preferences',
