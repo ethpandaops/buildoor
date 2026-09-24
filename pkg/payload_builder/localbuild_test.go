@@ -355,10 +355,9 @@ func TestBuildLocalTxSources(t *testing.T) {
 	})
 }
 
-// fakePoolEL is the txpool ELClient for builder-level pool tests.
-type fakePoolEL struct {
-	states map[common.Address]*execution.AccountState
-}
+// fakePoolEL is the txpool ELClient for builder-level pool tests: every
+// account is funded at nonce 0.
+type fakePoolEL struct{}
 
 func (f *fakePoolEL) GetChainID(context.Context) (*big.Int, error) { return big.NewInt(1), nil }
 func (f *fakePoolEL) HeaderByHash(context.Context, common.Hash) (*types.Header, error) {

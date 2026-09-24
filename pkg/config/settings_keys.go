@@ -42,12 +42,12 @@ const (
 	KeyBuildAutoWeakHeadPct           = "build.auto_weak_head_pct"
 	KeyBuildEnforceBidGasLimit        = "build.enforce_bid_gas_limit"
 
-	KeyLocalBuildEnabled          = "local_build.enabled"
-	KeyLocalBuildPayloadSource    = "local_build.payload_source"
-	KeyLocalBuildTxSource         = "local_build.tx_source"
-	KeyLocalBuildBuildELPayload   = "local_build.build_el_payload"
-	KeyLocalBuildAllowBlobsNoBund = "local_build.allow_blobs_without_bundle"
-	KeyLocalBuildMaxAttempts      = "local_build.max_attempts"
+	KeyLocalBuildEnabled            = "local_build.enabled"
+	KeyLocalBuildPayloadSource      = "local_build.payload_source"
+	KeyLocalBuildTxSource           = "local_build.tx_source"
+	KeyLocalBuildBuildELPayload     = "local_build.build_el_payload"
+	KeyLocalBuildAllowBlobsNoBundle = "local_build.allow_blobs_without_bundle"
+	KeyLocalBuildMaxAttempts        = "local_build.max_attempts"
 
 	KeyTxPoolEnabled         = "txpool.enabled"
 	KeyTxPoolOrdering        = "txpool.ordering"
