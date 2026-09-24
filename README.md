@@ -192,7 +192,7 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--txpool-max-txs-per-sender` | `256` | Per-sender queue cap |
 | `--txpool-base-fee-ceiling-gwei` | `0` | Above this next base fee pool fills drop to the EIP-1559 gas target so a long max-fill run does not price its own txs out (exact lists are never reduced) |
 | `--txpool-max-strikes` | `3` | Drop a queued tx after this many attributed build failures (0 = never) |
-| `--txpool-tx-ttl-slots` | `0` | Drop queued txs older than this many slots (0 = never; expiring queued txs leaves nonce gaps behind) |
+| `--txpool-tx-ttl-slots` | `64` | Expire queued txs older than this many slots; an expired tx goes together with its sender's higher nonces, so no gap is left (0 = never) |
 | `--txpool-forward-to-el` | `false` | Also submit admitted txs to the EL mempool (A/B shadow mode) |
 
 Point a generator at the pool as its ONLY host:

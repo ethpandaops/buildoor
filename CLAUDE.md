@@ -296,7 +296,11 @@ npm run clean
      `fifo` | `tip` | `random` under gas/blob/count budgets). The eviction loop
      follows beacon head + payload-available events: included txs are dropped
      (`included_by_us` vs `included_by_other` via `NoteBuiltBlock`), touched
-     senders' passed nonces pruned, the optional TTL applied (`txpool.tx_ttl_slots`, default 0 = never: expiring queued txs leaves nonce gaps that stall the sender until the generator rebroadcasts). Ingress (`pkg/txpool/rpc/`):
+     senders' passed nonces pruned, the TTL applied (`txpool.tx_ttl_slots`,
+     default 64, 0 = never): an expired tx marks a stalled sender chain and
+     is dropped TOGETHER with the sender's higher nonces — dropping it alone
+     would leave a gap they could never cross — while fresh lower nonces
+     stay; the generator restarts at the pool-aware "pending" nonce. Ingress (`pkg/txpool/rpc/`):
      JSON-RPC 2.0 (single + batch) at `POST /rpc` on the API port; auth per
      `txpool.auth` = `open` (default) | `auth_token` (the authenticatoor JWT the
      mutating API endpoints use, `txpoolrpc.Authorizer` implemented in webui.go)

@@ -686,12 +686,13 @@ type TxPoolConfig struct {
 	// MaxTxsPerSender caps the queued transactions of one sender.
 	MaxTxsPerSender uint64 `yaml:"max_txs_per_sender" json:"max_txs_per_sender"`
 
-	// TxTTLSlots drops transactions older than this many slots (0 = never,
-	// the default). Pool transactions only land when buildoor wins a slot,
-	// which can take long; expiring the queued ones leaves nonce gaps behind
-	// that a generator tracking nonces locally (spamoor) only closes through
-	// its slow rebroadcast, so every later transaction of the sender stalls.
-	// The pool caps bound memory instead.
+	// TxTTLSlots expires queued transactions older than this many slots
+	// (0 = never). Pool transactions only land when buildoor wins a slot, so
+	// an expired transaction marks a stalled sender chain; it is dropped
+	// TOGETHER with the sender's higher nonces, which could never execute
+	// behind the gap it would leave, while fresh lower nonces stay. A
+	// generator tracking nonces locally (spamoor) recovers through the
+	// pool-aware "pending" nonce, which restarts at the chain nonce.
 	TxTTLSlots uint64 `yaml:"tx_ttl_slots" json:"tx_ttl_slots"`
 
 	// MaxStrikes drops a queued transaction after this many attributed build

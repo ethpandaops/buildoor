@@ -706,3 +706,59 @@ func TestSelectRoundRobinAndCeiling(t *testing.T) {
 	require.False(t, sel.CeilingApplied)
 	require.Equal(t, uint64(30_000_000), sel.GasBudget)
 }
+
+func TestSweepTTLDropsSenderSuffix(t *testing.T) {
+	el := newFakeEL()
+	pool, cfg, chainSvc := newTestPool(t, el)
+	pool.ctx = context.Background()
+	cfg.TxPool.TxTTLSlots = 4
+
+	// stalled: its lowest nonce is old, so the whole chain goes.
+	stalled := newAccount(t)
+	fund(el, stalled, 0, 100)
+	// active: an old higher nonce behind a fresh lower one; only the suffix
+	// from the expired nonce goes, the executable lower nonce stays.
+	active := newAccount(t)
+	fund(el, active, 0, 100)
+	// fresh: nothing expired.
+	fresh := newAccount(t)
+	fund(el, fresh, 0, 100)
+
+	chainSvc.slot = 10
+
+	stalled0, raw := signTx(t, stalled, txOpts{nonce: 0})
+	_, err := pool.Add(raw)
+	require.NoError(t, err)
+
+	active1, raw := signTx(t, active, txOpts{nonce: 1}) // arrives before nonce 0
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	chainSvc.slot = 20
+
+	stalled1, raw := signTx(t, stalled, txOpts{nonce: 1})
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	active0, raw := signTx(t, active, txOpts{nonce: 0})
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	fresh0, raw := signTx(t, fresh, txOpts{nonce: 0})
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	pool.sweepTTL(14)
+	require.Equal(t, 5, pool.Stats().Pending, "slot 10 arrivals are not expired before the cutoff passes them")
+
+	pool.sweepTTL(15)
+
+	require.Nil(t, pool.Get(stalled0.Hash()), "expired head")
+	require.Nil(t, pool.Get(stalled1.Hash()), "fresh nonce above an expired one goes with it")
+	require.Nil(t, pool.Get(active1.Hash()), "expired higher nonce")
+	require.NotNil(t, pool.Get(active0.Hash()), "fresh lower nonce stays executable")
+	require.NotNil(t, pool.Get(fresh0.Hash()))
+	require.Equal(t, uint64(3), pool.Stats().EvictedTTL)
+	require.Equal(t, 2, pool.Stats().Pending)
+	require.Equal(t, uint64(1), pool.PendingNonce(active.addr, 0), "the sender restarts at the surviving run")
+}

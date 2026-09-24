@@ -67,7 +67,7 @@ func DefaultConfig() *Config {
 			MaxPoolTxs:      10000,
 			MaxTxsPerSender: 256,
 			MaxStrikes:      3,
-			TxTTLSlots:      0, // never: expiring queued txs leaves nonce gaps behind (see TxPoolConfig)
+			TxTTLSlots:      64, // a stalled sender is dropped whole (see TxPoolConfig)
 		},
 		Reveal: RevealConfig{
 			Enabled: true,
