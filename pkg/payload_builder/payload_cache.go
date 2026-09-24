@@ -150,6 +150,30 @@ func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *Payload {
 	return nil
 }
 
+// Remove drops the given payload from the cache when it is still the cached
+// build of its parent tuple (a newer build on the same tuple stays). Returns
+// whether the payload was removed.
+func (c *PayloadCache) Remove(payload *Payload) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	slot := payload.Attributes.ProposalSlot
+	key := beacon.AttrParentKeyOf(payload.Attributes)
+
+	variants := c.payloads[slot]
+	if variants[key] != payload {
+		return false
+	}
+
+	delete(variants, key)
+
+	if len(variants) == 0 {
+		delete(c.payloads, slot)
+	}
+
+	return true
+}
+
 // Delete removes all payloads for the given slot.
 func (c *PayloadCache) Delete(slot phase0.Slot) {
 	c.mu.Lock()

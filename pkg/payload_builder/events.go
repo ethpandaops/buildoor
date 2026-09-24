@@ -13,6 +13,10 @@ type PayloadBuildStartedEvent struct {
 	Slot      phase0.Slot
 	Candidate string    // candidate key the build targets ("" = unclassified)
 	StartedAt time.Time // When the build started
+	// BuildSeq identifies the build across its started/ready/failed events
+	// and orders the builds of one slot: a superseded build's late events
+	// carry a lower seq than its replacement's. Monotonic per process.
+	BuildSeq uint64
 }
 
 // PayloadBuildFailedEvent is emitted when a payload build fails. Subscribers
@@ -23,6 +27,7 @@ type PayloadBuildFailedEvent struct {
 	Candidate string    // candidate key the build targeted ("" = unclassified)
 	Error     string    // Failure reason
 	FailedAt  time.Time // When the build failed
+	BuildSeq  uint64    // see PayloadBuildStartedEvent.BuildSeq
 }
 
 // BuildSkippedEvent is emitted when the builder deliberately does not build

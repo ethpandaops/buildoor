@@ -66,7 +66,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-ignore-preference-limit", defaults.BuilderAPI.IgnorePreferenceLimit, "Serve the configured execution_payment portion even beyond the proposer's advertised max_execution_payment (deliberately spec-violating, for client-side rejection testing)")
 	rootCmd.PersistentFlags().String("builder-api-serve-candidates", defaults.BuilderAPI.ServeCandidates, "Which built candidate payloads bid requests are answered from: all, canonical_only, or a comma-separated candidate key list")
 	rootCmd.PersistentFlags().Bool("builder-api-on-demand-build", defaults.BuilderAPI.OnDemandBuild, "Build a payload on the fly when a bid request asks for a legal parent no candidate covers yet")
-	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); used to validate builder_url in SignedRequestAuthV1")
+	rootCmd.PersistentFlags().String("builder-api-url", defaults.BuilderAPI.BuilderURL, "Publicly reachable URL of this builder (e.g. https://builder.example.com); its hostname is used to validate auth.message.data in SignedRequestAuthV1")
 	rootCmd.PersistentFlags().Bool("builder-api-require-auth", defaults.BuilderAPI.RequireRequestAuth, "Require SignedRequestAuthV1 on getExecutionPayloadBid requests; reject unauthenticated requests with 401")
 	rootCmd.PersistentFlags().Uint64("builder-keys-target", defaults.BuilderKeys.TargetCount, "Number of builder keys to keep registered and funded (derived from the entry key; index 0 is the entry key itself)")
 	rootCmd.PersistentFlags().Uint64("builder-keys-max-index", defaults.BuilderKeys.MaxIndex, "Highest internal builder key index that may be derived")

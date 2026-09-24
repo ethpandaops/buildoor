@@ -150,8 +150,9 @@ const (
 // BuilderAPIConfig defines configuration for the traditional Builder API (pre-ePBS).
 type BuilderAPIConfig struct {
 	// BuilderURL is this builder's publicly reachable URL (e.g. "https://builder.example.com").
-	// Used to verify the auth.message.data field (set to the builder URL) in
-	// SignedRequestAuthV1 messages from proposers. If empty, this validation is skipped.
+	// Used to verify the auth.message.data field in SignedRequestAuthV1 messages
+	// from proposers, by default the hostname of this URL. If empty, this validation
+	// is skipped.
 	BuilderURL string `yaml:"builder_url" json:"builder_url"`
 
 	// RequireRequestAuth controls whether a SignedRequestAuthV1 body is mandatory on

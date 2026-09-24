@@ -166,6 +166,32 @@ func TestSubmitBuilderPreferences_LatestOverwrites(t *testing.T) {
 	assert.Equal(t, phase0.Gwei(250), got, "only the latest preference should be retained")
 }
 
+// TestSubmitBuilderPreferences_HostnameAuthData verifies that the builder-specs
+// default auth data, the hostname of the builder URL, is accepted however the
+// configured URL is written.
+func TestSubmitBuilderPreferences_HostnameAuthData(t *testing.T) {
+	gfv := phase0.Version{}
+	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)
+	require.NoError(t, err)
+
+	cfg := &config.BuilderAPIConfig{BuilderURL: "HTTPS://Builder.Example.com:443/"}
+	srv := NewServer(cfg, logrus.New(), &mockChainService{}, newServingPlanService(), nil, nil, nil)
+	srv.SetEnabled(true)
+
+	body := signBuilderPrefsRequest(t, blsSigner, "builder.example.com", 100, 5_000_000_000, gfv)
+	pk := blsSigner.PublicKey()
+	url := "/eth/v1/builder/builder_preferences/0x" + hex.EncodeToString(pk[:])
+
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	_, ok := srv.GetBuilderPreferencesStore().Get(pk)
+	assert.True(t, ok, "preference must be stored when auth data is the builder hostname")
+}
+
 func TestSubmitBuilderPreferences_WrongBuilderURL(t *testing.T) {
 	gfv := phase0.Version{}
 	blsSigner, err := signer.NewBLSSigner(testValidatorPrivkey)

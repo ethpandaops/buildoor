@@ -333,6 +333,20 @@ npm run clean
    - Calls Engine API to construct execution payloads (forkchoiceUpdated → getPayload)
    - Emits `PayloadReadyEvent` to subscribers; plan-involved skips fire
      `BuildSkippedEvent` (deduped per slot) for the slot results tracker
+   - **Missing-block fallback** (`applyAttributesFallback`): when no attributes
+     arrived for a slot by its build start time, the previous slot's are
+     re-used with the proposal slot advanced and the event marked
+     `Synthesized`. Such attributes are stale whenever the state moved in
+     between (an epoch transition changes the expected withdrawals), and Teku
+     emits next-slot attributes only ~30 ms before the build start, so the
+     fallback can win the race against a late node event. A node-received
+     event for the same parent tuple therefore SUPERSEDES a build that ran
+     from synthesized attributes (`supersedeSynthesizedBuild`): unless its
+     build inputs are identical (`PayloadAttributesEvent.BuildInputsEqual`),
+     the in-flight engine build is cancelled, an already emitted payload is
+     withdrawn from the payload cache (a `PayloadBuildFailedEvent` with reason
+     `superseded by beacon node attributes` is recorded) and the tuple is
+     rebuilt from the node's attributes via the late-build path
 
 2. **Payload Bidder** (`pkg/payload_bidder/`) — shared Gloas+ bid/reveal domain
    - `Signer`, `BuildSignedBid`, `BuildSignedEnvelope`: bid/envelope construction + signing
@@ -510,9 +524,11 @@ npm run clean
      preference (0 when never submitted, per spec) unless
      `builder_api.ignore_preference_limit` deliberately serves beyond it (a
      spec-violating bid clients should reject); gossip bids stay
-     `execution_payment = 0` per spec. An unset `--builder-api-url` skips the
-     SignedRequestAuth builder_url match on BOTH ePBS handlers (bids and
-     preferences alike)
+     `execution_payment = 0` per spec. `auth.message.data` must be the
+     hostname of `--builder-api-url` (the builder-specs default, see
+     `epbs/auth_data.go`) or, for validator clients predating that default,
+     the URL bytes verbatim. An unset `--builder-api-url` skips the match on
+     BOTH ePBS handlers (bids and preferences alike)
    - Outcomes are recorded through the narrow `SlotResultRecorder` interface
      (implemented by the slot results tracker): bids `served` only after a
      successful response write, `suppressed`/`failed`/`cancelled` otherwise, with

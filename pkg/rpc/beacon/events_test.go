@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -216,4 +218,86 @@ func TestPayloadAttributeVariants(t *testing.T) {
 	stream.CleanupPayloadAttributesCache(21)
 	assert.Nil(t, stream.GetLatestPayloadAttributes(20))
 	assert.Empty(t, stream.GetPayloadAttributesVariants(20))
+}
+
+func TestPayloadAttributesBuildInputsEqual(t *testing.T) {
+	base := func() *PayloadAttributesEvent {
+		return &PayloadAttributesEvent{
+			ProposalSlot:          30,
+			ProposerIndex:         7,
+			ParentBlockRoot:       phase0.Root{0x01},
+			ParentBlockNumber:     29,
+			ParentBlockHash:       phase0.Hash32{0xaa},
+			Timestamp:             1000,
+			PrevRandao:            phase0.Root{0xcc},
+			SuggestedFeeRecipient: common.Address{0x0f},
+			ParentBeaconBlockRoot: phase0.Root{0x01},
+			TargetGasLimit:        60_000_000,
+			Withdrawals: []*capella.Withdrawal{
+				{Index: 1, ValidatorIndex: 10, Amount: 500},
+				{Index: 2, ValidatorIndex: 11, Amount: 600},
+			},
+			InclusionListTransactions: [][]byte{{0x01, 0x02}},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(e *PayloadAttributesEvent)
+		equal  bool
+	}{
+		{name: "identical", mutate: func(*PayloadAttributesEvent) {}, equal: true},
+		{
+			name:   "slot and parent number ignored",
+			mutate: func(e *PayloadAttributesEvent) { e.ProposalSlot = 31; e.ParentBlockNumber = 0; e.Synthesized = true },
+			equal:  true,
+		},
+		{
+			name:   "withdrawal amount differs",
+			mutate: func(e *PayloadAttributesEvent) { e.Withdrawals[1].Amount = 601 },
+			equal:  false,
+		},
+		{
+			name:   "withdrawal count differs",
+			mutate: func(e *PayloadAttributesEvent) { e.Withdrawals = e.Withdrawals[:1] },
+			equal:  false,
+		},
+		{name: "prev randao differs", mutate: func(e *PayloadAttributesEvent) { e.PrevRandao = phase0.Root{0xdd} }, equal: false},
+		{name: "timestamp differs", mutate: func(e *PayloadAttributesEvent) { e.Timestamp++ }, equal: false},
+		{name: "proposer differs", mutate: func(e *PayloadAttributesEvent) { e.ProposerIndex = 8 }, equal: false},
+		{name: "target gas limit differs", mutate: func(e *PayloadAttributesEvent) { e.TargetGasLimit = 0 }, equal: false},
+		{name: "fee recipient differs", mutate: func(e *PayloadAttributesEvent) { e.SuggestedFeeRecipient = common.Address{} }, equal: false},
+		{
+			name:   "inclusion list differs",
+			mutate: func(e *PayloadAttributesEvent) { e.InclusionListTransactions = [][]byte{{0x01, 0x03}} },
+			equal:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, b := base(), base()
+			tt.mutate(b)
+			assert.Equal(t, tt.equal, a.BuildInputsEqual(b))
+			assert.Equal(t, tt.equal, b.BuildInputsEqual(a), "symmetric")
+		})
+	}
+}
+
+// TestInjectPayloadAttributes_NodeEventReplacesSynthesized: a node-received
+// event for the same parent tuple replaces the synthesized variant, and the
+// marker tells them apart.
+func TestInjectPayloadAttributes_NodeEventReplacesSynthesized(t *testing.T) {
+	stream := NewEventStream(&Client{})
+
+	synthesized := &PayloadAttributesEvent{ProposalSlot: 12, ParentBlockHash: phase0.Hash32{0xaa}, Synthesized: true}
+	require.True(t, stream.InjectPayloadAttributes(synthesized))
+	assert.True(t, stream.GetLatestPayloadAttributes(12).Synthesized)
+
+	real := &PayloadAttributesEvent{ProposalSlot: 12, ParentBlockHash: phase0.Hash32{0xaa}, Timestamp: 5}
+	stream.cachePayloadAttributes(real)
+
+	assert.Same(t, real, stream.GetLatestPayloadAttributes(12), "node event wins")
+	assert.Len(t, stream.GetPayloadAttributesVariants(12), 1)
+	assert.False(t, stream.GetLatestPayloadAttributes(12).Synthesized)
 }

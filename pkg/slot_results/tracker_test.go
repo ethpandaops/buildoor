@@ -18,6 +18,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -561,4 +563,78 @@ func TestBuildValueFromBigInt(t *testing.T) {
 	// Guard the wei string formatting used by handlePayloadReady.
 	value := big.NewInt(1_500_000_000)
 	require.Equal(t, "1500000000", value.String())
+}
+
+// TestBuildOutcomeSeqOrdering: a candidate rebuilt after a supersede reports
+// through two builds whose events arrive over separate subscriptions in no
+// fixed order; the newer build's outcome always wins and a build's own
+// superseded failure still replaces its withdrawn ready payload.
+func TestBuildOutcomeSeqOrdering(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+	slot := phase0.Slot(1600)
+	now := time.Now()
+
+	readyPayload := func(seq uint64, hash byte) *payload_builder.Payload {
+		return &payload_builder.Payload{
+			Attributes: &beacon.PayloadAttributesEvent{
+				ProposalSlot:    slot,
+				ParentBlockRoot: phase0.Root{0x01},
+				ParentBlockHash: phase0.Hash32{0xaa},
+			},
+			Candidate: chain.CandidateParentFull,
+			BlockHash: phase0.Hash32{hash},
+			ReadyAt:   now,
+			BuildSeq:  seq,
+		}
+	}
+
+	// Build 1 (synthesized) starts, emits a payload, then is superseded.
+	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
+		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 1,
+	})
+	env.tracker.handlePayloadReady(readyPayload(1, 0x11))
+	require.Equal(t, BuildStatusReady, env.tracker.Get(slot).Build.Status)
+
+	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
+		Slot: slot, Candidate: "parent_full", Error: "superseded by beacon node attributes",
+		FailedAt: now, BuildSeq: 1,
+	})
+	result := env.tracker.Get(slot)
+	require.Equal(t, BuildStatusFailed, result.Build.Status, "same build: failure replaces the withdrawn ready payload")
+	require.Len(t, result.Builds, 1)
+
+	// Build 2 (node attributes) starts the candidate over.
+	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
+		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 2,
+	})
+	result = env.tracker.Get(slot)
+	require.Len(t, result.Builds, 1)
+	require.Equal(t, BuildStatusStarted, result.Builds[0].Status, "a newer build restarts the candidate")
+
+	env.tracker.handlePayloadReady(readyPayload(2, 0x22))
+	result = env.tracker.Get(slot)
+	require.Equal(t, BuildStatusReady, result.Build.Status)
+	require.Equal(t, "0x2200000000000000000000000000000000000000000000000000000000000000", result.Build.BlockHash)
+
+	// Late events of build 1 (its superseded failure, a duplicate ready)
+	// arrive after build 2 reported: ignored.
+	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
+		Slot: slot, Candidate: "parent_full", Error: "superseded by beacon node attributes",
+		FailedAt: now, BuildSeq: 1,
+	})
+	env.tracker.handlePayloadReady(readyPayload(1, 0x11))
+	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
+		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 1,
+	})
+
+	result = env.tracker.Get(slot)
+	require.Len(t, result.Builds, 1)
+	require.Equal(t, BuildStatusReady, result.Build.Status, "stale build 1 events never clobber build 2")
+	require.Equal(t, "0x2200000000000000000000000000000000000000000000000000000000000000", result.Build.BlockHash)
+
+	// Build 2's own failure would still apply (same seq).
+	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
+		Slot: slot, Candidate: "parent_full", Error: "boom", FailedAt: now, BuildSeq: 2,
+	})
+	require.Equal(t, BuildStatusFailed, env.tracker.Get(slot).Build.Status)
 }
