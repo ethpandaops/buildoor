@@ -879,8 +879,9 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	})
 
 	// The local build extension runs alongside the engine build when the
-	// slot's frozen plan enables it and the EL exposes the testing namespace.
-	localReq, localSkip := s.resolveLocalBuildRequest(slot)
+	// slot's frozen plan enables it, the target is the canonical candidate
+	// and the EL exposes the testing namespace.
+	localReq, localSkip := s.resolveLocalBuildRequest(slot, target.candidate)
 
 	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
 

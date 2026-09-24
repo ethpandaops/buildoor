@@ -244,7 +244,13 @@ npm run clean
      forkchoiceUpdated pinned the EL head to the parent (geth and ethrex require
      `parentHash == head`) and runs during the engine build's wait; without an
      engine build (`local_build.build_el_payload=false` + payload source `local`) a
-     head-only FCU is issued first. `local_build.payload_source` decides which
+     head-only FCU is issued first. Only the CANONICAL candidate (`parent_full`,
+     or an unclassified tuple) builds locally: geth's testing call builds on the
+     EL's current head, and a speculative parent (`parent_empty`,
+     `grandparent_*`) is not the head — the CL's own forkchoice updates and
+     parallel candidate builds move it — so those targets skip with
+     `speculative_candidate` (payload source `local` then yields no payload for
+     them; `local_or_el` falls back). `local_build.payload_source` decides which
      payload feeds `PayloadReady` (bids/reveals): `el` (default; the local payload
      is an inspection-only SHADOW), `local` (strict — no payload when the local
      build fails), `local_or_el` (fallback, recorded). Tx source:

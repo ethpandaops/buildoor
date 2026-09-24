@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -459,4 +460,34 @@ func TestBuildLocalAttributedRetry(t *testing.T) {
 	require.Error(t, out.err)
 	require.Len(t, client.calls, 1)
 	require.Equal(t, 1, pool.Get(txA0.Hash()).Strikes(), "no strike for an exact plan's refusal")
+}
+
+func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
+	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	svc := supersedeTestService(t, &stubChainService{spec: spec})
+	svc.cfg.LocalBuild.Enabled = true
+	svc.localBuild.availability = LocalBuildAvailability{Configured: true, Available: true, BlobBundle: true}
+
+	tests := []struct {
+		name      string
+		candidate chain.CandidateKey
+		wantReq   bool
+		wantSkip  string
+	}{
+		{name: "canonical", candidate: chain.CandidateParentFull, wantReq: true},
+		{name: "unclassified tuple", candidate: "", wantReq: true},
+		{name: "parent_empty", candidate: chain.CandidateParentEmpty, wantSkip: LocalSkipSpeculativeCandidate},
+		{name: "grandparent_full", candidate: chain.CandidateGrandparentFull, wantSkip: LocalSkipSpeculativeCandidate},
+		{name: "grandparent_empty", candidate: chain.CandidateGrandparentEmpty, wantSkip: LocalSkipSpeculativeCandidate},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// A fresh slot per case: Freeze snapshots the first resolution.
+			req, skip := svc.resolveLocalBuildRequest(phase0.Slot(1000+i), tc.candidate)
+
+			require.Equal(t, tc.wantSkip, skip)
+			require.Equal(t, tc.wantReq, req != nil)
+		})
+	}
 }

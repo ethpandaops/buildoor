@@ -168,6 +168,10 @@ the namespace on an additional endpoint instead
 and point `--el-rpc` at port 8547) — and reth rejects it without an alternative. Both extensions need `--el-rpc` and are off by
 default; the enable settings are refused while the EL does not expose the
 namespace (probed at startup and every 5 minutes, or on demand from the UI).
+Only the canonical build candidate (`parent_full`) builds locally: the testing
+call builds on the EL's current head, which a speculative parent (`parent_empty`,
+`grandparent_*`) is not — those targets skip with `speculative_candidate` and,
+with payload source `local`, produce no payload (`local_or_el` falls back).
 
 | Flag | Default | Description |
 |------|---------|-------------|

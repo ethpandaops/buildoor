@@ -13,6 +13,7 @@ import (
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
@@ -39,6 +40,14 @@ const (
 	LocalSkipTxPoolUnavailable = "txpool_unavailable"
 	// LocalSkipTxPoolDisabled: tx source txpool while the pool is switched off.
 	LocalSkipTxPoolDisabled = "txpool_disabled"
+	// LocalSkipSpeculativeCandidate: the target is a speculative candidate
+	// (parent_empty, grandparent_*). testing_buildBlockV1 builds on the EL's
+	// CURRENT head only, and a speculative parent is not the head: the CL
+	// re-pins the head to the canonical block with its own forkchoice
+	// updates, and parallel candidate builds move it with theirs, so the
+	// call would fail with "parentHash is not current head". Only the
+	// canonical candidate builds locally.
+	LocalSkipSpeculativeCandidate = "speculative_candidate"
 )
 
 // Local build statuses (LocalBuildEvent.Status).
@@ -411,11 +420,13 @@ func (s *Service) SubscribeLocalBuild(capacity int, blocking bool) *utils.Subscr
 }
 
 // resolveLocalBuildRequest turns the slot's frozen local-build settings into
-// the builder request, applying the runtime gates the plan cannot know: the
+// the builder request for one candidate, applying the runtime gates the plan
+// cannot know: the candidate (only the canonical parent_full candidate — or
+// an unclassified tuple — is the EL head the testing call builds on), the
 // probed availability of the testing namespace and the EL's blob handling.
 // The second return is the skip reason when no local build runs (empty when a
 // request is returned or the extension is simply off without a plan).
-func (s *Service) resolveLocalBuildRequest(slot phase0.Slot) (*LocalBuildRequest, string) {
+func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.CandidateKey) (*LocalBuildRequest, string) {
 	frozen := s.planSvc.Freeze(slot)
 	if frozen.Build == nil || frozen.Build.Local == nil {
 		return nil, ""
@@ -424,6 +435,10 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot) (*LocalBuildRequest
 	settings := frozen.Build.Local
 	if !settings.Enabled {
 		return nil, ""
+	}
+
+	if candidate != "" && candidate != chain.CandidateParentFull {
+		return nil, LocalSkipSpeculativeCandidate
 	}
 
 	availability := s.LocalBuildAvailability()
