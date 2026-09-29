@@ -81,11 +81,18 @@ const referenceSlotTimeMs = 12000
 // Timing fields are tuned for a 12s slot and scaled linearly to the actual slot
 // time (value = reference@12s * slotTimeMs / 12000):
 //
-//	BuildStartTime:  -2900ms @12s  (e.g. -1450ms @6s)
-//	PayloadBuildTime: 2100ms @12s  (e.g.  1050ms @6s)
+//	BuildStartTime:  -3400ms @12s  (e.g. -1700ms @6s)
+//	PayloadBuildTime: 2600ms @12s  (e.g.  1300ms @6s)
 //	BidStartTime:     -400ms @12s  (e.g.  -200ms @6s)
 //	BidEndTime:       -100ms @12s  (e.g.   -50ms @6s)
 //	Reveal.TimeMs:    5000ms @12s  (e.g.  2500ms @6s)
+//
+// PayloadBuildTime must leave headroom beyond the EL's own build deadline:
+// geth, for example, fills transactions for up to 2s (--miner.recommit) after
+// preparing the block and only then seals it, so under load its first full
+// payload is ready ~2.2s after fcu. A getPayload before that returns the
+// empty payload. BuildStartTime moves together with it so that the build
+// still ends 800ms before slot start, leaving the bid schedule unchanged.
 //
 // Reveal.TimeMs (41.7% of the slot) is anchored to the Gloas/EIP-7732 deadlines:
 // it sits after the attestation deadline (ATTESTATION_DUE_BPS_GLOAS, 25%) — so
@@ -96,11 +103,11 @@ const referenceSlotTimeMs = 12000
 // gossip to PTC members, who attest at 75% (PAYLOAD_ATTESTATION_DUE_BPS).
 func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 	if c.EPBS.BuildStartTime == 0 {
-		c.EPBS.BuildStartTime = -2900 * slotTimeMs / referenceSlotTimeMs
+		c.EPBS.BuildStartTime = -3400 * slotTimeMs / referenceSlotTimeMs
 	}
 
 	if c.PayloadBuildTime == 0 {
-		c.PayloadBuildTime = uint64(2100 * slotTimeMs / referenceSlotTimeMs)
+		c.PayloadBuildTime = uint64(2600 * slotTimeMs / referenceSlotTimeMs)
 	}
 
 	if c.EPBS.BidStartTime == 0 {
