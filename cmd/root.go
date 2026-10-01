@@ -88,7 +88,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("schedule-start-slot", defaults.Schedule.StartSlot, "Start building at this slot")
 
 	// Build start time flag (0 = auto from slot time, scaled from the 12s value)
-	rootCmd.PersistentFlags().Int64("build-start-time", 0, "Build start time in ms relative to slot start (0 = auto: -2900ms @12s, scaled to slot time)")
+	rootCmd.PersistentFlags().Int64("build-start-time", 0, "Build start time in ms relative to slot start (0 = auto: -3400ms @12s, scaled to slot time)")
 
 	// ePBS time-based flags (0 = auto from slot time, scaled from the 12s value)
 	rootCmd.PersistentFlags().Int64("epbs-bid-start", 0, "First bid time in ms relative to slot start (0 = auto: -400ms @12s, scaled to slot time)")
@@ -127,7 +127,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("reveal-rebind-on-reorg", defaults.Reveal.RebindOnReorg, "Re-bind a slot's reveal (rebuilt, re-signed envelope) when our payload is re-included under a different block root after a reorg")
 
 	// Payload Build Time (0 = auto from slot time, scaled from the 12s value)
-	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2100ms @12s, scaled to slot time)")
+	rootCmd.PersistentFlags().Uint64("payload-build-time", 0, "Time to allow the EL to build the payload in ms (0 = auto: 2600ms @12s, scaled to slot time)")
 
 	// Per-slot result/artifact history
 	rootCmd.PersistentFlags().Uint64("slot-result-retention-epochs", defaults.SlotResultRetentionEpochs, "Epochs of per-slot action plan + result history to keep before pruning (must be > 0)")
