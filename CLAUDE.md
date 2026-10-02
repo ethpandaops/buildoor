@@ -151,8 +151,10 @@ npm run clean
      (`payload`/`bid`/`envelope`) applied to the object's JSON via `pkg/jqtransform`
      (wraps `itchyny/gojq`; env access disabled, single-output, ctx-timeout 2s) for
      arbitrary custom builder testing. Payload rewrites the built execution payload
-     before it feeds both the bid commitment and the reveal (Payload.BlockHash
-     re-synced from the result); bid/envelope rewrite the MESSAGE just before signing
+     before it feeds both the bid commitment and the reveal; the block hash is
+     recomputed from the transformed header fields unless the expression sets
+     `block_hash` itself (keep that for deliberate hash-mismatch tests), so field
+     edits yield execution-invalid but hash-valid payloads; bid/envelope rewrite the MESSAGE just before signing
      and are then RE-SIGNED (target-slot fork) — so results are validly signed but
      customized, and a bid commitment can deliberately diverge from the revealed
      payload. Expressions are jq-Validated at plan-update time (400 on bad jq); a

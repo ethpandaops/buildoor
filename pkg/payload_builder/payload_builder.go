@@ -339,9 +339,12 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),
 		ExecutionRequests: execRequests,
 		BlockHash:         phase0.Hash32(newHash),
-		FeeRecipient:      proposerFeeRecipient,
-		BlockValue:        blockValue,
-		ReadyAt:           time.Now(),
+
+		EngineExecutionRequests: resp.ExecutionRequests,
+		EngineVersion:           enginePayload.Version,
+		FeeRecipient:            proposerFeeRecipient,
+		BlockValue:              blockValue,
+		ReadyAt:                 time.Now(),
 	}
 
 	b.log.WithFields(logrus.Fields{

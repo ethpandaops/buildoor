@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
@@ -33,7 +35,9 @@ type Payload struct {
 	// BlobsBundle holds the blobs/commitments/proofs (Deneb+), nil if none.
 	BlobsBundle *BlobsBundle
 	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
-	ExecutionRequests *eth2all.ExecutionRequests
+	ExecutionRequests       *eth2all.ExecutionRequests
+	EngineExecutionRequests []prague.ExecutionRequest
+	EngineVersion           enginev.DataVersion
 
 	// Metadata not carried by the objects above.
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
