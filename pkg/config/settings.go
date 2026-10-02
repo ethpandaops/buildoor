@@ -221,6 +221,12 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		ks.uiValue = v
 		ks.uiSeq = s.nextSeq()
 		s.persist(f, ks, actor)
+
+		s.log.WithFields(logrus.Fields{
+			"key":   key,
+			"value": v,
+			"actor": actor,
+		}).Info("Setting updated")
 	}
 
 	s.recompute()

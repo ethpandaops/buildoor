@@ -152,9 +152,9 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 		resp.EffectiveBalance = resp.CLBalance - resp.PendingPayments
 	}
 
-	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
+	// Get wallet info from lifecycle manager
 	if h.lifecycleMgr != nil {
-		resp.LifecycleEnabled = true
+		resp.LifecycleEnabled = h.lifecycleMgr.IsEnabled()
 
 		if wallet := h.lifecycleMgr.GetWallet(); wallet != nil {
 			resp.WalletAddress = wallet.Address().Hex()

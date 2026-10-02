@@ -119,7 +119,15 @@ func NewManager(
 
 // SetEnabled sets whether the lifecycle manager is actively managing the builder.
 func (m *Manager) SetEnabled(enabled bool) {
-	m.enabled.Store(enabled)
+	if m.enabled.Swap(enabled) == enabled {
+		return
+	}
+
+	if enabled {
+		m.log.Info("Lifecycle management enabled")
+	} else {
+		m.log.Warn("Lifecycle management disabled: builder keys will not be topped up")
+	}
 }
 
 // IsEnabled returns whether the lifecycle manager is enabled.
