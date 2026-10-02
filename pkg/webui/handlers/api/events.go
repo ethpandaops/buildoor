@@ -1603,9 +1603,9 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 		}
 	}
 
-	// Get wallet info from lifecycle manager (only when lifecycle is enabled)
+	// Get wallet info from lifecycle manager
 	if m.lifecycleMgr != nil {
-		info.LifecycleEnabled = true
+		info.LifecycleEnabled = m.lifecycleMgr.IsEnabled()
 
 		if wallet := m.lifecycleMgr.GetWallet(); wallet != nil {
 			info.WalletAddress = wallet.Address().Hex()
