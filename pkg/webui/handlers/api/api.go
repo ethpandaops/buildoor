@@ -81,8 +81,9 @@ type UpdateBuilderAPIConfigRequest struct {
 
 // UpdateLifecycleConfigRequest is the request for updating lifecycle config.
 type UpdateLifecycleConfigRequest struct {
+	DepositAmount  *uint64 `json:"deposit_amount,omitempty"`  // Gwei; every deposit and top-up
 	TopupThreshold *uint64 `json:"topup_threshold,omitempty"` // Gwei
-	TopupAmount    *uint64 `json:"topup_amount,omitempty"`    // Gwei
+	DepositMaxFee  *uint64 `json:"deposit_max_fee,omitempty"` // Gwei
 }
 
 // LifecycleStatusResponse is the response for lifecycle status.
@@ -653,7 +654,9 @@ func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// UpdateLifecycleConfig updates the lifecycle configuration (topup threshold/amount).
+// UpdateLifecycleConfig updates the lifecycle configuration (deposit amount,
+// top-up threshold, max deposit fee). Unknown members are rejected rather than
+// dropped, so a client sending a setting that does not exist hears about it.
 func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -662,18 +665,26 @@ func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	var req UpdateLifecycleConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
 	updates := map[string]json.RawMessage{}
+	if req.DepositAmount != nil {
+		updates[config.KeyDepositAmount] = mustJSON(*req.DepositAmount)
+	}
+
 	if req.TopupThreshold != nil {
 		updates[config.KeyTopupThreshold] = mustJSON(*req.TopupThreshold)
 	}
 
-	if req.TopupAmount != nil {
-		updates[config.KeyTopupAmount] = mustJSON(*req.TopupAmount)
+	if req.DepositMaxFee != nil {
+		updates[config.KeyDepositMaxFee] = mustJSON(*req.DepositMaxFee)
 	}
 
 	if !h.applySettings(w, r, token, "config.lifecycle", req, updates) {
@@ -893,7 +904,9 @@ func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Reques
 	writeJSON(w, http.StatusOK, BuilderPreferencesResponse{Preferences: result})
 }
 
-// configToMap returns the config as a map with sensitive fields redacted.
+// configToMap returns the config as a map with sensitive fields redacted. It
+// is the only form in which the config may leave the process: both the REST
+// endpoint and the (unauthenticated) SSE config event serve it.
 func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil

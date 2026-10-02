@@ -106,11 +106,13 @@ var depositCmd = &cobra.Command{
 			return nil
 		}
 
-		// Get deposit amount
-		amount, _ := cmd.Flags().GetUint64("amount")
-		if amount == 0 {
-			amount = cfg.DepositAmount
+		// --amount overrides the configured deposit amount for this one deposit;
+		// the lifecycle manager deposits cfg.DepositAmount.
+		if amount, _ := cmd.Flags().GetUint64("amount"); amount > 0 {
+			cfg.DepositAmount = amount
 		}
+
+		amount := cfg.DepositAmount
 
 		waitForInclusion, _ := cmd.Flags().GetBool("wait")
 		timeout, _ := cmd.Flags().GetDuration("timeout")
@@ -153,7 +155,7 @@ var depositCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(depositCmd)
 
-	depositCmd.Flags().Uint64("amount", 10000000000, "Deposit amount in Gwei")
+	depositCmd.Flags().Uint64("amount", 0, "Deposit amount in Gwei (0 = use --deposit-amount)")
 	depositCmd.Flags().Uint64("key-index", 0, "Internal builder key index to deposit for (0 = the entry key)")
 	depositCmd.Flags().Bool("wait", true, "Wait for deposit to be included")
 	depositCmd.Flags().Duration("timeout", 5*time.Minute, "Timeout for waiting")

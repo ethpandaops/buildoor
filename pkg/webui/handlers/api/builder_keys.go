@@ -44,7 +44,7 @@ type BuilderKeyExitRequest struct {
 }
 
 // BuilderKeyTopupRequest tops a key up; AmountGwei of 0 uses the configured
-// top-up amount.
+// deposit amount.
 type BuilderKeyTopupRequest struct {
 	AmountGwei uint64 `json:"amount_gwei,omitempty"`
 }

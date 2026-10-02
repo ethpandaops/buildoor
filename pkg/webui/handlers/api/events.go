@@ -1785,7 +1785,7 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      m.builderSvc.GetConfig(),
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	}) {
 		return
 	}
@@ -2074,11 +2074,10 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 
 // BroadcastConfigUpdate broadcasts a config update event.
 func (m *EventStreamManager) BroadcastConfigUpdate() {
-	cfg := m.builderSvc.GetConfig()
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	})
 }
 

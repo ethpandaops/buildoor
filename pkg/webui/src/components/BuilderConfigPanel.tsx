@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import { CandidatePolicySection } from './CandidatePolicySection';
+import { HistorySettingsSection } from './HistorySettingsSection';
+import { useSettings } from '../hooks/useSettings';
 import type { Config, ScheduleConfig } from '../types';
 
 interface BuilderConfigPanelProps {
@@ -14,7 +16,8 @@ interface BuilderFormState {
 }
 
 export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }) => {
-  const { isLoggedIn, getAuthHeader } = useAuthContext();
+  const { isLoggedIn } = useAuthContext();
+  const { postSettings } = useSettings();
   const [collapsed, setCollapsed] = useState(true);
   const [editing, setEditing] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState(false);
@@ -59,49 +62,32 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = await getAuthHeader();
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-    try {
-      const response = await fetch('/api/config/builder', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(form),
-      });
-      const result = await response.json();
-      if (result.error) {
-        alert('Failed to update: ' + result.error);
-      } else {
-        setEditing(false);
-      }
-    } catch (err) {
-      alert('Error: ' + err);
+
+    const result = await postSettings({
+      'epbs.build_start_time': form.build_start_time,
+      'payload_build_time': form.payload_build_delay,
+      'extra_data': form.extra_data,
+    });
+    if (result.ok) {
+      setEditing(false);
+    } else {
+      alert('Failed to update: ' + result.error);
     }
   };
 
   const handleScheduleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = await getAuthHeader();
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-    try {
-      const response = await fetch('/api/config/schedule', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(scheduleForm),
-      });
-      const result = await response.json();
-      if (result.error) {
-        alert('Failed to update: ' + result.error);
-      } else {
-        setEditingSchedule(false);
-      }
-    } catch (err) {
-      alert('Error: ' + err);
+
+    const result = await postSettings({
+      'schedule.mode': scheduleForm.mode,
+      'schedule.every_nth': scheduleForm.every_nth,
+      'schedule.next_n': scheduleForm.next_n,
+      'schedule.start_slot': scheduleForm.start_slot,
+    });
+    if (result.ok) {
+      setEditingSchedule(false);
+    } else {
+      alert('Failed to update: ' + result.error);
     }
   };
 
@@ -294,6 +280,9 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
               </div>
             </form>
           )}
+
+          {/* Slot result / artifact history */}
+          <HistorySettingsSection config={config} />
         </div>
       )}
     </div>
