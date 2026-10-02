@@ -10,9 +10,12 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
+	"github.com/ethpandaops/go-eth-engine-client/spec/amsterdam"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	"github.com/ethpandaops/go-eth-engine-client/spec/shanghai"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 )
 
 const maxExtraDataSize = 32
@@ -208,4 +211,53 @@ func buildHeaderFromPayload(
 	}
 
 	return header, nil
+}
+
+func RehashBeaconPayload(
+	p *eth2all.ExecutionPayload,
+	engineVersion enginev.DataVersion,
+	executionRequests []prague.ExecutionRequest,
+	parentBeaconBlockRoot common.Hash,
+) (common.Hash, error) {
+	ep := &engineall.ExecutionPayload{
+		Version:         engineVersion,
+		ParentHash:      paris.Hash32(p.ParentHash),
+		FeeRecipient:    paris.Address(p.FeeRecipient),
+		StateRoot:       paris.Hash32(p.StateRoot),
+		ReceiptsRoot:    paris.Hash32(p.ReceiptsRoot),
+		LogsBloom:       paris.Bloom(p.LogsBloom),
+		PrevRandao:      paris.Hash32(p.PrevRandao),
+		BlockNumber:     p.BlockNumber,
+		GasLimit:        p.GasLimit,
+		GasUsed:         p.GasUsed,
+		Timestamp:       p.Timestamp,
+		ExtraData:       p.ExtraData,
+		BaseFeePerGas:   p.BaseFeePerGas,
+		BlobGasUsed:     p.BlobGasUsed,
+		ExcessBlobGas:   p.ExcessBlobGas,
+		BlockAccessList: amsterdam.BlockAccessList(p.BlockAccessList),
+		SlotNumber:      p.SlotNumber,
+	}
+
+	ep.Transactions = make([]paris.Transaction, len(p.Transactions))
+	for i, tx := range p.Transactions {
+		ep.Transactions[i] = paris.Transaction(tx)
+	}
+
+	ep.Withdrawals = make([]*shanghai.Withdrawal, len(p.Withdrawals))
+	for i, w := range p.Withdrawals {
+		ep.Withdrawals[i] = &shanghai.Withdrawal{
+			Index:          uint64(w.Index),
+			ValidatorIndex: uint64(w.ValidatorIndex),
+			Address:        paris.Address(w.Address),
+			Amount:         uint64(w.Amount),
+		}
+	}
+
+	header, err := buildHeaderFromPayload(ep, parentBeaconBlockRoot, executionRequests)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	return header.Hash(), nil
 }

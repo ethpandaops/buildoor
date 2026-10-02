@@ -1063,6 +1063,16 @@ func (s *Service) applyPayloadTransform(ctx context.Context, slot phase0.Slot, p
 		return err
 	}
 
+	if transformed.BlockHash == p.ExecutionPayload.BlockHash {
+		newHash, err := RehashBeaconPayload(transformed, p.EngineVersion,
+			p.EngineExecutionRequests, common.Hash(p.Attributes.ParentBeaconBlockRoot))
+		if err != nil {
+			return fmt.Errorf("failed to recompute block hash after transform: %w", err)
+		}
+
+		transformed.BlockHash = phase0.Hash32(newHash)
+	}
+
 	p.ExecutionPayload = transformed
 	p.BlockHash = transformed.BlockHash
 
