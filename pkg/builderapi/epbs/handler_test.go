@@ -22,6 +22,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
 	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
+	hezespec "github.com/ethpandaops/go-eth2-client/spec/heze"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
@@ -296,6 +297,50 @@ func signedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash
 	return body
 }
 
+func hezeSignedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.Hash32,
+	builderIndex uint64,
+) []byte {
+	t.Helper()
+
+	block := &hezespec.SignedBeaconBlock{
+		Message: &hezespec.BeaconBlock{
+			Slot:       slot,
+			ParentRoot: phase0.Root{0x22},
+			StateRoot:  phase0.Root{0x33},
+			Body: &hezespec.BeaconBlockBody{
+				ETH1Data: &phase0.ETH1Data{
+					BlockHash: make([]byte, 32),
+				},
+				ProposerSlashings: []*phase0.ProposerSlashing{},
+				AttesterSlashings: []*gloasspec.AttesterSlashing{},
+				Attestations:      []*gloasspec.Attestation{},
+				Deposits:          []*phase0.Deposit{},
+				VoluntaryExits:    []*phase0.SignedVoluntaryExit{},
+				SyncAggregate: &altair.SyncAggregate{
+					SyncCommitteeBits: bitfield.NewBitvector512(),
+				},
+				BLSToExecutionChanges: []*capella.SignedBLSToExecutionChange{},
+				SignedExecutionPayloadBid: &hezespec.SignedExecutionPayloadBid{
+					Message: &hezespec.ExecutionPayloadBid{
+						BlockHash:          blockHash,
+						Slot:               slot,
+						BuilderIndex:       gloasspec.BuilderIndex(builderIndex),
+						BlobKZGCommitments: []deneb.KZGCommitment{},
+						InclusionListBits:  make([]byte, 2),
+					},
+				},
+				PayloadAttestations:     []*gloasspec.PayloadAttestation{},
+				ParentExecutionRequests: &gloasspec.ExecutionRequests{},
+			},
+		},
+	}
+
+	body, err := json.Marshal(block)
+	require.NoError(t, err)
+
+	return body
+}
+
 func postBeaconBlock(h *Handler, body []byte) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -342,7 +387,7 @@ func TestHandleSubmitBeaconBlock_Success(t *testing.T) {
 // TestHandleSubmitBeaconBlock_ProposalVersion verifies the broadcast proposal
 // carries the fork-agnostic block in the fork's proposal field: the chain's
 // current fork by default, or the Eth-Consensus-Version header's fork when
-// supplied (Heze reuses the Gloas block schema).
+// supplied.
 func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	env := newBeaconBlockTestEnv(t, 4*time.Second, 3500)
 
@@ -363,9 +408,9 @@ func TestHandleSubmitBeaconBlock_ProposalVersion(t *testing.T) {
 	require.NotNil(t, proposal.Gloas, "proposal must carry the Gloas block")
 	assert.Nil(t, proposal.Heze)
 
-	// Heze via the Eth-Consensus-Version header (same wire schema as Gloas).
+	// Heze via the Eth-Consensus-Version header.
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/beacon_blocks",
-		bytes.NewReader(signedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex)))
+		bytes.NewReader(hezeSignedBeaconBlockJSON(t, slot, blockHash, testBuilderIndex)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Eth-Consensus-Version", "heze")
 	rec = httptest.NewRecorder()
