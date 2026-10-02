@@ -272,8 +272,8 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </tr>
             )}
 
-            {/* Wallet Info (if lifecycle enabled) */}
-            {builderInfo.lifecycle_enabled && builderInfo.wallet_address && (
+            {/* Wallet Info */}
+            {builderInfo.wallet_address && (
               <tr>
                 <td className="text-muted">Wallet:</td>
                 <td className="text-end font-monospace small">
@@ -322,8 +322,8 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
               </tr>
             )}
 
-            {/* Wallet Balance (if lifecycle enabled) */}
-            {builderInfo.lifecycle_enabled && builderInfo.wallet_balance_wei && (
+            {/* Wallet Balance */}
+            {builderInfo.wallet_balance_wei && (
               <>
                 <tr>
                   <td colSpan={2}><hr className="my-1" /></td>
