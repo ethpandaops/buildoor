@@ -11,7 +11,9 @@ import (
 //
 // Only mutable settings are registered. Immutable startup-only fields (keys,
 // client URLs, ports, the state-db path) are intentionally absent: they are
-// never overridable via the UI and never persisted.
+// never overridable via the UI and never persisted. Every registered setting
+// must have an editor in the WebUI (enforced by the webui settings coverage
+// test) — a setting an operator cannot see or change is a trap.
 type Field struct {
 	// Key is the canonical persisted/override key, e.g. "epbs.bid_subsidy".
 	Key string
@@ -127,6 +129,7 @@ func Fields() []Field {
 		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
 		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
 		newField(KeyBuilderAPIKeyStrategy, "builder-api-key-strategy", func(c *Config) *string { return &c.BuilderAPI.KeyStrategy }),
+		newField(KeyBuilderAPIRequireRequestAuth, "builder-api-require-auth", func(c *Config) *bool { return &c.BuilderAPI.RequireRequestAuth }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),
@@ -139,7 +142,7 @@ func Fields() []Field {
 
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
-		newField(KeyTopupAmount, "topup-amount", func(c *Config) *uint64 { return &c.TopupAmount }),
+		newField(KeyDepositMaxFee, "deposit-max-fee", func(c *Config) *uint64 { return &c.DepositMaxFeeGwei }),
 
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),

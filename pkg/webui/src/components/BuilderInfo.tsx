@@ -3,6 +3,7 @@ import { useAuthContext } from '../context/AuthContext';
 import type { BuilderInfo as BuilderInfoType, ServiceStatus, Config } from '../types';
 import { CopyableHash } from './CopyableHash';
 import { useBuilderKeyActions } from '../hooks/useBuilderKeys';
+import { useSettings } from '../hooks/useSettings';
 import { setView } from '../stores/viewStore';
 
 interface BuilderInfoProps {
@@ -30,6 +31,9 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
   const [editingLifecycle, setEditingLifecycle] = useState(false);
   const [lcThreshold, setLcThreshold] = useState('');
   const [lcAmount, setLcAmount] = useState('');
+  const [lcMaxFee, setLcMaxFee] = useState('');
+  const [lcError, setLcError] = useState('');
+  const { postSettings } = useSettings();
   const [editingTarget, setEditingTarget] = useState(false);
   const [targetInput, setTargetInput] = useState('');
   const [targetError, setTargetError] = useState('');
@@ -52,30 +56,35 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
 
   const startEditingLifecycle = () => {
     setLcThreshold(config ? String(config.topup_threshold / 1e9) : '');
-    setLcAmount(config ? String(config.topup_amount / 1e9) : '');
+    setLcAmount(config ? String(config.deposit_amount / 1e9) : '');
+    setLcMaxFee(config ? String(config.deposit_max_fee) : '');
+    setLcError('');
     setEditingLifecycle(true);
   };
 
   const handleLifecycleSave = async () => {
     if (!isLoggedIn) return;
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = await getAuthHeader();
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
+
+    const amount = Math.round(parseFloat(lcAmount) * 1e9);
+    const threshold = Math.round(parseFloat(lcThreshold) * 1e9);
+    const maxFee = parseInt(lcMaxFee, 10);
+    if (!Number.isFinite(amount) || !Number.isFinite(threshold) || !Number.isFinite(maxFee)) {
+      setLcError('all three values are required');
+      return;
     }
-    try {
-      await fetch('/api/config/lifecycle', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          topup_threshold: Math.round(parseFloat(lcThreshold) * 1e9),
-          topup_amount: Math.round(parseFloat(lcAmount) * 1e9),
-        }),
-      });
-      setEditingLifecycle(false);
-    } catch (err) {
-      console.error('Failed to update lifecycle config:', err);
+
+    const result = await postSettings({
+      'deposit_amount': amount,
+      'topup_threshold': threshold,
+      'deposit_max_fee': maxFee,
+    });
+    if (!result.ok) {
+      setLcError(result.error ?? 'failed to update lifecycle config');
+      return;
     }
+
+    setLcError('');
+    setEditingLifecycle(false);
   };
 
   const handleTargetSave = async () => {
@@ -364,9 +373,14 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                 {!editingLifecycle ? (
                   <>
                     <tr>
-                      <td className="text-muted small">Topup Threshold:</td>
+                      <td
+                        className="text-muted small"
+                        title="Sent with every builder key deposit: early onboarding, registration and each top-up"
+                      >
+                        Deposit Amount:
+                      </td>
                       <td className="text-end small">
-                        {formatGwei(config.topup_threshold)} ETH
+                        {formatGwei(config.deposit_amount)} ETH
                         {isLoggedIn && (
                           <button
                             className="btn btn-sm btn-outline-primary ms-1 py-0 px-1"
@@ -379,14 +393,42 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                       </td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Topup Amount:</td>
-                      <td className="text-end small">{formatGwei(config.topup_amount)} ETH</td>
+                      <td className="text-muted small">Topup Threshold:</td>
+                      <td className="text-end small">{formatGwei(config.topup_threshold)} ETH</td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small">Max Deposit Fee:</td>
+                      <td className="text-end small">
+                        {config.deposit_max_fee > 0
+                          ? `${config.deposit_max_fee.toLocaleString()} gwei`
+                          : 'no limit'}
+                      </td>
                     </tr>
                   </>
                 ) : (
                   <>
                     <tr>
-                      <td className="text-muted small">Threshold (ETH):</td>
+                      <td className="text-muted small">Deposit Amount (ETH):</td>
+                      <td className="text-end">
+                        <input
+                          type="number"
+                          step="0.1"
+                          min={0}
+                          className="form-control form-control-sm"
+                          style={{ fontSize: '11px' }}
+                          value={lcAmount}
+                          onChange={(e) => setLcAmount(e.target.value)}
+                        />
+                      </td>
+                    </tr>
+                    <tr>
+                      <td colSpan={2} className="form-text mt-0">
+                        Sent with every builder key deposit — early onboarding, registration
+                        and each top-up.
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="text-muted small">Topup Threshold (ETH):</td>
                       <td className="text-end">
                         <input
                           type="number"
@@ -399,18 +441,29 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                       </td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Amount (ETH):</td>
+                      <td className="text-muted small">Max Deposit Fee (gwei):</td>
                       <td className="text-end">
                         <input
                           type="number"
-                          step="0.1"
+                          min={0}
                           className="form-control form-control-sm"
                           style={{ fontSize: '11px' }}
-                          value={lcAmount}
-                          onChange={(e) => setLcAmount(e.target.value)}
+                          value={lcMaxFee}
+                          onChange={(e) => setLcMaxFee(e.target.value)}
                         />
                       </td>
                     </tr>
+                    <tr>
+                      <td colSpan={2} className="form-text mt-0">
+                        Deposits and top-ups wait while the deposit queue fee is above this
+                        (0 = no limit).
+                      </td>
+                    </tr>
+                    {lcError && (
+                      <tr>
+                        <td colSpan={2} className="small text-danger">{lcError}</td>
+                      </tr>
+                    )}
                     <tr>
                       <td colSpan={2} className="text-end">
                         <button className="btn btn-sm btn-primary me-1" onClick={handleLifecycleSave}>Save</button>

@@ -151,7 +151,7 @@ const DashboardPage: React.FC = () => {
           <ConfigPanel config={config} serviceStatus={serviceStatus} />
 
           {/* Builder API */}
-          <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
+          <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} config={config} loading={builderAPIStatusLoading} />
 
           {/* Payload Reveal (shared by both flows) */}
           <RevealConfigPanel config={config} />

@@ -31,7 +31,7 @@ The Builder API mode implements the traditional [MEV-Boost Builder API](https://
 - Publishes full blocks when a proposer submits a blinded block via `submitBlindedBlock`
 - Supports a configurable block value subsidy to make bids more attractive for testing
 
-Enable with `--builder-api-enabled --builder-api-port <port>`.
+Enable with `--builder-api-enabled --api-port <port>` (the Builder API is served on the WebUI/API port).
 
 ## Building
 
@@ -94,12 +94,16 @@ buildoor run \
   --el-engine-api http://localhost:8551 \
   --el-jwt-secret /path/to/jwt.hex \
   --builder-api-enabled \
-  --builder-api-port 18550
+  --api-port 18550
 ```
 
 ## Configuration Reference
 
-Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or an environment variables.
+Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or environment variables.
+
+- **Config file**: a flat YAML map keyed by the flag names without the leading dashes (`deposit-amount: 32000000000`). Any other key fails the start instead of being ignored.
+- **Environment**: `BUILDOOR_` + the flag name in upper case with dashes as underscores (`BUILDOOR_DEPOSIT_AMOUNT=32000000000`).
+- Values that a module would not act on (unknown modes, strategies, out-of-range percentages) fail the start as well.
 
 ### Core Flags
 
@@ -119,7 +123,6 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--builder-api-enabled` | `false` | Enable the Builder API at startup |
-| `--builder-api-port` | `0` | Builder API HTTP port (0 = disabled) |
 | `--builder-api-subsidy` | `100000` | Block value subsidy added to bids (Gwei) |
 
 ### ePBS Flags
@@ -127,13 +130,13 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--epbs-enabled` | `false` | Enable ePBS bidding/revealing at startup |
-| `--build-start-time` | `-4000` | Payload build start time in ms relative to slot start |
-| `--epbs-bid-start` | `-1000` | First bid time in ms relative to slot start |
-| `--epbs-bid-end` | `1000` | Last bid time in ms relative to slot start |
-| `--epbs-reveal-time` | `6000` | Payload reveal time in ms relative to slot start |
+| `--build-start-time` | `0` | Payload build start time in ms relative to slot start (0 = auto: -3400 ms @12s, scaled to slot time) |
+| `--epbs-bid-start` | `0` | First bid time in ms relative to slot start (0 = auto: -400 ms @12s) |
+| `--epbs-bid-end` | `0` | Last bid time in ms relative to slot start (0 = auto: -100 ms @12s) |
+| `--reveal-time` | `0` | Payload reveal time gate in ms relative to slot start (0 = auto: 5000 ms @12s) |
 | `--epbs-bid-min` | `1000000` | Minimum bid amount (Gwei) |
 | `--epbs-bid-increase` | `100000` | Bid increase per subsequent bid (Gwei) |
-| `--epbs-bid-interval` | `250` | Interval between bids in ms (0 = single bid) |
+| `--epbs-bid-interval` | `500` | Interval between bids in ms (0 = single bid) |
 
 ### Schedule Flags
 
@@ -149,9 +152,9 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--lifecycle` | `false` | Enable builder lifecycle management (deposits, exits, top-ups) |
-| `--deposit-amount` | `10000000000` | Builder deposit amount (Gwei, default 10 ETH) |
-| `--topup-threshold` | `1000000000` | Balance threshold for auto top-up (Gwei, default 1 ETH) |
-| `--topup-amount` | `5000000000` | Top-up amount (Gwei, default 5 ETH) |
+| `--deposit-amount` | `50000000000` | Amount of every builder key deposit — early onboarding, registration and each top-up (Gwei, default 50 ETH). There is no separate top-up amount |
+| `--topup-threshold` | `10000000000` | Effective balance below which a key is topped up by `--deposit-amount` (Gwei, default 10 ETH) |
+| `--deposit-max-fee` | `1000000` | Max builder deposit queue fee; deposits and top-ups wait above it (Gwei, 0 = no limit) |
 
 ### Other Flags
 

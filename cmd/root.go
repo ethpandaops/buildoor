@@ -2,8 +2,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -17,7 +20,15 @@ var (
 	cfg     *config.Config
 	logger  *logrus.Logger
 	v       *viper.Viper
+
+	// cfgFileErr is the error of reading the config file; it surfaces from
+	// initConfig because the config is loaded before the logger exists.
+	cfgFileErr error
 )
+
+// envPrefix namespaces the environment variables that supply flag values:
+// --deposit-amount is read from BUILDOOR_DEPOSIT_AMOUNT.
+const envPrefix = "BUILDOOR"
 
 var rootCmd = &cobra.Command{
 	Use:   "buildoor",
@@ -27,7 +38,7 @@ submit bids, and reveal payloads with configurable behavior.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		initLogger()
 
-		if err := initConfig(); err != nil {
+		if err := initConfig(cmd.Root()); err != nil {
 			return err
 		}
 
@@ -73,9 +84,8 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
-	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
+	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
+	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
@@ -176,18 +186,62 @@ func loadConfigFile() {
 		v.AddConfigPath("$HOME/.buildoor")
 	}
 
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			if logger != nil {
-				logger.WithError(err).Warn("Error reading config file")
-			}
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			cfgFileErr = err
 		}
 	}
 }
 
-func initConfig() error {
+// checkConfigFileKeys rejects config-file keys that are not flag names. Values
+// resolve by flag name, so any other key — a typo, or a nested/underscored
+// spelling — would be read without complaint and never applied.
+func checkConfigFileKeys(root *cobra.Command) error {
+	used := v.ConfigFileUsed()
+	if used == "" {
+		return nil
+	}
+
+	file := viper.New()
+	file.SetConfigFile(used)
+
+	if err := file.ReadInConfig(); err != nil {
+		return fmt.Errorf("failed to read config file %s: %w", used, err)
+	}
+
+	unknown := make([]string, 0, 4)
+
+	for _, key := range file.AllKeys() {
+		if root.PersistentFlags().Lookup(key) == nil {
+			unknown = append(unknown, key)
+		}
+	}
+
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	sort.Strings(unknown)
+
+	return fmt.Errorf(
+		"config file %s: unknown keys %s — keys are the flag names without the leading dashes "+
+			"(e.g. deposit-amount)", used, strings.Join(unknown, ", "))
+}
+
+func initConfig(root *cobra.Command) error {
+	if cfgFileErr != nil {
+		return fmt.Errorf("failed to read config file: %w", cfgFileErr)
+	}
+
+	if err := checkConfigFileKeys(root); err != nil {
+		return err
+	}
+
 	cfg = &config.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
 		BuilderMnemonic:   v.GetString("builder-mnemonic"),
@@ -226,7 +280,6 @@ func initConfig() error {
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
 		TopupThreshold:    v.GetUint64("topup-threshold"),
-		TopupAmount:       v.GetUint64("topup-amount"),
 		ExtraData:         v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
@@ -285,25 +338,12 @@ func initConfig() error {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
 	}
 
-	for flag, mode := range map[string]string{
-		"--build-candidate-parent-full":       cfg.Build.CandidateParentFull,
-		"--build-candidate-parent-empty":      cfg.Build.CandidateParentEmpty,
-		"--build-candidate-grandparent-full":  cfg.Build.CandidateGrandparentFull,
-		"--build-candidate-grandparent-empty": cfg.Build.CandidateGrandparentEmpty,
-	} {
-		if mode != config.NormalizedCandidateMode(mode, "") {
-			return fmt.Errorf("invalid %s %q: must be auto, always or never", flag, mode)
+	// Operator-supplied values pass the same validation as UI overrides, so a
+	// typo fails the start instead of being replaced by a module's fallback.
+	for _, field := range config.Fields() {
+		if err := config.ValidateSetting(field.Key, field.Get(cfg)); err != nil {
+			return fmt.Errorf("invalid --%s: %w", field.FlagKey, err)
 		}
-	}
-
-	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {
-		return fmt.Errorf("invalid --reveal-gate-mode %q: must be time, vote, vote_or_time or vote_and_time",
-			cfg.Reveal.GateMode)
-	}
-
-	if cfg.Reveal.BroadcastValidation != cfg.Reveal.NormalizedBroadcastValidation() {
-		return fmt.Errorf("invalid --reveal-broadcast-validation %q: must be gossip, consensus or consensus_and_equivocation",
-			cfg.Reveal.BroadcastValidation)
 	}
 
 	return nil

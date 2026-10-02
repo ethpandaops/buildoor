@@ -24,11 +24,31 @@ export interface Config {
   epbs: EPBSConfig;
   reveal?: RevealConfig;
   build?: BuildConfig;
+  builder_api?: BuilderAPIConfig;
+  // The one lifecycle amount (gwei): every deposit and every top-up.
   deposit_amount: number;
   topup_threshold: number;
-  topup_amount: number;
+  deposit_max_fee: number;
   payload_build_time?: number;
   extra_data?: string;
+  slot_result_retention_epochs?: number;
+  slot_artifact_retention_epochs?: number;
+  slot_artifact_capture_enabled?: boolean;
+}
+
+// Builder API bid-serving settings (global baseline; per-slot action plans
+// override them).
+export interface BuilderAPIConfig {
+  builder_url?: string;
+  require_request_auth?: boolean;
+  block_value_subsidy_gwei?: number;
+  value_override_gwei?: number;
+  execution_payment_gwei?: number;
+  execution_payment_percent?: number;
+  ignore_preference_limit?: boolean;
+  serve_candidates?: string;
+  on_demand_build?: boolean;
+  key_strategy?: string;
 }
 
 // Build-candidate policy: which parent candidates a slot builds payloads for
@@ -54,6 +74,7 @@ export interface RevealConfig {
   broadcast_validation: string; // gossip | consensus | consensus_and_equivocation
   max_attempts: number;
   retry_interval_ms: number;
+  rebind_on_reorg?: boolean;
 }
 
 export interface ScheduleConfig {
@@ -72,7 +93,10 @@ export interface EPBSConfig {
   bid_interval: number;
   bid_subsidy: number;
   payload_build_delay?: number;
+  bid_value_override?: number;
+  head_vote_threshold_pct?: number;
   bid_candidate?: string;
+  bid_candidate_switch?: boolean;
   key_strategy?: string;
   bid_keys_per_slot?: number;
   bid_keys_per_step?: number;

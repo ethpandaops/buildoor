@@ -1,6 +1,7 @@
 package config
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -137,4 +138,94 @@ func TestUnsuppliedUsesDefault(t *testing.T) {
 	svc, err := NewService(&eff, defaults, map[string]bool{}, store, testLogger())
 	require.NoError(t, err)
 	require.Equal(t, defaults.EPBS.BidSubsidy, svc.Load().EPBS.BidSubsidy)
+}
+
+// A UI override stored under a retired key must carry over to the setting that
+// replaced it: merging two settings may not discard what the operator set.
+func TestRetiredKeyOverrideIsAdopted(t *testing.T) {
+	dir := t.TempDir()
+	store := db.NewDatabase(&db.Config{File: filepath.Join(dir, "state.db")}, testLogger())
+	require.NoError(t, store.Init())
+
+	// State left behind by a release that still had a separate top-up amount.
+	require.NoError(t, store.PutSetting(db.SettingRow{
+		Key:     "topup_amount",
+		UIValue: sql.NullString{String: "32000000000", Valid: true},
+		UISeq:   7,
+		Actor:   "tester",
+	}))
+
+	defaults := defaultsConfig()
+
+	svc := boot(t, store, defaults, nil)
+	require.Equal(t, uint64(32000000000), svc.Load().DepositAmount)
+
+	// The adoption is persisted under the successor key, and a later edit of
+	// that key is not overwritten by the retired row on the next start.
+	raw, err := json.Marshal(uint64(40000000000))
+	require.NoError(t, err)
+	require.NoError(t, svc.Set(KeyDepositAmount, raw, "tester"))
+
+	svc = boot(t, store, defaults, nil)
+	require.Equal(t, uint64(40000000000), svc.Load().DepositAmount)
+
+	require.NoError(t, store.Close())
+}
+
+// Values the consuming module would silently replace with a fallback must be
+// rejected at write time.
+func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {
+	store := db.NewDatabase(&db.Config{File: ""}, testLogger())
+	require.NoError(t, store.Init())
+
+	svc := boot(t, store, defaultsConfig(), nil)
+
+	tests := []struct {
+		key   string
+		value any
+		ok    bool
+	}{
+		{KeyRevealGateMode, "vote_or_time", true},
+		{KeyRevealGateMode, "votes", false},
+		{KeyRevealBroadcastValidation, "consensus", true},
+		{KeyRevealBroadcastValidation, "strict", false},
+		{KeyBuildCandidateParentEmpty, "never", true},
+		{KeyBuildCandidateParentEmpty, "sometimes", false},
+		{KeyEPBSKeyStrategy, "least_used", true},
+		{KeyEPBSKeyStrategy, "", false},
+		{KeyBuilderAPIKeyStrategy, "", true},
+		{KeyBuilderAPIKeyStrategy, "fastest", false},
+		{KeyEPBSBidCandidate, "grandparent_full", true},
+		{KeyEPBSBidCandidate, "uncle", false},
+		{KeyBuilderAPIServeCandidates, "parent_full, parent_empty", true},
+		{KeyBuilderAPIServeCandidates, "parent_full,uncle", false},
+		{KeyRevealVoteThreshold, uint64(100), true},
+		{KeyRevealVoteThreshold, uint64(101), false},
+		{KeyBuilderAPIExecutionPaymentPct, uint64(250), false},
+		{KeyDepositAmount, uint64(32000000000), true},
+		{KeyDepositAmount, uint64(0), false},
+		{KeyScheduleMode, "every_nth", true},
+		{KeyScheduleMode, "sometimes", false},
+	}
+
+	for _, tt := range tests {
+		raw, err := json.Marshal(tt.value)
+		require.NoError(t, err)
+
+		err = svc.Set(tt.key, raw, "tester")
+		if tt.ok {
+			require.NoError(t, err, "%s=%v", tt.key, tt.value)
+		} else {
+			require.Error(t, err, "%s=%v", tt.key, tt.value)
+		}
+	}
+}
+
+// The shipped defaults must pass the validation operator values go through.
+func TestDefaultsAreValid(t *testing.T) {
+	defaults := defaultsConfig()
+
+	for _, field := range Fields() {
+		require.NoError(t, ValidateSetting(field.Key, field.Get(defaults)), field.Key)
+	}
 }

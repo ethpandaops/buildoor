@@ -4,8 +4,6 @@ type FrontendConfig struct {
 	Host     string
 	Port     int
 	SiteName string
-	Debug    bool
-	Pprof    bool
 	Minify   bool
 
 	// AuthProviderURL is the canonical URL of the remote authenticatoor

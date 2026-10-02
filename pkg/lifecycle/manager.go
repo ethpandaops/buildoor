@@ -275,10 +275,10 @@ func (m *Manager) CheckAndTopup(ctx context.Context, key *builder_keys.Key) erro
 
 // TopupKey submits a top-up deposit for the key regardless of its current
 // balance — the operator asked for it explicitly. amountGwei of 0 uses the
-// configured top-up amount.
+// configured deposit amount.
 func (m *Manager) TopupKey(ctx context.Context, key *builder_keys.Key, amountGwei uint64) error {
 	if amountGwei == 0 {
-		amountGwei = m.cfg.TopupAmount
+		amountGwei = m.cfg.DepositAmount
 	}
 
 	if err := m.depositSvc.CreateTopup(ctx, key, amountGwei); err != nil {

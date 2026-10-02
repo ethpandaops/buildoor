@@ -27,6 +27,7 @@ const STRATEGY_LABELS: Record<string, string> = {
 
 interface KeySelectionForm {
   bid_candidate: string;
+  bid_candidate_switch: boolean;
   key_strategy: string;
   bid_keys_per_slot: number;
   bid_keys_per_step: number;
@@ -34,6 +35,7 @@ interface KeySelectionForm {
 
 const DEFAULT_FORM: KeySelectionForm = {
   bid_candidate: 'auto',
+  bid_candidate_switch: false,
   key_strategy: 'round_robin',
   bid_keys_per_slot: 0,
   bid_keys_per_step: 1,
@@ -41,6 +43,7 @@ const DEFAULT_FORM: KeySelectionForm = {
 
 const formFromConfig = (epbs: EPBSConfig | undefined): KeySelectionForm => ({
   bid_candidate: epbs?.bid_candidate || DEFAULT_FORM.bid_candidate,
+  bid_candidate_switch: epbs?.bid_candidate_switch ?? DEFAULT_FORM.bid_candidate_switch,
   key_strategy: epbs?.key_strategy || DEFAULT_FORM.key_strategy,
   bid_keys_per_slot: epbs?.bid_keys_per_slot ?? DEFAULT_FORM.bid_keys_per_slot,
   bid_keys_per_step: epbs?.bid_keys_per_step ?? DEFAULT_FORM.bid_keys_per_step,
@@ -80,6 +83,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
         headers,
         body: JSON.stringify({
           'epbs.bid_candidate': form.bid_candidate,
+          'epbs.bid_candidate_switch': form.bid_candidate_switch,
           'epbs.key_strategy': form.key_strategy,
           'epbs.bid_keys_per_slot': form.bid_keys_per_slot,
           'epbs.bid_keys_per_step': form.bid_keys_per_step,
@@ -119,6 +123,14 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
               <div className="config-item-label">Bid Candidate</div>
               <div className="config-item-value">
                 {CANDIDATE_LABELS[epbs?.bid_candidate || 'auto'] ?? epbs?.bid_candidate}
+              </div>
+            </div>
+          </div>
+          <div className="col-6">
+            <div className="config-item">
+              <div className="config-item-label">Candidate Switch</div>
+              <div className="config-item-value">
+                {epbs?.bid_candidate_switch ? 'mid-slot allowed' : 'sticky per slot'}
               </div>
             </div>
           </div>
@@ -165,6 +177,25 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
               every candidate the slot built, spending keys per candidate — a
               deliberate multi-parent gossip scenario, since only one of those
               parents can end up canonical.
+            </div>
+          </div>
+
+          <div className="form-check mb-2">
+            <input
+              type="checkbox"
+              className="form-check-input"
+              id="bid-candidate-switch"
+              checked={form.bid_candidate_switch}
+              onChange={(e) => setForm({ ...form, bid_candidate_switch: e.target.checked })}
+            />
+            <label className="form-check-label" htmlFor="bid-candidate-switch">
+              Allow switching candidate mid-slot
+            </label>
+            <div className="form-text">
+              Lets the auto selection move to a different candidate when the
+              chain view changes during the slot. Off keeps the first gossiped
+              candidate — a switched bid rarely propagates past the gossip
+              first-seen rule anyway.
             </div>
           </div>
 

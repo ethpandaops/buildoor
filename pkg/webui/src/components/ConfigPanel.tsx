@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import { KeySelectionSection } from './KeySelectionSection';
+import { useSettings } from '../hooks/useSettings';
 import type { Config, EPBSConfig, ServiceStatus } from '../types';
 
 interface ConfigPanelProps {
@@ -15,6 +16,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
   const [collapsed, setCollapsed] = useState(true);
   const [editingTiming, setEditingTiming] = useState(false);
   const [toggling, setToggling] = useState(false);
+  const { postSettings } = useSettings();
 
   const [timingForm, setTimingForm] = useState<EPBSFormState>({
     build_start_time: 0,
@@ -24,6 +26,8 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
     bid_increase: 0,
     bid_interval: 0,
     bid_subsidy: 0,
+    bid_value_override: 0,
+    head_vote_threshold_pct: 0,
   });
 
   // Sync timing form state when not editing
@@ -35,32 +39,20 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
 
   const handleTimingSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    const authToken = await getAuthHeader();
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-    try {
-      const response = await fetch('/api/config/epbs', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          bid_start_time: timingForm.bid_start_time,
-          bid_end_time: timingForm.bid_end_time,
-          bid_min_amount: timingForm.bid_min_amount,
-          bid_increase: timingForm.bid_increase,
-          bid_interval: timingForm.bid_interval,
-          bid_subsidy: timingForm.bid_subsidy,
-        }),
-      });
-      const result = await response.json();
-      if (result.error) {
-        alert('Failed to update: ' + result.error);
-      } else {
-        setEditingTiming(false);
-      }
-    } catch (err) {
-      alert('Error: ' + err);
+    const result = await postSettings({
+      'epbs.bid_start_time': timingForm.bid_start_time,
+      'epbs.bid_end_time': timingForm.bid_end_time,
+      'epbs.bid_min_amount': timingForm.bid_min_amount,
+      'epbs.bid_increase': timingForm.bid_increase,
+      'epbs.bid_interval': timingForm.bid_interval,
+      'epbs.bid_subsidy': timingForm.bid_subsidy,
+      'epbs.bid_value_override': timingForm.bid_value_override ?? 0,
+      'epbs.head_vote_threshold_pct': timingForm.head_vote_threshold_pct ?? 0,
+    });
+    if (result.ok) {
+      setEditingTiming(false);
+    } else {
+      alert('Failed to update: ' + result.error);
     }
   };
 
@@ -145,7 +137,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
           )}
           {/* Timing Config Section */}
           <div className="d-flex justify-content-between align-items-center mb-2">
-            <div className="section-header">Timing Config</div>
+            <div className="section-header">Bid Config</div>
             {canEdit && !editingTiming && (
               <button
                 className="btn btn-sm btn-outline-primary"
@@ -192,6 +184,22 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 <div className="config-item">
                   <div className="config-item-label">Bid Subsidy</div>
                   <div className="config-item-value">{epbs?.bid_subsidy || 0} gwei</div>
+                </div>
+              </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Bid Value Override</div>
+                  <div className="config-item-value">
+                    {epbs?.bid_value_override ? `${epbs.bid_value_override} gwei` : 'off'}
+                  </div>
+                </div>
+              </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Vote Marker</div>
+                  <div className="config-item-value">
+                    {epbs?.head_vote_threshold_pct ? `${epbs.head_vote_threshold_pct}%` : 'off'}
+                  </div>
                 </div>
               </div>
             </div>
@@ -259,6 +267,39 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 <div className="form-text">
                   Flat gwei added to every bid so it clears the proposer's local-EL
                   threshold. Set to 0 to bid the real block value.
+                </div>
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Bid Value Override (gwei)</label>
+                <input
+                  type="number"
+                  min={0}
+                  className="form-control form-control-sm"
+                  value={timingForm.bid_value_override ?? 0}
+                  onChange={(e) => setTimingForm({ ...timingForm, bid_value_override: parseInt(e.target.value) || 0 })}
+                  required
+                />
+                <div className="form-text">
+                  Absolute bid base replacing max(block value, bid min) + subsidy —
+                  allows underbidding the block value. Bid Increase still applies
+                  per re-bid. 0 = off.
+                </div>
+              </div>
+              <div className="mb-2">
+                <label className="form-label">Vote Marker Threshold (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="form-control form-control-sm"
+                  value={timingForm.head_vote_threshold_pct ?? 0}
+                  onChange={(e) => setTimingForm({ ...timingForm, head_vote_threshold_pct: parseInt(e.target.value) || 0 })}
+                  required
+                />
+                <div className="form-text">
+                  Head-vote participation marked as reached in the slot graph.
+                  Display only — the reveal vote gate has its own threshold under
+                  Payload Reveal. 0 = off.
                 </div>
               </div>
               <div className="d-flex gap-2">
