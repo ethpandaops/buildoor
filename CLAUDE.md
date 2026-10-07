@@ -146,7 +146,11 @@ npm run clean
      payload AND the bid derived from it agree on the reorged parent. A deliberate
      parent-payload reorg (invalid on mainnet forkchoice; a testing knob). Falls back
      to a normal build (logged) when the parent slot's attributes are unavailable.
-     It only modifies HOW a build happens, never forces/suppresses the build decision.
+     `omit_inclusion_list` builds without the FOCIL inclusion-list transactions from
+     the payload attributes, so the EL fills the block from its mempool alone (a
+     FOCIL censorship test: pair it with a builder EL that skips the target txs, e.g.
+     a high min gas price). Both only modify HOW a build happens, never
+     forces/suppresses the build decision.
    - A fifth `transforms` category is MODELESS: operator-supplied jq expressions
      (`payload`/`bid`/`envelope`) applied to the object's JSON via `pkg/jqtransform`
      (wraps `itchyny/gojq`; env access disabled, single-output, ctx-timeout 2s) for

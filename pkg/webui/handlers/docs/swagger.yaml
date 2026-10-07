@@ -62,6 +62,12 @@ definitions:
           grandparent_empty) -> mode (auto, always, never). Absent keys inherit
           the global policy.
         type: object
+      omit_inclusion_list:
+        description: |-
+          OmitInclusionList builds without the FOCIL inclusion-list transactions
+          from the beacon node's payload attributes, so the EL fills the block from
+          its mempool alone.
+        type: boolean
       reorg_parent_payload:
         description: |-
           ReorgParentPayload builds on the grandparent (n-2) execution payload
@@ -282,6 +288,11 @@ definitions:
         description: |-
           Forced marks builds the plan pushed past the schedule (they never
           consume the next_n budget).
+        type: boolean
+      omit_inclusion_list:
+        description: |-
+          OmitInclusionList builds without the FOCIL inclusion-list transactions
+          (see BuildPlan.OmitInclusionList).
         type: boolean
       plan_involved:
         description: |-

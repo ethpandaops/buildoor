@@ -89,6 +89,10 @@ type ResolvedBuildSettings struct {
 	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 
+	// OmitInclusionList builds without the FOCIL inclusion-list transactions
+	// (see BuildPlan.OmitInclusionList).
+	OmitInclusionList bool `json:"omit_inclusion_list,omitempty"`
+
 	// CandidateModes is the effective build-candidate policy for the slot:
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
@@ -283,6 +287,7 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	// suppresses the build decision itself.
 	if frozen.Plan != nil && frozen.Plan.Build != nil {
 		build.ReorgParentPayload = frozen.Plan.Build.ReorgParentPayload
+		build.OmitInclusionList = frozen.Plan.Build.OmitInclusionList
 	}
 
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)

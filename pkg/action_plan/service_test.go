@@ -351,6 +351,20 @@ func TestFreezeReorgParentPayload(t *testing.T) {
 	require.False(t, plain.Build.ReorgParentPayload)
 }
 
+func TestFreezeOmitInclusionList(t *testing.T) {
+	chainSvc := newStubChain()
+	svc := newTestService(chainSvc, nil)
+
+	_, err := svc.ApplyUpdates([]*PlanUpdate{
+		{Slots: []uint64{9100}, Set: map[string]json.RawMessage{"build.omit_inclusion_list": json.RawMessage("true")}},
+		{Slots: []uint64{9101}, Bid: json.RawMessage(`{"mode":"custom"}`)},
+	}, "tester")
+	require.NoError(t, err)
+
+	require.True(t, svc.Freeze(9100).Build.OmitInclusionList)
+	require.False(t, svc.Freeze(9101).Build.OmitInclusionList)
+}
+
 func TestPruneForEpochKeepsFuturePlans(t *testing.T) {
 	chainSvc := newStubChain()
 

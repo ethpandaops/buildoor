@@ -357,6 +357,11 @@ type BuildPlan struct {
 	// inclusion path against a withheld parent.
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 
+	// OmitInclusionList builds without the FOCIL inclusion-list transactions
+	// from the beacon node's payload attributes, so the EL fills the block from
+	// its mempool alone.
+	OmitInclusionList bool `json:"omit_inclusion_list,omitempty"`
+
 	// Candidates overrides the global build-candidate policy for this slot:
 	// candidate key (parent_full, parent_empty, grandparent_full,
 	// grandparent_empty) -> mode (auto, always, never). Absent keys inherit
@@ -384,7 +389,7 @@ func (p *BuildPlan) clone() *BuildPlan {
 // isZero reports whether the build plan carries no active instruction; such a
 // plan is dropped rather than persisted.
 func (p *BuildPlan) isZero() bool {
-	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0)
+	return p == nil || (!p.ReorgParentPayload && !p.OmitInclusionList && len(p.Candidates) == 0)
 }
 
 func (p *BuildPlan) validate() error {
