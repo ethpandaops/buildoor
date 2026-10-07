@@ -1161,12 +1161,12 @@ func (s *Service) omitInclusionList(
 		"inclusion_list_txs": len(attrs.InclusionListTransactions),
 	}).Warn("Building without the inclusion list (FOCIL censorship test)")
 
-	if len(attrs.InclusionListTransactions) == 0 {
+	if attrs.InclusionListTransactions == nil {
 		return attrs
 	}
 
 	effective := *attrs
-	effective.InclusionListTransactions = nil
+	effective.InclusionListTransactions = [][]byte{}
 
 	return &effective
 }

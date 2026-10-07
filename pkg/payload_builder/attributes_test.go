@@ -219,7 +219,8 @@ func TestOmitInclusionList(t *testing.T) {
 	}
 
 	omitted := svc.omitInclusionList(1000, attrs)
-	assert.Nil(t, omitted.InclusionListTransactions)
+	assert.NotNil(t, omitted.InclusionListTransactions)
+	assert.Empty(t, omitted.InclusionListTransactions)
 	assert.Len(t, attrs.InclusionListTransactions, 2, "the cached event must not be mutated")
 
 	attrs.ProposalSlot = 1001

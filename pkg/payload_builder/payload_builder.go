@@ -219,7 +219,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		TargetGasLimit:        targetGasLimit,
 	}
 
-	if len(attrs.InclusionListTransactions) > 0 {
+	if attrs.InclusionListTransactions != nil {
 		payloadAttrs.InclusionListTransactions = make([]paris.Transaction, len(attrs.InclusionListTransactions))
 		for i, tx := range attrs.InclusionListTransactions {
 			payloadAttrs.InclusionListTransactions[i] = paris.Transaction(tx)
