@@ -1865,6 +1865,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "omit_inclusion_list": {
+                    "description": "OmitInclusionList builds without the FOCIL inclusion-list transactions\nfrom the beacon node's payload attributes, so the EL fills the block from\nits mempool alone.",
+                    "type": "boolean"
+                },
                 "reorg_parent_payload": {
                     "description": "ReorgParentPayload builds on the grandparent (n-2) execution payload\ninstead of the immediate parent: the FCU head block hash and the payload\nattributes' withdrawals are taken from the PARENT slot's payload\nattributes (whose parent is n-2), while every other property comes from\nthe current slot. This is a deliberate parent-payload reorg attempt —\nrejected by mainnet forkchoice, but useful for exercising the reveal /\ninclusion path against a withheld parent.",
                     "type": "boolean"
@@ -2109,6 +2113,10 @@ const docTemplate = `{
                 },
                 "forced": {
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
+                    "type": "boolean"
+                },
+                "omit_inclusion_list": {
+                    "description": "OmitInclusionList builds without the FOCIL inclusion-list transactions\n(see BuildPlan.OmitInclusionList).",
                     "type": "boolean"
                 },
                 "plan_involved": {

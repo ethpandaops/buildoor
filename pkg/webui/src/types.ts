@@ -644,6 +644,7 @@ export interface RevealPlan {
 // slot's payload is built when a build happens.
 export interface BuildPlan {
   reorg_parent_payload?: boolean;
+  omit_inclusion_list?: boolean;
   // Per-slot candidate policy overrides: candidate key -> auto/always/never.
   candidates?: Record<string, string>;
 }
@@ -734,6 +735,7 @@ export interface ResolvedBuildSettings {
   plan_involved?: boolean;
   build_start_time_ms: number;
   reorg_parent_payload?: boolean;
+  omit_inclusion_list?: boolean;
   candidate_modes?: Record<string, string>;
 }
 

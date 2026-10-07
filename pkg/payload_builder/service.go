@@ -836,6 +836,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// at the grandparent, so the build, the stored payload and the bid all
 	// agree on the parent.
 	event := s.effectiveBuildAttributes(slot, target.attrs)
+	event = s.omitInclusionList(slot, event)
 
 	s.log.WithFields(logrus.Fields{
 		"slot":        slot,
@@ -1142,6 +1143,30 @@ func (s *Service) effectiveBuildAttributes(
 		"original_parent":     fmt.Sprintf("%x", current.ParentBlockHash[:8]),
 		"withdrawals":         len(effective.Withdrawals),
 	}).Warn("Building on grandparent payload (parent-reorg test)")
+
+	return &effective
+}
+
+// omitInclusionList returns a copy of attrs without the FOCIL inclusion-list
+// transactions when the slot's frozen plan sets build.omit_inclusion_list.
+func (s *Service) omitInclusionList(
+	slot phase0.Slot, attrs *beacon.PayloadAttributesEvent,
+) *beacon.PayloadAttributesEvent {
+	if !s.planSvc.Freeze(slot).Build.OmitInclusionList {
+		return attrs
+	}
+
+	s.log.WithFields(logrus.Fields{
+		"slot":               slot,
+		"inclusion_list_txs": len(attrs.InclusionListTransactions),
+	}).Warn("Building without the inclusion list (FOCIL censorship test)")
+
+	if attrs.InclusionListTransactions == nil {
+		return attrs
+	}
+
+	effective := *attrs
+	effective.InclusionListTransactions = [][]byte{}
 
 	return &effective
 }

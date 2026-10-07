@@ -203,3 +203,26 @@ func TestHandlePayloadAttributes_RescheduleOnParentChange(t *testing.T) {
 	assert.True(t, state.passScheduled)
 	assert.Empty(t, state.started, "no candidate build starts before the pass fires")
 }
+
+func TestOmitInclusionList(t *testing.T) {
+	svc := sanitizeTestSetup(t)
+
+	_, err := svc.planSvc.ApplyUpdates([]*action_plan.PlanUpdate{{
+		Slots: []uint64{1000},
+		Build: []byte(`{"omit_inclusion_list":true}`),
+	}}, "tester")
+	require.NoError(t, err)
+
+	attrs := &beacon.PayloadAttributesEvent{
+		ProposalSlot:              1000,
+		InclusionListTransactions: [][]byte{{0x01}, {0x02}},
+	}
+
+	omitted := svc.omitInclusionList(1000, attrs)
+	assert.NotNil(t, omitted.InclusionListTransactions)
+	assert.Empty(t, omitted.InclusionListTransactions)
+	assert.Len(t, attrs.InclusionListTransactions, 2, "the cached event must not be mutated")
+
+	attrs.ProposalSlot = 1001
+	assert.Same(t, attrs, svc.omitInclusionList(1001, attrs))
+}
