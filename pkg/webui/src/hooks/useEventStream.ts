@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -78,6 +78,7 @@ interface UseEventStreamResult {
   builderKeysAggregate: BuilderKeysAggregate | null;
   serviceStatus: ServiceStatus | null;
   voteCoverage: VoteCoverage | null;
+  txPoolStats: TxPoolStats | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -98,6 +99,7 @@ export function useEventStream(): UseEventStreamResult {
     useState<BuilderKeysAggregate | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
+  const [txPoolStats, setTxPoolStats] = useState<TxPoolStats | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -257,6 +259,43 @@ export function useEventStream(): UseEventStreamResult {
         case 'vote_coverage':
           setVoteCoverage(event.data as VoteCoverage);
           break;
+
+        case 'txpool_stats':
+          setTxPoolStats(event.data as TxPoolStats);
+          break;
+
+        case 'local_build': {
+          const data = event.data as LocalBuildStreamEvent;
+          const where = data.candidate ? ` (${data.candidate})` : '';
+
+          if (data.status === 'ready') {
+            const txs = data.local?.num_transactions ?? 0;
+            const role = data.selected ? 'feeds bids' : 'shadow';
+            addEvent('local_build',
+              `Local build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
+              event.timestamp);
+          } else if (data.status === 'skipped') {
+            addEvent('local_build',
+              `Local build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (EL payload used)' : ''}`,
+              event.timestamp);
+          } else {
+            addEvent('local_build_failed',
+              `Local build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (EL payload used)' : ''}`,
+              event.timestamp);
+          }
+
+          setSlotStates(prev => {
+            const state = prev[data.slot] || { slot: data.slot };
+            // The primary target's outcome wins; secondary candidates only fill
+            // an empty slot entry.
+            if (state.localBuild && data.candidate && data.candidate !== 'parent_full' &&
+                state.localBuild.candidate === 'parent_full') {
+              return prev;
+            }
+            return { ...prev, [data.slot]: { ...state, localBuild: data } };
+          });
+          break;
+        }
 
         case 'slot_start': {
           const data = event.data as { slot: number; slot_start_time: number };
@@ -796,6 +835,7 @@ export function useEventStream(): UseEventStreamResult {
     builderKeysAggregate,
     serviceStatus,
     voteCoverage,
+    txPoolStats,
     currentSlot,
     slotStates,
     slotConfigs,

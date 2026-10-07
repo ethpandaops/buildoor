@@ -4,4 +4,4 @@ ENCLAVE_NAME="${ENCLAVE_NAME:-buildoor}"
 kurtosis enclave rm -f "$ENCLAVE_NAME"
 
 echo "Cleaning up generated files..."
-rm -f ${__dir}/generated-*
+rm -rf "${__dir}"/generated-*

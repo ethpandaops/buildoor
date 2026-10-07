@@ -751,6 +751,9 @@ func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
 		LifecycleAvailable:    h.lifecycleMgr != nil,
 		LifecycleEnabled:      h.lifecycleMgr != nil && h.lifecycleMgr.IsEnabled(),
 	}
+
+	fillLocalBuildStatus(&status, h.builderSvc)
+
 	writeJSON(w, http.StatusOK, status)
 }
 

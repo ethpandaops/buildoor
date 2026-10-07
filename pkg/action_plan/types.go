@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
@@ -362,6 +364,148 @@ type BuildPlan struct {
 	// grandparent_empty) -> mode (auto, always, never). Absent keys inherit
 	// the global policy.
 	Candidates map[string]string `json:"candidates,omitempty"`
+
+	// Local overrides the local build extension (testing_buildBlockV1) for
+	// this slot; absent = inherit the global local_build settings. The EL's
+	// availability of the testing namespace still wins at build time.
+	Local *LocalBuildPlan `json:"local,omitempty"`
+}
+
+// LocalBuildPlan is the per-slot local build instruction. Every field is
+// optional; nil/empty inherits the global local_build / txpool settings.
+type LocalBuildPlan struct {
+	// Enabled forces the local build on or off for the slot.
+	Enabled *bool `json:"enabled,omitempty"`
+	// PayloadSource: el | local | local_or_el.
+	PayloadSource string `json:"payload_source,omitempty"`
+	// TxSource: txpool | empty | el_mempool | explicit (explicit requires
+	// Transactions; a non-empty Transactions list implies explicit).
+	TxSource string `json:"tx_source,omitempty"`
+	// Transactions is the exact raw transaction list (0x-hex, network
+	// encoding) the slot's local payload is built from.
+	Transactions []string `json:"transactions,omitempty"`
+	// Queued is the exact ordered list of transaction hashes (0x-hex) the
+	// slot's local payload is built from; every hash must be queued in the
+	// pool at build time and the order must respect each sender's nonces.
+	// Implies tx_source queued. Any deviation fails the build, never trims.
+	Queued []string `json:"queued,omitempty"`
+	// BuildELPayload keeps the engine build when the payload source is local.
+	BuildELPayload *bool `json:"build_el_payload,omitempty"`
+	// Pool selection tweaks (tx source txpool).
+	MaxTxs     *uint64 `json:"max_txs,omitempty"`
+	GasFillPct *uint64 `json:"gas_fill_pct,omitempty"`
+	Ordering   string  `json:"ordering,omitempty"`
+}
+
+func (p *LocalBuildPlan) clone() *LocalBuildPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.Enabled = cloneScalar(p.Enabled)
+	c.BuildELPayload = cloneScalar(p.BuildELPayload)
+	c.MaxTxs = cloneScalar(p.MaxTxs)
+	c.GasFillPct = cloneScalar(p.GasFillPct)
+
+	if p.Transactions != nil {
+		c.Transactions = make([]string, len(p.Transactions))
+		copy(c.Transactions, p.Transactions)
+	}
+
+	if p.Queued != nil {
+		c.Queued = make([]string, len(p.Queued))
+		copy(c.Queued, p.Queued)
+	}
+
+	return &c
+}
+
+func (p *LocalBuildPlan) isZero() bool {
+	return p == nil || (p.Enabled == nil && p.PayloadSource == "" && p.TxSource == "" &&
+		len(p.Transactions) == 0 && len(p.Queued) == 0 && p.BuildELPayload == nil && p.MaxTxs == nil &&
+		p.GasFillPct == nil && p.Ordering == "")
+}
+
+// EffectiveTxSource returns the plan's transaction source, resolving an
+// explicit transaction list to the explicit source and a queued-hash list to
+// the queued source.
+func (p *LocalBuildPlan) EffectiveTxSource() string {
+	if len(p.Transactions) > 0 {
+		return config.TxSourceExplicit
+	}
+
+	if len(p.Queued) > 0 {
+		return config.TxSourceQueued
+	}
+
+	return p.TxSource
+}
+
+func (p *LocalBuildPlan) validate() error {
+	if p.PayloadSource != "" && config.NormalizedPayloadSource(p.PayloadSource, "") == "" {
+		return fmt.Errorf("build.local.payload_source: must be el, local or local_or_el (got %q)", p.PayloadSource)
+	}
+
+	if p.TxSource != "" && config.NormalizedTxSource(p.TxSource, "") == "" {
+		return fmt.Errorf("build.local.tx_source: must be txpool, empty, el_mempool or explicit (got %q)", p.TxSource)
+	}
+
+	if p.TxSource == config.TxSourceExplicit && len(p.Transactions) == 0 {
+		return errors.New("build.local.tx_source: explicit requires build.local.transactions")
+	}
+
+	if len(p.Transactions) > 0 && p.TxSource != "" && p.TxSource != config.TxSourceExplicit {
+		return fmt.Errorf("build.local.transactions: only allowed with tx_source explicit (got %q)", p.TxSource)
+	}
+
+	if p.TxSource == config.TxSourceQueued && len(p.Queued) == 0 {
+		return errors.New("build.local.tx_source: queued requires build.local.queued")
+	}
+
+	if len(p.Queued) > 0 && p.TxSource != "" && p.TxSource != config.TxSourceQueued {
+		return fmt.Errorf("build.local.queued: only allowed with tx_source queued (got %q)", p.TxSource)
+	}
+
+	if len(p.Queued) > 0 && len(p.Transactions) > 0 {
+		return errors.New("build.local: transactions and queued are mutually exclusive")
+	}
+
+	for i, h := range p.Queued {
+		if len(h) != 66 || !strings.HasPrefix(h, "0x") {
+			return fmt.Errorf("build.local.queued[%d]: %q is not a 0x-prefixed 32-byte hash", i, h)
+		}
+
+		if _, err := hexutil.Decode(h); err != nil {
+			return fmt.Errorf("build.local.queued[%d]: %w", i, err)
+		}
+	}
+
+	if p.Ordering != "" && config.NormalizedTxOrdering(p.Ordering, "") == "" {
+		return fmt.Errorf("build.local.ordering: must be fifo, tip, random or round_robin (got %q)", p.Ordering)
+	}
+
+	if p.GasFillPct != nil && (*p.GasFillPct == 0 || *p.GasFillPct > 100) {
+		return errors.New("build.local.gas_fill_pct: must be between 1 and 100")
+	}
+
+	for i, hexTx := range p.Transactions {
+		raw, err := hexutil.Decode(hexTx)
+		if err != nil {
+			return fmt.Errorf("build.local.transactions[%d]: %w", i, err)
+		}
+
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalBinary(raw); err != nil {
+			return fmt.Errorf("build.local.transactions[%d]: invalid transaction: %w", i, err)
+		}
+
+		if _, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx); err != nil {
+			return fmt.Errorf("build.local.transactions[%d]: invalid signature: %w", i, err)
+		}
+	}
+
+	return nil
 }
 
 func (p *BuildPlan) clone() *BuildPlan {
@@ -378,13 +522,15 @@ func (p *BuildPlan) clone() *BuildPlan {
 		}
 	}
 
+	c.Local = p.Local.clone()
+
 	return &c
 }
 
 // isZero reports whether the build plan carries no active instruction; such a
 // plan is dropped rather than persisted.
 func (p *BuildPlan) isZero() bool {
-	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0)
+	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0 && p.Local.isZero())
 }
 
 func (p *BuildPlan) validate() error {
@@ -395,6 +541,12 @@ func (p *BuildPlan) validate() error {
 
 		if config.NormalizedCandidateMode(mode, "") == "" {
 			return fmt.Errorf("build.candidates.%s: mode must be auto, always or never (got %q)", key, mode)
+		}
+	}
+
+	if p.Local != nil {
+		if err := p.Local.validate(); err != nil {
+			return err
 		}
 	}
 

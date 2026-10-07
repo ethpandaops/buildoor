@@ -705,6 +705,69 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
 
+          {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
+              line. Shown when it ran next to an engine build (two distinct builds) or when it
+              did not produce a payload; a local-only build is already the primary line. */}
+          {(() => {
+            const lb = state.localBuild;
+            if (!lb || genesisTime <= 0 || !epbsConfig) return null;
+            if (lb.status === 'ready' && !lb.el) return null;
+
+            const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
+            const items = [
+              { label: 'Build Start', value: `${buildStartMs}ms` },
+              ...(lb.status === 'ready' && lb.built_at
+                ? [
+                    { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },
+                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - buildStartMs}ms` }
+                  ]
+                : [{ label: lb.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${lb.at - slotStartTime}ms` }]),
+              { label: 'Status', value: `${lb.status}${lb.skip_reason ? ` (${lb.skip_reason})` : ''}` },
+              ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
+              { label: 'Tx Source', value: lb.tx_source || '—' },
+              { label: 'Payload Source', value: lb.payload_source || '—' },
+              { label: 'Feeds Bids', value: lb.selected ? 'yes (local payload)' : lb.fallback ? 'no (EL payload, fallback)' : 'no (EL payload)' },
+              ...(lb.local ? [
+                { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
+                { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },
+                { label: 'Contents', value: `${lb.local.num_transactions} txs, ${lb.local.num_blobs} blobs` },
+                { label: 'Gas', value: `${lb.local.gas_used.toLocaleString()} / ${lb.local.gas_limit.toLocaleString()}` }
+              ] : []),
+              ...(lb.info?.selection ? [
+                { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
+                ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
+                  ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
+                  : [])
+              ] : []),
+              ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
+              ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
+              ...(lb.el ? [
+                { label: 'EL Payload', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
+              ] : [])
+            ];
+            const data = { title: 'Local Build (testing_buildBlockV1)', items };
+            const dotClass = lb.status === 'ready'
+              ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
+              : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+
+            return (
+              <>
+                {lb.status === 'ready' && buildStartX < 100 && (
+                  <BuildDelayLine
+                    leftPct={buildStartX}
+                    slotStartTime={slotStartTime}
+                    rangeStart={rangeStart}
+                    totalRange={totalRange}
+                    endAt={endAt}
+                    className="local-build-line"
+                    onClick={(e) => showPopover(e, data)}
+                  />
+                )}
+                {renderEventDot(dotClass, endAt - slotStartTime, data, 'local-build')}
+              </>
+            );
+          })()}
+
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
             'build-failed',

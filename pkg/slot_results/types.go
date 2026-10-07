@@ -13,6 +13,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
 // BuildStatus is the lifecycle state of a slot's payload build.
@@ -136,8 +137,67 @@ type BuildOutcome struct {
 	// Attributes is the payload_attributes snapshot the build ran on.
 	Attributes *AttributesSnapshot `json:"attributes,omitempty"`
 
+	// Source records which build produced the payload feeding the consumers:
+	// el (engine API) or local (testing_buildBlockV1). Empty pre-ready.
+	Source string `json:"source,omitempty"`
+	// Fallback marks that the local payload was wanted but the engine payload
+	// was used (local build failed or skipped).
+	Fallback bool `json:"fallback,omitempty"`
+	// LocalBuild is the local build's outcome for this target when the
+	// extension was requested for the slot (ready, failed or skipped).
+	LocalBuild *LocalBuildOutcome `json:"local_build,omitempty"`
+
 	Error string    `json:"error,omitempty"`
 	At    time.Time `json:"at"`
+}
+
+// LocalBuildOutcome records the local build (testing_buildBlockV1) of one
+// build target: its status, how the transaction list was assembled and the
+// resulting payload's headline properties. The local payload is captured as
+// its own artifact so the shadow build stays inspectable even when the engine
+// payload fed the bids.
+type LocalBuildOutcome struct {
+	Status     string `json:"status"` // ready | failed | skipped
+	SkipReason string `json:"skip_reason,omitempty"`
+	Error      string `json:"error,omitempty"`
+
+	TxSource      string `json:"tx_source,omitempty"`
+	PayloadSource string `json:"payload_source,omitempty"`
+	// Selected marks that the local payload fed the consumers.
+	Selected bool `json:"selected"`
+
+	BlockHash       string `json:"block_hash,omitempty"`
+	BlockValueWei   string `json:"block_value_wei,omitempty"`
+	NumTransactions int    `json:"num_transactions,omitempty"`
+	NumBlobs        int    `json:"num_blobs,omitempty"`
+	GasUsed         uint64 `json:"gas_used,omitempty"`
+	GasLimit        uint64 `json:"gas_limit,omitempty"`
+	// ArtifactIdx is the per-slot payload artifact index of the local payload.
+	ArtifactIdx *int `json:"artifact_idx,omitempty"`
+
+	// Info is the transaction assembly detail (selection summary, explicit
+	// list size, inclusion-list handling, EL drops).
+	Info *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+
+	At time.Time `json:"at"`
+}
+
+func (o *LocalBuildOutcome) clone() *LocalBuildOutcome {
+	if o == nil {
+		return nil
+	}
+
+	c := *o
+
+	if o.ArtifactIdx != nil {
+		idx := *o.ArtifactIdx
+		c.ArtifactIdx = &idx
+	}
+
+	// Info is written once by the builder and never mutated afterwards;
+	// sharing the pointer is safe.
+
+	return &c
 }
 
 // AttributesSnapshot captures the payload_attributes a build ran on (list
@@ -257,11 +317,72 @@ type SlotResult struct {
 	RevealAttempts   []RevealAttempt   `json:"reveal_attempts,omitempty"`
 	Inclusion        *InclusionResult  `json:"inclusion,omitempty"`
 
+	// TxPlan is the post-inclusion verdict of a locally built payload: whether
+	// the canonical block holds exactly the transactions buildoor submitted,
+	// in order. Only set for included slots whose payload came from an
+	// explicit list (local build with a txpool/explicit/queued source).
+	TxPlan *TxPlanResult `json:"tx_plan,omitempty"`
+
 	// DroppedAttempts counts attempts beyond the per-kind retention cap,
 	// keyed by kind ("bids", "block_submissions", "reveal_attempts").
 	DroppedAttempts map[string]int `json:"dropped_attempts,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TxPlanStatus is the verdict of a tx plan check.
+type TxPlanStatus string
+
+const (
+	// TxPlanPending: the payload was included, the EL check has not run yet.
+	TxPlanPending TxPlanStatus = "pending"
+	// TxPlanMatch: the canonical block holds exactly the plan, in order.
+	TxPlanMatch TxPlanStatus = "match"
+	// TxPlanMismatch: the block's transaction list differs from the plan.
+	TxPlanMismatch TxPlanStatus = "mismatch"
+	// TxPlanBlockNotFound: the EL did not serve the included block in time.
+	TxPlanBlockNotFound TxPlanStatus = "block_not_found"
+	// TxPlanNotIncluded: the slot passed without the payload reaching the chain.
+	TxPlanNotIncluded TxPlanStatus = "not_included"
+	// TxPlanMissed: the payload was won but the next block built on an older one.
+	TxPlanMissed TxPlanStatus = "missed"
+	// TxPlanOrphaned: the won block was reorged out.
+	TxPlanOrphaned TxPlanStatus = "orphaned"
+)
+
+// maxTxPlanHashes bounds the expected-hash list stored per slot; the exact
+// list is in the payload artifact.
+const maxTxPlanHashes = 4096
+
+// TxPlanResult is the plan a local payload was built from and its
+// post-inclusion verdict.
+type TxPlanResult struct {
+	TxSource       string   `json:"tx_source"`
+	ExpectedCount  int      `json:"expected_count"`
+	ExpectedHashes []string `json:"expected_hashes"`
+	Truncated      bool     `json:"truncated,omitempty"`
+
+	Status        TxPlanStatus `json:"status"`
+	IncludedCount int          `json:"included_count,omitempty"`
+	FirstMismatch int          `json:"first_mismatch,omitempty"`
+	Detail        string       `json:"detail,omitempty"`
+	VerifiedAt    *time.Time   `json:"verified_at,omitempty"`
+}
+
+func (p *TxPlanResult) clone() *TxPlanResult {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.ExpectedHashes = append([]string(nil), p.ExpectedHashes...)
+
+	if p.VerifiedAt != nil {
+		at := *p.VerifiedAt
+		c.VerifiedAt = &at
+	}
+
+	return &c
 }
 
 // Clone returns a deep copy of the result.
@@ -279,6 +400,8 @@ func (r *SlotResult) Clone() *SlotResult {
 			build.ArtifactIdx = &idx
 		}
 
+		build.LocalBuild = r.Build.LocalBuild.clone()
+
 		c.Build = &build
 	}
 
@@ -291,6 +414,8 @@ func (r *SlotResult) Clone() *SlotResult {
 				clone.ArtifactIdx = &idx
 			}
 
+			clone.LocalBuild = build.LocalBuild.clone()
+
 			c.Builds[i] = &clone
 		}
 	}
@@ -299,6 +424,8 @@ func (r *SlotResult) Clone() *SlotResult {
 		inclusion := *r.Inclusion
 		c.Inclusion = &inclusion
 	}
+
+	c.TxPlan = r.TxPlan.clone()
 
 	if r.Bids != nil {
 		c.Bids = make([]BidAttempt, len(r.Bids))

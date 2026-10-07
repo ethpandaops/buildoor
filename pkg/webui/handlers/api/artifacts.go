@@ -193,9 +193,14 @@ func parseArtifactSlot(w http.ResponseWriter, r *http.Request) (phase0.Slot, boo
 func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Request) {
 	idx := 0
 
-	// A slot may hold one payload per build-parent candidate; ?candidate=
-	// selects one of them, defaulting to the first stored payload.
-	if candidate := r.URL.Query().Get("candidate"); candidate != "" {
+	// A slot may hold one payload per build-parent candidate and, with the
+	// local build extension, one per source (el / local) on the same parent;
+	// ?candidate= and ?source= select one of them, defaulting to the first
+	// stored payload.
+	candidate := r.URL.Query().Get("candidate")
+	source := r.URL.Query().Get("source")
+
+	if candidate != "" || source != "" {
 		if h.resultTracker == nil {
 			writeError(w, http.StatusNotFound, "artifact not found")
 			return
@@ -206,9 +211,9 @@ func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		resolved, found := h.resultTracker.Artifacts().PayloadIndexForCandidate(slot, candidate)
+		resolved, found := h.resultTracker.Artifacts().PayloadIndexFor(slot, candidate, source)
 		if !found {
-			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate)
+			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate+" source "+source)
 			return
 		}
 

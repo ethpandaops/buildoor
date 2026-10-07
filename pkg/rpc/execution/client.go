@@ -21,6 +21,25 @@ type Client struct {
 	rpcClient *rpc.Client
 	rpcURL    string
 	log       logrus.FieldLogger
+
+	// tee, when set, also receives every transaction this client sends
+	// (buildoor's own lifecycle transactions) so they land in the owned
+	// pool's blocks when buildoor builds from that pool.
+	tee TxTee
+}
+
+// TxTee receives a copy of every transaction the client sends. Satisfied by
+// the transaction pool.
+type TxTee interface {
+	// Add admits a network-encoded transaction; a disabled pool or a
+	// duplicate is not an error worth failing the send for.
+	Add(raw []byte) (common.Hash, error)
+	Enabled() bool
+}
+
+// SetTxTee wires the transaction pool as the tee of every sent transaction.
+func (c *Client) SetTxTee(tee TxTee) {
+	c.tee = tee
 }
 
 // NewClient creates a new standard EL JSON-RPC client (no JWT).
@@ -97,6 +116,22 @@ func (c *Client) GetLatestBlock(ctx context.Context) (*types.Block, error) {
 func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	if err := c.ethClient.SendTransaction(ctx, tx); err != nil {
 		return fmt.Errorf("failed to send transaction: %w", err)
+	}
+
+	// While the pool is enabled buildoor builds its blocks from it, and its
+	// own deposits/exits would otherwise only land through other builders'
+	// blocks. The EL mempool copy above still covers the pool-less case.
+	if c.tee != nil && c.tee.Enabled() {
+		raw, err := tx.MarshalBinary()
+		if err != nil {
+			c.log.WithError(err).Warn("Cannot encode transaction for the pool tee")
+
+			return nil
+		}
+
+		if _, err := c.tee.Add(raw); err != nil {
+			c.log.WithError(err).WithField("tx", tx.Hash().Hex()).Debug("Pool tee refused the transaction")
+		}
 	}
 
 	return nil

@@ -16,6 +16,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -41,6 +42,13 @@ type APIHandler struct {
 	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
 	planSvc          *action_plan.PlanService         // May be nil
 	resultTracker    *slot_results.Tracker            // May be nil
+	planVerifier     *tx_plan_verifier.Verifier       // May be nil (no --el-rpc)
+}
+
+// SetPlanVerifier attaches the tx plan verifier whose counters the local
+// build status serves.
+func (h *APIHandler) SetPlanVerifier(v *tx_plan_verifier.Verifier) {
+	h.planVerifier = v
 }
 
 // NewAPIHandler creates a new API handler.

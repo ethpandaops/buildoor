@@ -8,6 +8,12 @@ participants:
   # whose bid pool is fed by gossip from node 1.
   - el_type: nethermind
     el_image: ethpandaops/nethermind:glamsterdam-devnet-8
+    # The testing namespace (testing_buildBlockV1) backs phase 4, the local
+    # build from buildoor's own transaction pool. nethermind rejects a repeated
+    # --JsonRpc.EnabledModules, so the namespace goes on an additional RPC
+    # endpoint (port 8547) that buildoor's --el-rpc is pointed at below.
+    el_extra_params:
+      - --JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing
     cl_type: lodestar
     cl_image: ethpandaops/lodestar:glamsterdam-devnet-8
     vc_image: ethpandaops/lodestar:glamsterdam-devnet-8
@@ -43,6 +49,9 @@ buildoor_params:
   epbs_builder: true
   lifecycle: true
   extra_args:
+    # The last --el-rpc wins: use the EL's additional endpoint that exposes
+    # the testing namespace (see el_extra_params above).
+    - --el-rpc=http://el-1-nethermind-lodestar:8547
     - --deposit-max-fee=0
     - --builder-api-subsidy=100000000
     - --epbs-bid-min=1000000

@@ -17,7 +17,9 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
+	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
+	"github.com/ethpandaops/buildoor/pkg/txpool"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -51,6 +53,7 @@ type Service struct {
 	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
 	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
 	buildSkippedDispatcher *utils.Dispatcher[*BuildSkippedEvent]
+	localBuildDispatcher   *utils.Dispatcher[*LocalBuildEvent]
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
@@ -88,6 +91,11 @@ type Service struct {
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
 	elClientVersionMu sync.RWMutex
 	elClientVersion   *ELClientVersion
+
+	// Local build extension (testing_buildBlockV1) state and the owned
+	// transaction pool its txpool source selects from.
+	localBuild localBuildState
+	txPool     *txpool.Pool
 }
 
 // ELClientVersion is the execution client's identification, as returned by
@@ -127,6 +135,7 @@ func NewService(
 		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
 		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
 		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
+		localBuildDispatcher:   &utils.Dispatcher[*LocalBuildEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		slotBuilds:             make(map[phase0.Slot]*slotBuildState, 16),
@@ -134,6 +143,8 @@ func NewService(
 		attrFallbackArmed:      make(map[phase0.Slot]bool, 16),
 		wonPayloads:            make(map[phase0.Hash32]phase0.Slot, 16),
 	}
+
+	s.localBuild.availability = LocalBuildAvailability{Reason: "no --el-rpc configured"}
 
 	return s, nil
 }
@@ -143,9 +154,15 @@ func (s *Service) Start(ctx context.Context) error {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	// Create payload builder
+	s.localBuild.mu.RLock()
+	localClient := s.localBuild.client
+	s.localBuild.mu.RUnlock()
+
 	s.payloadBuilder = NewPayloadBuilder(
 		s.clClient,
 		s.engineClient,
+		localClient,
+		s.txPool,
 		s.chainSvc,
 		s.feeRecipient,
 		s.cfg,
@@ -213,7 +230,14 @@ func (s *Service) refreshELClientVersionLoop() {
 		}).Info("EL client identified")
 	}
 
+	// The local build availability is probed on the same cadence: the EL
+	// may be restarted with the testing namespace enabled (or disabled).
+	probe := func() {
+		s.ProbeLocalBuild(s.ctx)
+	}
+
 	refresh()
+	probe()
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -224,6 +248,7 @@ func (s *Service) refreshELClientVersionLoop() {
 			return
 		case <-ticker.C:
 			refresh()
+			probe()
 		}
 	}
 }
@@ -853,7 +878,17 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		BuildSeq:  build.seq,
 	})
 
-	payloadEvent, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs)
+	// The local build extension runs alongside the engine build when the
+	// slot's frozen plan enables it, the target is the canonical candidate
+	// and the EL exposes the testing namespace.
+	localReq, localSkip := s.resolveLocalBuildRequest(slot, target.candidate)
+
+	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
+
+	if localReq != nil || localSkip != "" {
+		s.emitLocalBuild(slot, target, result, localReq, localSkip, err)
+	}
+
 	if err != nil {
 		if s.buildAborted(build) {
 			s.reportBuildSuperseded(slot, target.candidate, build.seq)
@@ -878,7 +913,18 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		return
 	}
 
+	payloadEvent := result.Payload
 	payloadEvent.BuildSeq = build.seq
+
+	if s.txPool != nil {
+		// Remember every built block hash so the pool can tell blocks of ours
+		// from other builders' when it evicts included transactions.
+		s.txPool.NoteBuiltBlock(common.Hash(payloadEvent.BlockHash), slot)
+
+		if result.Local != nil && result.Local != payloadEvent {
+			s.txPool.NoteBuiltBlock(common.Hash(result.Local.BlockHash), slot)
+		}
+	}
 
 	// Classify the payload by the parent it was actually built on (the plan's
 	// parent-reorg tweak may have redirected it).
@@ -1239,6 +1285,109 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 		}
 		s.wonPayloadsMu.Unlock()
 	}
+}
+
+// emitLocalBuild reports the local build's outcome for one target. skipReason
+// is set when no local build ran although the slot asked for one (availability
+// gate); otherwise the result carries the local outcome.
+func (s *Service) emitLocalBuild(
+	slot phase0.Slot,
+	target *buildTarget,
+	result *BuildResult,
+	req *LocalBuildRequest,
+	skipReason string,
+	buildErr error,
+) {
+	event := &LocalBuildEvent{
+		Slot:      slot,
+		Candidate: string(target.candidate),
+		At:        time.Now(),
+	}
+
+	if req != nil {
+		event.TxSource = req.TxSource
+		event.PayloadSource = req.PayloadSource
+	}
+
+	frozen := s.planSvc.Freeze(slot)
+	if frozen.Build != nil && frozen.Build.Local != nil {
+		if event.TxSource == "" {
+			event.TxSource = frozen.Build.Local.TxSource
+		}
+
+		if event.PayloadSource == "" {
+			event.PayloadSource = frozen.Build.Local.PayloadSource
+		}
+	}
+
+	switch {
+	case skipReason != "":
+		event.Status = LocalStatusSkipped
+		event.SkipReason = skipReason
+		event.Fallback = true
+	case result == nil:
+		// The target failed before either build ran (forkchoice update,
+		// prelude): the local build shares that failure.
+		event.Status = LocalStatusFailed
+		event.Error = "build did not run"
+
+		if buildErr != nil {
+			event.Error = buildErr.Error()
+		}
+	case result.Local != nil:
+		event.Status = LocalStatusReady
+		event.Payload = result.Local
+		event.Info = result.LocalInfo
+		event.Selected = result.Source == SourceLocal
+	case result.LocalSkipReason != "":
+		event.Status = LocalStatusSkipped
+		event.SkipReason = result.LocalSkipReason
+		event.Info = result.LocalInfo
+		event.Fallback = result.Fallback
+	default:
+		event.Status = LocalStatusFailed
+		event.Info = result.LocalInfo
+		event.Fallback = result.Fallback
+
+		if result.LocalErr != nil {
+			event.Error = result.LocalErr.Error()
+		}
+	}
+
+	if result != nil {
+		event.ELPayload = result.EL
+	}
+
+	reason := event.SkipReason
+	if event.Status == LocalStatusFailed {
+		reason = "error"
+	}
+
+	metrics.LocalBuildOutcomes.WithLabelValues(event.Status, reason).Inc()
+
+	if result != nil && result.Source != "" {
+		metrics.LocalBuildSelected.WithLabelValues(result.Source).Inc()
+	}
+
+	if p := event.Payload; p != nil && p.ExecutionPayload != nil {
+		metrics.LocalBuildTxs.Observe(float64(len(p.ExecutionPayload.Transactions)))
+
+		if p.ExecutionPayload.GasLimit > 0 {
+			metrics.LocalBuildFillRatio.Set(float64(p.ExecutionPayload.GasUsed) / float64(p.ExecutionPayload.GasLimit))
+		}
+	}
+
+	if event.Status != LocalStatusReady {
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"candidate":   target.candidate,
+			"status":      event.Status,
+			"skip_reason": event.SkipReason,
+			"error":       event.Error,
+		}).Warn("Local build did not produce a payload")
+	}
+
+	s.localBuildDispatcher.Fire(event)
 }
 
 // UnmarkPayloadWon clears the won marker of a payload whose winning block was

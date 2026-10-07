@@ -153,6 +153,73 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--topup-threshold` | `1000000000` | Balance threshold for auto top-up (Gwei, default 1 ETH) |
 | `--topup-amount` | `5000000000` | Top-up amount (Gwei, default 5 ETH) |
 
+### Local Build & Transaction Pool Flags
+
+Buildoor can build an additional payload per slot through the EL's
+`testing_buildBlockV1` (execution-apis `testing` namespace, disabled by default
+on every client — enable it with `--http.api ...,testing` on geth/reth/erigon,
+`--rpc-http-api ...,TESTING` on besu, `--JsonRpc.EnabledModules ...,Testing` on
+nethermind) from a transaction source it controls, and choose whether bids use
+that payload or the EL's. Under the kurtosis ethereum-package the module flag
+can only be appended through `el_extra_params`: geth, besu, erigon and ethrex
+accept the repeated flag (the appended list wins), nethermind rejects it — expose
+the namespace on an additional endpoint instead
+(`--JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing`
+and point `--el-rpc` at port 8547) — and reth rejects it without an alternative. Both extensions need `--el-rpc` and are off by
+default; the enable settings are refused while the EL does not expose the
+namespace (probed at startup and every 5 minutes, or on demand from the UI).
+Only the canonical build candidate (`parent_full`) builds locally: the testing
+call builds on the EL's current head, which a speculative parent (`parent_empty`,
+`grandparent_*`) is not — those targets skip with `speculative_candidate` and,
+with payload source `local`, produce no payload (`local_or_el` falls back).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--local-build-enabled` | `false` | Build the additional local payload per slot |
+| `--local-build-payload-source` | `el` | Which payload feeds bids/reveals: `el` (local is a shadow), `local`, `local_or_el` |
+| `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `empty`, `el_mempool` (per-slot plans may set an explicit list) |
+| `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
+| `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
+| `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
+| `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
+| `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
+| `--txpool-auth` | `open` | Ingress authentication: `open`, `auth_token` (the authenticatoor JWT of the API, needs `--auth-provider-url`) or `static` |
+| `--txpool-auth-token` | | Shared bearer secret for `--txpool-auth=static` |
+| `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random`, `round_robin` |
+| `--txpool-block-max-txs` | `0` | Max pool txs per local block (0 = unlimited) |
+| `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |
+| `--txpool-max-txs` | `10000` | Pool capacity |
+| `--txpool-max-txs-per-sender` | `256` | Per-sender queue cap |
+| `--txpool-base-fee-ceiling-gwei` | `0` | Above this next base fee pool fills drop to the EIP-1559 gas target so a long max-fill run does not price its own txs out (exact lists are never reduced) |
+| `--txpool-max-strikes` | `3` | Drop a queued tx after this many attributed build failures (0 = never) |
+| `--txpool-tx-ttl-slots` | `64` | Expire queued txs older than this many slots; an expired tx goes together with its sender's higher nonces, so no gap is left (0 = never) |
+| `--txpool-forward-to-el` | `false` | Also submit admitted txs to the EL mempool (A/B shadow mode) |
+
+Point a generator at the pool as its ONLY host:
+
+```bash
+spamoor eoatx -h "name(buildoor)http://<buildoor>:8080/rpc" -p <privkey>
+```
+
+Every locally built block is verified twice: the built payload must hold exactly
+the submitted list before it is bid, and after inclusion the canonical block is
+re-read from the EL and compared with the plan (verdict on the slot result's
+`tx_plan`, the `buildoor_tx_plan_checks_total` metric, and a `TX PLAN CHECK
+FAILED` error log on any deviation). A per-slot plan can name an exact ordered
+list of queued transaction hashes (`build.local.queued`); `.hack/txgen` signs
+transfers into the pool and prints their hashes for that purpose, and
+`.hack/payloadcheck` builds a payload on an EL and validates it through
+`engine_newPayload` (on the builder and on an independent EL) to prove the
+EL's testing path yields chain-valid blocks.
+
+The ingress answers `eth_sendRawTransaction` (and `eth_chainId`,
+`eth_getTransactionCount` pool-aware for `pending`, `txpool_*`) locally and
+proxies read-only `eth_*`/`net_*`/`web3_*` calls to `--el-rpc`, so spamoor can
+follow the chain through it. Do not add the EL as a second host: spamoor fans
+every submission out to all of its hosts, which would put the transactions into
+the EL mempool as well. Pool transactions never enter the EL mempool: they land
+on chain only inside a local payload that won the slot.
+
 ### Other Flags
 
 | Flag | Default | Description |
@@ -179,6 +246,9 @@ make devnet
 
 # Run buildoor against the devnet
 make devnet-run-docker
+
+# Feed the replacement's transaction pool with a one-shot spamoor
+make devnet-spam
 
 # Clean up the devnet
 make devnet-clean
