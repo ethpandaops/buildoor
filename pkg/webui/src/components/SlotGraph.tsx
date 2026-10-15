@@ -1456,7 +1456,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           </div>
         )}
 
-        {/* Current time indicator - animated via requestAnimationFrame */}
+        {/* Current time indicator - a compositor animation, no per-frame script */}
         <CurrentTimeIndicator
           slotStartTime={slotStartTime}
           rangeStart={rangeStart}
@@ -1485,5 +1485,5 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
 // SlotGraph re-renders only when its own slot's state (or the config/status
 // it shows) changes; the stream updates one slot at a time, and the time
-// based parts animate on the shared frame clock without re-rendering.
+// based parts (now-line, growing build lines) are compositor animations.
 export const SlotGraph = React.memo(SlotGraphView);

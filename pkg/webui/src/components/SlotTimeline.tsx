@@ -2,7 +2,6 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import type { SlotState, Config, ChainInfo, ServiceStatus } from '../types';
 import { SlotGraph, slotGraphHeight } from './SlotGraph';
 import { SLOT_HISTORY } from '../hooks/useEventStream';
-import { onFrame } from '../utils/frameClock';
 
 interface SlotTimelineProps {
   chainInfo: ChainInfo | null;
@@ -74,22 +73,22 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     return { displaySlot, showNextSlot };
   }, [chainInfo]);
 
-  // Check for slot changes on the shared frame clock, but only re-render when
-  // the window actually moves (new slot, or the next slot appearing at 75%).
+  // The window moves twice per slot: when the next slot appears (75%) and
+  // when it starts. A timer wakes up exactly then instead of polling.
   useEffect(() => {
     if (!chainInfo || chainInfo.genesis_time === 0) return;
 
-    const initial = calculateSlotDisplay();
-    setSlotDisplay(initial);
-    let last = initial;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      setSlotDisplay(calculateSlotDisplay());
+      const slotDuration = chainInfo.seconds_per_slot;
+      const intoSlot = (Date.now() - chainInfo.genesis_time) % slotDuration;
+      const nextChange = intoSlot < slotDuration * 0.75 ? slotDuration * 0.75 : slotDuration;
+      timer = setTimeout(schedule, nextChange - intoSlot + 5);
+    };
+    schedule();
 
-    return onFrame(() => {
-      const next = calculateSlotDisplay();
-      if (next.displaySlot !== last.displaySlot || next.showNextSlot !== last.showNextSlot) {
-        last = next;
-        setSlotDisplay(next);
-      }
-    });
+    return () => clearTimeout(timer);
   }, [chainInfo, calculateSlotDisplay]);
 
   const { displaySlot, showNextSlot } = slotDisplay;

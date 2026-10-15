@@ -1,5 +1,4 @@
-import React, { useRef, useEffect } from 'react';
-import { onFrame } from '../utils/frameClock';
+import React, { useLayoutEffect, useRef } from 'react';
 
 interface CurrentTimeIndicatorProps {
   slotStartTime: number;
@@ -7,10 +6,12 @@ interface CurrentTimeIndicatorProps {
   totalRange: number;
 }
 
-// CurrentTimeIndicator moves the "now" line across a slot graph. It spans the
-// whole graph and is shifted with a transform (a percentage of its own width
-// = the graph width), so a frame only touches the compositor, and it writes
-// to the DOM only when the line is visible or its visibility changes.
+// CurrentTimeIndicator sweeps the "now" line across a slot graph as one
+// linear transform animation over the graph's whole time range, started at
+// the offset "now" has into it (a negative delay when the range began
+// already). The browser runs it on the compositor: no script per frame, and
+// main-thread work (React renders, stream events) cannot stall it. Outside
+// the range the track rests off-graph (clipped by the graph area).
 export const CurrentTimeIndicator: React.FC<CurrentTimeIndicatorProps> = ({
   slotStartTime,
   rangeStart,
@@ -18,28 +19,25 @@ export const CurrentTimeIndicator: React.FC<CurrentTimeIndicatorProps> = ({
 }) => {
   const trackRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    let visible: boolean | null = null;
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track || totalRange <= 0) return;
 
-    return onFrame((now) => {
-      const track = trackRef.current;
-      if (!track) return;
+    const animation = track.animate(
+      [{ transform: 'translateX(0%)' }, { transform: 'translateX(100%)' }],
+      {
+        duration: totalRange,
+        delay: slotStartTime + rangeStart - Date.now(),
+        easing: 'linear',
+        fill: 'none',
+      },
+    );
 
-      const position = ((now - slotStartTime - rangeStart) / totalRange) * 100;
-      const inRange = position >= 0 && position <= 100;
-
-      if (inRange !== visible) {
-        visible = inRange;
-        track.style.visibility = inRange ? 'visible' : 'hidden';
-      }
-      if (inRange) {
-        track.style.transform = `translateX(${position}%)`;
-      }
-    });
+    return () => animation.cancel();
   }, [slotStartTime, rangeStart, totalRange]);
 
   return (
-    <div ref={trackRef} className="current-time-track" style={{ visibility: 'hidden' }}>
+    <div ref={trackRef} className="current-time-track">
       <div className="current-time-indicator" />
     </div>
   );

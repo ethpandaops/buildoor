@@ -1,5 +1,4 @@
-import React, { useRef, useEffect } from 'react';
-import { onFrame } from '../utils/frameClock';
+import React, { useLayoutEffect, useRef } from 'react';
 
 interface BuildDelayLineProps {
   leftPct: number;            // build start position, in %
@@ -17,10 +16,12 @@ interface BuildDelayLineProps {
 }
 
 // BuildDelayLine renders the payload build span on the slot timeline.
-// While the build is in progress (endAt unset) it animates its right edge toward
-// the current time via requestAnimationFrame, so the build is visible as it
-// progresses. Once the build finalizes (payload ready) it renders a static line
-// from build start to the end time. Build failures are rendered as a red dot by
+// While the build is in progress (endAt unset) its right edge grows toward
+// the current time: the line is laid out at its final extent (the expected
+// end, else the end of the graph) and a linear horizontal scale animation
+// from "now" to that extent runs on the compositor, so the growth needs no
+// script per frame. Once the build finalizes it renders a static line from
+// build start to the end time. Build failures are rendered as a red dot by
 // the parent instead — a thin line is too hard to see and click.
 export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   leftPct,
@@ -36,40 +37,46 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   const ref = useRef<HTMLDivElement>(null);
   const left = Math.max(0, leftPct);
 
-  useEffect(() => {
-    const apply = (rightPct: number) => {
-      if (!ref.current) return;
-      const right = Math.min(100, rightPct);
-      if (right > left) {
-        ref.current.style.left = `${left}%`;
-        ref.current.style.width = `${right - left}%`;
-        ref.current.style.display = 'block';
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const pctAt = (at: number) => ((at - slotStartTime - rangeStart) / totalRange) * 100;
+    const show = (rightPct: number): number => {
+      const width = Math.min(100, rightPct) - left;
+      if (width > 0) {
+        el.style.left = `${left}%`;
+        el.style.width = `${width}%`;
+        el.style.display = 'block';
       } else {
-        ref.current.style.display = 'none';
+        el.style.display = 'none';
       }
+      return width;
     };
 
-    // Finalized build: static line from build start to the end (ready or failed) time.
+    // Finalized build: static line from build start to the end time.
     if (endAt) {
-      apply(((endAt - slotStartTime - rangeStart) / totalRange) * 100);
+      show(pctAt(endAt));
       return;
     }
 
-    // In-progress build: grow the right edge toward "now" on the shared frame
-    // clock, capped at the expected completion time so a stuck/timed-out
-    // build holds a bounded bar (and stops animating once it got there).
-    let unsubscribe: (() => void) | null = onFrame((now) => {
-      const edge = expectedEndAt !== undefined ? Math.min(now, expectedEndAt) : now;
-      apply(((edge - slotStartTime - rangeStart) / totalRange) * 100);
-      if (expectedEndAt !== undefined && now >= expectedEndAt && unsubscribe) {
-        unsubscribe();
-        unsubscribe = null;
-      }
-    });
+    // In progress: lay out the full extent and grow into it in real time.
+    const now = Date.now();
+    const capAt = expectedEndAt ?? slotStartTime + rangeStart + totalRange;
+    const width = show(pctAt(capAt));
+    if (width <= 0) return;
 
-    return () => {
-      unsubscribe?.();
-    };
+    const progress = Math.min(1, Math.max(0, (pctAt(now) - left) / width));
+    const remaining = capAt - now;
+    if (remaining <= 0 || progress >= 1) return;
+
+    const animation = el.animate(
+      // `scale`, not `transform`: the line CSS centers it with a translate.
+      [{ scale: `${progress} 1` }, { scale: '1 1' }],
+      { duration: remaining, easing: 'linear', fill: 'forwards' },
+    );
+
+    return () => animation.cancel();
   }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt]);
 
   // Styling: finalized (plain) vs in-progress (pulsing).
@@ -79,7 +86,7 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
     <div
       ref={ref}
       className={`${className}${stateClass}`}
-      style={lineColor ? { backgroundColor: lineColor } : undefined}
+      style={{ transformOrigin: 'left center', ...(lineColor ? { backgroundColor: lineColor } : {}) }}
       onClick={onClick}
     />
   );
