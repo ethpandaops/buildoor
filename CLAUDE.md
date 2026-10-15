@@ -333,8 +333,12 @@ npm run clean
      (`PooledTx.Submitter`), anonymous callers nothing. Methods:
      `eth_sendRawTransaction` (network encoding), `eth_chainId`, `net_version`,
      `web3_clientVersion`, pool-aware `eth_getTransactionCount(..,"pending")`,
-     `eth_getTransactionByHash`, `txpool_status/content` locally; read-only
-     `eth_*`/`net_*`/`web3_*` proxied through the upstreams; everything else
+     `eth_getTransactionByHash`, `txpool_status/content` locally; an allowlist
+     of the standard public reads (`passthroughMethods`: eth_ state/block/receipt/
+     log/fee/call reads, `net_listening`, `web3_sha3`) proxied through the
+     upstreams — no privileged namespace, no signing/sending/bundles, no
+     node-local answers (accounts, coinbase, the EL's pending txs), no filters or
+     subscriptions; everything else
      `-32601`. The same privacy rule covers the WebUI: the pool REST
      (`/api/buildoor/txpool[/preview]`) needs a login, custom-built payload
      artifacts (and the envelope of a slot that has one) need a login, and

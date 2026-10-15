@@ -234,27 +234,53 @@ func (s *Server) dispatch(ctx context.Context, caller Caller, req *request) resp
 	return s.proxy(ctx, req.ID, req.Method, params)
 }
 
-// passthroughAllowed reports whether a method is forwarded to the EL: the
-// read-only eth_/net_/web3_ surface. Everything that mutates node state or
-// belongs to privileged namespaces is refused.
-func passthroughAllowed(method string) bool {
-	switch {
-	case strings.HasPrefix(method, "net_"), strings.HasPrefix(method, "web3_"):
-		return true
-	case !strings.HasPrefix(method, "eth_"):
-		return false
-	}
+// passthroughMethods is the read surface forwarded to the upstreams: the
+// standard public JSON-RPC reads (execution-apis eth namespace plus the
+// harmless net_/web3_ ones). It is an allowlist on purpose: privileged
+// namespaces (admin, debug, trace, testing, engine, personal, miner, ...),
+// signing and sending, node-local answers (accounts, coinbase, the EL's own
+// pending transactions), stateful filters and subscriptions, and any method a
+// client adds later stay unreachable. Methods answered by buildoor itself are
+// dispatched before this check.
+var passthroughMethods = map[string]struct{}{
+	"eth_blockNumber":                         {},
+	"eth_syncing":                             {},
+	"eth_gasPrice":                            {},
+	"eth_maxPriorityFeePerGas":                {},
+	"eth_feeHistory":                          {},
+	"eth_blobBaseFee":                         {},
+	"eth_getBalance":                          {},
+	"eth_getCode":                             {},
+	"eth_getStorageAt":                        {},
+	"eth_getProof":                            {},
+	"eth_call":                                {},
+	"eth_estimateGas":                         {},
+	"eth_createAccessList":                    {},
+	"eth_simulateV1":                          {},
+	"eth_getBlockByHash":                      {},
+	"eth_getBlockByNumber":                    {},
+	"eth_getBlockReceipts":                    {},
+	"eth_getBlockTransactionCountByHash":      {},
+	"eth_getBlockTransactionCountByNumber":    {},
+	"eth_getUncleCountByBlockHash":            {},
+	"eth_getUncleCountByBlockNumber":          {},
+	"eth_getUncleByBlockHashAndIndex":         {},
+	"eth_getUncleByBlockNumberAndIndex":       {},
+	"eth_getTransactionByBlockHashAndIndex":   {},
+	"eth_getTransactionByBlockNumberAndIndex": {},
+	"eth_getTransactionReceipt":               {},
+	"eth_getRawTransactionByHash":             {},
+	"eth_getLogs":                             {},
+	"net_listening":                           {},
+	"web3_sha3":                               {},
+}
 
-	switch method {
-	case "eth_sendTransaction", "eth_sendRawTransaction", "eth_sign", "eth_signTransaction",
-		"eth_submitWork", "eth_submitHashrate", "eth_subscribe", "eth_unsubscribe",
-		"eth_newFilter", "eth_newBlockFilter", "eth_newPendingTransactionFilter",
-		"eth_uninstallFilter", "eth_getFilterChanges", "eth_getFilterLogs",
-		"eth_sendRawTransactionSync":
-		return false
-	default:
-		return true
-	}
+// passthroughAllowed reports whether a method may be forwarded to the
+// upstreams (see passthroughMethods).
+func passthroughAllowed(method string) bool {
+	_, ok := passthroughMethods[method]
+
+	return ok
 }
 
 func (s *Server) sendRawTransaction(id json.RawMessage, params []json.RawMessage, caller Caller) response {
