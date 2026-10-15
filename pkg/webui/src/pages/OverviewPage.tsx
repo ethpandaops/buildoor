@@ -86,7 +86,7 @@ const OverviewPage: React.FC = () => {
       <footer className="ov-footer">
         <nav aria-label="More">
           <a
-            href="/"
+            href="/dashboard"
             onClick={(e) => {
               e.preventDefault();
               setView('dashboard');

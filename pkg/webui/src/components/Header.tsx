@@ -13,7 +13,7 @@ export const Header: React.FC = () => {
     <BrandHeader
       title="Buildoor"
       brandHref="/"
-      onBrandClick={() => setView('dashboard')}
+      onBrandClick={() => setView('overview')}
       navItems={<HeaderNav />}
       endContent={
         <span className="d-flex align-items-center gap-3">

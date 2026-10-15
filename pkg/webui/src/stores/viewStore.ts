@@ -12,8 +12,8 @@ export type ViewType =
   | 'api-docs';
 
 const VIEW_PATHS: Record<ViewType, string> = {
-  overview: '/overview',
-  dashboard: '/',
+  overview: '/',
+  dashboard: '/dashboard',
   'action-plan': '/action-plan',
   'bids-won': '/bids-won',
   mempool: '/mempool',
@@ -23,12 +23,14 @@ const VIEW_PATHS: Record<ViewType, string> = {
   'api-docs': '/api-docs',
 };
 
-// Paths of views that were merged into another one; old links and bookmarks
-// land on the successor (the registration lists became the tabs of one page).
+// Paths of views that moved or were merged into another one; old links and
+// bookmarks land on the successor (the registration lists became the tabs of
+// one page, the public overview is the landing page at /).
 const LEGACY_PATHS: Record<string, string> = {
   '/validators': '/registrations',
   '/proposer-preferences': '/registrations/proposer-preferences',
   '/builder-preferences': '/registrations/payment-caps',
+  '/overview': '/',
 };
 
 const PATH_TO_VIEW: Record<string, ViewType> = {};
@@ -42,13 +44,13 @@ function normalizePath(pathname: string): string {
 }
 
 // A view owns its path and every sub path below it (e.g. the tabs of
-// /registrations/<tab>); unknown paths fall back to the dashboard.
+// /registrations/<tab>); unknown paths fall back to the public overview.
 function viewFromPath(pathname: string): ViewType {
   if (PATH_TO_VIEW[pathname]) return PATH_TO_VIEW[pathname];
   for (const [path, view] of Object.entries(PATH_TO_VIEW)) {
     if (path !== '/' && pathname.startsWith(path + '/')) return view;
   }
-  return 'dashboard';
+  return 'overview';
 }
 
 let currentPath = normalizePath(window.location.pathname);

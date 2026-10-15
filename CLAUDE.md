@@ -602,9 +602,10 @@ npm run clean
    - React/TypeScript app served publicly: everything is readable, actions
      (switches, edits, key actions) and private data (pool contents, custom
      payloads, callers/keys, explicit plan transactions, the audit log) need a
-     login. Two views: **Overview** (`/overview`, end users: what the builder
-     does, blocks won, last 16 slots, how to send private transactions and
-     register validators) and **Operator** (every other page)
+     login. Two views: **Overview** (the landing page at `/`, end users: what
+     the builder does, blocks won, last 16 slots, how to send private
+     transactions and register validators) and **Operator** (`/dashboard` and
+     every other page, reached through the header switch)
    - ONE SSE connection per tab (`EventStreamProvider` in
      `hooks/useEventStream.ts`, read with `useEventStream()`), so page switches
      neither reconnect nor replay; per-slot state is kept for the last
