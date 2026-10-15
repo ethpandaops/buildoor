@@ -5,6 +5,7 @@ import 'bootstrap/dist/js/bootstrap.bundle.min.js';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import { App } from './App';
 import { AuthProvider } from './context/AuthContext';
+import { EventStreamProvider } from './hooks/useEventStream';
 import './styles.css';
 
 // Render main app
@@ -14,7 +15,9 @@ if (appContainer) {
   appRoot.render(
     <React.StrictMode>
       <AuthProvider>
-        <App />
+        <EventStreamProvider>
+          <App />
+        </EventStreamProvider>
       </AuthProvider>
     </React.StrictMode>
   );

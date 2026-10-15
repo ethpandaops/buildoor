@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
+import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -46,6 +46,9 @@ function dispatchStreamEvent(type: string, data: unknown) {
   }
 }
 
+// Slots of per-slot state kept for the timeline's scroll window.
+export const SLOT_HISTORY = 100;
+
 // Connection generation: incremented on every successful (re)connect of the
 // SSE stream, so views can refetch REST state after a reconnect (events that
 // occurred during the gap were never delivered).
@@ -68,7 +71,7 @@ function bumpConnectionGeneration() {
   generationListeners.forEach((listener) => listener());
 }
 
-interface UseEventStreamResult {
+export interface UseEventStreamResult {
   connected: boolean;
   config: Config | null;
   chainInfo: ChainInfo | null;
@@ -88,7 +91,7 @@ interface UseEventStreamResult {
   connectionGeneration: number;
 }
 
-export function useEventStream(): UseEventStreamResult {
+function useEventStreamConnection(): UseEventStreamResult {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
@@ -147,6 +150,31 @@ export function useEventStream(): UseEventStreamResult {
 
     return () => clearInterval(interval);
   }, [chainInfo]);
+
+  // Keep the per-slot state of the timeline's scroll window only; a tab left
+  // open for days must not accumulate every slot it ever saw.
+  useEffect(() => {
+    if (!currentSlot) return;
+    const oldest = currentSlot - SLOT_HISTORY;
+    const prune = <T,>(prev: Record<number, T>): Record<number, T> => {
+      let stale = false;
+      for (const key in prev) {
+        if (Number(key) < oldest) {
+          stale = true;
+          break;
+        }
+      }
+      if (!stale) return prev;
+      const next: Record<number, T> = {};
+      for (const key in prev) {
+        if (Number(key) >= oldest) next[key] = prev[key];
+      }
+      return next;
+    };
+    setSlotStates(prune);
+    setSlotConfigs(prune);
+    setSlotServiceStatuses(prune);
+  }, [currentSlot]);
 
   const clearEvents = useCallback(() => {
     setEvents([]);
@@ -867,4 +895,24 @@ export function useEventStream(): UseEventStreamResult {
     clearEvents,
     connectionGeneration: generation
   };
+}
+
+const EventStreamContext = createContext<UseEventStreamResult | null>(null);
+
+/**
+ * Owns the tab's single /api/events connection. Every page reads the stream
+ * through useEventStream(), so switching pages neither reconnects nor makes
+ * the server replay its event cache again.
+ */
+export function EventStreamProvider({ children }: { children: ReactNode }) {
+  const value = useEventStreamConnection();
+  return createElement(EventStreamContext.Provider, { value }, children);
+}
+
+export function useEventStream(): UseEventStreamResult {
+  const value = useContext(EventStreamContext);
+  if (!value) {
+    throw new Error('useEventStream must be used inside EventStreamProvider');
+  }
+  return value;
 }

@@ -359,7 +359,7 @@ const maxTxPlanHashes = 4096
 type TxPlanResult struct {
 	TxSource       string   `json:"tx_source"`
 	ExpectedCount  int      `json:"expected_count"`
-	ExpectedHashes []string `json:"expected_hashes"`
+	ExpectedHashes []string `json:"expected_hashes,omitempty"`
 	Truncated      bool     `json:"truncated,omitempty"`
 
 	Status        TxPlanStatus `json:"status"`
@@ -399,21 +399,46 @@ func (p *TxPlanResult) clone() *TxPlanResult {
 	return &c
 }
 
-// Redacted returns the result without the raw explicit transactions of its
-// applied plan (see action_plan.SlotPlan.Redacted), for readers without a
-// login.
+// Redacted returns the result for readers without a login: the applied
+// plan loses its raw explicit transactions (see action_plan.SlotPlan.Redacted)
+// and the custom builds and the tx plan lose their transaction hashes (see
+// payload_builder.LocalBuildInfo.Public).
 func (r *SlotResult) Redacted() *SlotResult {
 	if r == nil {
 		return nil
 	}
 
-	plan := r.AppliedPlan.Redacted()
-	if plan == r.AppliedPlan {
-		return r
+	out := *r
+	out.AppliedPlan = r.AppliedPlan.Redacted()
+	out.Build = r.Build.public()
+
+	if len(r.Builds) > 0 {
+		out.Builds = make([]*BuildOutcome, len(r.Builds))
+		for i, build := range r.Builds {
+			out.Builds[i] = build.public()
+		}
 	}
 
-	out := *r
-	out.AppliedPlan = plan
+	if r.TxPlan != nil && r.TxPlan.ExpectedHashes != nil {
+		plan := *r.TxPlan
+		plan.ExpectedHashes = nil
+		out.TxPlan = &plan
+	}
+
+	return &out
+}
+
+// public returns the outcome with its custom build info stripped of
+// transaction hashes.
+func (b *BuildOutcome) public() *BuildOutcome {
+	if b == nil || b.LocalBuild == nil || b.LocalBuild.Info.Public() == b.LocalBuild.Info {
+		return b
+	}
+
+	out := *b
+	local := *b.LocalBuild
+	local.Info = b.LocalBuild.Info.Public()
+	out.LocalBuild = &local
 
 	return &out
 }

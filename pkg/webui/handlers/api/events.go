@@ -22,6 +22,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
@@ -75,6 +76,21 @@ type StreamEvent struct {
 	Timestamp int64     `json:"timestamp"`
 	Seq       uint64    `json:"seq,omitempty"`
 	Data      any       `json:"data"`
+
+	// encoded is the wire form, marshalled once when the event is fanned out
+	// so every connected client writes the same bytes instead of encoding
+	// the event again (cost and payload grow with the number of viewers).
+	encoded []byte
+}
+
+// wireBytes returns the event's JSON encoding, reusing the one made at
+// fan-out time. Per-client initial-state events are encoded on demand.
+func (e *StreamEvent) wireBytes() ([]byte, error) {
+	if e.encoded != nil {
+		return e.encoded, nil
+	}
+
+	return json.Marshal(e)
 }
 
 const (
@@ -84,6 +100,18 @@ const (
 
 	// maxCachedEvents bounds the replay cache regardless of slot pruning.
 	maxCachedEvents = 2000
+
+	// maxStreamClients and maxStreamClientsPerIP bound the open event
+	// streams of a publicly served UI: every stream holds a goroutine and a
+	// replay-sized buffer, so an unbounded count is a cheap way to exhaust
+	// the process. A browser tab holds one stream.
+	maxStreamClients      = 1000
+	maxStreamClientsPerIP = 16
+
+	// headVoteFlushInterval coalesces head-vote updates for the stream: the
+	// tracker reports a participation step up to every 100 ms per slot, the
+	// graph needs a few points per second. Threshold crossings bypass it.
+	headVoteFlushInterval = 250 * time.Millisecond
 )
 
 // cachedStreamEvent tags a broadcast event with the slot it belongs to so
@@ -362,6 +390,12 @@ type HeadVotesStreamEvent struct {
 	Timestamp        int64   `json:"timestamp"`
 }
 
+// SlotResultUpdatedEvent tells viewers that a slot's result record changed;
+// the record itself is served by GET /api/buildoor/slot-results.
+type SlotResultUpdatedEvent struct {
+	Slot uint64 `json:"slot"`
+}
+
 // BlockDetailStreamEvent is the display summary of an imported beacon block
 // (extracted from the head vote tracker's coverage block fetch; list fields
 // aggregated to counts).
@@ -596,6 +630,8 @@ type EventStreamManager struct {
 	resultTracker    *slot_results.Tracker            // Optional slot results tracker
 
 	clients map[chan *StreamEvent]struct{}
+	// streamsPerIP counts open event streams per client IP (guarded by mu).
+	streamsPerIP map[string]int
 	// mu guards clients, eventCache and seq. Broadcasts, cache appends and
 	// client registration all serialize on it, so a new client's replay
 	// prefill plus subsequent live events form one ordered, gapless,
@@ -662,6 +698,7 @@ func NewEventStreamManager(
 		planSvc:          planSvc,
 		resultTracker:    resultTracker,
 		clients:          make(map[chan *StreamEvent]struct{}, 8),
+		streamsPerIP:     make(map[string]int, 8),
 		eventCache:       make([]cachedStreamEvent, 0, 256),
 		// Seed the sequence from wall-clock micros so it stays monotonic
 		// across restarts: clients keep their highest processed seq to
@@ -867,6 +904,11 @@ func (m *EventStreamManager) Start() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 
+		votes := newHeadVoteCoalescer()
+
+		voteFlush := time.NewTicker(headVoteFlushInterval)
+		defer voteFlush.Stop()
+
 		var lastSlot phase0.Slot
 
 		for {
@@ -916,7 +958,14 @@ func (m *EventStreamManager) Start() {
 					continue
 				}
 
-				m.handleHeadVoteUpdate(event)
+				if votes.add(event) {
+					m.handleHeadVoteUpdate(event)
+				}
+
+			case <-voteFlush.C:
+				for _, event := range votes.drain() {
+					m.handleHeadVoteUpdate(event)
+				}
 
 			case event, ok := <-coverageChan:
 				if !ok {
@@ -973,10 +1022,12 @@ func (m *EventStreamManager) Start() {
 					continue
 				}
 
+				// An invalidation only: the record is several KB and only
+				// the views showing that slot need it, so they refetch it.
 				m.Broadcast(&StreamEvent{
 					Type:      EventTypeSlotResultUpdated,
 					Timestamp: time.Now().UnixMilli(),
-					Data:      event.Redacted(),
+					Data:      SlotResultUpdatedEvent{Slot: uint64(event.Slot)},
 				})
 
 			case event, ok := <-keyChangeChan:
@@ -1083,6 +1134,40 @@ func (m *EventStreamManager) RegisterClient() chan *StreamEvent {
 	return ch
 }
 
+// AcquireStream reserves a stream slot for a client IP, refusing when the
+// global or the per-IP limit is reached. Every successful call must be
+// paired with ReleaseStream.
+func (m *EventStreamManager) AcquireStream(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	total := 0
+	for _, n := range m.streamsPerIP {
+		total += n
+	}
+
+	if total >= maxStreamClients || m.streamsPerIP[ip] >= maxStreamClientsPerIP {
+		return false
+	}
+
+	m.streamsPerIP[ip]++
+
+	return true
+}
+
+// ReleaseStream frees a slot reserved by AcquireStream.
+func (m *EventStreamManager) ReleaseStream(ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.streamsPerIP[ip] <= 1 {
+		delete(m.streamsPerIP, ip)
+		return
+	}
+
+	m.streamsPerIP[ip]--
+}
+
 // RemoveClient removes an SSE client.
 func (m *EventStreamManager) RemoveClient(ch chan *StreamEvent) {
 	m.mu.Lock()
@@ -1123,6 +1208,13 @@ func (m *EventStreamManager) broadcastForSlot(slot phase0.Slot, event *StreamEve
 func (m *EventStreamManager) deliverLocked(event *StreamEvent) {
 	m.seq++
 	event.Seq = m.seq
+
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+
+	event.encoded = encoded
 
 	for ch := range m.clients {
 		select {
@@ -1578,12 +1670,12 @@ func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 		Data: HeadVotesStreamEvent{
 			Slot:             uint64(event.Slot),
 			BlockRoot:        fmt.Sprintf("%#x", event.BlockRoot),
-			ParticipationPct: event.ParticipationPct,
+			ParticipationPct: roundPct(event.ParticipationPct),
 			ParticipationETH: event.ParticipationETH,
 			TotalSlotETH:     event.TotalSlotETH,
 			VoteCount:        event.VoteCount,
 			Estimated:        event.Estimated,
-			SampledPct:       event.SampledPct,
+			SampledPct:       roundPct(event.SampledPct),
 			ThresholdPct:     event.ThresholdPct,
 			ThresholdMet:     event.ThresholdMet,
 			Timestamp:        event.Timestamp,
@@ -1821,7 +1913,7 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 			Fallback:      event.Fallback,
 			Local:         streamPayloadSummary(event.Payload),
 			EL:            streamPayloadSummary(event.ELPayload),
-			Info:          event.Info,
+			Info:          event.Info.Public(),
 			BuiltAt:       builtAt,
 			ELReadyAt:     elReadyAt,
 			At:            event.At.UnixMilli(),
@@ -2143,6 +2235,20 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The client IP honours the reverse proxies in front of the API port
+	// (the same hop count the /rpc rate limits use).
+	var proxyHops uint64
+	if h.settingsSvc != nil {
+		proxyHops = h.settingsSvc.Load().TxPool.RPCProxyHops
+	}
+
+	clientIP := txpoolrpc.ClientIP(r, proxyHops)
+	if !h.eventStreamMgr.AcquireStream(clientIP) {
+		writeError(w, http.StatusTooManyRequests, "too many open event streams")
+		return
+	}
+	defer h.eventStreamMgr.ReleaseStream(clientIP)
+
 	// Set headers for SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -2206,7 +2312,7 @@ func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			data, err := json.Marshal(event)
+			data, err := event.wireBytes()
 			if err != nil {
 				continue
 			}

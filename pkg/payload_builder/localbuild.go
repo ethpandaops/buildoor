@@ -169,8 +169,30 @@ type LocalBuildInfo struct {
 // DroppedTx is a pool transaction removed from a build attempt after the EL
 // refused the list.
 type DroppedTx struct {
-	Hash   string `json:"hash"`
+	Hash   string `json:"hash,omitempty"`
 	Reason string `json:"reason"`
+}
+
+// Public returns the info without transaction hashes, for readers who must
+// not learn what the custom block holds before it is published: the
+// buildoor mempool keeps its transactions private, and a withheld or
+// orphaned payload never publishes them at all. Counts and reasons stay.
+func (i *LocalBuildInfo) Public() *LocalBuildInfo {
+	if i == nil || (i.ExpectedHashes == nil && len(i.Dropped) == 0) {
+		return i
+	}
+
+	out := *i
+	out.ExpectedHashes = nil
+
+	if len(i.Dropped) > 0 {
+		out.Dropped = make([]DroppedTx, len(i.Dropped))
+		for idx, dropped := range i.Dropped {
+			out.Dropped[idx] = DroppedTx{Reason: dropped.Reason}
+		}
+	}
+
+	return &out
 }
 
 // BuildResult is the outcome of one build target: the payload feeding the

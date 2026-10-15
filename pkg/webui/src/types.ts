@@ -273,7 +273,7 @@ export interface LocalBuildInfo {
   dropped_by_el?: number;
   submitted_txs: number;
   attempts?: number;
-  dropped?: { hash: string; reason: string }[];
+  dropped?: { hash?: string; reason: string }[];
   built_at?: string;
   fill_txs?: number;
   fill_error?: string;
@@ -1278,7 +1278,7 @@ export type TxPlanStatus = 'pending' | 'match' | 'mismatch' | 'block_not_found' 
 export interface TxPlanResult {
   tx_source: string;
   expected_count: number;
-  expected_hashes: string[];
+  expected_hashes?: string[];
   truncated?: boolean;
   status: TxPlanStatus;
   included_count?: number;
