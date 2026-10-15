@@ -2,6 +2,14 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import type { SlotState, Config, ChainInfo, ServiceStatus } from '../types';
 import { SlotGraph, slotGraphHeight } from './SlotGraph';
 import { SLOT_HISTORY } from '../hooks/useEventStream';
+import { calculateSlotTiming } from '../utils';
+
+// Offset into the current slot at which the next slot's row appears: where its
+// graph range begins (it starts before the slot), so the time indicator enters
+// the new row at its left edge.
+function nextSlotAppearsAt(chainInfo: ChainInfo): number {
+  return chainInfo.seconds_per_slot + calculateSlotTiming(chainInfo, 0).rangeStart;
+}
 
 interface SlotTimelineProps {
   chainInfo: ChainInfo | null;
@@ -69,12 +77,12 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     const slotDuration = chainInfo.seconds_per_slot;
     const elapsed = Date.now() - chainInfo.genesis_time;
     const displaySlot = Math.floor(elapsed / slotDuration);
-    const showNextSlot = elapsed % slotDuration >= slotDuration * 0.75;
+    const showNextSlot = elapsed % slotDuration >= nextSlotAppearsAt(chainInfo);
     return { displaySlot, showNextSlot };
   }, [chainInfo]);
 
-  // The window moves twice per slot: when the next slot appears (75%) and
-  // when it starts. A timer wakes up exactly then instead of polling.
+  // The window moves twice per slot: when the next slot's graph range begins
+  // and when it starts. A timer wakes up exactly then instead of polling.
   useEffect(() => {
     if (!chainInfo || chainInfo.genesis_time === 0) return;
 
@@ -83,7 +91,8 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
       setSlotDisplay(calculateSlotDisplay());
       const slotDuration = chainInfo.seconds_per_slot;
       const intoSlot = (Date.now() - chainInfo.genesis_time) % slotDuration;
-      const nextChange = intoSlot < slotDuration * 0.75 ? slotDuration * 0.75 : slotDuration;
+      const appearsAt = nextSlotAppearsAt(chainInfo);
+      const nextChange = intoSlot < appearsAt ? appearsAt : slotDuration;
       timer = setTimeout(schedule, nextChange - intoSlot + 5);
     };
     schedule();
