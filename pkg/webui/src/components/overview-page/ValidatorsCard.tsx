@@ -1,10 +1,13 @@
 import React, { useMemo } from 'react';
-import { CopyButton, CopyField, shortHash } from './CopyField';
+import { CopyField } from './CopyField';
 import type { BuilderKeyState } from '../../types';
 
 interface ValidatorsCardProps {
   builderAPI: boolean;
   epbsScheduled: boolean;
+  // Whether the Gloas fork is active, and its epoch when scheduled.
+  gloasActive: boolean;
+  gloasEpoch: number | null;
   builderUrl?: string;
   builderPubkey?: string;
   builderKeys: BuilderKeyState[];
@@ -21,6 +24,8 @@ function parseUrl(value: string): URL | null {
 export const ValidatorsCard: React.FC<ValidatorsCardProps> = ({
   builderAPI,
   epbsScheduled,
+  gloasActive,
+  gloasEpoch,
   builderUrl,
   builderPubkey,
   builderKeys,
@@ -55,12 +60,7 @@ export const ValidatorsCard: React.FC<ValidatorsCardProps> = ({
             {builderPubkey && (
               <>
                 <h3 className="bd-group-title mt-3">Builder pubkey</h3>
-                <div className="ov-copy-field">
-                  <code className="ov-copy-value" title={builderPubkey}>
-                    {shortHash(builderPubkey, 10)}
-                  </code>
-                  <CopyButton value={builderPubkey} label="builder pubkey" />
-                </div>
+                <CopyField value={builderPubkey} label="builder pubkey" />
               </>
             )}
             {relayUrl && (
@@ -73,7 +73,9 @@ export const ValidatorsCard: React.FC<ValidatorsCardProps> = ({
         )}
         {epbsScheduled && (
           <p className="bd-muted ov-small mt-3 mb-0">
-            After Gloas, buildoor also gossips p2p bids from builder keys derived from its entry key
+            {gloasActive
+              ? 'buildoor also gossips p2p bids from builder keys derived from its entry key'
+              : `${gloasEpoch !== null ? `From the Gloas fork (epoch ${gloasEpoch.toLocaleString()}) on` : 'After Gloas'}, buildoor also gossips p2p bids from builder keys derived from its entry key`}
             {builderIndexes.length > 0 ? (
               <>
                 {' '}

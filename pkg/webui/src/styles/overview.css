@@ -230,7 +230,7 @@
 
 .ov-copy-field {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   padding: 4px 4px 4px 10px;
   border: 1px solid var(--bd-border);
@@ -242,11 +242,13 @@
 .ov-copy-value {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 5px 0;
   color: var(--bd-text);
   font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .ov-copy-btn {

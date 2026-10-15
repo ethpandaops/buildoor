@@ -44,7 +44,9 @@ interface CopyFieldProps {
   label: string;
 }
 
-// CopyField shows a full value (URL, key) in a monospace box with a copy button.
+// CopyField shows a full value (URL, key) in a monospace box with a copy
+// button. Long values wrap: they are what consumers paste into their
+// configuration, so they are never cut off.
 export const CopyField: React.FC<CopyFieldProps> = ({ value, label }) => (
   <div className="ov-copy-field">
     <code className="ov-copy-value" title={value}>

@@ -59,15 +59,41 @@ export const OverviewHero: React.FC<OverviewHeroProps> = ({
   const validators = stats?.builder_api_registered_validators ?? 0;
   const network = chainInfo?.network ? chainInfo.network.charAt(0).toUpperCase() + chainInfo.network.slice(1) : '';
 
-  const channels: string[] = [];
-  if (serviceStatus?.builder_api_available) channels.push('through the Builder API');
-  if (epbsScheduled) {
-    channels.push(
-      serviceStatus?.epbs_registration_state === 'waiting_gloas'
-        ? 'through enshrined PBS (p2p bids) once Gloas activates'
-        : 'through enshrined PBS (p2p bids)',
-    );
+  // Gloas is "active" from its fork epoch on; before it the p2p bids are a
+  // promise with a date, after it they are what the builder does.
+  const gloasEpoch = chainInfo?.gloas_fork_epoch ?? null;
+  const currentEpoch = chainInfo && currentSlot ? Math.floor(currentSlot / chainInfo.slots_per_epoch) : null;
+  const gloasActive = gloasEpoch !== null && currentEpoch !== null && currentEpoch >= gloasEpoch;
+  const p2pBidding = epbsScheduled && !!serviceStatus?.epbs_enabled;
+  const mempoolAvailable = serviceStatus?.txpool_available === true;
+
+  let offer: string;
+  if (gloasActive) {
+    offer = p2pBidding && builderAPI
+      ? 'It bids for slots over p2p under enshrined PBS and serves bids to proposers that call it directly through the Builder API.'
+      : p2pBidding
+        ? 'It bids for slots over p2p under enshrined PBS.'
+        : builderAPI
+          ? 'It serves bids to proposers that call it directly through the Builder API.'
+          : 'It is not offering its blocks to proposers at the moment.';
+  } else {
+    const p2pFuture = p2pBidding
+      ? gloasEpoch !== null
+        ? ` From the Gloas fork (epoch ${gloasEpoch.toLocaleString()}) on, it also bids for slots over p2p under enshrined PBS.`
+        : ' Once Gloas activates, it also bids for slots over p2p under enshrined PBS.'
+      : '';
+    offer = builderAPI
+      ? `Proposers get its blocks through the Builder API.${p2pFuture}`
+      : p2pFuture
+        ? p2pFuture.trim()
+        : 'It is not offering its blocks to proposers at the moment.';
   }
+
+  const mempool = mempoolOpen
+    ? 'Transactions sent to its mempool stay private until a block it built is published.'
+    : mempoolAvailable
+      ? 'Its private mempool is not accepting transactions at the moment.'
+      : '';
 
   return (
     <section className="ov-hero" aria-labelledby="ov-hero-title">
@@ -76,14 +102,8 @@ export const OverviewHero: React.FC<OverviewHeroProps> = ({
           An open block builder{network ? ` for ${network}` : ''}
         </h1>
         <p className="ov-hero-lead">
-          buildoor builds execution payloads {everySlot ? 'every slot' : 'on a configured slot schedule'}
-          {channels.length > 0 ? <> and offers them to proposers {channels.join(', and ')}.</> : '.'}
-          {mempoolOpen && (
-            <>
-              {' '}
-              Transactions sent to its mempool stay private until a block it built is published.
-            </>
-          )}
+          buildoor builds execution payloads {everySlot ? 'every slot' : 'on a configured slot schedule'}. {offer}
+          {mempool && ` ${mempool}`}
         </p>
       </div>
       {serviceStatus && (

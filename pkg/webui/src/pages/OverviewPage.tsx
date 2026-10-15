@@ -34,6 +34,9 @@ const OverviewPage: React.FC = () => {
   const mempoolOpen = !!serviceStatus?.txpool_available && !!serviceStatus.txpool_enabled;
   const builderAPI = !!serviceStatus?.builder_api_available;
   const epbsScheduled = !!serviceStatus?.epbs_available;
+  const gloasActive =
+    chainInfo?.gloas_fork_epoch != null && !!currentSlot &&
+    Math.floor(currentSlot / chainInfo.slots_per_epoch) >= chainInfo.gloas_fork_epoch;
 
   return (
     <div className="ov-page">
@@ -75,6 +78,8 @@ const OverviewPage: React.FC = () => {
             <ValidatorsCard
               builderAPI={builderAPI}
               epbsScheduled={epbsScheduled}
+              gloasActive={gloasActive}
+              gloasEpoch={chainInfo?.gloas_fork_epoch ?? null}
               builderUrl={config?.builder_api?.builder_url}
               builderPubkey={builderInfo?.builder_pubkey}
               builderKeys={builderKeys}
