@@ -23,7 +23,7 @@ function relativeTime(at: number): string {
 // FlowCard shows one flow on the dashboard: its on/off switch, state and
 // headline metric, and its configuration read-only. Configure opens the
 // settings drawer.
-export const FlowCard: React.FC<FlowCardProps> = ({ flow, ctx }) => {
+const FlowCardView: React.FC<FlowCardProps> = ({ flow, ctx }) => {
   const { isLoggedIn } = useAuthContext();
   const [toggleError, setToggleError] = useState<string | null>(null);
   // Until the stream delivered the config and service status, every flow
@@ -77,3 +77,5 @@ export const FlowCard: React.FC<FlowCardProps> = ({ flow, ctx }) => {
     </article>
   );
 };
+
+export const FlowCard = React.memo(FlowCardView);

@@ -2,7 +2,7 @@ import React from 'react';
 
 // Two-row legend: chain/network/voting context on top, our own
 // bidder / Builder API events below.
-export const Legend: React.FC = () => {
+const LegendView: React.FC = () => {
   return (
     <div className="mt-2">
       <div className="timeline-legend d-flex flex-wrap gap-2 small">
@@ -44,3 +44,5 @@ export const Legend: React.FC = () => {
     </div>
   );
 };
+
+export const Legend = React.memo(LegendView);

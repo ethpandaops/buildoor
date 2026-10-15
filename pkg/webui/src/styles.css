@@ -744,8 +744,18 @@
   color: var(--bs-success);
 }
 
-/* Current time indicator */
+/* Current time indicator: the track spans the graph and is shifted with a
+   transform, the line sits at its left edge. */
+.current-time-track {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  will-change: transform;
+}
+
 .current-time-indicator {
+  left: 0;
   position: absolute;
   top: 0;
   bottom: 0;

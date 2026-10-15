@@ -335,7 +335,7 @@ const parentRows = (
 const truncateHashStr = (hash: string, len = 16): string =>
   hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
 
-export const SlotGraph: React.FC<SlotGraphProps> = ({
+const SlotGraphView: React.FC<SlotGraphProps> = ({
   slot,
   state,
   originalConfig,
@@ -1482,3 +1482,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     </div>
   );
 };
+
+// SlotGraph re-renders only when its own slot's state (or the config/status
+// it shows) changes; the stream updates one slot at a time, and the time
+// based parts animate on the shared frame clock without re-rendering.
+export const SlotGraph = React.memo(SlotGraphView);

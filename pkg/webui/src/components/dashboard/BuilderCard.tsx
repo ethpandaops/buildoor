@@ -34,7 +34,7 @@ function registration(state: string | undefined, index: number): { tone: Tone; t
 
 // BuilderCard shows the builder's identity and money: entry key, registry
 // index, funding wallet and the fleet's balances.
-export const BuilderCard: React.FC<BuilderCardProps> = ({ builderInfo, serviceStatus }) => {
+const BuilderCardView: React.FC<BuilderCardProps> = ({ builderInfo, serviceStatus }) => {
   const state = serviceStatus?.epbs_registration_state;
   const reg = registration(state, builderInfo?.builder_index ?? 0);
   const fleet = (builderInfo?.key_target ?? 1) > 1 || (builderInfo?.key_count ?? 1) > 1;
@@ -137,3 +137,5 @@ export const BuilderCard: React.FC<BuilderCardProps> = ({ builderInfo, serviceSt
     </section>
   );
 };
+
+export const BuilderCard = React.memo(BuilderCardView);

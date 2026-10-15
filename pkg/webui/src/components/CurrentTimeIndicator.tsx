@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { onFrame } from '../utils/frameClock';
 
 interface CurrentTimeIndicatorProps {
   slotStartTime: number;
@@ -6,40 +7,40 @@ interface CurrentTimeIndicatorProps {
   totalRange: number;
 }
 
+// CurrentTimeIndicator moves the "now" line across a slot graph. It spans the
+// whole graph and is shifted with a transform (a percentage of its own width
+// = the graph width), so a frame only touches the compositor, and it writes
+// to the DOM only when the line is visible or its visibility changes.
 export const CurrentTimeIndicator: React.FC<CurrentTimeIndicatorProps> = ({
   slotStartTime,
   rangeStart,
   totalRange
 }) => {
-  const indicatorRef = useRef<HTMLDivElement>(null);
-  const animationRef = useRef<number>(0);
+  const trackRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const updatePosition = () => {
-      if (!indicatorRef.current) return;
+    let visible: boolean | null = null;
 
-      const now = Date.now();
-      const currentTimeRelativeMs = now - slotStartTime;
-      const position = ((currentTimeRelativeMs - rangeStart) / totalRange) * 100;
+    return onFrame((now) => {
+      const track = trackRef.current;
+      if (!track) return;
 
-      if (position >= 0 && position <= 100) {
-        indicatorRef.current.style.left = `${position}%`;
-        indicatorRef.current.style.display = 'block';
-      } else {
-        indicatorRef.current.style.display = 'none';
+      const position = ((now - slotStartTime - rangeStart) / totalRange) * 100;
+      const inRange = position >= 0 && position <= 100;
+
+      if (inRange !== visible) {
+        visible = inRange;
+        track.style.visibility = inRange ? 'visible' : 'hidden';
       }
-
-      animationRef.current = requestAnimationFrame(updatePosition);
-    };
-
-    animationRef.current = requestAnimationFrame(updatePosition);
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
+      if (inRange) {
+        track.style.transform = `translateX(${position}%)`;
       }
-    };
+    });
   }, [slotStartTime, rangeStart, totalRange]);
 
-  return <div ref={indicatorRef} className="current-time-indicator" />;
+  return (
+    <div ref={trackRef} className="current-time-track" style={{ visibility: 'hidden' }}>
+      <div className="current-time-indicator" />
+    </div>
+  );
 };

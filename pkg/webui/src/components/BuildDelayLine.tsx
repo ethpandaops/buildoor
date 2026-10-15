@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { onFrame } from '../utils/frameClock';
 
 interface BuildDelayLineProps {
   leftPct: number;            // build start position, in %
@@ -33,7 +34,6 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   lineColor
 }) => {
   const ref = useRef<HTMLDivElement>(null);
-  const animationRef = useRef<number>(0);
   const left = Math.max(0, leftPct);
 
   useEffect(() => {
@@ -55,25 +55,20 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
       return;
     }
 
-    // In-progress build: grow the right edge toward "now", capped at the expected
-    // completion time so a stuck/timed-out build holds a bounded bar.
-    const update = () => {
-      const now = Date.now();
+    // In-progress build: grow the right edge toward "now" on the shared frame
+    // clock, capped at the expected completion time so a stuck/timed-out
+    // build holds a bounded bar (and stops animating once it got there).
+    let unsubscribe: (() => void) | null = onFrame((now) => {
       const edge = expectedEndAt !== undefined ? Math.min(now, expectedEndAt) : now;
       apply(((edge - slotStartTime - rangeStart) / totalRange) * 100);
-
-      // Once we've reached the cap, hold position and stop animating.
-      if (expectedEndAt !== undefined && now >= expectedEndAt) {
-        return;
+      if (expectedEndAt !== undefined && now >= expectedEndAt && unsubscribe) {
+        unsubscribe();
+        unsubscribe = null;
       }
-      animationRef.current = requestAnimationFrame(update);
-    };
-    animationRef.current = requestAnimationFrame(update);
+    });
 
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      unsubscribe?.();
     };
   }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt]);
 

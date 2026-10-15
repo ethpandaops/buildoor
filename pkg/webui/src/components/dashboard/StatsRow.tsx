@@ -12,7 +12,7 @@ interface StatsRowProps {
 
 // StatsRow is the dashboard's headline: what the builder produced since it
 // started, one tile per outcome.
-export const StatsRow: React.FC<StatsRowProps> = ({ stats, builderInfo, serviceStatus, txPoolStats }) => {
+const StatsRowView: React.FC<StatsRowProps> = ({ stats, builderInfo, serviceStatus, txPoolStats }) => {
   const pendingGwei = builderInfo?.total_pending_payments_gwei ?? builderInfo?.pending_payments_gwei ?? 0;
   const mempoolAvailable = serviceStatus?.txpool_available !== false;
 
@@ -53,3 +53,5 @@ export const StatsRow: React.FC<StatsRowProps> = ({ stats, builderInfo, serviceS
     </section>
   );
 };
+
+export const StatsRow = React.memo(StatsRowView);

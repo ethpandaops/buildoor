@@ -2,6 +2,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import type { SlotState, Config, ChainInfo, ServiceStatus } from '../types';
 import { SlotGraph, slotGraphHeight } from './SlotGraph';
 import { SLOT_HISTORY } from '../hooks/useEventStream';
+import { onFrame } from '../utils/frameClock';
 
 interface SlotTimelineProps {
   chainInfo: ChainInfo | null;
@@ -43,8 +44,22 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
   viewportHeight = 420,
 }) => {
   const [slotDisplay, setSlotDisplay] = useState<SlotDisplayState>({ displaySlot: 0, showNextSlot: false });
-  const animationRef = useRef<number>(0);
   const viewportRef = useRef<HTMLDivElement>(null);
+  // Slots without stream data get one stable empty state each, so the
+  // memoized graphs of quiet slots do not re-render on every event.
+  const emptyStatesRef = useRef(new Map<number, SlotState>());
+  const emptyState = (slot: number): SlotState => {
+    let empty = emptyStatesRef.current.get(slot);
+    if (!empty) {
+      empty = { slot };
+      emptyStatesRef.current.set(slot, empty);
+      if (emptyStatesRef.current.size > SLOT_HISTORY * 2) {
+        const oldest = emptyStatesRef.current.keys().next().value;
+        if (oldest !== undefined) emptyStatesRef.current.delete(oldest);
+      }
+    }
+    return empty;
+  };
   const [scrollTop, setScrollTop] = useState(0);
   const firstSlotRef = useRef<number>(-1);
 
@@ -59,8 +74,8 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     return { displaySlot, showNextSlot };
   }, [chainInfo]);
 
-  // Check for slot changes every frame, but only re-render when the window
-  // actually moves (new slot, or the next slot appearing at 75%).
+  // Check for slot changes on the shared frame clock, but only re-render when
+  // the window actually moves (new slot, or the next slot appearing at 75%).
   useEffect(() => {
     if (!chainInfo || chainInfo.genesis_time === 0) return;
 
@@ -68,17 +83,13 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     setSlotDisplay(initial);
     let last = initial;
 
-    const checkSlotChange = () => {
+    return onFrame(() => {
       const next = calculateSlotDisplay();
       if (next.displaySlot !== last.displaySlot || next.showNextSlot !== last.showNextSlot) {
         last = next;
         setSlotDisplay(next);
       }
-      animationRef.current = requestAnimationFrame(checkSlotChange);
-    };
-    animationRef.current = requestAnimationFrame(checkSlotChange);
-
-    return () => cancelAnimationFrame(animationRef.current);
+    });
   }, [chainInfo, calculateSlotDisplay]);
 
   const { displaySlot, showNextSlot } = slotDisplay;
@@ -169,7 +180,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
               <SlotGraph
                 key={slot}
                 slot={slot}
-                state={slotStates[slot] || { slot }}
+                state={slotStates[slot] || emptyState(slot)}
                 originalConfig={slotConfigs[slot] || null}
                 originalServiceStatus={slotServiceStatuses[slot] || null}
                 currentConfig={currentConfig}

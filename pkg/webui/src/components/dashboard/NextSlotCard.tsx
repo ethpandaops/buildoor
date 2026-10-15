@@ -25,7 +25,7 @@ function planSummary(plan: SlotPlan): string[] {
 
 // NextSlotCard shows what the next slot will run under before its build
 // starts: the proposer, what it told buildoor, and the slot's action plan.
-export const NextSlotCard: React.FC<NextSlotCardProps> = ({ outlook }) => {
+const NextSlotCardView: React.FC<NextSlotCardProps> = ({ outlook }) => {
   const plan = outlook?.plan;
   const changes = plan ? planSummary(plan) : [];
 
@@ -86,3 +86,5 @@ export const NextSlotCard: React.FC<NextSlotCardProps> = ({ outlook }) => {
     </section>
   );
 };
+
+export const NextSlotCard = React.memo(NextSlotCardView);
