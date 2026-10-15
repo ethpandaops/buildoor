@@ -21,9 +21,8 @@ func DefaultConfig() *Config {
 			AutoDeposit:  true,
 			AutoExit:     true,
 		},
-		DepositAmount:               50000000000, // 50 ETH in Gwei
+		DepositAmount:               50000000000, // 50 ETH in Gwei; deposits and top-ups alike
 		TopupThreshold:              10000000000, // 10 ETH in Gwei
-		TopupAmount:                 50000000000, // 50 ETH in Gwei
 		DepositMaxFeeGwei:           1000000,     // 0.001 ETH in Gwei; delay deposits/topups above this queue fee
 		ExtraData:                   "buildoor/",
 		SlotResultRetentionEpochs:   100,
@@ -52,6 +51,22 @@ func DefaultConfig() *Config {
 			CandidateGrandparentEmpty: CandidateModeNever,
 			Parallel:                  true,
 			AutoWeakHeadPct:           40,
+		},
+		LocalBuild: LocalBuildConfig{
+			PayloadSource:  PayloadSourceEL,
+			TxSource:       TxSourceTxPool,
+			BuildELPayload: true,
+			BlobEncoding:   BlobEncodingAuto,
+			MaxAttempts:    3,
+		},
+		TxPool: TxPoolConfig{
+			Auth:            TxPoolAuthOpen,
+			Ordering:        TxOrderingFIFO,
+			GasFillPct:      100,
+			MaxPoolTxs:      10000,
+			MaxTxsPerSender: 256,
+			MaxStrikes:      3,
+			TxTTLSlots:      64, // a stalled sender is dropped whole (see TxPoolConfig)
 		},
 		Reveal: RevealConfig{
 			Enabled: true,

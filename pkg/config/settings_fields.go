@@ -11,7 +11,9 @@ import (
 //
 // Only mutable settings are registered. Immutable startup-only fields (keys,
 // client URLs, ports, the state-db path) are intentionally absent: they are
-// never overridable via the UI and never persisted.
+// never overridable via the UI and never persisted. Every registered setting
+// must have an editor in the WebUI (enforced by the webui settings coverage
+// test) — a setting an operator cannot see or change is a trap.
 type Field struct {
 	// Key is the canonical persisted/override key, e.g. "epbs.bid_subsidy".
 	Key string
@@ -117,6 +119,24 @@ func Fields() []Field {
 		newField(KeyBuildAutoWeakHeadPct, "build-auto-weak-head-pct", func(c *Config) *uint64 { return &c.Build.AutoWeakHeadPct }),
 		newField(KeyBuildEnforceBidGasLimit, "build-enforce-bid-gas-limit", func(c *Config) *bool { return &c.Build.EnforceBidGasLimit }),
 
+		newField(KeyLocalBuildEnabled, "local-build-enabled", func(c *Config) *bool { return &c.LocalBuild.Enabled }),
+		newField(KeyLocalBuildPayloadSource, "local-build-payload-source", func(c *Config) *string { return &c.LocalBuild.PayloadSource }),
+		newField(KeyLocalBuildTxSource, "local-build-tx-source", func(c *Config) *string { return &c.LocalBuild.TxSource }),
+		newField(KeyLocalBuildBuildELPayload, "local-build-el-payload", func(c *Config) *bool { return &c.LocalBuild.BuildELPayload }),
+		newField(KeyLocalBuildAllowBlobsNoBundle, "local-build-allow-blobs-without-bundle", func(c *Config) *bool { return &c.LocalBuild.AllowBlobsWithoutBundle }),
+		newField(KeyLocalBuildMaxAttempts, "local-build-max-attempts", func(c *Config) *uint64 { return &c.LocalBuild.MaxAttempts }),
+
+		newField(KeyTxPoolEnabled, "txpool-enabled", func(c *Config) *bool { return &c.TxPool.Enabled }),
+		newField(KeyTxPoolOrdering, "txpool-ordering", func(c *Config) *string { return &c.TxPool.Ordering }),
+		newField(KeyTxPoolMaxTxsPerBlock, "txpool-block-max-txs", func(c *Config) *uint64 { return &c.TxPool.MaxTxsPerBlock }),
+		newField(KeyTxPoolGasFillPct, "txpool-gas-fill-pct", func(c *Config) *uint64 { return &c.TxPool.GasFillPct }),
+		newField(KeyTxPoolMaxPoolTxs, "txpool-max-txs", func(c *Config) *uint64 { return &c.TxPool.MaxPoolTxs }),
+		newField(KeyTxPoolMaxTxsPerSender, "txpool-max-txs-per-sender", func(c *Config) *uint64 { return &c.TxPool.MaxTxsPerSender }),
+		newField(KeyTxPoolTxTTLSlots, "txpool-tx-ttl-slots", func(c *Config) *uint64 { return &c.TxPool.TxTTLSlots }),
+		newField(KeyTxPoolMaxStrikes, "txpool-max-strikes", func(c *Config) *uint64 { return &c.TxPool.MaxStrikes }),
+		newField(KeyTxPoolBaseFeeCeiling, "txpool-base-fee-ceiling-gwei", func(c *Config) *uint64 { return &c.TxPool.BaseFeeCeilingGwei }),
+		newField(KeyTxPoolForwardToEL, "txpool-forward-to-el", func(c *Config) *bool { return &c.TxPool.ForwardToEL }),
+
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
 		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
@@ -127,6 +147,7 @@ func Fields() []Field {
 		newField(KeyBuilderAPIServeCandidates, "builder-api-serve-candidates", func(c *Config) *string { return &c.BuilderAPI.ServeCandidates }),
 		newField(KeyBuilderAPIOnDemandBuild, "builder-api-on-demand-build", func(c *Config) *bool { return &c.BuilderAPI.OnDemandBuild }),
 		newField(KeyBuilderAPIKeyStrategy, "builder-api-key-strategy", func(c *Config) *string { return &c.BuilderAPI.KeyStrategy }),
+		newField(KeyBuilderAPIRequireRequestAuth, "builder-api-require-auth", func(c *Config) *bool { return &c.BuilderAPI.RequireRequestAuth }),
 
 		newField(KeySlotResultRetentionEpochs, "slot-result-retention-epochs", func(c *Config) *uint64 { return &c.SlotResultRetentionEpochs }),
 		newField(KeySlotArtifactRetentionEpochs, "slot-artifact-retention-epochs", func(c *Config) *uint64 { return &c.SlotArtifactRetentionEpochs }),
@@ -139,7 +160,7 @@ func Fields() []Field {
 
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
-		newField(KeyTopupAmount, "topup-amount", func(c *Config) *uint64 { return &c.TopupAmount }),
+		newField(KeyDepositMaxFee, "deposit-max-fee", func(c *Config) *uint64 { return &c.DepositMaxFeeGwei }),
 
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),

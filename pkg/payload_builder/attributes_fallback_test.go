@@ -135,3 +135,46 @@ func TestApplyAttributesFallbackMultiSlotGap(t *testing.T) {
 	svc.applyAttributesFallback(43 + attrFallbackLookback + 1)
 	assert.Nil(t, events.GetLatestPayloadAttributes(43+attrFallbackLookback+1))
 }
+
+// TestApplyAttributesFallbackSkipsWhenHeadAdvanced never re-uses attributes
+// whose parent the chain head already moved past: the blocks were not missing,
+// the beacon node simply emitted no attributes (e.g. it only prepares payloads
+// for its own proposers), and building on the stale parent would rewind the
+// execution client's head.
+func TestApplyAttributesFallbackSkipsWhenHeadAdvanced(t *testing.T) {
+	cfg := config.DefaultConfig()
+
+	log := logrus.New()
+	log.SetLevel(logrus.ErrorLevel)
+
+	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
+	require.NoError(t, err)
+
+	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	tracker := chain.NewHeadTracker(clClient, spec, &beacon.Genesis{}, log)
+	chainSvc := &stubChainService{spec: spec, headTracker: tracker}
+
+	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
+
+	svc, err := NewService(cfg, clClient, chainSvc, planSvc, nil, common.Address{}, log)
+	require.NoError(t, err)
+
+	svc.ctx = context.Background()
+
+	events := clClient.Events()
+	require.True(t, events.InjectPayloadAttributes(&beacon.PayloadAttributesEvent{
+		ProposalSlot:    50,
+		Timestamp:       3000,
+		ParentBlockHash: phase0.Hash32{0xee},
+	}))
+
+	// Block 50 is missing (head still at 49): the fallback applies.
+	tracker.PrimeHead(&beacon.BlockInfo{Slot: 49, Root: phase0.Root{0x49}})
+	svc.applyAttributesFallback(51)
+	require.NotNil(t, events.GetLatestPayloadAttributes(51))
+
+	// Block 52 arrived without attributes for 53: the source is stale.
+	tracker.PrimeHead(&beacon.BlockInfo{Slot: 52, Root: phase0.Root{0x52}})
+	svc.applyAttributesFallback(53)
+	assert.Nil(t, events.GetLatestPayloadAttributes(53), "a stale parent must not be re-used")
+}

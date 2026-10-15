@@ -10,7 +10,13 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
+	"github.com/ethpandaops/buildoor/pkg/chain"
 )
+
+// earlyArrivalsWindowEpochs is how close (in epochs) to the predicted deposit window
+// the evaluation also fetches the head state's queue: deposits that arrived since the
+// epoch snapshot shield ours and can open the window mid-epoch.
+const earlyArrivalsWindowEpochs = 32
 
 // earlyOnboard onboards the whole target key set before the Gloas fork via the
 // regular validator deposit contract, so there is no coverage gap between the
@@ -22,9 +28,12 @@ import (
 // deposit service is unavailable, Gloas is not scheduled, no deposit contract is
 // known, Gloas is already active, or every target key is already registered.
 //
-// When applicable it re-evaluates the deposit timing once per epoch until the
-// batch is submitted (and it waited for registration), the fork is reached, or
-// the manager stops.
+// When applicable it re-evaluates the deposit timing on every new head (the
+// deposit can land in the next block at the earliest), on a per-slot timer that
+// covers missed blocks, and on every epoch snapshot, until the batch is submitted
+// (and it waited for registration), the fork is reached, or the manager stops.
+// Builder indices follow the queue order at the fork, so the first safe block is
+// the one to land in.
 func (m *Manager) earlyOnboard(ctx context.Context) {
 	if m.earlyDepositSvc == nil {
 		return
@@ -55,13 +64,23 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 		"Gloas fork at epoch %d, preparing early onboarding of %d builder keys",
 		forkEpoch, m.cfg.BuilderKeys.EffectiveTargetCount()), "info")
 
-	// Subscribe before the first evaluation so an epoch transition can't slip through
-	// between a "wait" decision and the subscription.
+	// Subscribe before the first evaluation so an epoch transition or head can't slip
+	// through between a "wait" decision and the subscription.
 	epochSub := m.chainSvc.SubscribeEpochStats()
 	defer epochSub.Unsubscribe()
 
+	headSub := m.clClient.Events().SubscribeHead()
+	defer headSub.Unsubscribe()
+
+	slotTimer := time.NewTimer(m.untilMissedBlockCheck())
+	defer slotTimer.Stop()
+
+	// The block of the current slot may not be built yet, so a deposit sent now
+	// could still join it.
+	landingSlot := m.chainSvc.GetCurrentSlot()
+
 	for {
-		if m.tryEarlyOnboardOnce(ctx, forkEpoch) {
+		if m.tryEarlyOnboardOnce(ctx, forkEpoch, landingSlot) {
 			return
 		}
 
@@ -74,8 +93,29 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 			if !ok {
 				return
 			}
+
+			landingSlot = m.chainSvc.GetCurrentSlot()
+		case head := <-headSub.Channel():
+			// The head block is sealed: the earliest block a deposit sent now can
+			// join is the next one.
+			landingSlot = head.Slot + 1
+		case <-slotTimer.C:
+			// Covers missed blocks, where no head event arrives for the slot.
+			slotTimer.Reset(m.untilMissedBlockCheck())
+
+			landingSlot = m.chainSvc.GetCurrentSlot()
 		}
 	}
+}
+
+// untilMissedBlockCheck returns the delay until a third into the next slot, by which
+// the slot's block has normally arrived; when it did not, the timer evaluation
+// covers the missing head event.
+func (m *Manager) untilMissedBlockCheck() time.Duration {
+	spec := m.chainSvc.GetChainSpec()
+	next := m.chainSvc.SlotToTime(m.chainSvc.GetCurrentSlot() + 1)
+
+	return max(time.Until(next.Add(spec.SecondsPerSlot/3)), time.Second)
 }
 
 // earlyOnboardTargets returns the target keys that still need an early deposit:
@@ -113,7 +153,7 @@ func (m *Manager) earlyOnboardTargets() []*builder_keys.Key {
 // early-onboarding phase is complete and the loop should stop: every target key is
 // onboarded or queued (and we waited for registration), or the fork was reached without
 // onboarding (handed off to the normal post-fork flow).
-func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoch) bool {
+func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoch, landingSlot phase0.Slot) bool {
 	if !m.enabled.Load() {
 		return false // paused; keep waiting until re-enabled
 	}
@@ -160,27 +200,55 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 	}
 
 	amount := m.cfg.DepositAmount
+	stats := m.chainSvc.GetCurrentEpochStats()
+	count := uint64(len(remaining))
 
-	// Two deposit windows (per design): at least earlyOnboardFinalizationMargin epochs
-	// before the fork if the pending-deposit queue is long enough to shield the whole
-	// batch from being processed before the fork; otherwise at the latest epoch boundary
-	// that still leaves at least minEarlyOnboardSlots before the fork (a fresh
-	// back-of-queue batch is guaranteed to survive the remaining transitions).
+	m.logEarlyOnboardWindow(stats, spec, forkEpoch)
+
+	// Deposit as soon as a batch landing at landingSlot is still queued at the fork:
+	// first judged against the epoch snapshot alone, then — near the predicted window —
+	// with the deposits that arrived since. The final epoch before the fork is the
+	// fallback when the drain cannot be modeled.
 	lastSafeEpoch := (epochsUntilFork-1)*spec.SlotsPerEpoch < minEarlyOnboardSlots
 	shouldDeposit := lastSafeEpoch ||
-		(epochsUntilFork >= earlyOnboardFinalizationMargin &&
-			depositsSurviveUntilFork(m.chainSvc.GetCurrentEpochStats(), spec,
-				amount, uint64(len(remaining)), forkEpoch))
+		depositsSurviveUntilFork(stats, nil, spec, amount, count, landingSlot, forkEpoch)
+
+	var arrivals []chain.PendingDepositInfo
+
+	if !shouldDeposit && nearEarlyOnboardWindow(stats, spec, forkEpoch) {
+		var err error
+
+		arrivals, err = m.queueArrivals(ctx, stats)
+		if err != nil {
+			m.log.WithError(err).Debug("Failed to fetch the head pending-deposit queue")
+		} else {
+			shouldDeposit = depositsSurviveUntilFork(stats, arrivals, spec, amount, count, landingSlot, forkEpoch)
+		}
+	}
 
 	if !shouldDeposit {
 		m.log.WithFields(logrus.Fields{
 			"current_epoch":     currentEpoch,
 			"fork_epoch":        forkEpoch,
 			"epochs_until_fork": epochsUntilFork,
-			"slots_until_fork":  slotsUntilFork,
+			"landing_slot":      landingSlot,
+			"queue_arrivals":    len(arrivals),
 			"remaining_keys":    len(remaining),
 		}).Debug("Waiting for early onboarding deposit window")
 
+		return false
+	}
+
+	// The epoch snapshot cannot see a deposit of ours that landed since (e.g. before a
+	// restart); the head queue can.
+	remaining, err := m.withoutQueuedKeys(ctx, stats, remaining, arrivals)
+	if err != nil {
+		m.log.WithError(err).Warn("Failed to check the head pending-deposit queue, retrying")
+
+		return false
+	}
+
+	if len(remaining) == 0 {
 		return false
 	}
 
@@ -244,7 +312,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 func (m *Manager) waitForEarlyRegistration(ctx context.Context, forkEpoch, currentEpoch phase0.Epoch) {
 	spec := m.chainSvc.GetChainSpec()
 
-	epochsToWait := uint64(forkEpoch-currentEpoch) + earlyOnboardFinalizationMargin
+	epochsToWait := uint64(forkEpoch-currentEpoch) + earlyRegistrationWaitMargin
 	timeout := max(time.Duration(epochsToWait*spec.SlotsPerEpoch)*spec.SecondsPerSlot, 5*time.Minute)
 
 	if err := m.WaitForRegistration(ctx, m.registry.Primary(), timeout); err != nil {
@@ -252,4 +320,112 @@ func (m *Manager) waitForEarlyRegistration(ctx context.Context, forkEpoch, curre
 		m.fireEvent("early_onboard",
 			"Builder not yet registered after the early deposits; the reconciler will retry", "warning")
 	}
+}
+
+// nearEarlyOnboardWindow reports whether the fork is close enough to the window
+// predicted from the epoch snapshot that deposits arriving within the epoch could
+// open it, which is when the head queue is worth fetching on every evaluation.
+func nearEarlyOnboardWindow(stats *chain.EpochStats, spec *chain.ChainSpec, forkEpoch phase0.Epoch) bool {
+	drain, ok := queueDrainEpochs(stats, spec)
+
+	return ok && uint64(forkEpoch-stats.Epoch) <= drain+earlyArrivalsWindowEpochs
+}
+
+// logEarlyOnboardWindow logs the predicted deposit window once per epoch snapshot.
+func (m *Manager) logEarlyOnboardWindow(stats *chain.EpochStats, spec *chain.ChainSpec, forkEpoch phase0.Epoch) {
+	if stats == nil || m.earlyWindowLoggedEpoch.Load() == uint64(stats.Epoch)+1 {
+		return
+	}
+
+	m.earlyWindowLoggedEpoch.Store(uint64(stats.Epoch) + 1)
+
+	drain, ok := queueDrainEpochs(stats, spec)
+	if !ok || forkEpoch <= stats.Epoch {
+		return
+	}
+
+	// A deposit survives once the fork is closer than the drain time, and in any
+	// case from the fork-2 epoch on, where it cannot finalize before the fork.
+	lead := max(drain, 3) - 1
+
+	window := stats.Epoch
+	if uint64(forkEpoch-stats.Epoch) > lead {
+		window = forkEpoch - phase0.Epoch(lead)
+	}
+
+	m.log.WithFields(logrus.Fields{
+		"window_epoch":     window,
+		"epochs_to_window": uint64(window - stats.Epoch),
+		"fork_epoch":       forkEpoch,
+		"queue_length":     len(stats.PendingDeposits),
+		"queue_drain":      drain,
+	}).Info("Early onboarding deposit window predicted (moves with the deposit queue length)")
+}
+
+// queueArrivals returns the head state's pending deposits that arrived after the
+// epoch snapshot, in queue order. Deposits for validators the snapshot already
+// flagged as exited keep their no-churn flag.
+func (m *Manager) queueArrivals(ctx context.Context, stats *chain.EpochStats) ([]chain.PendingDepositInfo, error) {
+	deposits, err := m.clClient.GetPendingDeposits(ctx, "head")
+	if err != nil {
+		return nil, err
+	}
+
+	noChurn := make(map[phase0.BLSPubKey]bool)
+
+	for _, deposit := range stats.PendingDeposits {
+		if deposit.NoChurn {
+			noChurn[deposit.Pubkey] = true
+		}
+	}
+
+	arrivals := make([]chain.PendingDepositInfo, 0, 16)
+
+	for _, deposit := range deposits {
+		if deposit == nil || deposit.Slot <= stats.StateSlot {
+			continue
+		}
+
+		arrivals = append(arrivals, chain.PendingDepositInfo{
+			Pubkey:  deposit.Pubkey,
+			Amount:  uint64(deposit.Amount),
+			Slot:    deposit.Slot,
+			NoChurn: noChurn[deposit.Pubkey],
+		})
+	}
+
+	return arrivals, nil
+}
+
+// withoutQueuedKeys drops the keys whose deposit already sits in the head queue's
+// arrivals. It fetches the arrivals when the caller has none yet.
+func (m *Manager) withoutQueuedKeys(
+	ctx context.Context,
+	stats *chain.EpochStats,
+	keys []*builder_keys.Key,
+	arrivals []chain.PendingDepositInfo,
+) ([]*builder_keys.Key, error) {
+	if arrivals == nil {
+		var err error
+
+		arrivals, err = m.queueArrivals(ctx, stats)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	queued := make(map[phase0.BLSPubKey]bool, len(arrivals))
+	for _, deposit := range arrivals {
+		queued[deposit.Pubkey] = true
+	}
+
+	result := make([]*builder_keys.Key, 0, len(keys))
+
+	for _, key := range keys {
+		if !queued[key.Pubkey()] {
+			result = append(result, key)
+		}
+	}
+
+	return result, nil
 }

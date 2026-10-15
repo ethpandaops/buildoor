@@ -327,6 +327,59 @@
   z-index: 1;
 }
 
+/* Local build (testing_buildBlockV1) span: rendered slightly below the
+   regular build line, ending in its own small dot. */
+.local-build-line {
+  position: absolute;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(13, 202, 240, 0.35), rgba(13, 202, 240, 0.85));
+  border-radius: 2px;
+  top: 82%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+.local-build-line:hover {
+  background: linear-gradient(90deg, rgba(13, 202, 240, 0.6), rgba(13, 202, 240, 1));
+  height: 5px;
+}
+
+.local-build-line-active {
+  box-shadow: 0 0 6px rgba(13, 202, 240, 0.7);
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
+.local-build-created,
+.local-build-failed,
+.local-build-skipped {
+  width: 8px;
+  height: 8px;
+  top: 14px;
+  z-index: 49;
+}
+
+.local-build-created {
+  background: #0dcaf0;
+  border: 1px solid #0aa2c0;
+}
+
+.local-build-selected {
+  box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45);
+}
+
+.local-build-failed {
+  background: #dc3545;
+  border: 1px solid #b02a37;
+}
+
+.local-build-skipped {
+  background: #adb5bd;
+  border: 1px solid #6c757d;
+}
+
+.bg-local-build { background: #0dcaf0; }
+
 /* Reveal call span: from attempt start to completion, ending in the reveal
    outcome dot (mirrors the build delay line's style in the reveal purple). */
 .reveal-call-line {

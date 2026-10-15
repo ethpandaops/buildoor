@@ -17,6 +17,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/http"
 	"github.com/ethpandaops/go-eth2-client/spec"
 	"github.com/ethpandaops/go-eth2-client/spec/all"
+	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	dynssz "github.com/pk910/dynamic-ssz"
@@ -502,6 +503,24 @@ func (c *Client) GetFinalityInfo(ctx context.Context) (*FinalityInfo, error) {
 		SafeExecutionBlockHash:      safeBlockHash,
 		FinalizedExecutionBlockHash: finalizedBlockHash,
 	}, nil
+}
+
+// GetPendingDeposits returns the pending_deposits queue of a beacon state, in
+// queue order.
+func (c *Client) GetPendingDeposits(ctx context.Context, stateID string) ([]*electra.PendingDeposit, error) {
+	provider, ok := c.client.(eth2client.PendingDepositProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support pending deposits provider")
+	}
+
+	resp, err := provider.PendingDeposits(ctx, &api.PendingDepositsOpts{
+		State: stateID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending deposits: %w", err)
+	}
+
+	return resp.Data, nil
 }
 
 // GetValidatorIndexToPubkeyMap fetches the beacon state once and returns a map of validator index to pubkey.
