@@ -20,10 +20,10 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 )
 
-// earlyOnboardFinalizationMargin is the preferred minimum number of epochs before the
-// Gloas fork to submit an early-onboarding deposit, leaving time for it to finalize so
-// the fork transition converts it into a builder.
-const earlyOnboardFinalizationMargin = 4
+// earlyRegistrationWaitMargin is how many epochs past the Gloas fork the early
+// onboarding keeps waiting for its queued deposits to show up as builders before
+// handing over to the reconciler.
+const earlyRegistrationWaitMargin = 4
 
 // minEarlyOnboardSlots is the hard floor of slots remaining before the Gloas fork for an
 // early-onboarding deposit to be worthwhile. Closer than this we skip early onboarding
@@ -65,6 +65,10 @@ type Manager struct {
 	// walletUnderfunded dedupes the "fund the wallet" event; re-armed once the
 	// wallet can cover a deposit again.
 	walletUnderfunded atomic.Bool
+
+	// earlyWindowLoggedEpoch is the epoch (+1, 0 = none) whose predicted early
+	// onboarding window was last logged.
+	earlyWindowLoggedEpoch atomic.Uint64
 	eventCallback     func(*LifecycleEvent)
 
 	// poke requests an immediate reconcile pass (cap 1).
