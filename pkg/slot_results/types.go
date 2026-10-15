@@ -367,6 +367,20 @@ type TxPlanResult struct {
 	FirstMismatch int          `json:"first_mismatch,omitempty"`
 	Detail        string       `json:"detail,omitempty"`
 	VerifiedAt    *time.Time   `json:"verified_at,omitempty"`
+
+	// awaitingSeed marks a verdict recorded before the inclusion seeded the
+	// plan (the verifier and the tracker consume the same inclusion event
+	// independently); the seed adopts it instead of resetting it to pending.
+	awaitingSeed bool
+}
+
+// adoptVerdict copies an early verdict onto a freshly seeded plan.
+func (p *TxPlanResult) adoptVerdict(verdict *TxPlanResult) {
+	p.Status = verdict.Status
+	p.IncludedCount = verdict.IncludedCount
+	p.FirstMismatch = verdict.FirstMismatch
+	p.Detail = verdict.Detail
+	p.VerifiedAt = verdict.VerifiedAt
 }
 
 func (p *TxPlanResult) clone() *TxPlanResult {

@@ -3,6 +3,7 @@ package txpool
 import (
 	"context"
 	"crypto/ecdsa"
+	"errors"
 	"math/big"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ type fakeEL struct {
 	blobBaseFee *big.Int
 	blocks      map[common.Hash]*execution.BlockTxList
 	txBlocks    map[common.Hash]common.Hash // tx hash -> including block
+	lookupErr   error                       // TransactionBlockHashes failure
 	sent        []common.Hash
 }
 
@@ -59,6 +61,10 @@ func newFakeEL() *fakeEL {
 }
 
 func (f *fakeEL) TransactionBlockHashes(_ context.Context, hashes []common.Hash) (map[common.Hash]common.Hash, error) {
+	if f.lookupErr != nil {
+		return nil, f.lookupErr
+	}
+
 	out := make(map[common.Hash]common.Hash, len(hashes))
 	for _, h := range hashes {
 		out[h] = f.txBlocks[h]
@@ -761,4 +767,36 @@ func TestSweepTTLDropsSenderSuffix(t *testing.T) {
 	require.Equal(t, uint64(3), pool.Stats().EvictedTTL)
 	require.Equal(t, 2, pool.Stats().Pending)
 	require.Equal(t, uint64(1), pool.PendingNonce(active.addr, 0), "the sender restarts at the surviving run")
+}
+
+// TestStaleEvictionWaitsForClassification keeps stale transactions while the
+// EL cannot say which block included them, instead of counting them all as
+// replaced (nonce too low), and evicts them on the next successful lookup.
+func TestStaleEvictionWaitsForClassification(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	stale := newAccount(t)
+	fund(el, stale, 5, 100) // chain nonce already past the queued tx
+
+	staleTx, raw := signTx(t, stale, txOpts{nonce: 2})
+	_, err := pool.Add(raw)
+	require.NoError(t, err)
+
+	el.lookupErr = errors.New("el unavailable")
+
+	params := &SelectParams{ParentHash: common.Hash{0xaa}, Ordering: config.TxOrderingFIFO}
+
+	sel, err := pool.Select(context.Background(), params)
+	require.NoError(t, err)
+	require.Empty(t, sel.Selected, "a stale transaction is never selected")
+	require.NotNil(t, pool.Get(staleTx.Hash()), "kept until it can be classified")
+	require.Zero(t, pool.Stats().EvictedNonceTooLow)
+
+	el.lookupErr = nil
+
+	_, err = pool.Select(context.Background(), params)
+	require.NoError(t, err)
+	require.Nil(t, pool.Get(staleTx.Hash()))
+	require.Equal(t, uint64(1), pool.Stats().EvictedNonceTooLow)
 }

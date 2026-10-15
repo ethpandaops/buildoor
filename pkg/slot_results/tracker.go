@@ -891,6 +891,10 @@ func (t *Tracker) handleIncluded(event *payload_bidder.PayloadIncludedEvent) {
 
 	t.upsert(slot, func(result *SlotResult) {
 		if txPlan != nil {
+			if early := result.TxPlan; early != nil && early.awaitingSeed {
+				txPlan.adoptVerdict(early)
+			}
+
 			result.TxPlan = txPlan
 		}
 
@@ -961,13 +965,15 @@ func (t *Tracker) finalizeStaleTxPlan(slot phase0.Slot) {
 }
 
 // RecordTxPlanCheck records the post-inclusion verdict of a slot's tx plan.
-// A slot without a pending plan (no explicit-list payload) is left alone.
+// The verifier only checks slots whose payload was built from an explicit
+// list, but it can finish before this tracker processed the same inclusion
+// event: a verdict without a seeded plan is kept for the seed to adopt.
 func (t *Tracker) RecordTxPlanCheck(slot phase0.Slot, status TxPlanStatus, includedCount, firstMismatch int, detail string) {
 	now := time.Now()
 
 	t.upsert(slot, func(result *SlotResult) {
 		if result.TxPlan == nil {
-			return
+			result.TxPlan = &TxPlanResult{awaitingSeed: true}
 		}
 
 		result.TxPlan.Status = status

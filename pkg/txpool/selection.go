@@ -698,7 +698,10 @@ func (p *Pool) hasBlobTxs(queues map[common.Address][]*PooledTx) bool {
 // build runs before the previous block's payload is imported and processed),
 // so the EL is asked which block included each of them to keep the
 // included-by-us / included-by-other accounting right; a transaction the EL
-// does not know was replaced by another one at its nonce.
+// does not know was replaced by another one at its nonce. When the lookup
+// fails nothing is evicted: the selection keeps skipping the stale
+// transactions, and the next one (or the head-driven nonce pruning) retries
+// instead of counting all of them as replaced.
 func (p *Pool) evictStale(ctx context.Context, hashes []common.Hash) {
 	if len(hashes) == 0 {
 		return
@@ -706,7 +709,10 @@ func (p *Pool) evictStale(ctx context.Context, hashes []common.Hash) {
 
 	included, err := p.elClient.TransactionBlockHashes(ctx, hashes)
 	if err != nil {
-		p.log.WithError(err).Debug("Cannot classify stale pool transactions")
+		p.log.WithError(err).WithField("txs", len(hashes)).
+			Debug("Cannot classify stale pool transactions, keeping them for the next attempt")
+
+		return
 	}
 
 	p.mu.Lock()
