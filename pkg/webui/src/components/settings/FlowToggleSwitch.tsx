@@ -22,7 +22,12 @@ export const FlowToggleSwitch: React.FC<FlowToggleSwitchProps> = ({ flow, ctx, o
   if (!flow.toggle) return null;
 
   const key = flow.toggle.key;
-  const on = readSetting(key, ctx) === true;
+  const value = readSetting(key, ctx);
+  if (value === undefined) {
+    // Not delivered by the stream yet: show no state rather than "off".
+    return <Switch checked={false} label={flow.title} title="Loading…" disabled />;
+  }
+  const on = value === true;
   const unavailable = flow.toggle.unavailable?.(ctx) ?? null;
   const blocked = !isLoggedIn || (!on && unavailable !== null);
   const title = !isLoggedIn

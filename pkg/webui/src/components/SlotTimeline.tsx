@@ -140,7 +140,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
 
   if (!chainInfo || chainInfo.genesis_time === 0) {
     return (
-      <div className="slot-graphs-container">
+      <div className="slot-timeline-viewport" style={{ height: `${viewportHeight}px` }}>
         <div className="text-muted p-3">Waiting for chain info...</div>
       </div>
     );

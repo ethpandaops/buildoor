@@ -26,7 +26,10 @@ function relativeTime(at: number): string {
 export const FlowCard: React.FC<FlowCardProps> = ({ flow, ctx }) => {
   const { isLoggedIn } = useAuthContext();
   const [toggleError, setToggleError] = useState<string | null>(null);
-  const status = flow.status(ctx);
+  // Until the stream delivered the config and service status, every flow
+  // would read as off/paused.
+  const loaded = !!ctx.config && !!ctx.serviceStatus;
+  const status = loaded ? flow.status(ctx) : { label: 'Loading…', tone: 'neutral' as const, metric: '' };
   const changed = lastUIChange(
     flow.tabs.flatMap((tab) => tab.sections.flatMap((section) => section.keys)),
     ctx,
@@ -49,7 +52,7 @@ export const FlowCard: React.FC<FlowCardProps> = ({ flow, ctx }) => {
       {toggleError && <div className="sd-field-error">{toggleError}</div>}
       <dl className="bd-kv fc-rows">
         {flow.summary.map((row) => {
-          const value = summaryValue(row, ctx);
+          const value = loaded ? summaryValue(row, ctx) : '—';
           return (
             <React.Fragment key={row.label}>
               <dt>{row.label}</dt>
