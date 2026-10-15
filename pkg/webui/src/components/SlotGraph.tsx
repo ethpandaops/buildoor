@@ -403,6 +403,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   }, []);
 
   // Calculate marker positions
+  const pctMinus25X = calculatePosition(-slotDuration * 0.25, rangeStart, totalRange);
   const slotStartX = calculatePosition(0, rangeStart, totalRange);
   const pct25X = calculatePosition(slotDuration * 0.25, rangeStart, totalRange);
   const pct50X = calculatePosition(slotDuration * 0.50, rangeStart, totalRange);
@@ -493,6 +494,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
       <div className="slot-graph-area">
         <div className="slot-graph-bg">
           {/* Slot markers */}
+          <div className="slot-marker pct-marker" style={{ left: `${pctMinus25X}%` }}>
+            <span className="marker-label">-25%</span>
+          </div>
           <div className="slot-marker slot-start-marker" style={{ left: `${slotStartX}%` }}>
             <span className="marker-label">0%</span>
           </div>
