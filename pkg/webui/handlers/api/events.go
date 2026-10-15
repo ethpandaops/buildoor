@@ -508,6 +508,9 @@ type LocalBuildStreamEvent struct {
 	Local         *StreamPayloadSummary           `json:"local,omitempty"`
 	EL            *StreamPayloadSummary           `json:"el,omitempty"`
 	Info          *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+	// StartedAt is when the testing build began, after the configured start
+	// delay (unix ms, 0 when it never started).
+	StartedAt int64 `json:"started_at,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned (unix ms, 0 unless ready);
 	// ELReadyAt is when the engine payload of the same target was ready.
 	BuiltAt   int64 `json:"built_at,omitempty"`
@@ -1897,7 +1900,11 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 		return
 	}
 
-	var builtAt, elReadyAt int64
+	var startedAt, builtAt, elReadyAt int64
+
+	if event.Info != nil && !event.Info.StartedAt.IsZero() {
+		startedAt = event.Info.StartedAt.UnixMilli()
+	}
 
 	if event.Info != nil && !event.Info.BuiltAt.IsZero() {
 		builtAt = event.Info.BuiltAt.UnixMilli()
@@ -1923,6 +1930,7 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 			Local:         streamPayloadSummary(event.Payload),
 			EL:            streamPayloadSummary(event.ELPayload),
 			Info:          event.Info.Public(),
+			StartedAt:     startedAt,
 			BuiltAt:       builtAt,
 			ELReadyAt:     elReadyAt,
 			At:            event.At.UnixMilli(),

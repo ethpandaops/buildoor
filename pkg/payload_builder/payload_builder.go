@@ -232,6 +232,10 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			b.fireLocalProgress(attrs, local, started, nil)
 
 			outcome := b.buildLocal(buildCtx, attrs, prelude, local)
+			if outcome.info != nil {
+				outcome.info.StartedAt = started
+			}
+
 			b.fireLocalProgress(attrs, local, started, &outcome)
 
 			localCh <- outcome

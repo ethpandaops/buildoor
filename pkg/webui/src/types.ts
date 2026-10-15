@@ -314,6 +314,7 @@ export interface LocalBuildStreamEvent {
   local?: StreamPayloadSummary;
   el?: StreamPayloadSummary;
   info?: LocalBuildInfo;
+  started_at?: number; // unix ms, when the testing build began (after its start delay)
   built_at?: number; // unix ms, when testing_buildBlockV1 returned (ready only)
   el_ready_at?: number; // unix ms, when the engine payload of the target was ready
   at: number;

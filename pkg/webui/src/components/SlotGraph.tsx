@@ -790,12 +790,18 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             if (lb.status === 'ready' && !lb.el) return null;
 
             const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
+            // The testing build may start after the engine build (start delay).
+            const localStartMs = lb.started_at ? lb.started_at - slotStartTime : buildStartMs;
+            const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
             const items = [
-              { label: 'Build Start', value: `${buildStartMs}ms` },
+              { label: 'Build Start', value: `${localStartMs}ms` },
+              ...(localStartMs !== buildStartMs
+                ? [{ label: 'Start Delay', value: `${localStartMs - buildStartMs}ms after the engine build` }]
+                : []),
               ...(lb.status === 'ready' && lb.built_at
                 ? [
                     { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },
-                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - buildStartMs}ms` }
+                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - localStartMs}ms` }
                   ]
                 : [{ label: lb.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${lb.at - slotStartTime}ms` }]),
               { label: 'Status', value: `${lb.status}${lb.skip_reason ? ` (${lb.skip_reason})` : ''}` },
@@ -837,9 +843,9 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
             return (
               <>
-                {lb.status === 'ready' && buildStartX < 100 && (
+                {lb.status === 'ready' && localStartX < 100 && (
                   <BuildDelayLine
-                    leftPct={buildStartX}
+                    leftPct={localStartX}
                     slotStartTime={slotStartTime}
                     rangeStart={rangeStart}
                     totalRange={totalRange}

@@ -163,6 +163,8 @@ type LocalBuildInfo struct {
 	// Dropped lists the pool transactions removed from the attempt after an
 	// attributed EL refusal (txpool source only), with the failure class.
 	Dropped []DroppedTx `json:"dropped,omitempty"`
+	// StartedAt is when the testing build began (after the start delay).
+	StartedAt time.Time `json:"started_at"`
 	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
 	// build runs during the engine build's wait, so this is usually well
 	// before the payload's ReadyAt (the hand-over to the consumers).
