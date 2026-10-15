@@ -45,8 +45,11 @@ type EpochStats struct {
 	RandaoMix      phase0.Hash32
 	NextRandaoMix  phase0.Hash32
 	ProposerDuties []phase0.ValidatorIndex // [slot_index] -> validator index
-	AttesterDuties [][][]ActiveIndiceIndex // [slot_index][committee_index][member] -> active indice index
-	PtcDuties      [][]ActiveIndiceIndex   // [slot_index][ptc_member] -> active indice index (Gloas only)
+	// NextProposerDuties are the following epoch's proposers from the same
+	// lookahead (empty when the state does not carry them).
+	NextProposerDuties []phase0.ValidatorIndex
+	AttesterDuties     [][][]ActiveIndiceIndex // [slot_index][committee_index][member] -> active indice index
+	PtcDuties          [][]ActiveIndiceIndex   // [slot_index][ptc_member] -> active indice index (Gloas only)
 }
 
 // PendingDepositInfo is a single entry of the beacon state's pending_deposits queue,
@@ -173,6 +176,10 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 
 	if len(state.ProposerLookahead) > 0 {
 		stats.ProposerDuties = state.ProposerLookahead[:s.chainSpec.SlotsPerEpoch]
+
+		if uint64(len(state.ProposerLookahead)) >= 2*s.chainSpec.SlotsPerEpoch {
+			stats.NextProposerDuties = state.ProposerLookahead[s.chainSpec.SlotsPerEpoch : 2*s.chainSpec.SlotsPerEpoch]
+		}
 	}
 
 	// Compute attester duties

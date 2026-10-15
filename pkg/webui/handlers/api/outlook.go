@@ -117,25 +117,33 @@ func (m *EventStreamManager) buildSlotOutlook(slot phase0.Slot) *SlotOutlookEven
 }
 
 // lookupProposer resolves a slot's scheduled proposer from the cached epoch
-// duties.
+// duties (or the previous epoch's lookahead while its own are not loaded).
 func (m *EventStreamManager) lookupProposer(slot phase0.Slot) (phase0.ValidatorIndex, bool) {
 	if m.chainSvc == nil {
 		return 0, false
 	}
 
 	spec := m.chainSvc.GetChainSpec()
-	stats := m.chainSvc.GetEpochStats(m.chainSvc.GetEpochOfSlot(slot))
-
-	if spec == nil || stats == nil || spec.SlotsPerEpoch == 0 {
+	if spec == nil || spec.SlotsPerEpoch == 0 {
 		return 0, false
 	}
 
+	epoch := m.chainSvc.GetEpochOfSlot(slot)
 	slotIndex := uint64(slot) % spec.SlotsPerEpoch
-	if slotIndex >= uint64(len(stats.ProposerDuties)) {
-		return 0, false
+
+	if stats := m.chainSvc.GetEpochStats(epoch); stats != nil && slotIndex < uint64(len(stats.ProposerDuties)) {
+		return stats.ProposerDuties[slotIndex], true
 	}
 
-	return stats.ProposerDuties[slotIndex], true
+	// Early in an epoch its stats are not loaded yet; the previous epoch's
+	// proposer lookahead already names its proposers.
+	if epoch > 0 {
+		if prev := m.chainSvc.GetEpochStats(epoch - 1); prev != nil && slotIndex < uint64(len(prev.NextProposerDuties)) {
+			return prev.NextProposerDuties[slotIndex], true
+		}
+	}
+
+	return 0, false
 }
 
 // broadcastSlotOutlook sends the outlook of the slot after current to every
