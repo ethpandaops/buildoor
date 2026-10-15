@@ -182,8 +182,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeResponses(w, []response{s.dispatch(ctx, &req)}, false)
 }
 
-// dispatch answers one call locally or through the EL passthrough.
+// dispatch answers one call locally or through the EL passthrough. While the
+// pool is disabled every call is refused, the read passthrough included: the
+// ingress exists whenever --el-rpc is set, and it must not expose the EL on
+// the API port until the operator enables the pool.
 func (s *Server) dispatch(ctx context.Context, req *request) response {
+	if !s.pool.Enabled() {
+		return errorResponse(req.ID, codeServerError, txpool.ErrDisabled.Error())
+	}
+
 	if req.Method == "" {
 		return errorResponse(req.ID, codeInvalidRequest, "missing method")
 	}

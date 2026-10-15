@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -160,6 +161,26 @@ func TestDisabledPoolAnswersDisabled(t *testing.T) {
 	_, raw := signedTx(t, 0)
 	_, body := call(t, srv, fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":[%q]}`, raw))
 	require.Contains(t, body, "txpool disabled")
+}
+
+// TestDisabledPoolRefusesPassthrough keeps the EL unreachable through the
+// ingress while the pool is disabled, for single calls and batches alike.
+func TestDisabledPoolRefusesPassthrough(t *testing.T) {
+	srv, el, pool := newServer(t, "")
+	pool.SetEnabled(false)
+
+	_, body := call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}`)
+	require.JSONEq(t, `{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"txpool disabled"}}`, body)
+
+	_, body = call(t, srv, `[{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{},"latest"]},`+
+		`{"jsonrpc":"2.0","id":2,"method":"eth_chainId","params":[]}]`)
+	require.Equal(t, 2, strings.Count(body, "txpool disabled"))
+	require.Empty(t, el.calls, "a disabled pool never reaches the EL")
+
+	pool.SetEnabled(true)
+
+	_, body = call(t, srv, `{"jsonrpc":"2.0","id":3,"method":"eth_blockNumber","params":[]}`)
+	require.JSONEq(t, `{"jsonrpc":"2.0","id":3,"result":"0x10"}`, body)
 }
 
 func TestLocalMethods(t *testing.T) {

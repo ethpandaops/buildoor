@@ -309,6 +309,9 @@ npm run clean
      `web3_clientVersion`, pool-aware `eth_getTransactionCount(..,"pending")`,
      `eth_getTransactionByHash`, `txpool_status/content` locally; read-only
      `eth_*`/`net_*`/`web3_*` proxied to `--el-rpc`; everything else `-32601`.
+     The route exists whenever `--el-rpc` is set, but while `txpool.enabled`
+     is false EVERY call (read passthrough included) answers `txpool disabled`,
+     so the EL is never reachable through the API port until the pool is on.
      buildoor must be the generator's ONLY host (`-h "name(buildoor)http://…/rpc"`):
      spamoor fans every submission out to all its hosts, so an additional EL host
      leaks the transactions into the EL mempool (visible as
