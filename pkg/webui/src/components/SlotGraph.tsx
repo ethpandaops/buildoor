@@ -733,7 +733,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
               { label: 'Tx Source', value: lb.tx_source || '—' },
               { label: 'Payload Source', value: lb.payload_source || '—' },
-              { label: 'Feeds Bids', value: lb.selected ? 'yes (local payload)' : lb.fallback ? 'no (EL payload, fallback)' : 'no (EL payload)' },
+              { label: 'Bids With', value: lb.selected ? 'custom block' : lb.fallback ? 'engine block (fallback)' : 'engine block (custom is compare-only)' },
               ...(lb.local ? [
                 { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
                 { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },
@@ -749,10 +749,10 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
               ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
               ...(lb.el ? [
-                { label: 'EL Payload', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
+                { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
               ] : [])
             ];
-            const data = { title: 'Local Build (testing_buildBlockV1)', items };
+            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
             const dotClass = lb.status === 'ready'
               ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
               : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';

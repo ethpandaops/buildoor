@@ -270,17 +270,17 @@ export function useEventStream(): UseEventStreamResult {
 
           if (data.status === 'ready') {
             const txs = data.local?.num_transactions ?? 0;
-            const role = data.selected ? 'feeds bids' : 'shadow';
+            const role = data.selected ? 'bids with it' : 'compare only, bids use the engine block';
             addEvent('local_build',
-              `Local build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
+              `Custom build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
               event.timestamp);
           } else if (data.status === 'skipped') {
             addEvent('local_build',
-              `Local build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (EL payload used)' : ''}`,
+              `Custom build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (engine block used)' : ''}`,
               event.timestamp);
           } else {
             addEvent('local_build_failed',
-              `Local build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (EL payload used)' : ''}`,
+              `Custom build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (engine block used)' : ''}`,
               event.timestamp);
           }
 

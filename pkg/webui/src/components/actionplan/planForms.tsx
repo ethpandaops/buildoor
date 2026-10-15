@@ -1,5 +1,6 @@
 import React from 'react';
 import type { LocalBuildPlan, ActionMode } from '../../types';
+import { InfoHint } from '../InfoHint';
 
 // Shared plan-category form model, used by both the per-slot edit modal and
 // the recurring rule editor: the two author the same categories, only their
@@ -417,7 +418,13 @@ export const LocalBuildForm: React.FC<{
   return (
     <div className="mb-3">
       <div className="d-flex align-items-center gap-2 mb-1">
-        <div className="section-header">Local build</div>
+        <div className="section-header">
+          Custom build
+          <InfoHint>
+            The testing_buildBlockV1 build next to the engine build: buildoor hands the EL the
+            transaction list. Overrides the global Custom Build settings for these slots.
+          </InfoHint>
+        </div>
         <select
           className="form-select form-select-sm w-auto"
           value={state.enabled}
@@ -443,7 +450,14 @@ export const LocalBuildForm: React.FC<{
       {(state.enabled === 'true' || state.enabled === '') && (
         <div className="row g-2">
           <div className="col-6">
-            <label className="form-label small mb-0">Payload source</label>
+            <label className="form-label small mb-0">
+              Bid with
+              <InfoHint>
+                Which block feeds bids and the reveal. <strong>engine</strong>: the regular build, the
+                custom block is compare-only. <strong>custom</strong>: the custom block, no fallback.{' '}
+                <strong>custom, else engine</strong>: the custom block when built, otherwise the engine block.
+              </InfoHint>
+            </label>
             <select
               className="form-select form-select-sm"
               value={state.payload_source}
@@ -451,13 +465,22 @@ export const LocalBuildForm: React.FC<{
               onChange={(e) => set({ payload_source: e.target.value })}
             >
               <option value="">inherit</option>
-              <option value="el">el (local is a shadow)</option>
-              <option value="local">local (strict)</option>
-              <option value="local_or_el">local, else el</option>
+              <option value="el">engine block (custom is compare-only)</option>
+              <option value="local">custom block (no fallback)</option>
+              <option value="local_or_el">custom block, else engine block</option>
             </select>
           </div>
           <div className="col-6">
-            <label className="form-label small mb-0">Tx source</label>
+            <label className="form-label small mb-0">
+              Custom block transactions
+              <InfoHint>
+                <strong>buildoor mempool</strong>: transactions sent to <code>/rpc</code>.{' '}
+                <strong>EL mempool</strong>: the EL fills the block itself.{' '}
+                <strong>explicit</strong>: exactly the raw transactions below.{' '}
+                <strong>queued</strong>: exactly these buildoor-mempool hashes, in this order. Any
+                deviation fails the build instead of trimming the list.
+              </InfoHint>
+            </label>
             <select
               className="form-select form-select-sm"
               value={state.tx_source}
@@ -465,9 +488,9 @@ export const LocalBuildForm: React.FC<{
               onChange={(e) => set({ tx_source: e.target.value })}
             >
               <option value="">inherit</option>
-              <option value="txpool">txpool</option>
-              <option value="empty">empty block</option>
-              <option value="el_mempool">EL mempool (testing path)</option>
+              <option value="txpool">buildoor mempool</option>
+              <option value="el_mempool">EL mempool</option>
+              <option value="empty">none (empty block)</option>
               <option value="explicit">explicit list (raw txs)</option>
               <option value="queued">queued list (pool tx hashes, exact order)</option>
             </select>
@@ -503,7 +526,13 @@ export const LocalBuildForm: React.FC<{
             </div>
           )}
           <div className="col-4">
-            <label className="form-label small mb-0">Keep EL build</label>
+            <label className="form-label small mb-0">
+              Keep engine build
+              <InfoHint>
+                When bidding with the custom block only: keep building the engine block for
+                comparison.
+              </InfoHint>
+            </label>
             <select
               className="form-select form-select-sm"
               value={state.build_el_payload}

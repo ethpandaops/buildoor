@@ -4,6 +4,7 @@ import { useTxPool } from '../hooks/useTxPool';
 import { useSettings } from '../hooks/useSettings';
 import { useLocalBuildStatus } from '../hooks/useLocalBuildStatus';
 import { Pagination } from './Pagination';
+import { InfoHint } from './InfoHint';
 import type { TxPoolConfig, TxPoolStats, TxPoolTx, TxSelectionSummary } from '../types';
 
 const PAGE_LIMIT = 50;
@@ -222,21 +223,40 @@ const PoolSettingsCard: React.FC<{ cfg: TxPoolConfig | undefined }> = ({ cfg }) 
           <div className="row g-2">
             <div className="col-6 col-md-3">
               <div className="config-item">
-                <div className="config-item-label">Ordering</div>
+                <div className="config-item-label">
+                  Ordering
+                  <InfoHint>
+                    The order in which the custom build takes transactions from this mempool.
+                    <dl>
+                      {ORDERINGS.map((o) => (
+                        <React.Fragment key={o.value}>
+                          <dt>{o.value}</dt>
+                          <dd>{o.hint}</dd>
+                        </React.Fragment>
+                      ))}
+                    </dl>
+                  </InfoHint>
+                </div>
                 <div className="config-item-value">{current.ordering}</div>
               </div>
             </div>
             {POOL_NUMBERS.map((f) => (
               <div className="col-6 col-md-3" key={f.key}>
-                <div className="config-item" title={f.hint}>
-                  <div className="config-item-label">{f.label}</div>
+                <div className="config-item">
+                  <div className="config-item-label">{f.label}<InfoHint>{f.hint}</InfoHint></div>
                   <div className="config-item-value">{String(current[f.key])}</div>
                 </div>
               </div>
             ))}
             <div className="col-6 col-md-3">
-              <div className="config-item" title="Also submit every admitted transaction to the EL mempool">
-                <div className="config-item-label">Forward to EL</div>
+              <div className="config-item">
+                <div className="config-item-label">
+                  Forward to EL
+                  <InfoHint alignEnd>
+                    Also submits every admitted transaction to the EL&apos;s mempool. They stop being
+                    private and can land in any block, including other builders&apos;.
+                  </InfoHint>
+                </div>
                 <div className="config-item-value">{current.forward_to_el ? 'yes' : 'no'}</div>
               </div>
             </div>
@@ -364,7 +384,7 @@ export const MempoolView: React.FC = () => {
     <div className="container-fluid px-0">
       <div className="card mb-3">
         <div className="card-header d-flex flex-wrap align-items-center gap-2">
-          <h5 className="mb-0">Mempool</h5>
+          <h5 className="mb-0">buildoor Mempool</h5>
           <span className={`badge ${enabled ? 'bg-success' : 'bg-secondary'}`}>
             {enabled ? 'Enabled' : 'Disabled'}
           </span>
@@ -398,9 +418,11 @@ export const MempoolView: React.FC = () => {
           {message && <div className="alert alert-warning small py-1 px-2 mb-2">{message}</div>}
           {error && <div className="alert alert-secondary small py-1 px-2 mb-2">{error}</div>}
           <div className="small text-muted mb-2">
-            Transactions submitted here never enter the EL mempool: they are included only in payloads the
-            local build assembles from this pool (payload source <code>local</code>), so they land on chain
-            when buildoor's bid wins. Ingress (JSON-RPC, <code>eth_sendRawTransaction</code> + read passthrough):{' '}
+            buildoor&apos;s own mempool, separate from the EL&apos;s. Transactions sent here never enter
+            the EL mempool: only the <strong>custom build</strong> (Custom Build card, transactions from
+            the buildoor mempool) includes them, and they land on chain only when buildoor bids with the
+            custom block and wins. The regular engine build always uses the EL mempool. Ingress
+            (JSON-RPC, <code>eth_sendRawTransaction</code> + read passthrough):{' '}
             <code>{ingressUrl}</code>
           </div>
           <div className="small text-muted mb-3 font-monospace">{spamoorHint}</div>

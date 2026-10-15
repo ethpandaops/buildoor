@@ -130,7 +130,9 @@ export function calculateSlotTiming(
   const slotDuration = chainInfo?.seconds_per_slot || 12000;
   const genesisTime = chainInfo?.genesis_time || 0;
   const slotStartTime = genesisTime + (slot * slotDuration);
-  const rangeStart = -slotDuration * 0.25;
+  // A third of the slot before its start keeps the payload builds visible:
+  // they start ahead of the slot (default -28% of the slot time).
+  const rangeStart = -slotDuration / 3;
   const rangeEnd = slotDuration;
   const totalRange = rangeEnd - rangeStart;
 

@@ -192,9 +192,9 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           {frozen.build.local?.enabled && (
             <span
               className={`ms-1 ${badgeClass('info')}`}
-              title={`Local build via testing_buildBlockV1: payload source ${frozen.build.local.payload_source}, tx source ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
+              title={`Custom build via testing_buildBlockV1: bids with ${frozen.build.local.payload_source}, transactions from ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
             >
-              local: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
+              custom: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
             </span>
           )}
         </KV>
@@ -377,7 +377,7 @@ const ResultView: React.FC<{
                 <KV label="Source">
                   {build.source}
                   {build.fallback && (
-                    <span className={`ms-1 ${badgeClass('warning')}`} title="Local payload wanted, EL payload used">
+                    <span className={`ms-1 ${badgeClass('warning')}`} title="Custom block wanted, engine block used">
                       fallback
                     </span>
                   )}
@@ -388,7 +388,7 @@ const ResultView: React.FC<{
                 <div className="col-12">
                   <div className="config-item">
                     <div className="config-item-label d-flex align-items-center gap-2">
-                      Local build (testing_buildBlockV1)
+                      Custom build (testing_buildBlockV1)
                       <span className={badgeClass(
                         build.local_build.status === 'ready' ? 'success' :
                         build.local_build.status === 'failed' ? 'danger' : 'secondary'

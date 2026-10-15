@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSettings } from '../hooks/useSettings';
 import { useLocalBuildStatus } from '../hooks/useLocalBuildStatus';
+import { InfoHint } from './InfoHint';
 import type { Config, ServiceStatus } from '../types';
 
 interface LocalBuildPanelProps {
@@ -8,22 +9,30 @@ interface LocalBuildPanelProps {
   serviceStatus: ServiceStatus | null;
 }
 
+// Both builds run on the EL. The ENGINE build is the regular one: buildoor
+// sends forkchoiceUpdated + getPayload and the EL picks the transactions from
+// its own mempool. The CUSTOM build (testing_buildBlockV1) is the extension:
+// buildoor hands the EL the transaction list to execute.
 const PAYLOAD_SOURCES: Array<{ value: string; label: string; hint: string }> = [
-  { value: 'el', label: 'EL payload (local is a shadow)', hint: 'Bids use the engine-API payload; the local payload is built for comparison only.' },
-  { value: 'local', label: 'Local payload (strict)', hint: 'Bids use the local payload; a failed or skipped local build leaves the slot without a payload.' },
-  { value: 'local_or_el', label: 'Local, else EL', hint: 'Bids use the local payload when it succeeded, otherwise the engine payload.' },
+  { value: 'el', label: 'Engine block', hint: 'Bids and reveals use the engine block. The custom block is built next to it for comparison only.' },
+  { value: 'local', label: 'Custom block', hint: 'Bids and reveals use the custom block. When it fails or is skipped, the slot has no payload (no engine fallback).' },
+  { value: 'local_or_el', label: 'Custom block, else engine block', hint: 'Bids and reveals use the custom block when it was built, otherwise the engine block.' },
 ];
 
 const TX_SOURCES: Array<{ value: string; label: string; hint: string }> = [
-  { value: 'txpool', label: 'Transaction pool', hint: 'Select from the owned pool (spamoor via /rpc).' },
-  { value: 'empty', label: 'Empty block', hint: 'No transactions at all.' },
-  { value: 'el_mempool', label: 'EL mempool (testing path)', hint: 'The EL fills the block from its own mempool through testing_buildBlockV1.' },
+  { value: 'txpool', label: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
+  { value: 'el_mempool', label: 'EL mempool', hint: "The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths)." },
+  { value: 'empty', label: 'None (empty block)', hint: 'No transactions at all.' },
 ];
 
-// LocalBuildPanel is the dashboard card of the local build extension
-// (testing_buildBlockV1): the probed EL availability with the per-EL enable
-// hint, the enable toggle (vetoed server-side while unavailable), the payload
-// and transaction source selectors, and the transaction pool toggle.
+const optionLabel = (options: Array<{ value: string; label: string }>, value: string | undefined, fallback: string) =>
+  options.find((o) => o.value === (value || fallback))?.label ?? value ?? fallback;
+
+// LocalBuildPanel is the dashboard card of the custom build extension
+// (testing_buildBlockV1, settings under local_build.*): the probed EL
+// availability with the per-EL enable hint, the enable toggle (vetoed
+// server-side while unavailable), which block feeds bids, where the custom
+// block's transactions come from, and the buildoor mempool toggle.
 export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, serviceStatus }) => {
   const { isLoggedIn, postSettings } = useSettings();
   const [collapsed, setCollapsed] = useState(true);
@@ -106,7 +115,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
         onClick={() => setCollapsed(!collapsed)}
       >
         <i className={`fas fa-chevron-${collapsed ? 'right' : 'down'} me-2`}></i>
-        <h5 className="mb-0 me-2">Local Build</h5>
+        <h5 className="mb-0 me-2">Custom Build</h5>
         <span className="ms-auto d-flex gap-1">
           {loading ? (
             <span className="badge bg-secondary">…</span>
@@ -129,8 +138,21 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
             <div className="alert alert-warning small py-1 px-2 mb-2">{message}</div>
           )}
 
+          <div className="small text-muted mb-2">
+            A second block per slot, next to the regular <strong>engine build</strong> (where the EL
+            picks the transactions from its own mempool): buildoor hands the EL a transaction list
+            through <code>testing_buildBlockV1</code> and the EL executes exactly that list.
+          </div>
+
           {/* Availability */}
-          <div className="section-header mb-1">EL testing namespace</div>
+          <div className="section-header mb-1">
+            EL testing namespace
+            <InfoHint>
+              <code>testing_buildBlockV1</code> lives in an opt-in RPC namespace on the EL&apos;s
+              JSON-RPC port (<code>--el-rpc</code>), not on the engine port. buildoor probes it at
+              startup and every 5 minutes; the custom build cannot be enabled while it is missing.
+            </InfoHint>
+          </div>
           {availability && !available && availability.configured && (
             <div className="alert alert-warning small py-2 px-2 mb-2">
               <div>
@@ -202,8 +224,13 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 onChange={(e) => apply({ 'local_build.enabled': e.target.checked })}
               />
               <label className="form-check-label" htmlFor="local-build-enabled">
-                Local build (testing_buildBlockV1)
+                Custom build (testing_buildBlockV1)
               </label>
+              <InfoHint>
+                Builds the custom block every slot, alongside the engine build. Whether bids use it
+                is decided by <strong>Bid with</strong> below. Per-slot overrides live in the action
+                plan&apos;s build category.
+              </InfoHint>
               {!available && !enabled && (
                 <div className="form-text mt-0">Cannot enable while the EL does not expose the testing namespace.</div>
               )}
@@ -218,8 +245,13 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 onChange={(e) => apply({ 'txpool.enabled': e.target.checked })}
               />
               <label className="form-check-label" htmlFor="txpool-enabled">
-                Transaction pool (ingress at <code>/rpc</code>)
+                buildoor mempool (ingress at <code>/rpc</code>)
               </label>
+              <InfoHint>
+                buildoor&apos;s own mempool, separate from the EL&apos;s: transactions sent to{' '}
+                <code>/rpc</code> stay private and only land through custom blocks buildoor wins.
+                While it is off, <code>/rpc</code> refuses every call.
+              </InfoHint>
               {!poolAvailable && (
                 <div className="form-text mt-0">{status?.txpool.reason || 'Requires --el-rpc.'}</div>
               )}
@@ -263,7 +295,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
 
           {/* Sources */}
           <div className="d-flex justify-content-between align-items-center mb-2">
-            <div className="section-header">Payload &amp; transaction source</div>
+            <div className="section-header">Bid with &amp; custom block transactions</div>
             {isLoggedIn && !editing && (
               <button className="btn btn-sm btn-outline-primary" onClick={() => setEditing(true)}>
                 <i className="fas fa-pencil-alt"></i>
@@ -275,19 +307,19 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
             <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Payload source</div>
-                  <div className="config-item-value">{localCfg?.payload_source || 'el'}</div>
+                  <div className="config-item-label">Bid with</div>
+                  <div className="config-item-value">{optionLabel(PAYLOAD_SOURCES, localCfg?.payload_source, 'el')}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Tx source</div>
-                  <div className="config-item-value">{localCfg?.tx_source || 'txpool'}</div>
+                  <div className="config-item-label">Custom block txs</div>
+                  <div className="config-item-value">{optionLabel(TX_SOURCES, localCfg?.tx_source, 'txpool')}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Keep EL build</div>
+                  <div className="config-item-label">Keep engine build</div>
                   <div className="config-item-value">{localCfg?.build_el_payload ? 'yes' : 'no'}</div>
                 </div>
               </div>
@@ -307,7 +339,21 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
           ) : (
             <form onSubmit={handleSave}>
               <div className="mb-2">
-                <label className="form-label">Payload source</label>
+                <label className="form-label">
+                  Bid with
+                  <InfoHint>
+                    Which of the two blocks feeds bids, Builder API headers and the reveal
+                    (<code>local_build.payload_source</code>).
+                    <dl>
+                      {PAYLOAD_SOURCES.map((o) => (
+                        <React.Fragment key={o.value}>
+                          <dt>{o.label}</dt>
+                          <dd>{o.hint}</dd>
+                        </React.Fragment>
+                      ))}
+                    </dl>
+                  </InfoHint>
+                </label>
                 <select
                   className="form-select form-select-sm"
                   value={form.payload_source}
@@ -320,7 +366,23 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 <div className="form-text">{PAYLOAD_SOURCES.find((o) => o.value === form.payload_source)?.hint}</div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Transaction source</label>
+                <label className="form-label">
+                  Custom block transactions
+                  <InfoHint>
+                    Where the custom block&apos;s transactions come from
+                    (<code>local_build.tx_source</code>). One source per block: the two mempools are
+                    not combined. The engine block always uses the EL mempool. Per-slot action plans
+                    can also hand an exact list (<em>explicit</em>, <em>queued</em>).
+                    <dl>
+                      {TX_SOURCES.map((o) => (
+                        <React.Fragment key={o.value}>
+                          <dt>{o.label}</dt>
+                          <dd>{o.hint}</dd>
+                        </React.Fragment>
+                      ))}
+                    </dl>
+                  </InfoHint>
+                </label>
                 <select
                   className="form-select form-select-sm"
                   value={form.tx_source}
@@ -341,8 +403,13 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                   onChange={(e) => setForm({ ...form, build_el_payload: e.target.checked })}
                 />
                 <label className="form-check-label" htmlFor="local-build-el-payload">
-                  Keep running the engine build when the payload source is local
+                  Keep running the engine build when bidding with the custom block
                 </label>
+                <InfoHint>
+                  Only matters for <em>Bid with: Custom block</em>. On, the engine block is still built
+                  for comparison (and as the fallback of <em>Custom block, else engine block</em>, which
+                  always builds it). Off saves the EL the second build.
+                </InfoHint>
               </div>
               <div className="form-check mb-2">
                 <input
@@ -355,9 +422,21 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 <label className="form-check-label" htmlFor="local-build-allow-blobs">
                   Include blob txs on ELs without a blobs bundle (blobs cannot be revealed)
                 </label>
+                <InfoHint>
+                  Some ELs (reth, ethrex) return no blobs bundle from <code>testing_buildBlockV1</code>,
+                  so the blob sidecars of a custom block are unknown. Off skips blob transactions on
+                  those ELs; on includes them anyway, for testing a reveal without blob data.
+                </InfoHint>
               </div>
               <div className="mb-2">
-                <label className="form-label" htmlFor="local-build-max-attempts">Max attempts</label>
+                <label className="form-label" htmlFor="local-build-max-attempts">
+                  Max attempts
+                  <InfoHint>
+                    For the buildoor mempool source: when the EL refuses the list, the offending
+                    transactions are dropped (and get a strike in the pool) and the build retries, up
+                    to this many calls. Exact lists from action plans never retry.
+                  </InfoHint>
+                </label>
                 <input
                   type="number"
                   min={1}
