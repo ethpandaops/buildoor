@@ -335,17 +335,27 @@ npm run clean
      uint16 ms-offset per member) and served via `GetVoteDetail(slot, root)`
      (zero root = primary) together with the block ground-truth bitmap — the
      WebUI heatmap endpoint groups them by validator-ranges client name
-     (retention 8 slots, in-memory only). **Subnet coverage detection**: every imported
-     block's attestations (fetched per head event, aggregate-format walk) are
-     the ground truth compared against the singles bitmap; a rolling 16-block
-     window seeing <80% of on-chain attesters (min 8 blocks / 16 attesters,
-     recover at ≥90%) sets the `Low` flag on the `vote_coverage` SSE event
-     (initial-state + on change) — the UI then shows a warning badge (hover
-     callout with the subscribe-all-subnets flags) in the Slot Timeline
-     header and hides the head-vote graph. Low coverage makes BOTH the graph
-     AND vote-threshold-gated reveals unreliable: the undercounted
-     participation opens reveal vote gates late or never (withheld at slot
-     end)
+     (retention 8 slots, in-memory only). **Sampled-subnet estimation**: a
+     slot has at most one committee per attestation subnet, so a committee
+     whose singles arrive densely (≥ min(16, half its size) distinct voters,
+     any root) sits on a subnet the BN is subscribed to; stray votes from our
+     own validators on other subnets never reach that bar. Once ≥64 members
+     are sampled, participation is EXTRAPOLATED from the sampled committees
+     (voted balance / sampled balance, `HeadVoteUpdate.Estimated`); fully
+     sampled slots (subscribe-all-subnets) report the raw share unchanged. The
+     graph, the reveal vote gate and the weak-head candidate check all consume
+     this estimate. **Subnet coverage detection**: every imported block's
+     attestations (fetched per head event, aggregate-format walk) are the
+     ground truth compared against the singles bitmap, overall and within the
+     sampled committees; a rolling 16-block window whose reliable view (raw
+     when ≥80% seen, otherwise the sampled committees) sees <80% of its
+     on-chain attesters (min 8 blocks / 16 attesters, recover at ≥90%) sets
+     the `Low` flag on the `vote_coverage` SSE event (initial-state + on
+     change) — the UI then shows a warning badge in the Slot Timeline header
+     and hides the head-vote graph; an estimated-but-healthy view shows an
+     "Estimated votes" info badge instead. Low coverage makes BOTH the graph
+     AND vote-threshold-gated reveals unreliable (gates open late or never,
+     withheld at slot end)
 
 3b. **Builder Key Registry** (`pkg/builder_keys/`) — the managed set of builder
    BLS keys and the identity dependency of every module that used to hold a

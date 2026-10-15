@@ -285,12 +285,18 @@ export interface RevealAttempt {
   envelope?: EnvelopeDetail;
 }
 
-// Raw single-attestation subnet coverage vs. next-block attesters. `low` marks
-// the vote graph unreliable (beacon node likely without subscribe-all-subnets).
+// Raw single-attestation subnet coverage vs. next-block attesters, overall and
+// within the sampled committees (subnets the beacon node delivers densely).
+// `estimated` marks participation as extrapolated from the sampled subnets;
+// `low` marks the vote graph unreliable.
 export interface VoteCoverage {
   slots: number;
   attesters: number;
   seen_pct: number;
+  sampled_attesters: number;
+  sampled_pct: number;
+  sampled_seen_pct: number;
+  estimated: boolean;
   low: boolean;
 }
 
@@ -321,6 +327,8 @@ export interface HeadVoteDataPoint {
   eth: number;
   voteCount?: number;
   thresholdMet?: boolean;
+  estimated?: boolean;
+  sampledPct?: number;
 }
 
 // Execution payload envelope summary (payload_available / reveal events;
