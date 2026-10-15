@@ -15,6 +15,8 @@ func TestNewPayloadBuilder(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 		common.HexToAddress("0x1111"),
 		&config.Config{PayloadBuildTime: 100},
 		logrus.New(),
@@ -26,5 +28,5 @@ func TestNewPayloadBuilder(t *testing.T) {
 
 func TestNewPayloadBuilder_AcceptsNilClients(t *testing.T) {
 	// Constructor allows nil clients (used in tests); actual build will fail if they're nil.
-	_ = NewPayloadBuilder(nil, nil, nil, common.Address{}, &config.Config{}, logrus.New(), nil)
+	_ = NewPayloadBuilder(nil, nil, nil, nil, nil, common.Address{}, &config.Config{}, logrus.New(), nil)
 }

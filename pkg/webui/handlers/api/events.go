@@ -59,6 +59,8 @@ const (
 	EventTypeBuilderAPISubmitBlockRcvd   EventType = "builder_api_submit_block_received"
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
+	EventTypeLocalBuild                  EventType = "local_build"
+	EventTypeTxPoolStats                 EventType = "txpool_stats"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
 	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
 	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
@@ -352,6 +354,8 @@ type HeadVotesStreamEvent struct {
 	ParticipationETH uint64  `json:"participation_eth"`
 	TotalSlotETH     uint64  `json:"total_slot_eth"`
 	VoteCount        int     `json:"vote_count"`
+	Estimated        bool    `json:"estimated"`
+	SampledPct       float64 `json:"sampled_pct"`
 	ThresholdPct     float64 `json:"threshold_pct"`
 	ThresholdMet     bool    `json:"threshold_met"`
 	Timestamp        int64   `json:"timestamp"`
@@ -406,13 +410,18 @@ type BlockDetailPayload struct {
 }
 
 // VoteCoverageStreamEvent reports how many next-block attesters were seen as
-// raw single attestations beforehand. `low` marks the vote graph unreliable
-// (beacon node likely running without subscribe-all-subnets).
+// raw single attestations beforehand, overall and within the sampled
+// committees. `estimated` marks participation as extrapolated from sampled
+// subnets; `low` marks the vote graph unreliable.
 type VoteCoverageStreamEvent struct {
-	Slots     int     `json:"slots"`
-	Attesters int     `json:"attesters"`
-	SeenPct   float64 `json:"seen_pct"`
-	Low       bool    `json:"low"`
+	Slots            int     `json:"slots"`
+	Attesters        int     `json:"attesters"`
+	SeenPct          float64 `json:"seen_pct"`
+	SampledAttesters int     `json:"sampled_attesters"`
+	SampledPct       float64 `json:"sampled_pct"`
+	SampledSeenPct   float64 `json:"sampled_seen_pct"`
+	Estimated        bool    `json:"estimated"`
+	Low              bool    `json:"low"`
 }
 
 // BidWonStreamEvent is sent when a bid is won (block successfully delivered).
@@ -435,6 +444,72 @@ type ServiceStatusEvent struct {
 	BuilderAPIEnabled     bool   `json:"builder_api_enabled"`
 	LifecycleAvailable    bool   `json:"lifecycle_available"`
 	LifecycleEnabled      bool   `json:"lifecycle_enabled"`
+
+	// Local build extension (testing_buildBlockV1): available follows the EL
+	// probe, enabled the local_build.enabled setting.
+	LocalBuildAvailable bool   `json:"local_build_available"`
+	LocalBuildEnabled   bool   `json:"local_build_enabled"`
+	LocalBuildReason    string `json:"local_build_reason,omitempty"`
+	// Owned transaction pool: available when an EL RPC is configured, enabled
+	// per the txpool.enabled setting.
+	TxPoolAvailable bool `json:"txpool_available"`
+	TxPoolEnabled   bool `json:"txpool_enabled"`
+}
+
+// LocalBuildStreamEvent reports one target's local build outcome (SSE
+// local_build, slot-scoped).
+type LocalBuildStreamEvent struct {
+	Slot          uint64                          `json:"slot"`
+	Candidate     string                          `json:"candidate,omitempty"`
+	Status        string                          `json:"status"`
+	SkipReason    string                          `json:"skip_reason,omitempty"`
+	Error         string                          `json:"error,omitempty"`
+	TxSource      string                          `json:"tx_source,omitempty"`
+	PayloadSource string                          `json:"payload_source,omitempty"`
+	Selected      bool                            `json:"selected"`
+	Fallback      bool                            `json:"fallback"`
+	Local         *StreamPayloadSummary           `json:"local,omitempty"`
+	EL            *StreamPayloadSummary           `json:"el,omitempty"`
+	Info          *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+	// BuiltAt is when testing_buildBlockV1 returned (unix ms, 0 unless ready);
+	// ELReadyAt is when the engine payload of the same target was ready.
+	BuiltAt   int64 `json:"built_at,omitempty"`
+	ELReadyAt int64 `json:"el_ready_at,omitempty"`
+	At        int64 `json:"at"`
+}
+
+// StreamPayloadSummary is a built payload's headline properties for the UI.
+type StreamPayloadSummary struct {
+	BlockHash       string `json:"block_hash"`
+	BlockValueWei   string `json:"block_value_wei"`
+	NumTransactions int    `json:"num_transactions"`
+	NumBlobs        int    `json:"num_blobs"`
+	GasUsed         uint64 `json:"gas_used"`
+	GasLimit        uint64 `json:"gas_limit"`
+}
+
+func streamPayloadSummary(p *payload_builder.Payload) *StreamPayloadSummary {
+	if p == nil {
+		return nil
+	}
+
+	out := &StreamPayloadSummary{BlockHash: fmt.Sprintf("%#x", p.BlockHash)}
+
+	if p.BlockValue != nil {
+		out.BlockValueWei = p.BlockValue.String()
+	}
+
+	if ep := p.ExecutionPayload; ep != nil {
+		out.NumTransactions = len(ep.Transactions)
+		out.GasUsed = ep.GasUsed
+		out.GasLimit = ep.GasLimit
+	}
+
+	if p.BlobsBundle != nil {
+		out.NumBlobs = len(p.BlobsBundle.Commitments)
+	}
+
+	return out
 }
 
 // LifecycleStreamEvent is sent when a lifecycle action occurs (deposit, topup, exit, state change).
@@ -551,6 +626,10 @@ type EventStreamManager struct {
 	// Track last sent service status to avoid spam
 	lastServiceStatus   ServiceStatusEvent
 	lastServiceStatusMu sync.Mutex
+
+	// Track the last broadcast pool version to avoid spam
+	lastTxPoolVersion   uint64
+	lastTxPoolVersionMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
@@ -605,6 +684,9 @@ func (m *EventStreamManager) Start() {
 
 	// Subscribe to payload build failed events (mark builds as failed)
 	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16, false)
+
+	// Subscribe to local build outcomes (testing_buildBlockV1 extension)
+	localBuildSub := m.builderSvc.SubscribeLocalBuild(16, false)
 
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
@@ -728,6 +810,7 @@ func (m *EventStreamManager) Start() {
 		defer payloadSub.Unsubscribe()
 		defer buildStartedSub.Unsubscribe()
 		defer buildFailedSub.Unsubscribe()
+		defer localBuildSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
@@ -796,6 +879,9 @@ func (m *EventStreamManager) Start() {
 
 			case event := <-buildFailedSub.Channel():
 				m.handlePayloadBuildFailed(event)
+
+			case event := <-localBuildSub.Channel():
+				m.handleLocalBuild(event)
 
 			case event := <-headSub.Channel():
 				m.handleHeadEvent(event)
@@ -950,10 +1036,12 @@ func (m *EventStreamManager) Start() {
 					lastSlot = currentSlot
 					m.handleSlotStart(currentSlot)
 				}
-				// Periodically send stats, builder info, and service status
+				// Periodically send stats, builder info, service status and
+				// pool stats (the latter only when the pool changed)
 				m.sendStats()
 				m.sendBuilderInfo()
 				m.sendServiceStatus()
+				m.sendTxPoolStats(false)
 			}
 		}
 	}()
@@ -1461,10 +1549,14 @@ func (m *EventStreamManager) handleBlockDetail(block *eth2all.SignedBeaconBlock)
 // voteCoverageEvent converts a tracker coverage summary to the wire shape.
 func voteCoverageEvent(cov *chain.SubnetCoverage) VoteCoverageStreamEvent {
 	return VoteCoverageStreamEvent{
-		Slots:     cov.Slots,
-		Attesters: cov.Attesters,
-		SeenPct:   cov.SeenPct,
-		Low:       cov.Low,
+		Slots:            cov.Slots,
+		Attesters:        cov.Attesters,
+		SeenPct:          cov.SeenPct,
+		SampledAttesters: cov.SampledAttesters,
+		SampledPct:       cov.SampledPct,
+		SampledSeenPct:   cov.SampledSeenPct,
+		Estimated:        cov.Estimated,
+		Low:              cov.Low,
 	}
 }
 
@@ -1479,6 +1571,8 @@ func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 			ParticipationETH: event.ParticipationETH,
 			TotalSlotETH:     event.TotalSlotETH,
 			VoteCount:        event.VoteCount,
+			Estimated:        event.Estimated,
+			SampledPct:       event.SampledPct,
 			ThresholdPct:     event.ThresholdPct,
 			ThresholdMet:     event.ThresholdMet,
 			Timestamp:        event.Timestamp,
@@ -1574,12 +1668,17 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder identity, balance, and pending payments
-	if m.epbsSvc != nil {
-		pubkey := m.epbsSvc.GetBuilderPubkey()
+	// Builder identity, balance, and pending payments come from the key
+	// registry, which exists before Gloas is scheduled (the p2p bidder does not).
+	if registry := m.keyRegistry(); registry != nil {
+		primary := registry.Primary()
+		pubkey := primary.Pubkey()
 		info.BuilderPubkey = pubkey.String()
-		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
-		info.IsRegistered = m.epbsSvc.IsRegistered()
+		info.BuilderIndex, _ = primary.BuilderIndex()
+
+		if m.epbsSvc != nil {
+			info.IsRegistered = m.epbsSvc.IsRegistered()
+		}
 
 		// Get balance and pending payments from chain state
 		if m.chainSvc != nil {
@@ -1593,7 +1692,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if m.payments != nil {
-			adjustment := m.payments.GetBalanceAdjustment(m.epbsSvc.Registry().Primary().KeyIndex())
+			adjustment := m.payments.GetBalanceAdjustment(primary.KeyIndex())
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0
@@ -1665,7 +1764,7 @@ func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 		regState = p2p_bidder.RegistrationStateName(m.epbsSvc.GetRegistrationState())
 	}
 
-	return ServiceStatusEvent{
+	status := ServiceStatusEvent{
 		EPBSAvailable:         m.epbsSvc != nil,
 		EPBSEnabled:           m.epbsSvc != nil && m.epbsSvc.IsEnabled(),
 		EPBSRegistrationState: regState,
@@ -1674,6 +1773,80 @@ func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 		LifecycleAvailable:    m.lifecycleMgr != nil,
 		LifecycleEnabled:      m.lifecycleMgr != nil && m.lifecycleMgr.IsEnabled(),
 	}
+
+	fillLocalBuildStatus(&status, m.builderSvc)
+
+	return status
+}
+
+// handleLocalBuild forwards a local build outcome as a slot-scoped event.
+func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildEvent) {
+	if event == nil {
+		return
+	}
+
+	var builtAt, elReadyAt int64
+
+	if event.Info != nil && !event.Info.BuiltAt.IsZero() {
+		builtAt = event.Info.BuiltAt.UnixMilli()
+	}
+
+	if event.ELPayload != nil {
+		elReadyAt = event.ELPayload.ReadyAt.UnixMilli()
+	}
+
+	m.broadcastForSlot(event.Slot, &StreamEvent{
+		Type:      EventTypeLocalBuild,
+		Timestamp: time.Now().UnixMilli(),
+		Data: LocalBuildStreamEvent{
+			Slot:          uint64(event.Slot),
+			Candidate:     event.Candidate,
+			Status:        event.Status,
+			SkipReason:    event.SkipReason,
+			Error:         event.Error,
+			TxSource:      event.TxSource,
+			PayloadSource: event.PayloadSource,
+			Selected:      event.Selected,
+			Fallback:      event.Fallback,
+			Local:         streamPayloadSummary(event.Payload),
+			EL:            streamPayloadSummary(event.ELPayload),
+			Info:          event.Info,
+			BuiltAt:       builtAt,
+			ELReadyAt:     elReadyAt,
+			At:            event.At.UnixMilli(),
+		},
+	})
+}
+
+// sendTxPoolStats broadcasts the pool stats when the pool changed since the
+// last broadcast (or unconditionally when force is set).
+func (m *EventStreamManager) sendTxPoolStats(force bool) {
+	pool := m.builderSvc.TxPool()
+	if pool == nil {
+		return
+	}
+
+	version := pool.Version()
+
+	m.lastTxPoolVersionMu.Lock()
+	changed := force || version != m.lastTxPoolVersion
+	m.lastTxPoolVersion = version
+	m.lastTxPoolVersionMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeTxPoolStats,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      pool.Stats(),
+	})
+}
+
+// BroadcastTxPoolStats pushes the pool stats to every client now.
+func (m *EventStreamManager) BroadcastTxPoolStats() {
+	m.sendTxPoolStats(true)
 }
 
 func (m *EventStreamManager) sendServiceStatus() {
@@ -1785,9 +1958,20 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      m.builderSvc.GetConfig(),
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	}) {
 		return
+	}
+
+	// Send the pool stats snapshot (when a pool is configured)
+	if pool := m.builderSvc.TxPool(); pool != nil {
+		if !send(&StreamEvent{
+			Type:      EventTypeTxPoolStats,
+			Timestamp: time.Now().UnixMilli(),
+			Data:      pool.Stats(),
+		}) {
+			return
+		}
 	}
 
 	// Send current status
@@ -2074,11 +2258,10 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 
 // BroadcastConfigUpdate broadcasts a config update event.
 func (m *EventStreamManager) BroadcastConfigUpdate() {
-	cfg := m.builderSvc.GetConfig()
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	})
 }
 

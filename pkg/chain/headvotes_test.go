@@ -191,10 +191,8 @@ func TestHeadVoteTrackerRejectsInconsistentVotes(t *testing.T) {
 	// Slot outside the tracking window.
 	tracker.handleSingleAttestation(singleVote(0, 0, 0, rootA))
 
-	update, ok := tracker.GetParticipation(5, rootA)
-	require.True(t, ok)
-	assert.Zero(t, update.VoteCount, "no invalid vote may be counted")
-	assert.Zero(t, update.ParticipationETH)
+	_, ok := tracker.GetParticipation(5, rootA)
+	require.False(t, ok, "invalid votes must not allocate root state")
 
 	_, ok = tracker.GetParticipation(0, rootA)
 	require.False(t, ok, "out-of-window slots must not allocate state")
@@ -633,4 +631,176 @@ func TestHeadVoteTrackerVoteDetail(t *testing.T) {
 
 	_, ok = tracker.GetVoteDetail(6, phase0.Root{})
 	assert.False(t, ok, "untracked slot has no detail")
+}
+
+// sampledTestCommittees builds n committees of size members each with
+// consecutive validator indices.
+func sampledTestCommittees(n, size int) [][]ActiveIndiceIndex {
+	committees := make([][]ActiveIndiceIndex, n)
+	for ci := range n {
+		committees[ci] = make([]ActiveIndiceIndex, size)
+		for j := range size {
+			committees[ci][j] = ActiveIndiceIndex(ci*size + j)
+		}
+	}
+
+	return committees
+}
+
+// voteCommittee submits votes for the first count members of a committee.
+func voteCommittee(tracker *HeadVoteTracker, slot phase0.Slot, ci, size, count int, root phase0.Root) {
+	for j := range count {
+		tracker.handleSingleAttestation(singleVote(slot, phase0.CommitteeIndex(ci),
+			phase0.ValidatorIndex(ci*size+j), root))
+	}
+}
+
+// TestHeadVoteTrackerSampledEstimation extrapolates participation from the
+// densely seen committees and ignores sparse ones (our own validators'
+// votes on subnets the beacon node does not subscribe to).
+func TestHeadVoteTrackerSampledEstimation(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	// Committees 0 and 1 sit on subscribed subnets; committees 2 and 3 only
+	// show a stray vote each.
+	voteCommittee(tracker, 5, 0, 40, 30, rootA)
+	voteCommittee(tracker, 5, 1, 40, 20, rootA)
+	voteCommittee(tracker, 5, 2, 40, 1, rootA)
+	voteCommittee(tracker, 5, 3, 40, 2, rootA)
+
+	update, ok := tracker.GetParticipation(5, rootA)
+	require.True(t, ok)
+	assert.True(t, update.Estimated)
+	assert.InDelta(t, 50.0/80.0*100.0, update.ParticipationPct, 0.001)
+	assert.InDelta(t, 50.0, update.SampledPct, 0.001)
+	assert.Equal(t, uint64(3200), update.ParticipationETH, "estimated ETH follows the estimate")
+	assert.Equal(t, 53, update.VoteCount, "vote count stays raw")
+}
+
+// TestHeadVoteTrackerSampledEstimationNeedsMembers keeps the raw view while
+// fewer than sampleMinMembers members are sampled.
+func TestHeadVoteTrackerSampledEstimationNeedsMembers(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	// One sampled committee (40 members) is below the 64-member minimum.
+	voteCommittee(tracker, 5, 0, 40, 30, rootA)
+
+	update, ok := tracker.GetParticipation(5, rootA)
+	require.True(t, ok)
+	assert.False(t, update.Estimated)
+	assert.InDelta(t, 30.0/160.0*100.0, update.ParticipationPct, 0.001)
+}
+
+// TestHeadVoteTrackerFullySampledIsRaw reports the raw participation once
+// every committee is sampled (subscribe-all-subnets).
+func TestHeadVoteTrackerFullySampledIsRaw(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	for ci := range 4 {
+		voteCommittee(tracker, 5, ci, 40, 20+ci, rootA)
+	}
+
+	update, ok := tracker.GetParticipation(5, rootA)
+	require.True(t, ok)
+	assert.False(t, update.Estimated)
+	assert.InDelta(t, 86.0/160.0*100.0, update.ParticipationPct, 0.001)
+	assert.InDelta(t, 100.0, update.SampledPct, 0.001)
+}
+
+// TestHeadVoteTrackerSampledThresholdFires fires the threshold once the
+// extrapolated participation crosses it.
+func TestHeadVoteTrackerSampledThresholdFires(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 60, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	sub := tracker.SubscribeUpdates()
+	defer sub.Unsubscribe()
+
+	tracker.handleHeadEvent(&beacon.HeadEvent{Slot: 5, Block: rootA})
+
+	voteCommittee(tracker, 5, 0, 40, 30, rootA)
+	voteCommittee(tracker, 5, 1, 40, 17, rootA)
+
+	// (30+17)/80 = 58.75% — below the threshold.
+	for _, u := range drainUpdates(sub) {
+		assert.False(t, u.ThresholdMet)
+	}
+
+	// The 18th vote of committee 1 reaches (30+18)/80 = 60%.
+	tracker.handleSingleAttestation(singleVote(5, 1, phase0.ValidatorIndex(40+17), rootA))
+
+	updates := drainUpdates(sub)
+	require.Len(t, updates, 1)
+	assert.True(t, updates[0].ThresholdMet)
+	assert.True(t, updates[0].Estimated)
+	assert.InDelta(t, 60.0, updates[0].ParticipationPct, 0.001)
+}
+
+// TestHeadVoteTrackerSampledCoverage keeps coverage healthy when the raw
+// view is partial but the sampled committees see their votes.
+func TestHeadVoteTrackerSampledCoverage(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	voteCommittee(tracker, 5, 0, 40, 40, rootA)
+	voteCommittee(tracker, 5, 1, 40, 36, rootA)
+
+	// Every member of every committee landed on chain.
+	blockAtt := &beacon.AttestationEvent{
+		Slot:            5,
+		BeaconBlockRoot: rootA,
+		CommitteeBits:   []byte{0b1111},
+		AggregationBits: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	}
+
+	for range coverageWindowSlots {
+		tracker.recordBlockAttestations([]*beacon.AttestationEvent{blockAtt})
+	}
+
+	cov := tracker.GetSubnetCoverage()
+	assert.InDelta(t, 76.0/160.0*100.0, cov.SeenPct, 0.001)
+	assert.InDelta(t, 50.0, cov.SampledPct, 0.001)
+	assert.InDelta(t, 95.0, cov.SampledSeenPct, 0.001)
+	assert.True(t, cov.Estimated)
+	assert.False(t, cov.Low, "a densely seen sample keeps the estimate reliable")
+}
+
+// TestHeadVoteTrackerSampledCoverageLow flags coverage when no committee is
+// sampled at all.
+func TestHeadVoteTrackerSampledCoverageLow(t *testing.T) {
+	rootA := phase0.Root{0xaa}
+	tracker, _ := newVoteTestTracker(t, 0, 5, map[phase0.Slot][][]ActiveIndiceIndex{
+		5: sampledTestCommittees(4, 40),
+	}, 160)
+
+	voteCommittee(tracker, 5, 0, 40, 3, rootA)
+
+	blockAtt := &beacon.AttestationEvent{
+		Slot:            5,
+		BeaconBlockRoot: rootA,
+		CommitteeBits:   []byte{0b1111},
+		AggregationBits: []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	}
+
+	for range coverageMinSlots {
+		tracker.recordBlockAttestations([]*beacon.AttestationEvent{blockAtt})
+	}
+
+	cov := tracker.GetSubnetCoverage()
+	assert.Zero(t, cov.SampledAttesters)
+	assert.True(t, cov.Estimated)
+	assert.True(t, cov.Low)
 }

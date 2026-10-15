@@ -53,6 +53,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
     broadcast_validation: 'gossip',
     max_attempts: 3,
     retry_interval_ms: 500,
+    rebind_on_reorg: true,
   });
 
   useEffect(() => {
@@ -94,6 +95,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
       'reveal.broadcast_validation': form.broadcast_validation,
       'reveal.max_attempts': form.max_attempts,
       'reveal.retry_interval_ms': form.retry_interval_ms,
+      'reveal.rebind_on_reorg': form.rebind_on_reorg ?? true,
     });
     if (ok) setEditing(false);
   };
@@ -203,6 +205,12 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                   <div className="config-item-value">{reveal?.retry_interval_ms ?? 0} ms</div>
                 </div>
               </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Rebind on Reorg</div>
+                  <div className="config-item-value">{reveal?.rebind_on_reorg ? 'on' : 'off'}</div>
+                </div>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleSave}>
@@ -289,6 +297,23 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                   onChange={(e) => setForm({ ...form, retry_interval_ms: parseInt(e.target.value) || 0 })}
                   required
                 />
+              </div>
+              <div className="form-check mb-2">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id="reveal-rebind-on-reorg"
+                  checked={form.rebind_on_reorg ?? true}
+                  onChange={(e) => setForm({ ...form, rebind_on_reorg: e.target.checked })}
+                />
+                <label className="form-check-label" htmlFor="reveal-rebind-on-reorg">
+                  Rebind on reorg
+                </label>
+                <div className="form-text">
+                  When the block a reveal was scheduled for is reorged out and
+                  our payload is re-included under a different block root,
+                  rebuild and re-sign the envelope for the new root.
+                </div>
               </div>
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary">Save</button>

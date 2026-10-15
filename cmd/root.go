@@ -2,8 +2,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -17,7 +20,15 @@ var (
 	cfg     *config.Config
 	logger  *logrus.Logger
 	v       *viper.Viper
+
+	// cfgFileErr is the error of reading the config file; it surfaces from
+	// initConfig because the config is loaded before the logger exists.
+	cfgFileErr error
 )
+
+// envPrefix namespaces the environment variables that supply flag values:
+// --deposit-amount is read from BUILDOOR_DEPOSIT_AMOUNT.
+const envPrefix = "BUILDOOR"
 
 var rootCmd = &cobra.Command{
 	Use:   "buildoor",
@@ -27,7 +38,7 @@ submit bids, and reveal payloads with configurable behavior.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		initLogger()
 
-		if err := initConfig(); err != nil {
+		if err := initConfig(cmd.Root()); err != nil {
 			return err
 		}
 
@@ -73,9 +84,8 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
-	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
+	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
+	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
@@ -115,6 +125,27 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
+
+	// Local block building extension (testing_buildBlockV1) and the owned transaction pool
+	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
+	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, or local_or_el")
+	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, empty or el_mempool")
+	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
+	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
+	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
+	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
+	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
+	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Authentication of the /rpc ingress: open, auth_token (the authenticatoor JWT of the API, needs --auth-provider-url) or static (--txpool-auth-token)")
+	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Shared bearer secret callers of the /rpc ingress must send in --txpool-auth=static mode")
+	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip, random or round_robin")
+	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
+	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs", defaults.TxPool.MaxPoolTxs, "Max queued transactions in the pool")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs-per-sender", defaults.TxPool.MaxTxsPerSender, "Max queued transactions per sender")
+	rootCmd.PersistentFlags().Uint64("txpool-tx-ttl-slots", defaults.TxPool.TxTTLSlots, "Expire queued transactions older than this many slots; an expired transaction is dropped together with its sender's higher nonces, which could not execute behind the gap (0 = never)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-strikes", defaults.TxPool.MaxStrikes, "Drop a queued transaction after this many attributed build failures (0 = never)")
+	rootCmd.PersistentFlags().Uint64("txpool-base-fee-ceiling-gwei", defaults.TxPool.BaseFeeCeilingGwei, "Above this next base fee (gwei) pool selections fill only to the EIP-1559 gas target, so a long max-fill run does not price its own transactions out (0 = off; exact lists are never reduced)")
+	rootCmd.PersistentFlags().Bool("txpool-forward-to-el", defaults.TxPool.ForwardToEL, "Also submit admitted transactions to the EL mempool (shadow mode for A/B comparisons)")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
@@ -176,18 +207,62 @@ func loadConfigFile() {
 		v.AddConfigPath("$HOME/.buildoor")
 	}
 
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			if logger != nil {
-				logger.WithError(err).Warn("Error reading config file")
-			}
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			cfgFileErr = err
 		}
 	}
 }
 
-func initConfig() error {
+// checkConfigFileKeys rejects config-file keys that are not flag names. Values
+// resolve by flag name, so any other key — a typo, or a nested/underscored
+// spelling — would be read without complaint and never applied.
+func checkConfigFileKeys(root *cobra.Command) error {
+	used := v.ConfigFileUsed()
+	if used == "" {
+		return nil
+	}
+
+	file := viper.New()
+	file.SetConfigFile(used)
+
+	if err := file.ReadInConfig(); err != nil {
+		return fmt.Errorf("failed to read config file %s: %w", used, err)
+	}
+
+	unknown := make([]string, 0, 4)
+
+	for _, key := range file.AllKeys() {
+		if root.PersistentFlags().Lookup(key) == nil {
+			unknown = append(unknown, key)
+		}
+	}
+
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	sort.Strings(unknown)
+
+	return fmt.Errorf(
+		"config file %s: unknown keys %s — keys are the flag names without the leading dashes "+
+			"(e.g. deposit-amount)", used, strings.Join(unknown, ", "))
+}
+
+func initConfig(root *cobra.Command) error {
+	if cfgFileErr != nil {
+		return fmt.Errorf("failed to read config file: %w", cfgFileErr)
+	}
+
+	if err := checkConfigFileKeys(root); err != nil {
+		return err
+	}
+
 	cfg = &config.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
 		BuilderMnemonic:   v.GetString("builder-mnemonic"),
@@ -226,7 +301,6 @@ func initConfig() error {
 		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
 		DepositAmount:     v.GetUint64("deposit-amount"),
 		TopupThreshold:    v.GetUint64("topup-threshold"),
-		TopupAmount:       v.GetUint64("topup-amount"),
 		ExtraData:         v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
@@ -249,6 +323,29 @@ func initConfig() error {
 			KeyStrategy:          v.GetString("epbs-key-strategy"),
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
+		},
+		LocalBuild: config.LocalBuildConfig{
+			Enabled:                 v.GetBool("local-build-enabled"),
+			PayloadSource:           v.GetString("local-build-payload-source"),
+			TxSource:                v.GetString("local-build-tx-source"),
+			BuildELPayload:          v.GetBool("local-build-el-payload"),
+			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
+			BlobEncoding:            v.GetString("local-build-blob-encoding"),
+			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
+		},
+		TxPool: config.TxPoolConfig{
+			Enabled:            v.GetBool("txpool-enabled"),
+			Auth:               v.GetString("txpool-auth"),
+			AuthToken:          v.GetString("txpool-auth-token"),
+			Ordering:           v.GetString("txpool-ordering"),
+			MaxTxsPerBlock:     v.GetUint64("txpool-block-max-txs"),
+			GasFillPct:         v.GetUint64("txpool-gas-fill-pct"),
+			MaxPoolTxs:         v.GetUint64("txpool-max-txs"),
+			MaxTxsPerSender:    v.GetUint64("txpool-max-txs-per-sender"),
+			TxTTLSlots:         v.GetUint64("txpool-tx-ttl-slots"),
+			MaxStrikes:         v.GetUint64("txpool-max-strikes"),
+			BaseFeeCeilingGwei: v.GetUint64("txpool-base-fee-ceiling-gwei"),
+			ForwardToEL:        v.GetBool("txpool-forward-to-el"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),
@@ -285,25 +382,36 @@ func initConfig() error {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
 	}
 
-	for flag, mode := range map[string]string{
-		"--build-candidate-parent-full":       cfg.Build.CandidateParentFull,
-		"--build-candidate-parent-empty":      cfg.Build.CandidateParentEmpty,
-		"--build-candidate-grandparent-full":  cfg.Build.CandidateGrandparentFull,
-		"--build-candidate-grandparent-empty": cfg.Build.CandidateGrandparentEmpty,
-	} {
-		if mode != config.NormalizedCandidateMode(mode, "") {
-			return fmt.Errorf("invalid %s %q: must be auto, always or never", flag, mode)
+	// Operator-supplied values pass the same validation as UI overrides, so a
+	// typo fails the start instead of being replaced by a module's fallback.
+	for _, field := range config.Fields() {
+		if err := config.ValidateSetting(field.Key, field.Get(cfg)); err != nil {
+			return fmt.Errorf("invalid --%s: %w", field.FlagKey, err)
 		}
 	}
 
-	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {
-		return fmt.Errorf("invalid --reveal-gate-mode %q: must be time, vote, vote_or_time or vote_and_time",
-			cfg.Reveal.GateMode)
+	// Startup-only options and cross-field requirements of the local build and
+	// the transaction pool (not mutable settings, so not covered above).
+	if cfg.LocalBuild.BlobEncoding != config.NormalizedBlobEncoding(cfg.LocalBuild.BlobEncoding) {
+		return fmt.Errorf("invalid --local-build-blob-encoding %q: must be auto, network or canonical",
+			cfg.LocalBuild.BlobEncoding)
 	}
 
-	if cfg.Reveal.BroadcastValidation != cfg.Reveal.NormalizedBroadcastValidation() {
-		return fmt.Errorf("invalid --reveal-broadcast-validation %q: must be gossip, consensus or consensus_and_equivocation",
-			cfg.Reveal.BroadcastValidation)
+	if cfg.TxPool.Auth != cfg.TxPool.NormalizedAuth() {
+		return fmt.Errorf("invalid --txpool-auth %q: must be open, auth_token or static", cfg.TxPool.Auth)
+	}
+
+	if cfg.TxPool.Auth == config.TxPoolAuthStatic && cfg.TxPool.AuthToken == "" {
+		return fmt.Errorf("--txpool-auth=static requires --txpool-auth-token")
+	}
+
+	if cfg.TxPool.Auth == config.TxPoolAuthToken && cfg.AuthProviderURL == "" {
+		return fmt.Errorf("--txpool-auth=auth_token requires --auth-provider-url")
+	}
+
+	if (cfg.LocalBuild.Enabled || cfg.TxPool.Enabled) && cfg.ELRPC == "" {
+		return fmt.Errorf("--el-rpc is required when --local-build-enabled or --txpool-enabled is set " +
+			"(testing_buildBlockV1 and the pool's state lookups live on the EL JSON-RPC)")
 	}
 
 	return nil

@@ -152,3 +152,11 @@ func TestSelectForBidHonoursCount(t *testing.T) {
 	got := registry.SelectForBid(0, SelectRequest{Strategy: StrategyRoundRobin, Count: 2})
 	require.Len(t, got, 2)
 }
+
+// The settings validation keeps its own list of strategy names (the config
+// package cannot import this one); the two must not drift.
+func TestConfigKnowsEveryStrategy(t *testing.T) {
+	require.ElementsMatch(t,
+		[]string{StrategyRoundRobin, StrategySingle, StrategyRandom, StrategyLeastUsed},
+		config.KeyStrategies)
+}

@@ -188,7 +188,7 @@ func (w *Wallet) BuildTransaction(
 		"nonce":   nonce,
 	}).Debug("Fetched next nonce from RPC for transaction build")
 
-	return w.buildTransactionWithNonce(ctx, to, value, data, gasLimit, nonce)
+	return w.buildTransactionWithNonce(ctx, to, value, data, gasLimit, nonce, nil)
 }
 
 // buildTransactionWithNonce creates an unsigned transaction at an explicit nonce.
@@ -201,6 +201,7 @@ func (w *Wallet) buildTransactionWithNonce(
 	data []byte,
 	gasLimit uint64,
 	nonce uint64,
+	minGasTipCap *big.Int,
 ) (*types.Transaction, error) {
 	// Ensure chain ID is available
 	if w.chainID == nil {
@@ -216,6 +217,10 @@ func (w *Wallet) buildTransactionWithNonce(
 	gasTipCap, err := w.rpcClient.SuggestGasTipCap(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get gas tip cap: %w", err)
+	}
+
+	if minGasTipCap != nil && gasTipCap.Cmp(minGasTipCap) < 0 {
+		gasTipCap = new(big.Int).Set(minGasTipCap)
 	}
 
 	// Get base fee from latest header

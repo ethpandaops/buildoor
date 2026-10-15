@@ -53,9 +53,10 @@ type EpochStats struct {
 // reduced to the fields needed to model Electra deposit-queue draining and to
 // identify our own (early-onboarding) deposit after a restart.
 type PendingDepositInfo struct {
-	Pubkey phase0.BLSPubKey
-	Amount uint64 // gwei
-	Slot   phase0.Slot
+	Pubkey  phase0.BLSPubKey
+	Amount  uint64 // gwei
+	Slot    phase0.Slot
+	NoChurn bool // deposit for an exited validator: postponed or applied without consuming churn
 }
 
 // BuilderInfo represents information about a builder from the beacon state.
@@ -220,17 +221,36 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 		stats.DepositBalanceToConsume = uint64(state.DepositBalanceToConsume)
 		stats.Eth1DepositIndex = state.ETH1DepositIndex
 		stats.DepositRequestsStartIndex = state.DepositRequestsStartIndex
-		stats.PendingDeposits = extractPendingDeposits(state.PendingDeposits)
+		stats.PendingDeposits = extractPendingDeposits(state.PendingDeposits, validators)
 	}
 
 	return stats, nil
 }
 
 // extractPendingDeposits reduces the beacon state's pending_deposits queue to the
-// amount/slot pairs needed to model Electra deposit-queue draining.
-func extractPendingDeposits(deposits []*electra.PendingDeposit) []PendingDepositInfo {
+// fields needed to model Electra deposit-queue draining. Deposits for exited
+// validators are flagged: process_pending_deposits postpones them (or applies them
+// once withdrawn) without consuming churn.
+func extractPendingDeposits(deposits []*electra.PendingDeposit, validators []*phase0.Validator) []PendingDepositInfo {
 	if len(deposits) == 0 {
 		return nil
+	}
+
+	queued := make(map[phase0.BLSPubKey]bool, len(deposits))
+	for _, deposit := range deposits {
+		if deposit != nil {
+			queued[deposit.Pubkey] = false
+		}
+	}
+
+	for _, validator := range validators {
+		if validator == nil || uint64(validator.ExitEpoch) == FarFutureEpoch {
+			continue
+		}
+
+		if _, ok := queued[validator.PublicKey]; ok {
+			queued[validator.PublicKey] = true
+		}
 	}
 
 	result := make([]PendingDepositInfo, 0, len(deposits))
@@ -240,9 +260,10 @@ func extractPendingDeposits(deposits []*electra.PendingDeposit) []PendingDeposit
 		}
 
 		result = append(result, PendingDepositInfo{
-			Pubkey: deposit.Pubkey,
-			Amount: uint64(deposit.Amount),
-			Slot:   deposit.Slot,
+			Pubkey:  deposit.Pubkey,
+			Amount:  uint64(deposit.Amount),
+			Slot:    deposit.Slot,
+			NoChurn: queued[deposit.Pubkey],
 		})
 	}
 

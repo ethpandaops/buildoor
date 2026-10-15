@@ -44,21 +44,36 @@ const (
 	coverageMinAttesters     = 16   // minimum attesters counted before flagging
 	coverageLowThreshold     = 80.0 // flag when the seen percentage falls below this
 	coverageRecoverThreshold = 90.0 // clear once the seen percentage reaches this
+
+	// Sampled-subnet estimation: a slot has at most one committee per
+	// attestation subnet, so a committee whose singles we see densely sits on a
+	// subnet our beacon node is subscribed to. Participation is extrapolated
+	// from those sampled committees, which keeps the estimate accurate on large
+	// networks without subscribe-all-subnets.
+	sampleMinVoters  = 16 // distinct voters that mark a committee as sampled (capped at half its size)
+	sampleMinMembers = 64 // sampled committee members required before extrapolating
 )
 
 // SubnetCoverage summarizes how many of the attesters that landed in recent
-// blocks were previously seen as raw single attestations.
+// blocks were previously seen as raw single attestations, overall and within
+// the sampled committees participation is extrapolated from.
 type SubnetCoverage struct {
-	Slots     int     // measured blocks in the window
-	Attesters int     // total attesters counted across the window
-	SeenPct   float64 // percent of those attesters seen as singles beforehand
-	Low       bool    // sustained miss above coverageMissThreshold
+	Slots            int     // measured blocks in the window
+	Attesters        int     // total attesters counted across the window
+	SeenPct          float64 // percent of those attesters seen as singles beforehand
+	SampledAttesters int     // attesters of sampled committees across the window
+	SampledPct       float64 // percent of all attesters that sat in sampled committees
+	SampledSeenPct   float64 // percent of the sampled committees' attesters seen as singles
+	Estimated        bool    // raw view is partial; participation is extrapolated from sampled subnets
+	Low              bool    // neither the raw nor the sampled view can be trusted
 }
 
 // coverageSample is one block's attester count vs. previously-seen singles.
 type coverageSample struct {
-	seen  int
-	total int
+	seen         int
+	total        int
+	sampledSeen  int
+	sampledTotal int
 }
 
 // HeadVoteUpdate is dispatched when head vote participation changes.
@@ -70,6 +85,8 @@ type HeadVoteUpdate struct {
 	TotalSlotETH     uint64
 	VoteCount        int
 	TotalMembers     int
+	Estimated        bool    // ParticipationPct is extrapolated from sampled committees
+	SampledPct       float64 // percent of the slot's attesting balance in sampled committees
 	ThresholdPct     float64 // effective threshold at fire time (0 = disabled)
 	ThresholdMet     bool
 	Timestamp        int64
@@ -81,6 +98,8 @@ type HeadVoteUpdate struct {
 type slotCommitteeLayout struct {
 	committeeOffsets []int // per-committee global bit offset
 	committeeSizes   []int
+	committeeETH     []uint64 // per-committee total effective balance in full ETH
+	sampleMin        []int    // per-committee distinct voters marking it as sampled
 	totalMembers     int
 	positions        map[phase0.ValidatorIndex]int32 // validator index -> global bit position
 	validators       []phase0.ValidatorIndex         // bit position -> validator index
@@ -96,6 +115,7 @@ type rootVoteState struct {
 	voteTimes        []uint16 // per bit position: ms offset from slot start + 1; 0 = not seen
 	blockBits        []byte   // attesters that landed on chain (next-block ground truth); nil until measured
 	participatingETH uint64
+	sampledETH       uint64 // participatingETH within sampled committees
 	voteCount        int
 	lastVoteAt       time.Time // receive time of the last merged vote; stamps updates
 	lastFiredPct     float64
@@ -111,6 +131,13 @@ type slotVoteState struct {
 	layout   *slotCommitteeLayout
 	roots    map[phase0.Root]*rootVoteState
 	headRoot phase0.Root // zero until a head event names the slot's head
+
+	// Committee sampling across all roots: a voter counts once per slot.
+	voterBits       []byte
+	committeeVoters []int
+	sampled         []bool
+	sampledETH      uint64 // total effective balance of sampled committees
+	sampledMembers  int
 }
 
 // primary returns the root whose participation is streamed to subscribers:
@@ -240,22 +267,47 @@ func (t *HeadVoteTracker) GetSubnetCoverage() SubnetCoverage {
 // buildCoverage assembles the coverage summary from the rolling window.
 // Caller must hold t.mu.
 func (t *HeadVoteTracker) buildCoverage() SubnetCoverage {
-	var seen, total int
+	var seen, total, sampledSeen, sampledTotal int
 	for _, s := range t.coverageSamples {
 		seen += s.seen
 		total += s.total
+		sampledSeen += s.sampledSeen
+		sampledTotal += s.sampledTotal
 	}
 
 	cov := SubnetCoverage{
-		Slots:     len(t.coverageSamples),
-		Attesters: total,
-		Low:       t.coverageLow,
+		Slots:            len(t.coverageSamples),
+		Attesters:        total,
+		SampledAttesters: sampledTotal,
+		Low:              t.coverageLow,
 	}
 	if total > 0 {
 		cov.SeenPct = float64(seen) / float64(total) * 100.0
+		cov.SampledPct = float64(sampledTotal) / float64(total) * 100.0
 	}
 
+	if sampledTotal > 0 {
+		cov.SampledSeenPct = float64(sampledSeen) / float64(sampledTotal) * 100.0
+	}
+
+	cov.Estimated = cov.SeenPct < coverageLowThreshold
+
 	return cov
+}
+
+// reliablePct is the seen percentage of the view participation is computed
+// from: the raw view when it is (nearly) complete, otherwise the sampled
+// committees — or 0 when too few attesters were sampled to extrapolate.
+func (c SubnetCoverage) reliablePct() float64 {
+	if !c.Estimated {
+		return c.SeenPct
+	}
+
+	if c.SampledAttesters < coverageMinAttesters {
+		return 0
+	}
+
+	return c.SampledSeenPct
 }
 
 // VoteDetail is a per-attester snapshot of one (slot, root) vote state,
@@ -334,7 +386,7 @@ func (t *HeadVoteTracker) GetParticipation(slot phase0.Slot, root phase0.Root) (
 		return HeadVoteUpdate{}, false
 	}
 
-	return *t.buildUpdate(slot, root, state.layout, rs), true
+	return *t.buildUpdate(slot, root, state, rs), true
 }
 
 func (t *HeadVoteTracker) run() {
@@ -485,9 +537,24 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 		// Keep the ground-truth bitmap on the root state (created if needed,
 		// respecting the root cap) so the per-name vote detail can report
 		// attesters that landed on chain but were never seen as singles.
-		seen := 0
-		if rs := t.getOrCreateRootState(t.slotStates[key.slot], key.root); rs != nil {
-			seen = popCountAnd(bitmap, rs.voteBits)
+		state := t.slotStates[key.slot]
+		sample := coverageSample{total: total}
+
+		for ci, sampled := range state.sampled {
+			if sampled {
+				sample.sampledTotal += popCountRange(bitmap, state.layout.committeeOffsets[ci], state.layout.committeeSizes[ci])
+			}
+		}
+
+		if rs := t.getOrCreateRootState(state, key.root); rs != nil {
+			sample.seen = popCountAnd(bitmap, rs.voteBits)
+
+			for ci, sampled := range state.sampled {
+				if sampled {
+					sample.sampledSeen += popCountAndRange(bitmap, rs.voteBits,
+						state.layout.committeeOffsets[ci], state.layout.committeeSizes[ci])
+				}
+			}
 
 			if rs.blockBits == nil {
 				rs.blockBits = bitmap
@@ -498,7 +565,7 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 			}
 		}
 
-		t.coverageSamples = append(t.coverageSamples, coverageSample{seen: seen, total: total})
+		t.coverageSamples = append(t.coverageSamples, sample)
 		if len(t.coverageSamples) > coverageWindowSlots {
 			t.coverageSamples = t.coverageSamples[len(t.coverageSamples)-coverageWindowSlots:]
 		}
@@ -510,24 +577,31 @@ func (t *HeadVoteTracker) recordBlockAttestations(atts []*beacon.AttestationEven
 		return
 	}
 
-	// Flag with hysteresis on the window's weighted seen percentage.
+	// Flag with hysteresis on the seen percentage of the view participation
+	// is computed from (raw, or the sampled committees when the raw view is
+	// partial).
 	cov := t.buildCoverage()
+	reliable := cov.reliablePct()
 
 	if !t.coverageLow && cov.Slots >= coverageMinSlots && cov.Attesters >= coverageMinAttesters &&
-		cov.SeenPct < coverageLowThreshold {
+		reliable < coverageLowThreshold {
 		t.coverageLow = true
 
 		t.log.WithFields(logrus.Fields{
-			"seen_pct":  fmt.Sprintf("%.1f%%", cov.SeenPct),
-			"attesters": cov.Attesters,
-		}).Warn("Raw attestation subnet coverage is low — beacon node likely runs " +
-			"without subscribe-all-subnets; head vote tracking undercounts and " +
+			"seen_pct":         fmt.Sprintf("%.1f%%", cov.SeenPct),
+			"sampled_pct":      fmt.Sprintf("%.1f%%", cov.SampledPct),
+			"sampled_seen_pct": fmt.Sprintf("%.1f%%", cov.SampledSeenPct),
+			"attesters":        cov.Attesters,
+		}).Warn("Attestation subnet coverage is too low to estimate head votes — " +
+			"the beacon node delivers too few single attestations even on its own subnets; " +
 			"vote-threshold-gated reveals are unreliable (gates open late or never)")
-	} else if t.coverageLow && cov.SeenPct >= coverageRecoverThreshold {
+	} else if t.coverageLow && reliable >= coverageRecoverThreshold {
 		t.coverageLow = false
 
-		t.log.WithField("seen_pct", fmt.Sprintf("%.1f%%", cov.SeenPct)).
-			Info("Raw attestation subnet coverage recovered")
+		t.log.WithFields(logrus.Fields{
+			"seen_pct":         fmt.Sprintf("%.1f%%", cov.SeenPct),
+			"sampled_seen_pct": fmt.Sprintf("%.1f%%", cov.SampledSeenPct),
+		}).Info("Attestation subnet coverage recovered")
 	}
 
 	cov.Low = t.coverageLow
@@ -542,11 +616,6 @@ func (t *HeadVoteTracker) handleSingleAttestation(event *beacon.SingleAttestatio
 
 	state := t.getOrCreateSlotState(event.Slot)
 	if state == nil {
-		return
-	}
-
-	rs := t.getOrCreateRootState(state, event.BeaconBlockRoot)
-	if rs == nil {
 		return
 	}
 
@@ -565,19 +634,62 @@ func (t *HeadVoteTracker) handleSingleAttestation(event *beacon.SingleAttestatio
 		return
 	}
 
-	if isBitSet(rs.voteBits, int(pos)) {
+	if rs := t.getOrCreateRootState(state, event.BeaconBlockRoot); rs != nil && !isBitSet(rs.voteBits, int(pos)) {
+		setBit(rs.voteBits, int(pos))
+		rs.voteTimes[pos] = t.voteTimeOffset(event.Slot, event.ReceivedAt)
+
+		weight := uint64(layout.weights[pos])
+		rs.participatingETH += weight
+
+		if state.sampled[ci] {
+			rs.sampledETH += weight
+		}
+
+		rs.voteCount++
+		rs.lastVoteAt = event.ReceivedAt
+		rs.dirty = true
+
+		t.maybeFireThreshold(event.Slot, state, event.BeaconBlockRoot, rs)
+	}
+
+	// Count the voter towards its committee's sampling (once per slot, across
+	// roots). A newly sampled committee shifts every root's estimate.
+	if isBitSet(state.voterBits, int(pos)) {
 		return
 	}
 
-	setBit(rs.voteBits, int(pos))
-	rs.voteTimes[pos] = t.voteTimeOffset(event.Slot, event.ReceivedAt)
+	setBit(state.voterBits, int(pos))
+	state.committeeVoters[ci]++
 
-	rs.participatingETH += uint64(layout.weights[pos])
-	rs.voteCount++
-	rs.lastVoteAt = event.ReceivedAt
-	rs.dirty = true
+	if state.sampled[ci] || state.committeeVoters[ci] < layout.sampleMin[ci] {
+		return
+	}
 
-	t.maybeFireThreshold(event.Slot, state, event.BeaconBlockRoot, rs)
+	state.markSampled(ci)
+
+	if root, rs := state.primary(); rs != nil {
+		rs.dirty = true
+		t.maybeFireThreshold(event.Slot, state, root, rs)
+	}
+}
+
+// markSampled marks a committee as sampled and folds the votes every root
+// already holds within it into the root's sampled balance.
+func (s *slotVoteState) markSampled(ci int) {
+	layout := s.layout
+	s.sampled[ci] = true
+	s.sampledETH += layout.committeeETH[ci]
+	s.sampledMembers += layout.committeeSizes[ci]
+
+	end := layout.committeeOffsets[ci] + layout.committeeSizes[ci]
+
+	for _, rs := range s.roots {
+		for pos := layout.committeeOffsets[ci]; pos < end; pos++ {
+			if isBitSet(rs.voteBits, pos) {
+				rs.sampledETH += uint64(layout.weights[pos])
+			}
+		}
+	}
 }
 
 // voteTimeOffset encodes a vote's receive time as ms offset from the slot
@@ -615,8 +727,11 @@ func (t *HeadVoteTracker) getOrCreateSlotState(slot phase0.Slot) *slotVoteState 
 	}
 
 	state := &slotVoteState{
-		layout: layout,
-		roots:  make(map[phase0.Root]*rootVoteState, maxTrackedRootsPerSlot),
+		layout:          layout,
+		roots:           make(map[phase0.Root]*rootVoteState, maxTrackedRootsPerSlot),
+		voterBits:       make([]byte, (layout.totalMembers+7)/8),
+		committeeVoters: make([]int, len(layout.committeeSizes)),
+		sampled:         make([]bool, len(layout.committeeSizes)),
 	}
 	t.slotStates[slot] = state
 
@@ -702,6 +817,8 @@ func (t *HeadVoteTracker) buildCommitteeLayout(slot phase0.Slot) *slotCommitteeL
 	layout := &slotCommitteeLayout{
 		committeeOffsets: committeeOffsets,
 		committeeSizes:   committeeSizes,
+		committeeETH:     make([]uint64, len(committees)),
+		sampleMin:        make([]int, len(committees)),
 		totalMembers:     totalMembers,
 		positions:        make(map[phase0.ValidatorIndex]int32, totalMembers),
 		weights:          make([]uint32, totalMembers),
@@ -711,11 +828,14 @@ func (t *HeadVoteTracker) buildCommitteeLayout(slot phase0.Slot) *slotCommitteeL
 
 	pos := 0
 
-	for _, committee := range committees {
+	for ci, committee := range committees {
+		layout.sampleMin[ci] = min(sampleMinVoters, (len(committee)+1)/2)
+
 		for _, aidx := range committee {
 			layout.positions[stats.ActiveIndices[aidx]] = int32(pos)
 			layout.validators[pos] = stats.ActiveIndices[aidx]
 			layout.weights[pos] = stats.EffectiveBalances[aidx]
+			layout.committeeETH[ci] += uint64(stats.EffectiveBalances[aidx])
 			layout.totalSlotETH += uint64(stats.EffectiveBalances[aidx])
 			pos++
 		}
@@ -782,12 +902,12 @@ func (t *HeadVoteTracker) maybeFireThreshold(
 		return
 	}
 
-	if t.participationPct(state.layout, rs) < threshold {
+	if pct, _ := state.participation(rs); pct < threshold {
 		return
 	}
 
 	rs.thresholdFired = true
-	t.fire(slot, root, state.layout, rs)
+	t.fire(slot, root, state, rs)
 }
 
 // flushDirty fires throttled updates for every slot's primary root whose
@@ -802,22 +922,29 @@ func (t *HeadVoteTracker) flushDirty() {
 			continue
 		}
 
-		if t.participationPct(state.layout, rs)-rs.lastFiredPct < voteFirePctStep {
+		if pct, _ := state.participation(rs); pct-rs.lastFiredPct < voteFirePctStep {
 			continue
 		}
 
-		t.fire(slot, root, state.layout, rs)
+		t.fire(slot, root, state, rs)
 	}
 }
 
-// participationPct computes a root's participation in percent of the slot's
-// total attesting balance.
-func (t *HeadVoteTracker) participationPct(layout *slotCommitteeLayout, rs *rootVoteState) float64 {
+// participation computes a root's participation in percent of the slot's
+// total attesting balance. While only part of the slot's committees are
+// sampled it is extrapolated from them (estimated = true); once every
+// committee is sampled, or too few members are, it is the raw seen share.
+func (s *slotVoteState) participation(rs *rootVoteState) (pct float64, estimated bool) {
+	layout := s.layout
 	if layout.totalSlotETH == 0 {
-		return 0
+		return 0, false
 	}
 
-	return float64(rs.participatingETH) / float64(layout.totalSlotETH) * 100.0
+	if s.sampledMembers >= sampleMinMembers && s.sampledETH > 0 && s.sampledETH < layout.totalSlotETH {
+		return float64(rs.sampledETH) / float64(s.sampledETH) * 100.0, true
+	}
+
+	return float64(rs.participatingETH) / float64(layout.totalSlotETH) * 100.0, false
 }
 
 // buildUpdate assembles the update snapshot for a root's current state. The
@@ -827,11 +954,22 @@ func (t *HeadVoteTracker) participationPct(layout *slotCommitteeLayout, rs *root
 func (t *HeadVoteTracker) buildUpdate(
 	slot phase0.Slot,
 	root phase0.Root,
-	layout *slotCommitteeLayout,
+	state *slotVoteState,
 	rs *rootVoteState,
 ) *HeadVoteUpdate {
-	pct := t.participationPct(layout, rs)
+	layout := state.layout
+	pct, estimated := state.participation(rs)
 	threshold := t.thresholdPct()
+
+	participatingETH := rs.participatingETH
+	if estimated {
+		participatingETH = uint64(pct / 100.0 * float64(layout.totalSlotETH))
+	}
+
+	var sampledPct float64
+	if layout.totalSlotETH > 0 {
+		sampledPct = float64(state.sampledETH) / float64(layout.totalSlotETH) * 100.0
+	}
 
 	at := rs.lastVoteAt
 	if at.IsZero() {
@@ -842,10 +980,12 @@ func (t *HeadVoteTracker) buildUpdate(
 		Slot:             slot,
 		BlockRoot:        root,
 		ParticipationPct: pct,
-		ParticipationETH: rs.participatingETH,
+		ParticipationETH: participatingETH,
 		TotalSlotETH:     layout.totalSlotETH,
 		VoteCount:        rs.voteCount,
 		TotalMembers:     layout.totalMembers,
+		Estimated:        estimated,
+		SampledPct:       sampledPct,
 		ThresholdPct:     threshold,
 		ThresholdMet:     threshold > 0 && pct >= threshold,
 		Timestamp:        at.UnixMilli(),
@@ -857,10 +997,10 @@ func (t *HeadVoteTracker) buildUpdate(
 func (t *HeadVoteTracker) fire(
 	slot phase0.Slot,
 	root phase0.Root,
-	layout *slotCommitteeLayout,
+	state *slotVoteState,
 	rs *rootVoteState,
 ) {
-	update := t.buildUpdate(slot, root, layout, rs)
+	update := t.buildUpdate(slot, root, state, rs)
 
 	rs.lastFiredPct = update.ParticipationPct
 	rs.dirty = false
@@ -871,6 +1011,8 @@ func (t *HeadVoteTracker) fire(
 		"votes":         update.VoteCount,
 		"eth":           update.ParticipationETH,
 		"total_eth":     update.TotalSlotETH,
+		"estimated":     update.Estimated,
+		"sampled_pct":   fmt.Sprintf("%.1f%%", update.SampledPct),
 		"threshold_met": update.ThresholdMet,
 	}).Debug("Firing head vote update")
 
@@ -902,6 +1044,31 @@ func popCount(data []byte) int {
 	count := 0
 	for _, b := range data {
 		count += bits.OnesCount8(b)
+	}
+
+	return count
+}
+
+// popCountRange returns the number of set bits in [offset, offset+size).
+func popCountRange(data []byte, offset, size int) int {
+	count := 0
+	for pos := offset; pos < offset+size; pos++ {
+		if isBitSet(data, pos) {
+			count++
+		}
+	}
+
+	return count
+}
+
+// popCountAndRange returns the number of bits in [offset, offset+size) set in
+// both byte slices.
+func popCountAndRange(a, b []byte, offset, size int) int {
+	count := 0
+	for pos := offset; pos < offset+size; pos++ {
+		if isBitSet(a, pos) && isBitSet(b, pos) {
+			count++
+		}
 	}
 
 	return count
