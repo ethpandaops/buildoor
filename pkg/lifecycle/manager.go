@@ -65,11 +65,11 @@ type Manager struct {
 	// walletUnderfunded dedupes the "fund the wallet" event; re-armed once the
 	// wallet can cover a deposit again.
 	walletUnderfunded atomic.Bool
+	eventCallback     func(*LifecycleEvent)
 
 	// earlyWindowLoggedEpoch is the epoch (+1, 0 = none) whose predicted early
 	// onboarding window was last logged.
 	earlyWindowLoggedEpoch atomic.Uint64
-	eventCallback     func(*LifecycleEvent)
 
 	// poke requests an immediate reconcile pass (cap 1).
 	poke chan struct{}
