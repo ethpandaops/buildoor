@@ -186,8 +186,8 @@ func TestSimulateDepositSurvives(t *testing.T) {
 }
 
 // Onboarding several keys appends several entries: the batch survives to the
-// fork exactly when its LAST entry does, so a batch that fits the drain budget
-// while a longer one does not must be judged separately.
+// fork only when its FIRST entry does — a partly drained batch onboards the
+// keys behind the drain and turns the drained ones into validators.
 func TestSimulateDepositSurvives_Batch(t *testing.T) {
 	const (
 		deposit32 = 32 * gwei
@@ -213,9 +213,15 @@ func TestSimulateDepositSurvives_Batch(t *testing.T) {
 			want:       false,
 		},
 		{
-			name:       "batch larger than the drain budget survives at its tail",
+			name:       "batch larger than the drain budget is partly consumed",
 			ourAmounts: repeatAmounts(6, deposit32),
 			churn:      4 * deposit32,
+			want:       false,
+		},
+		{
+			name:       "batch whose first entry stays out of the drain survives",
+			ourAmounts: repeatAmounts(4, deposit32),
+			churn:      0,
 			want:       true,
 		},
 	}
