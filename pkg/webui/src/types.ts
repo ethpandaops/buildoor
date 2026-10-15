@@ -71,7 +71,7 @@ export interface BuildConfig {
 // payload (EL or local) feeds bids and reveals.
 export interface LocalBuildConfig {
   enabled: boolean;
-  payload_source: string; // el | local | local_or_el
+  payload_source: string; // el | local | local_or_el | higher_value
   tx_source: string; // txpool | empty | el_mempool
   build_el_payload: boolean;
   allow_blobs_without_bundle: boolean;
@@ -875,7 +875,7 @@ export interface BuildPlan {
 // Per-slot local build (testing_buildBlockV1) overrides; every field optional.
 export interface LocalBuildPlan {
   enabled?: boolean;
-  payload_source?: string; // el | local | local_or_el
+  payload_source?: string; // el | local | local_or_el | higher_value
   tx_source?: string; // txpool | empty | el_mempool | explicit
   transactions?: string[]; // 0x-hex raw transactions (tx_source explicit)
   queued?: string[]; // ordered pool tx hashes, exact or the build fails (tx_source queued)

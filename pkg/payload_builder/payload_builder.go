@@ -290,6 +290,18 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 
 		return result, localErr()
 
+	case config.PayloadSourceHigherValue:
+		switch {
+		case result.Local == nil:
+			return useEL()
+		case result.EL == nil:
+			return useLocal()
+		case blockValue(result.Local).Cmp(blockValue(result.EL)) > 0:
+			return useLocal()
+		default:
+			return useEL()
+		}
+
 	case config.PayloadSourceLocalOrEL:
 		if result.Local != nil {
 			return useLocal()
@@ -302,6 +314,15 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 	default:
 		return useEL()
 	}
+}
+
+// blockValue returns the payload's EL-reported block value (0 when unknown).
+func blockValue(payload *Payload) *big.Int {
+	if payload.BlockValue == nil {
+		return new(big.Int)
+	}
+
+	return payload.BlockValue
 }
 
 // prepareBuild resolves everything both build paths share for one target.

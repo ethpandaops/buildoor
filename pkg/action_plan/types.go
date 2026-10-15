@@ -358,7 +358,7 @@ type BuildPlan struct {
 type LocalBuildPlan struct {
 	// Enabled forces the local build on or off for the slot.
 	Enabled *bool `json:"enabled,omitempty"`
-	// PayloadSource: el | local | local_or_el.
+	// PayloadSource: el | local | local_or_el | higher_value.
 	PayloadSource string `json:"payload_source,omitempty"`
 	// TxSource: txpool | empty | el_mempool | explicit (explicit requires
 	// Transactions; a non-empty Transactions list implies explicit).
@@ -426,7 +426,7 @@ func (p *LocalBuildPlan) EffectiveTxSource() string {
 
 func (p *LocalBuildPlan) validate() error {
 	if p.PayloadSource != "" && config.NormalizedPayloadSource(p.PayloadSource, "") == "" {
-		return fmt.Errorf("build.local.payload_source: must be el, local or local_or_el (got %q)", p.PayloadSource)
+		return fmt.Errorf("build.local.payload_source: must be el, local, local_or_el or higher_value (got %q)", p.PayloadSource)
 	}
 
 	if p.TxSource != "" && config.NormalizedTxSource(p.TxSource, "") == "" {

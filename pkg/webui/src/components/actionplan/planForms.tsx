@@ -455,7 +455,8 @@ export const LocalBuildForm: React.FC<{
               <InfoHint>
                 Which block feeds bids and the reveal. <strong>engine</strong>: the regular build, the
                 custom block is compare-only. <strong>custom</strong>: the custom block, no fallback.{' '}
-                <strong>custom, else engine</strong>: the custom block when built, otherwise the engine block.
+                <strong>custom, else engine</strong>: the custom block when built, otherwise the engine block.{' '}
+                <strong>higher-value</strong>: both are built, the one worth more wins (engine on a tie).
               </InfoHint>
             </label>
             <select
@@ -468,6 +469,7 @@ export const LocalBuildForm: React.FC<{
               <option value="el">engine block (custom is compare-only)</option>
               <option value="local">custom block (no fallback)</option>
               <option value="local_or_el">custom block, else engine block</option>
+              <option value="higher_value">higher-value block</option>
             </select>
           </div>
           <div className="col-6">

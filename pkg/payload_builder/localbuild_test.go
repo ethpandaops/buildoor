@@ -32,6 +32,8 @@ func TestLocalBuildRequestRunEL(t *testing.T) {
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceEL}).RunEL())
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL, BuildELPayload: false}).RunEL(),
 		"local_or_el needs the engine payload as fallback")
+	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue, BuildELPayload: false}).RunEL(),
+		"higher_value compares against the engine payload")
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: true}).RunEL())
 	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: false}).RunEL())
 }
@@ -39,6 +41,8 @@ func TestLocalBuildRequestRunEL(t *testing.T) {
 func TestSelectPayload(t *testing.T) {
 	el := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{1}}
 	local := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{2}}
+	richEL := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{3}, BlockValue: big.NewInt(500)}
+	richLocal := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{4}, BlockValue: big.NewInt(500)}
 	b := &PayloadBuilder{}
 
 	tests := []struct {
@@ -81,6 +85,26 @@ func TestSelectPayload(t *testing.T) {
 		{
 			name: "local_or_el falls back to el", result: BuildResult{EL: el, LocalErr: errors.New("x")},
 			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: SourceEL, wantHash: el.BlockHash, fallback: true,
+		},
+		{
+			name: "higher_value takes the more valuable local payload", result: BuildResult{EL: el, Local: richLocal},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: richLocal.BlockHash,
+		},
+		{
+			name: "higher_value takes the more valuable el payload", result: BuildResult{EL: richEL, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: richEL.BlockHash,
+		},
+		{
+			name: "higher_value prefers el on a tie", result: BuildResult{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+		},
+		{
+			name: "higher_value uses el when local failed", result: BuildResult{EL: el, LocalErr: errors.New("x")},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+		},
+		{
+			name: "higher_value uses local when el failed", result: BuildResult{ELErr: errors.New("el down"), Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: local.BlockHash,
 		},
 		{
 			name: "local_or_el with both failed errors", result: BuildResult{ELErr: errors.New("el down"), LocalErr: errors.New("x")},

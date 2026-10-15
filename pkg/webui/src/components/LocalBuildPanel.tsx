@@ -17,6 +17,7 @@ const PAYLOAD_SOURCES: Array<{ value: string; label: string; hint: string }> = [
   { value: 'el', label: 'Engine block', hint: 'Bids and reveals use the engine block. The custom block is built next to it for comparison only.' },
   { value: 'local', label: 'Custom block', hint: 'Bids and reveals use the custom block. When it fails or is skipped, the slot has no payload (no engine fallback).' },
   { value: 'local_or_el', label: 'Custom block, else engine block', hint: 'Bids and reveals use the custom block when it was built, otherwise the engine block.' },
+  { value: 'higher_value', label: 'Higher-value block', hint: 'Both blocks are built; bids and reveals use the one with the higher block value (the engine block on a tie, the other one when a build fails).' },
 ];
 
 const TX_SOURCES: Array<{ value: string; label: string; hint: string }> = [
@@ -407,8 +408,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 </label>
                 <InfoHint>
                   Only matters for <em>Bid with: Custom block</em>. On, the engine block is still built
-                  for comparison (and as the fallback of <em>Custom block, else engine block</em>, which
-                  always builds it). Off saves the EL the second build.
+                  for comparison. The other choices always build it. Off saves the EL the second build.
                 </InfoHint>
               </div>
               <div className="form-check mb-2">

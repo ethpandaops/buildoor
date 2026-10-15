@@ -253,7 +253,9 @@ npm run clean
      them; `local_or_el` falls back). `local_build.payload_source` decides which
      payload feeds `PayloadReady` (bids/reveals): `el` (default; the local payload
      is an inspection-only SHADOW), `local` (strict — no payload when the local
-     build fails), `local_or_el` (fallback, recorded). Tx source:
+     build fails), `local_or_el` (fallback, recorded), `higher_value` (both
+     built, the higher EL-reported block value wins; engine on a tie, the
+     surviving one when a build fails). Tx source:
      `txpool` | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
@@ -689,7 +691,7 @@ Key config sections:
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
 - **Local build / tx pool**: `--local-build-enabled`, `--local-build-payload-source`
-  (el | local | local_or_el), `--local-build-tx-source` (txpool | empty |
+  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` + `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,

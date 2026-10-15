@@ -737,7 +737,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
               { label: 'Tx Source', value: lb.tx_source || '—' },
               { label: 'Payload Source', value: lb.payload_source || '—' },
-              { label: 'Bids With', value: lb.selected ? 'custom block' : lb.fallback ? 'engine block (fallback)' : 'engine block (custom is compare-only)' },
+              { label: 'Bids With', value: lb.selected
+                ? (lb.payload_source === 'higher_value' ? 'custom block (worth more)' : 'custom block')
+                : lb.fallback ? 'engine block (fallback)'
+                  : lb.payload_source === 'higher_value' ? 'engine block (worth at least as much)'
+                    : 'engine block (custom is compare-only)' },
               ...(lb.local ? [
                 { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
                 { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },

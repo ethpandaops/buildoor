@@ -79,8 +79,8 @@ type LocalBuildRequest struct {
 	// Queued is the exact ordered list of pool transaction hashes (tx source
 	// queued).
 	Queued []common.Hash
-	// PayloadSource decides which payload feeds consumers: el, local or
-	// local_or_el.
+	// PayloadSource decides which payload feeds consumers: el, local,
+	// local_or_el or higher_value.
 	PayloadSource string
 	// BuildELPayload keeps the engine build running when PayloadSource is
 	// local.
@@ -105,8 +105,8 @@ type LocalBuildRequest struct {
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
-// The el and local_or_el payload sources need the engine payload; local only
-// keeps it when BuildELPayload is set.
+// The el, local_or_el and higher_value payload sources need the engine
+// payload; local only keeps it when BuildELPayload is set.
 func (r *LocalBuildRequest) RunEL() bool {
 	if r == nil {
 		return true

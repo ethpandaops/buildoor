@@ -183,7 +183,7 @@ definitions:
       ordering:
         type: string
       payload_source:
-        description: 'PayloadSource: el | local | local_or_el.'
+        description: 'PayloadSource: el | local | local_or_el | higher_value.'
         type: string
       queued:
         description: |-
@@ -435,7 +435,7 @@ definitions:
       ordering:
         type: string
       payload_source:
-        description: 'PayloadSource: el | local | local_or_el.'
+        description: 'PayloadSource: el | local | local_or_el | higher_value.'
         type: string
       queued:
         description: Queued is the exact ordered hash list for the queued source.

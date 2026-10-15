@@ -498,13 +498,17 @@ const (
 	// PayloadSourceLocalOrEL uses the local payload when it succeeded and
 	// falls back to the engine payload otherwise.
 	PayloadSourceLocalOrEL = "local_or_el"
+	// PayloadSourceHigherValue builds both and uses the payload with the
+	// higher EL-reported block value (the engine payload on a tie, the one
+	// that exists when the other build failed).
+	PayloadSourceHigherValue = "higher_value"
 )
 
 // NormalizedPayloadSource returns the payload source, falling back to the
 // given default for unknown values (UI overrides are free-form strings).
 func NormalizedPayloadSource(source, fallback string) string {
 	switch source {
-	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL:
+	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL, PayloadSourceHigherValue:
 		return source
 	default:
 		return fallback
@@ -576,8 +580,9 @@ type LocalBuildConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// PayloadSource decides which payload feeds bids and reveals: el
-	// (default; the local payload is an inspection-only shadow), local, or
-	// local_or_el (local when it succeeded, else the engine payload).
+	// (default; the local payload is an inspection-only shadow), local,
+	// local_or_el (local when it succeeded, else the engine payload), or
+	// higher_value (whichever of the two is worth more).
 	PayloadSource string `yaml:"payload_source" json:"payload_source"`
 
 	// TxSource is where the local build's transaction list comes from:
@@ -588,8 +593,8 @@ type LocalBuildConfig struct {
 	// BuildELPayload keeps the engine-API build running when PayloadSource is
 	// local (default true, so the EL payload stays available for
 	// comparison). Set to false to skip the engine build and its wait when
-	// only the local payload matters. Ignored for el and local_or_el, which
-	// need the engine payload.
+	// only the local payload matters. Ignored for el, local_or_el and
+	// higher_value, which need the engine payload.
 	BuildELPayload bool `yaml:"build_el_payload" json:"build_el_payload"`
 
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on

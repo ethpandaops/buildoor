@@ -106,7 +106,7 @@ type ResolvedBuildSettings struct {
 // slot.
 type ResolvedLocalBuildSettings struct {
 	Enabled bool `json:"enabled"`
-	// PayloadSource: el | local | local_or_el.
+	// PayloadSource: el | local | local_or_el | higher_value.
 	PayloadSource string `json:"payload_source"`
 	// TxSource: txpool | empty | el_mempool | explicit.
 	TxSource string `json:"tx_source"`

@@ -2240,7 +2240,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "payload_source": {
-                    "description": "PayloadSource: el | local | local_or_el.",
+                    "description": "PayloadSource: el | local | local_or_el | higher_value.",
                     "type": "string"
                 },
                 "queued": {
@@ -2509,7 +2509,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "payload_source": {
-                    "description": "PayloadSource: el | local | local_or_el.",
+                    "description": "PayloadSource: el | local | local_or_el | higher_value.",
                     "type": "string"
                 },
                 "queued": {

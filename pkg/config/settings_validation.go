@@ -76,7 +76,7 @@ func ValidateSetting(key string, v any) error {
 	case KeyLocalBuildPayloadSource:
 		source, _ := v.(string)
 		if NormalizedPayloadSource(source, "") == "" {
-			return fmt.Errorf("%s must be el, local or local_or_el, got %q", key, source)
+			return fmt.Errorf("%s must be el, local, local_or_el or higher_value, got %q", key, source)
 		}
 
 	case KeyLocalBuildTxSource:

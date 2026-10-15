@@ -270,7 +270,11 @@ export function useEventStream(): UseEventStreamResult {
 
           if (data.status === 'ready') {
             const txs = data.local?.num_transactions ?? 0;
-            const role = data.selected ? 'bids with it' : 'compare only, bids use the engine block';
+            const role = data.selected
+              ? (data.payload_source === 'higher_value' ? 'bids with it, worth more' : 'bids with it')
+              : data.payload_source === 'higher_value'
+                ? 'engine block worth at least as much, bids use it'
+                : 'compare only, bids use the engine block';
             addEvent('local_build',
               `Custom build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
               event.timestamp);
