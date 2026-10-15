@@ -599,3 +599,36 @@ func TestBuildLocalELFill(t *testing.T) {
 		require.Equal(t, []string{own.Hash().Hex()}, out.info.ExpectedHashes)
 	})
 }
+
+// TestFireLocalProgress reports the custom build live: building at the start,
+// then its own outcome without waiting for the engine build.
+func TestFireLocalProgress(t *testing.T) {
+	b, attrs, _ := newLocalTestBuilder(&fakeLocalClient{})
+	sub := b.localProgress.Subscribe(8, false)
+
+	defer sub.Unsubscribe()
+
+	req := &LocalBuildRequest{Candidate: "parent_full", TxSource: config.TxSourceTxPool}
+	started := time.Now()
+
+	b.fireLocalProgress(attrs, req, started, nil)
+	b.fireLocalProgress(attrs, req, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
+	b.fireLocalProgress(attrs, req, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
+	b.fireLocalProgress(attrs, req, started, &localOutcome{err: errors.New("boom")})
+
+	phases := make([]*LocalBuildProgressEvent, 0, 4)
+	for range 4 {
+		phases = append(phases, <-sub.Channel())
+	}
+
+	require.Equal(t, LocalStatusBuilding, phases[0].Phase)
+	require.Equal(t, "parent_full", phases[0].Candidate)
+	require.Equal(t, attrs.ProposalSlot, phases[0].Slot)
+	require.Equal(t, LocalStatusReady, phases[1].Phase)
+	require.Equal(t, big.NewInt(7), phases[1].BlockValue)
+	require.Equal(t, started, phases[1].StartedAt)
+	require.Equal(t, LocalStatusSkipped, phases[2].Phase)
+	require.Equal(t, LocalSkipTxPoolDisabled, phases[2].SkipReason)
+	require.Equal(t, LocalStatusFailed, phases[3].Phase)
+	require.Equal(t, "boom", phases[3].Error)
+}

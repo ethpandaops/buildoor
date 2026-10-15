@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -297,6 +297,21 @@ export function useEventStream(): UseEventStreamResult {
               return prev;
             }
             return { ...prev, [data.slot]: { ...state, localBuild: data } };
+          });
+          break;
+        }
+
+        case 'local_build_progress': {
+          const data = event.data as LocalBuildProgressEvent;
+          setSlotStates(prev => {
+            const state = prev[data.slot] || { slot: data.slot };
+            // Display only: the primary target wins, and the final event (if
+            // already there) is authoritative.
+            if (state.localBuildLive && data.candidate && data.candidate !== 'parent_full' &&
+                state.localBuildLive.candidate === 'parent_full') {
+              return prev;
+            }
+            return { ...prev, [data.slot]: { ...state, localBuildLive: data } };
           });
           break;
         }

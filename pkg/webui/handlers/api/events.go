@@ -60,6 +60,7 @@ const (
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeLocalBuild                  EventType = "local_build"
+	EventTypeLocalBuildProgress          EventType = "local_build_progress"
 	EventTypeTxPoolStats                 EventType = "txpool_stats"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
 	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
@@ -687,6 +688,7 @@ func (m *EventStreamManager) Start() {
 
 	// Subscribe to local build outcomes (testing_buildBlockV1 extension)
 	localBuildSub := m.builderSvc.SubscribeLocalBuild(16, false)
+	localProgressSub := m.builderSvc.SubscribeLocalBuildProgress(16)
 
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
@@ -811,6 +813,7 @@ func (m *EventStreamManager) Start() {
 		defer buildStartedSub.Unsubscribe()
 		defer buildFailedSub.Unsubscribe()
 		defer localBuildSub.Unsubscribe()
+		defer localProgressSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
@@ -882,6 +885,9 @@ func (m *EventStreamManager) Start() {
 
 			case event := <-localBuildSub.Channel():
 				m.handleLocalBuild(event)
+
+			case event := <-localProgressSub.Channel():
+				m.handleLocalBuildProgress(event)
 
 			case event := <-headSub.Channel():
 				m.handleHeadEvent(event)
@@ -1815,6 +1821,49 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 			ELReadyAt:     elReadyAt,
 			At:            event.At.UnixMilli(),
 		},
+	})
+}
+
+// LocalBuildProgressStreamEvent is the live state of one custom build
+// (testing_buildBlockV1), sent ahead of the final local_build event.
+type LocalBuildProgressStreamEvent struct {
+	Slot            uint64 `json:"slot"`
+	Candidate       string `json:"candidate,omitempty"`
+	Phase           string `json:"phase"` // building | ready | failed | skipped
+	TxSource        string `json:"tx_source,omitempty"`
+	StartedAt       int64  `json:"started_at"`
+	At              int64  `json:"at"`
+	NumTransactions int    `json:"num_transactions,omitempty"`
+	BlockValueWei   string `json:"block_value_wei,omitempty"`
+	SkipReason      string `json:"skip_reason,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (m *EventStreamManager) handleLocalBuildProgress(event *payload_builder.LocalBuildProgressEvent) {
+	if event == nil {
+		return
+	}
+
+	data := LocalBuildProgressStreamEvent{
+		Slot:            uint64(event.Slot),
+		Candidate:       event.Candidate,
+		Phase:           event.Phase,
+		TxSource:        event.TxSource,
+		StartedAt:       event.StartedAt.UnixMilli(),
+		At:              event.At.UnixMilli(),
+		NumTransactions: event.NumTransactions,
+		SkipReason:      event.SkipReason,
+		Error:           event.Error,
+	}
+
+	if event.BlockValue != nil {
+		data.BlockValueWei = event.BlockValue.String()
+	}
+
+	m.broadcastForSlot(event.Slot, &StreamEvent{
+		Type:      EventTypeLocalBuildProgress,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      data,
 	})
 }
 

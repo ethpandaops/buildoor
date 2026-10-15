@@ -716,6 +716,60 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
 
+          {/* Custom build, live: from its start until the final local_build event (which
+              waits for the engine build and the bid choice) takes over below. */}
+          {(() => {
+            const live = state.localBuildLive;
+            if (!live || state.localBuild || genesisTime <= 0 || !epbsConfig) return null;
+
+            const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
+            if (startX >= 100) return null;
+
+            const items = [
+              { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
+              ...(live.phase === 'building'
+                ? [{ label: 'Status', value: 'building…' }]
+                : [
+                    {
+                      label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
+                      value: `${live.at - slotStartTime}ms`
+                    },
+                    { label: 'Duration', value: `${live.at - live.started_at}ms` },
+                    { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
+                  ]),
+              ...(live.error ? [{ label: 'Error', value: live.error }] : []),
+              { label: 'Tx Source', value: live.tx_source || '—' },
+              ...(live.phase === 'ready'
+                ? [
+                    { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
+                    { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
+                    { label: 'Bids With', value: 'decided once the engine build finishes' }
+                  ]
+                : [])
+            ];
+            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const dotClass = live.phase === 'ready'
+              ? 'local-build-created'
+              : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+
+            return (
+              <>
+                {live.phase !== 'skipped' && (
+                  <BuildDelayLine
+                    leftPct={startX}
+                    slotStartTime={slotStartTime}
+                    rangeStart={rangeStart}
+                    totalRange={totalRange}
+                    endAt={live.phase === 'building' ? undefined : live.at}
+                    className="local-build-line"
+                    onClick={(e) => showPopover(e, data)}
+                  />
+                )}
+                {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, 'local-build')}
+              </>
+            );
+          })()}
+
           {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
               line. Shown when it ran next to an engine build (two distinct builds) or when it
               did not produce a payload; a local-only build is already the primary line. */}

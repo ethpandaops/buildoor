@@ -3,6 +3,7 @@ package payload_builder
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -51,11 +52,13 @@ const (
 	LocalSkipSpeculativeCandidate = "speculative_candidate"
 )
 
-// Local build statuses (LocalBuildEvent.Status).
+// Local build statuses (LocalBuildEvent.Status; LocalBuildProgressEvent.Phase
+// also uses building).
 const (
-	LocalStatusReady   = "ready"
-	LocalStatusFailed  = "failed"
-	LocalStatusSkipped = "skipped"
+	LocalStatusBuilding = "building"
+	LocalStatusReady    = "ready"
+	LocalStatusFailed   = "failed"
+	LocalStatusSkipped  = "skipped"
 )
 
 // LocalBuildClient is the EL surface the local build uses: the testing
@@ -76,6 +79,8 @@ var _ LocalBuildClient = (*execution.Client)(nil)
 // LocalBuildRequest is a slot's resolved local-build instruction handed to the
 // payload builder alongside the engine build.
 type LocalBuildRequest struct {
+	// Candidate is the build target's candidate key (for progress events).
+	Candidate string
 	// TxSource is txpool, empty, el_mempool or explicit.
 	TxSource string
 	// Transactions is the explicit transaction list (tx source explicit).
@@ -425,6 +430,29 @@ func (s *Service) GuardSetting(key string, value any) error {
 	return nil
 }
 
+// LocalBuildProgressEvent reports a custom build live: building when it
+// starts, then ready / failed / skipped the moment testing_buildBlockV1
+// returned. The authoritative LocalBuildEvent follows once the engine build
+// finished and the payload feeding bids was selected.
+type LocalBuildProgressEvent struct {
+	Slot            phase0.Slot
+	Candidate       string
+	Phase           string // building | ready | failed | skipped
+	TxSource        string
+	StartedAt       time.Time
+	At              time.Time
+	NumTransactions int
+	BlockValue      *big.Int
+	SkipReason      string
+	Error           string
+}
+
+// SubscribeLocalBuildProgress subscribes to the live custom build progress
+// (display only, never blocking the build).
+func (s *Service) SubscribeLocalBuildProgress(capacity int) *utils.Subscription[*LocalBuildProgressEvent] {
+	return s.payloadBuilder.localProgress.Subscribe(capacity, false)
+}
+
 // SubscribeLocalBuild subscribes to local build outcome events. Authoritative
 // consumers (the slot results tracker) should pass blocking=true.
 func (s *Service) SubscribeLocalBuild(capacity int, blocking bool) *utils.Subscription[*LocalBuildEvent] {
@@ -459,6 +487,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 	}
 
 	req := &LocalBuildRequest{
+		Candidate:          string(candidate),
 		TxSource:           settings.TxSource,
 		PayloadSource:      settings.PayloadSource,
 		BuildELPayload:     settings.BuildELPayload,

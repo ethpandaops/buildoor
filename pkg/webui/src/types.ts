@@ -227,6 +227,22 @@ export interface LocalBuildInfo {
   fill_dropped?: boolean;
 }
 
+// SSE local_build_progress event: the live state of one custom build
+// (building, then ready / failed / skipped the moment testing_buildBlockV1
+// returned), ahead of the final local_build event.
+export interface LocalBuildProgressEvent {
+  slot: number;
+  candidate?: string;
+  phase: 'building' | 'ready' | 'failed' | 'skipped';
+  tx_source?: string;
+  started_at: number;
+  at: number;
+  num_transactions?: number;
+  block_value_wei?: string;
+  skip_reason?: string;
+  error?: string;
+}
+
 // SSE local_build event (slot-scoped): one build target's local outcome.
 export interface LocalBuildStreamEvent {
   slot: number;
@@ -685,6 +701,8 @@ export interface SlotState {
   submitBlockBlockHash?: string;
   // Local build extension outcome for the slot's primary target.
   localBuild?: LocalBuildStreamEvent;
+  // Live custom build state, until the final localBuild event arrives.
+  localBuildLive?: LocalBuildProgressEvent;
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.

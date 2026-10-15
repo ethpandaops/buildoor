@@ -22,6 +22,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
+	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
 // PayloadBuilder handles execution payload building via the Engine API and,
@@ -44,6 +45,10 @@ type PayloadBuilder struct {
 	// a newer slot starts.
 	activeBuilds map[activeBuildKey]*activeBuild
 	mu           sync.Mutex
+
+	// localProgress reports each custom build live, ahead of the final
+	// LocalBuildEvent that waits for the engine build and the selection.
+	localProgress *utils.Dispatcher[*LocalBuildProgressEvent]
 }
 
 // activeBuildKey identifies one in-progress build by the full parent tuple:
@@ -89,6 +94,7 @@ func NewPayloadBuilder(
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
+		localProgress:     &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		log:               log.WithField("component", "payload-builder"),
 	}
 }
@@ -207,7 +213,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		localCh = make(chan localOutcome, 1)
 
 		go func() {
-			localCh <- b.buildLocal(buildCtx, attrs, prelude, local)
+			started := time.Now()
+			b.fireLocalProgress(attrs, local, started, nil)
+
+			outcome := b.buildLocal(buildCtx, attrs, prelude, local)
+			b.fireLocalProgress(attrs, local, started, &outcome)
+
+			localCh <- outcome
 		}()
 	}
 
@@ -238,6 +250,46 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	return result, err
+}
+
+// fireLocalProgress reports a custom build's live state: building (outcome
+// nil) or its result the moment testing_buildBlockV1 returned.
+func (b *PayloadBuilder) fireLocalProgress(
+	attrs *beacon.PayloadAttributesEvent,
+	req *LocalBuildRequest,
+	started time.Time,
+	outcome *localOutcome,
+) {
+	event := &LocalBuildProgressEvent{
+		Slot:      attrs.ProposalSlot,
+		Candidate: req.Candidate,
+		Phase:     LocalStatusBuilding,
+		TxSource:  req.TxSource,
+		StartedAt: started,
+		At:        time.Now(),
+	}
+
+	switch {
+	case outcome == nil:
+	case outcome.payload != nil:
+		event.Phase = LocalStatusReady
+		event.BlockValue = outcome.payload.BlockValue
+
+		if outcome.payload.ExecutionPayload != nil {
+			event.NumTransactions = len(outcome.payload.ExecutionPayload.Transactions)
+		}
+	case outcome.skipReason != "":
+		event.Phase = LocalStatusSkipped
+		event.SkipReason = outcome.skipReason
+	default:
+		event.Phase = LocalStatusFailed
+
+		if outcome.err != nil {
+			event.Error = outcome.err.Error()
+		}
+	}
+
+	b.localProgress.Fire(event)
 }
 
 // selectPayload picks the payload feeding the consumers per the request's
