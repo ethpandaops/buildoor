@@ -399,6 +399,35 @@ func (p *TxPlanResult) clone() *TxPlanResult {
 	return &c
 }
 
+// Redacted returns the result without the raw explicit transactions of its
+// applied plan (see action_plan.SlotPlan.Redacted), for readers without a
+// login.
+func (r *SlotResult) Redacted() *SlotResult {
+	if r == nil {
+		return nil
+	}
+
+	plan := r.AppliedPlan.Redacted()
+	if plan == r.AppliedPlan {
+		return r
+	}
+
+	out := *r
+	out.AppliedPlan = plan
+
+	return &out
+}
+
+// RedactedResults returns the results without raw explicit transactions.
+func RedactedResults(results []*SlotResult) []*SlotResult {
+	out := make([]*SlotResult, len(results))
+	for i, result := range results {
+		out[i] = result.Redacted()
+	}
+
+	return out
+}
+
 // Clone returns a deep copy of the result.
 func (r *SlotResult) Clone() *SlotResult {
 	if r == nil {

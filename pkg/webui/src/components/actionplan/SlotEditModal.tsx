@@ -18,6 +18,8 @@ import {
   CANDIDATE_KEY_HINTS,
   BuildForm,
   LocalBuildForm,
+  HiddenTransactionsNote,
+  hiddenTransactionsError,
   initLocalBuildState,
   localBuildPlanFromState,
   type LocalBuildFormState,
@@ -29,6 +31,7 @@ import {
   type CategoryOutcome,
 } from './planForms';
 import { InfoHint } from '../InfoHint';
+import { ArtifactButtons } from '../ArtifactButtons';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -118,48 +121,14 @@ const StatusBadge: React.FC<{ map: Record<string, string>; status: string }> = (
 );
 
 // ---------------------------------------------------------------------------
-// Artifact access (JSON opens the endpoint, SSZ downloads via blob)
+// Artifact access (authenticated JSON / SSZ downloads via blob)
 // ---------------------------------------------------------------------------
-
-async function downloadSSZ(url: string, filename: string): Promise<void> {
-  const resp = await fetch(url, { headers: { Accept: 'application/octet-stream' } });
-  if (!resp.ok) {
-    throw new Error(`Artifact download failed: ${resp.status} ${resp.statusText}`);
-  }
-
-  const blob = await resp.blob();
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(objectUrl);
-}
 
 const ArtifactLinks: React.FC<{
   url: string;
   filename: string;
   onError: (message: string) => void;
-}> = ({ url, filename, onError }) => (
-  <span className="d-inline-flex gap-1">
-    <a href={url} target="_blank" rel="noreferrer" className="btn btn-outline-secondary ap-artifact-btn">
-      JSON
-    </a>
-    <button
-      type="button"
-      className="btn btn-outline-secondary ap-artifact-btn"
-      onClick={() => {
-        downloadSSZ(url, filename).catch((err) =>
-          onError(err instanceof Error ? err.message : String(err))
-        );
-      }}
-    >
-      SSZ
-    </button>
-  </span>
-);
+}> = ({ url, filename, onError }) => <ArtifactButtons url={url} filename={filename} onError={onError} />;
 
 // ---------------------------------------------------------------------------
 // Read-only frozen plan + result views
@@ -231,6 +200,15 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
               title={`Custom build via testing_buildBlockV1: bids with ${frozen.build.local.payload_source}, transactions from ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
             >
               custom: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
+            </span>
+          )}
+          {frozen.build.local?.enabled && frozen.build.local.tx_source === 'explicit' && (
+            <span className="ms-1">
+              {frozen.build.local.transactions_redacted ? (
+                <HiddenTransactionsNote count={frozen.build.local.transactions_redacted} />
+              ) : (
+                <span className="text-muted small">{frozen.build.local.transactions?.length ?? 0} explicit transactions</span>
+              )}
             </span>
           )}
         </KV>
@@ -1213,6 +1191,14 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
     const localChanged = bulk
       ? localPlan !== undefined
       : JSON.stringify(localPlan ?? null) !== JSON.stringify(initialLocal ?? null);
+
+    // A hidden explicit list cannot be written back: the backend refuses it
+    // rather than dropping the transactions.
+    const hiddenError = (candidatesChanged || localChanged) ? hiddenTransactionsError(localPlan) : null;
+    if (hiddenError) {
+      setFormError(hiddenError);
+      return;
+    }
 
     if (candidatesChanged) {
       const buildObj: Record<string, unknown> = {};

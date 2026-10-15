@@ -17,7 +17,17 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { getAuthHeader } = useAuth();
+  // True when the backend refused the pool read without a login (401): the
+  // pool holds private transactions, readable by operators only.
+  const [unauthorized, setUnauthorized] = useState(false);
+  const { getAuthHeader, isLoggedIn } = useAuth();
+
+  const authHeaders = useCallback(async (): Promise<HeadersInit> => {
+    const headers: HeadersInit = {};
+    const token = await getAuthHeader();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  }, [getAuthHeader]);
 
   const fetchPool = useCallback(async () => {
     const params = new URLSearchParams({
@@ -28,7 +38,14 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
     if (query.sort) params.set('sort', query.sort);
 
     try {
-      const response = await fetch(`/api/buildoor/txpool?${params.toString()}`);
+      const response = await fetch(`/api/buildoor/txpool?${params.toString()}`, { headers: await authHeaders() });
+      if (response.status === 401) {
+        setData(null);
+        setUnauthorized(true);
+        setError(null);
+        return;
+      }
+      setUnauthorized(false);
       if (response.status === 404) {
         setData(null);
         setError('Transaction pool not configured (no --el-rpc)');
@@ -44,11 +61,17 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
     } finally {
       setLoading(false);
     }
-  }, [query.offset, query.limit, query.sender, query.sort]);
+    // isLoggedIn re-runs the fetch once a login completes.
+  }, [query.offset, query.limit, query.sender, query.sort, authHeaders, isLoggedIn]);
 
   const fetchPreview = useCallback(async () => {
     try {
-      const response = await fetch('/api/buildoor/txpool/preview');
+      const response = await fetch('/api/buildoor/txpool/preview', { headers: await authHeaders() });
+      if (response.status === 401) {
+        setPreview(null);
+        setPreviewError(null);
+        return;
+      }
       const body = await response.json();
       if (!response.ok) {
         setPreview(null);
@@ -60,18 +83,11 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : 'Unknown error');
     }
-  }, []);
+  }, [authHeaders, isLoggedIn]);
 
   useEffect(() => {
     fetchPool();
   }, [fetchPool, refreshKey]);
-
-  const authHeaders = useCallback(async (): Promise<HeadersInit> => {
-    const headers: HeadersInit = {};
-    const token = await getAuthHeader();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    return headers;
-  }, [getAuthHeader]);
 
   const clear = useCallback(async (): Promise<string | null> => {
     const response = await fetch('/api/buildoor/txpool', { method: 'DELETE', headers: await authHeaders() });
@@ -89,5 +105,5 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
     return null;
   }, [authHeaders, fetchPool]);
 
-  return { data, loading, error, refresh: fetchPool, preview, previewError, fetchPreview, clear, drop };
+  return { data, loading, error, unauthorized, refresh: fetchPool, preview, previewError, fetchPreview, clear, drop };
 }

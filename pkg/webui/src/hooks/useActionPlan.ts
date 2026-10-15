@@ -8,6 +8,7 @@ import type {
   UpdateActionPlanResponse,
 } from '../types';
 import { authStore } from '../stores/authStore';
+import { authHeaders, frozenRedacted, planRedacted, useLoggedIn } from './authFetch';
 import {
   onStreamEvent,
   getConnectionGeneration,
@@ -53,6 +54,14 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
   const rangeRef = useRef({ min: minSlot, max: maxSlot });
   rangeRef.current = { min: minSlot, max: maxSlot };
 
+  // Reads with a login carry the explicit local build transactions; without
+  // one (and in every SSE event) they are redacted to a count.
+  const loggedIn = useLoggedIn();
+  const loggedInRef = useRef(loggedIn);
+  loggedInRef.current = loggedIn;
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
+
   const fetchAll = useCallback(async () => {
     if (maxSlot < minSlot) return;
 
@@ -61,9 +70,10 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
     try {
       const query = `min_slot=${minSlot}&max_slot=${maxSlot}`;
+      const headers = await authHeaders();
       const [planResp, resultResp] = await Promise.all([
-        fetch(`/api/buildoor/action-plan?${query}`),
-        fetch(`/api/buildoor/slot-results?${query}`),
+        fetch(`/api/buildoor/action-plan?${query}`, { headers }),
+        fetch(`/api/buildoor/slot-results?${query}`, { headers }),
       ]);
 
       if (!planResp.ok) {
@@ -95,7 +105,8 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     } finally {
       setLoading(false);
     }
-  }, [minSlot, maxSlot]);
+    // loggedIn: a login (or the auth client settling) unlocks redacted data.
+  }, [minSlot, maxSlot, loggedIn]);
 
   // Stable handle for the SSE handlers, which must not resubscribe whenever
   // the visible range changes.
@@ -138,11 +149,45 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     fetchAll();
   }, [fetchAll]);
 
+  // Slots whose authoritative result is being refetched because the SSE
+  // copy came redacted.
+  const resultRefetchRef = useRef(new Set<number>());
+
+  const refetchResult = useCallback(async (slot: number) => {
+    if (resultRefetchRef.current.has(slot)) return;
+    resultRefetchRef.current.add(slot);
+    try {
+      const response = await fetch(`/api/buildoor/slot-results?min_slot=${slot}&max_slot=${slot}`, {
+        headers: await authHeaders(),
+      });
+      if (!response.ok) return;
+      const data: SlotResultsResponse = await response.json();
+      const fresh = (data.results || []).find((r) => toSlotNumber(r.slot) === slot);
+      if (!fresh) return;
+      setResults((prev) => {
+        const current = prev[slot];
+        // Keep a newer SSE record; only its frozen applied plan is taken over.
+        const merged = current ? { ...current, applied_plan: fresh.applied_plan } : fresh;
+        return { ...prev, [slot]: merged };
+      });
+    } catch {
+      // The redacted SSE copy stays; the next range fetch heals it.
+    } finally {
+      resultRefetchRef.current.delete(slot);
+    }
+  }, []);
+
   // Live updates through the shared SSE connection.
   useEffect(() => {
     const offPlan = onStreamEvent('action_plan_updated', (data) => {
       const change = data as { slots?: number[]; plans?: (SlotPlan | null)[] };
       if (!change?.slots?.length) return;
+      // SSE bodies are always redacted; a logged-in reader refetches instead of
+      // adopting a plan whose explicit transactions were hidden.
+      if (loggedInRef.current && (change.plans || []).some((p) => planRedacted(p))) {
+        fetchAllRef.current();
+        return;
+      }
       applyPlanChange(change.slots, change.plans || []);
     });
 
@@ -157,7 +202,19 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       const slot = toSlotNumber(result?.slot);
       if (slot < 0) return;
       if (slot < rangeRef.current.min || slot > rangeRef.current.max) return;
+      if (!frozenRedacted(result.applied_plan) || !loggedInRef.current) {
+        setResults((prev) => ({ ...prev, [slot]: result }));
+        return;
+      }
+      // The applied plan is frozen at record creation, so a full copy already
+      // held stays valid; otherwise the slot is refetched with the login.
+      const held = resultsRef.current[slot]?.applied_plan;
+      if (held && !frozenRedacted(held)) {
+        setResults((prev) => ({ ...prev, [slot]: { ...result, applied_plan: held } }));
+        return;
+      }
       setResults((prev) => ({ ...prev, [slot]: result }));
+      refetchResult(slot);
     });
 
     return () => {
@@ -165,7 +222,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       offRules();
       offResult();
     };
-  }, [applyPlanChange]);
+  }, [applyPlanChange, refetchResult]);
 
   // Refetch the visible range after an SSE reconnect (updates during the gap
   // were never delivered).

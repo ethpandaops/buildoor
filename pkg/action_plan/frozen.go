@@ -112,6 +112,9 @@ type ResolvedLocalBuildSettings struct {
 	TxSource string `json:"tx_source"`
 	// Transactions is the explicit list (0x-hex) for the explicit source.
 	Transactions []string `json:"transactions,omitempty"`
+	// TransactionsRedacted is the length of Transactions when the list was
+	// hidden from a reader without a login (output only).
+	TransactionsRedacted int `json:"transactions_redacted,omitempty"`
 	// Queued is the exact ordered hash list for the queued source.
 	Queued []string `json:"queued,omitempty"`
 	// BuildELPayload keeps the engine build when the payload source is local.

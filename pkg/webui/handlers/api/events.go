@@ -944,10 +944,15 @@ func (m *EventStreamManager) Start() {
 					continue
 				}
 
+				// The stream reaches every viewer: explicit transaction lists
+				// stay out of it (logged-in views refetch over REST).
 				m.Broadcast(&StreamEvent{
 					Type:      EventTypeActionPlanUpdated,
 					Timestamp: time.Now().UnixMilli(),
-					Data:      event,
+					Data: action_plan.PlanChangeEvent{
+						Slots: event.Slots,
+						Plans: action_plan.RedactedPlans(event.Plans),
+					},
 				})
 
 			case event, ok := <-ruleChangeChan:
@@ -959,7 +964,7 @@ func (m *EventStreamManager) Start() {
 				m.Broadcast(&StreamEvent{
 					Type:      EventTypeActionPlanRulesUpdated,
 					Timestamp: time.Now().UnixMilli(),
-					Data:      event,
+					Data:      action_plan.RuleChangeEvent{Rules: action_plan.RedactedRules(event.Rules)},
 				})
 
 			case event, ok := <-resultUpdateChan:
@@ -971,7 +976,7 @@ func (m *EventStreamManager) Start() {
 				m.Broadcast(&StreamEvent{
 					Type:      EventTypeSlotResultUpdated,
 					Timestamp: time.Now().UnixMilli(),
-					Data:      event,
+					Data:      event.Redacted(),
 				})
 
 			case event, ok := <-keyChangeChan:

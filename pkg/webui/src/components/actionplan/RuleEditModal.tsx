@@ -11,6 +11,7 @@ import {
   REVEAL_CATEGORY_HINT,
   BuildForm,
   LocalBuildForm,
+  hiddenTransactionsError,
   initLocalBuildState,
   localBuildPlanFromState,
   type LocalBuildFormState,
@@ -225,6 +226,11 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     }
 
     const localPlan = localBuildPlanFromState(localBuild);
+    const hiddenError = hiddenTransactionsError(localPlan);
+    if (hiddenError) {
+      setFormError(hiddenError);
+      return;
+    }
     const buildPlan = {
       ...(buildReorg === 'on' ? { reorg_parent_payload: true } : {}),
       ...(localPlan ? { local: localPlan } : {}),

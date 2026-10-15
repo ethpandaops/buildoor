@@ -366,6 +366,9 @@ type LocalBuildPlan struct {
 	// Transactions is the exact raw transaction list (0x-hex, network
 	// encoding) the slot's local payload is built from.
 	Transactions []string `json:"transactions,omitempty"`
+	// TransactionsRedacted is the length of Transactions when the list was
+	// hidden from a reader without a login (output only).
+	TransactionsRedacted int `json:"transactions_redacted,omitempty"`
 	// Queued is the exact ordered list of transaction hashes (0x-hex) the
 	// slot's local payload is built from; every hash must be queued in the
 	// pool at build time and the order must respect each sender's nonces.
@@ -425,6 +428,10 @@ func (p *LocalBuildPlan) EffectiveTxSource() string {
 }
 
 func (p *LocalBuildPlan) validate() error {
+	if p.TransactionsRedacted > 0 && len(p.Transactions) == 0 {
+		return errRedactedTransactions
+	}
+
 	if p.PayloadSource != "" && config.NormalizedPayloadSource(p.PayloadSource, "") == "" {
 		return fmt.Errorf("build.local.payload_source: must be el, local, local_or_el or higher_value (got %q)", p.PayloadSource)
 	}

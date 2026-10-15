@@ -90,6 +90,10 @@ type PooledTx struct {
 	Arrived     time.Time
 	ArrivedSlot phase0.Slot
 	Seq         uint64 // arrival order (fifo ordering)
+	// Submitter identifies who submitted the transaction through the ingress
+	// (the caller's identity; empty for buildoor's own transactions). It
+	// scopes which callers may read it back.
+	Submitter string
 
 	// strikes counts attributed build failures. Written under the pool
 	// mutex, read by snapshot holders, hence atomic.
@@ -287,6 +291,11 @@ func (p *Pool) ChainID() *big.Int {
 // checked against the parent state at selection time instead, so generators
 // that submit ahead of confirmation are never rejected on stale state.
 func (p *Pool) Add(raw []byte) (common.Hash, error) {
+	return p.AddFrom(raw, "")
+}
+
+// AddFrom admits a transaction like Add and records its submitter.
+func (p *Pool) AddFrom(raw []byte, submitter string) (common.Hash, error) {
 	if !p.enabled.Load() {
 		return common.Hash{}, ErrDisabled
 	}
@@ -309,6 +318,8 @@ func (p *Pool) Add(raw []byte) (common.Hash, error) {
 	if err != nil {
 		return tx.Hash(), err
 	}
+
+	pooled.Submitter = submitter
 
 	if _, ok := p.byHash[pooled.Hash]; ok {
 		p.rejectLocked("already_known")

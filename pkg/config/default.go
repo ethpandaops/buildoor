@@ -61,6 +61,9 @@ func DefaultConfig() *Config {
 		},
 		TxPool: TxPoolConfig{
 			Auth:            TxPoolAuthOpen,
+			RPCAnonRate:     20,
+			RPCAnonScope:    RPCAnonScopePerIP,
+			RPCUpstreams:    RPCUpstreamLocal,
 			Ordering:        TxOrderingFIFO,
 			GasFillPct:      100,
 			MaxPoolTxs:      10000,

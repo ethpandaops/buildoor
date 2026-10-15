@@ -49,22 +49,23 @@ var (
 	staticEmbedFS embed.FS
 )
 
-// authProviderAuthorizer accepts ingress requests carrying a JWT the
-// authenticatoor validates — the same check the mutating API endpoints run.
-// With no auth provider configured the API is open and so is the ingress.
-type authProviderAuthorizer struct {
+// loginChecker accepts ingress requests carrying a valid WebUI login (the
+// authenticatoor JWT the mutating API endpoints check). Without an auth
+// provider there is no login: the API is open, but /rpc callers stay
+// anonymous.
+type loginChecker struct {
 	handler *auth.AuthHandler
 }
 
-func (a authProviderAuthorizer) Authorize(r *http.Request) bool {
-	if a.handler.IsOpen() {
-		return true
+func (c loginChecker) ValidLogin(r *http.Request) bool {
+	if c.handler.IsOpen() {
+		return false
 	}
 
-	return a.handler.CheckAuthToken(r.Header.Get("Authorization")) != nil
+	return c.handler.CheckAuthToken(r.Header.Get("Authorization")) != nil
 }
 
-func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, txPool *txpool.Pool, elClient *execution.Client, planVerifier *tx_plan_verifier.Verifier) *api.APIHandler {
+func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, txPool *txpool.Pool, elClient *execution.Client, rpcKeys *txpoolrpc.KeyStore, planVerifier *tx_plan_verifier.Verifier) *api.APIHandler {
 	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
@@ -81,29 +82,31 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 		builderAPISvc.RegisterRoutes(router)
 	}
 
+	// API routes
+	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker)
+
 	// Transaction pool JSON-RPC ingress (eth_sendRawTransaction + read
-	// passthrough). Its authentication is chosen by txpool.auth: open, the
-	// authenticatoor JWT of the mutating API endpoints, or a static secret.
+	// passthrough): callers are anonymous (if txpool.auth allows), an API key
+	// (header or /rpc/<key>), the static --txpool-auth-token or a WebUI login;
+	// reads go through the txpool.rpc_upstreams pool.
 	if txPool != nil {
 		cfg := settingsSvc.Load()
 
-		var authorizer txpoolrpc.Authorizer
-
-		switch cfg.TxPool.NormalizedAuth() {
-		case config.TxPoolAuthToken:
-			authorizer = authProviderAuthorizer{handler: authHandler}
-		case config.TxPoolAuthStatic:
-			authorizer = txpoolrpc.StaticAuthorizer{Token: cfg.TxPool.AuthToken}
-		default:
-			authorizer = txpoolrpc.OpenAuthorizer{}
+		var local txpoolrpc.ELProxy
+		if elClient != nil {
+			local = elClient
 		}
 
-		ingress := txpoolrpc.NewServer(txPool, elClient, authorizer, version.GetBuildVersion(), logrus.StandardLogger())
-		router.Handle("/rpc", ingress).Methods(http.MethodPost)
+		upstreams := txpoolrpc.NewUpstreamPool(cfg, local, logrus.StandardLogger())
+		access := txpoolrpc.NewAccess(cfg, rpcKeys, loginChecker{handler: authHandler})
+
+		ingress := txpoolrpc.NewServer(txPool, upstreams, access, version.GetBuildVersion(), logrus.StandardLogger())
+		router.Handle(txpoolrpc.PathPrefix, ingress).Methods(http.MethodPost)
+		router.Handle(txpoolrpc.PathPrefix+"/{key}", ingress).Methods(http.MethodPost)
+
+		apiHandler.SetRPCIngress(ingress, upstreams, rpcKeys)
 	}
 
-	// API routes
-	apiHandler := api.NewAPIHandler(authHandler, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keys, chainSvc, validatorStore, builderAPISvc, propPrefSvc, valRanges, revealSvc, inclusionTracker, payments, planSvc, resultTracker)
 	apiHandler.SetPlanVerifier(planVerifier)
 	apiRouter := router.PathPrefix("/api").Subrouter()
 	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
@@ -151,6 +154,10 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.ClearTxPool).Methods(http.MethodDelete)
 	apiRouter.HandleFunc("/buildoor/txpool/preview", apiHandler.GetTxPoolPreview).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/txpool/{hash}", apiHandler.DropTxPoolTx).Methods(http.MethodDelete)
+	apiRouter.HandleFunc("/buildoor/rpc-access", apiHandler.GetRPCAccess).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/rpc-access/keys", apiHandler.CreateRPCKey).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/rpc-access/keys/{id}", apiHandler.UpdateRPCKey).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/buildoor/rpc-access/keys/{id}", apiHandler.DeleteRPCKey).Methods(http.MethodDelete)
 
 	// Buildoor endpoints
 	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)

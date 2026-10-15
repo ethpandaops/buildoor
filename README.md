@@ -186,8 +186,13 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
-| `--txpool-auth` | `open` | Ingress authentication: `open`, `auth_token` (the authenticatoor JWT of the API, needs `--auth-provider-url`) or `static` |
-| `--txpool-auth-token` | | Shared bearer secret for `--txpool-auth=static` |
+| `--txpool-auth` | `open` | Who may call `/rpc`: `open` (anonymous callers too, rate-limited) or `api_key` (an API key, `--txpool-auth-token` or a WebUI login is required) |
+| `--txpool-auth-token` | | Static API key, accepted next to the keys managed in the WebUI |
+| `--txpool-rpc-anon-rate` | `20` | Anonymous `/rpc` calls per second (0 = unlimited) |
+| `--txpool-rpc-anon-scope` | `per_ip` | Anonymous rate-limit scope: `per_ip` or `shared` |
+| `--txpool-rpc-key-rate` | `0` | Default `/rpc` calls per second per API key (0 = unlimited) |
+| `--txpool-rpc-proxy-hops` | `0` | Trusted reverse proxies in front of `/rpc` (client IP from `X-Forwarded-For`) |
+| `--txpool-rpc-upstreams` | `local` | Read endpoints: `<local\|url>@<priority>,…`, lowest priority first, equal priorities round robin |
 | `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random`, `round_robin` |
 | `--txpool-block-max-txs` | `0` | Max pool txs per local block (0 = unlimited) |
 | `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |

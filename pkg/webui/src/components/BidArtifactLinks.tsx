@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { SlotBidArtifactsResponse } from '../types';
-import { downloadSSZ } from './Popover';
+import { ArtifactButtons } from './ArtifactButtons';
 
 interface BidArtifactLinksProps {
   slot: number;
@@ -54,20 +54,10 @@ export const BidArtifactLinks: React.FC<BidArtifactLinksProps> = ({ slot, transp
 
   const url = `/api/buildoor/slot-results/${slot}/bids/${index}`;
   return (
-    <div className="popover-artifacts d-flex gap-1">
-      <a href={url} target="_blank" rel="noreferrer" className="btn btn-outline-secondary ap-artifact-btn">
-        JSON
-      </a>
-      <button
-        type="button"
-        className="btn btn-outline-secondary ap-artifact-btn"
-        onClick={() => {
-          downloadSSZ(url, `slot-${slot}-bid-${index}.ssz`)
-            .catch((err) => console.error('artifact download failed:', err));
-        }}
-      >
-        SSZ
-      </button>
-    </div>
+    <ArtifactButtons
+      url={url}
+      filename={`slot-${slot}-bid-${index}.ssz`}
+      className="popover-artifacts d-flex flex-wrap align-items-center gap-1"
+    />
   );
 };

@@ -312,6 +312,20 @@ func (h *APIHandler) serveArtifact(w http.ResponseWriter, r *http.Request, kind 
 		return
 	}
 
+	// A custom-built payload (and the envelope of a slot that has one) may
+	// carry transactions of the private pool: only logged-in readers get it.
+	private := slot_results.IsCustomPayloadArtifact(artifact) ||
+		(kind == slot_results.ArtifactKindEnvelope && h.resultTracker.Artifacts().HasCustomPayload(slot))
+
+	if private && h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+		writeError(w, http.StatusUnauthorized, "custom-built payloads may hold private transactions: log in to download")
+		return
+	}
+
+	if private {
+		w.Header().Set("Cache-Control", "private, no-store")
+	}
+
 	writeArtifact(w, r, artifact)
 }
 

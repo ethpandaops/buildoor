@@ -66,8 +66,17 @@ type TestTransformResponse struct {
 // @Param request body TestTransformRequest true "Target, expression and optional sample slot"
 // @Success 200 {object} TestTransformResponse
 // @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /api/buildoor/action-plan/test-transform [post]
 func (h *APIHandler) TestTransform(w http.ResponseWriter, r *http.Request) {
+	// The sample input is a captured artifact, possibly a custom-built
+	// payload holding private transactions, and the endpoint runs jq: an
+	// operator tool behind the login.
+	if !h.isLoggedIn(r) {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxPlanUpdateBodyBytes)
 
 	var req TestTransformRequest

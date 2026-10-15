@@ -622,6 +622,9 @@ export interface LocalBuildFormState {
   payload_source: string;
   tx_source: string;
   transactions: string; // one 0x-hex raw transaction per line
+  // Length of an explicit list the backend hid from this reader (no login);
+  // 0 once the list is visible or replaced.
+  transactions_redacted: number;
   queued: string; // one pool tx hash per line, exact order
   build_el_payload: '' | 'true' | 'false';
   max_txs: string;
@@ -634,6 +637,7 @@ export const EMPTY_LOCAL_BUILD_STATE: LocalBuildFormState = {
   payload_source: '',
   tx_source: '',
   transactions: '',
+  transactions_redacted: 0,
   queued: '',
   build_el_payload: '',
   max_txs: '',
@@ -646,8 +650,10 @@ export function initLocalBuildState(plan: LocalBuildPlan | undefined): LocalBuil
   return {
     enabled: plan.enabled === undefined ? '' : plan.enabled ? 'true' : 'false',
     payload_source: plan.payload_source ?? '',
-    tx_source: plan.tx_source ?? (plan.transactions?.length ? 'explicit' : plan.queued?.length ? 'queued' : ''),
+    tx_source: plan.tx_source ??
+      (plan.transactions?.length || plan.transactions_redacted ? 'explicit' : plan.queued?.length ? 'queued' : ''),
     transactions: (plan.transactions ?? []).join('\n'),
+    transactions_redacted: plan.transactions?.length ? 0 : plan.transactions_redacted ?? 0,
     queued: (plan.queued ?? []).join('\n'),
     build_el_payload: plan.build_el_payload === undefined ? '' : plan.build_el_payload ? 'true' : 'false',
     max_txs: plan.max_txs === undefined ? '' : String(plan.max_txs),
@@ -670,7 +676,12 @@ export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildP
     .split(/\s+/)
     .map((t) => t.trim())
     .filter((t) => t !== '');
-  if (state.tx_source === 'explicit' || (state.tx_source === '' && txs.length > 0)) {
+  if (state.tx_source === 'explicit' && txs.length === 0 && state.transactions_redacted > 0) {
+    // The hidden list stays a marker: saving it is blocked (hiddenTransactionsError)
+    // and refused by the backend.
+    plan.tx_source = 'explicit';
+    plan.transactions_redacted = state.transactions_redacted;
+  } else if (state.tx_source === 'explicit' || (state.tx_source === '' && txs.length > 0)) {
     plan.tx_source = 'explicit';
     plan.transactions = txs;
   } else if (state.tx_source === 'queued' || (state.tx_source === '' && queued.length > 0)) {
@@ -685,6 +696,24 @@ export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildP
   if (state.ordering) plan.ordering = state.ordering;
   return Object.keys(plan).length > 0 ? plan : undefined;
 }
+
+// hiddenTransactionsError explains why a plan carrying a hidden explicit list
+// cannot be saved: the raw transactions were redacted for a reader without a
+// login, so writing the plan back would lose them.
+export function hiddenTransactionsError(plan: LocalBuildPlan | undefined): string | null {
+  if (!plan?.transactions_redacted || plan.transactions?.length) return null;
+  return `The custom build's ${plan.transactions_redacted} explicit transactions are hidden (no login): ` +
+    'log in and reopen the plan to edit them, or replace the list before saving.';
+}
+
+// HiddenTransactionsNote marks an explicit transaction list the backend hid
+// from a reader without a login.
+export const HiddenTransactionsNote: React.FC<{ count: number }> = ({ count }) => (
+  <span className="text-muted small">
+    <i className="fas fa-lock me-1"></i>
+    {count} explicit transaction{count === 1 ? '' : 's'} hidden (log in to view/edit)
+  </span>
+);
 
 export const LocalBuildForm: React.FC<{
   bulk: boolean;
@@ -800,7 +829,22 @@ export const LocalBuildForm: React.FC<{
               </div>
             </div>
           )}
-          {isExplicit && (
+          {isExplicit && state.transactions_redacted > 0 && state.transactions.trim() === '' && (
+            <div className="col-12">
+              <div className="alert alert-secondary small py-1 px-2 mb-0 d-flex flex-wrap align-items-center gap-2">
+                <HiddenTransactionsNote count={state.transactions_redacted} />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline-secondary py-0 ms-auto"
+                  disabled={disabled}
+                  onClick={() => set({ transactions_redacted: 0 })}
+                >
+                  Replace list
+                </button>
+              </div>
+            </div>
+          )}
+          {isExplicit && !(state.transactions_redacted > 0 && state.transactions.trim() === '') && (
             <div className="col-12">
               <label className="form-label small mb-0">Transactions (0x-hex raw, one per line)</label>
               <textarea

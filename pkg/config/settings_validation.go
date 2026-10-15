@@ -93,6 +93,23 @@ func ValidateSetting(key string, v any) error {
 			return fmt.Errorf("%s must be fifo, tip, random or round_robin, got %q", key, ordering)
 		}
 
+	case KeyTxPoolAuth:
+		return requireOneOf(key, v, TxPoolAuthOpen, TxPoolAuthAPIKey)
+
+	case KeyTxPoolRPCAnonScope:
+		return requireOneOf(key, v, RPCAnonScopePerIP, RPCAnonScopeShared)
+
+	case KeyTxPoolRPCProxyHops:
+		if hops, _ := v.(uint64); hops > 16 {
+			return fmt.Errorf("%s must be at most 16, got %d", key, hops)
+		}
+
+	case KeyTxPoolRPCUpstreams:
+		spec, _ := v.(string)
+		if _, err := ParseRPCUpstreams(spec); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+
 	case KeyTxPoolGasFillPct:
 		if pct, _ := v.(uint64); pct == 0 || pct > 100 {
 			return fmt.Errorf("%s must be between 1 and 100, got %d", key, pct)

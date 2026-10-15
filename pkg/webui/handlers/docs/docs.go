@@ -283,6 +283,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -885,6 +894,212 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/rpc-access": {
+            "get": {
+                "description": "API keys (without secrets), per-caller call stats (anonymous per IP or shared, per key, static token, WebUI login) and the read upstreams. Requires authentication: the stats carry client IPs.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "/rpc ingress access state",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.RPCAccessResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "No ingress",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/rpc-access/keys": {
+            "post": {
+                "description": "Creates an API key for the /rpc ingress. The secret is returned once and never stored (only its SHA-256). Send it as \"X-API-Key: \u003ckey\u003e\", \"Authorization: Bearer \u003ckey\u003e\" or in the URL as /rpc/\u003ckey\u003e.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Create a /rpc API key",
+                "parameters": [
+                    {
+                        "description": "Key",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateRPCKeyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.CreateRPCKeyResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/rpc-access/keys/{id}": {
+            "post": {
+                "description": "Changes a key's label, enabled flag or rate limit. A disabled key is refused (401) without being deleted.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Update a /rpc API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Key id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Update",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/api.UpdateRPCKeyRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.RPCKeyView"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Deletes the key; callers using it are refused from the next request on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Delete a /rpc API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Key id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/slot-results": {
             "get": {
                 "description": "Returns the recorded outcome history (build, bids, block\nsubmissions, reveals, inclusion, applied plan) for every\nactive slot within the inclusive slot range.",
@@ -1288,6 +1503,15 @@ const docTemplate = `{
                             "$ref": "#/definitions/api.TxPoolResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized (the pool holds private transactions)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Pool not configured",
                         "schema": {
@@ -1356,6 +1580,15 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/api.TxPoolPreviewResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized (the pool holds private transactions)",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     },
                     "404": {
@@ -2257,6 +2490,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "transactions_redacted": {
+                    "description": "TransactionsRedacted is the length of Transactions when the list was\nhidden from a reader without a login (output only).",
+                    "type": "integer"
+                },
                 "tx_source": {
                     "description": "TxSource: txpool | empty | el_mempool | explicit (explicit requires\nTransactions; a non-empty Transactions list implies explicit).",
                     "type": "string"
@@ -2525,6 +2762,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "transactions_redacted": {
+                    "description": "TransactionsRedacted is the length of Transactions when the list was\nhidden from a reader without a login (output only).",
+                    "type": "integer"
                 },
                 "tx_source": {
                     "description": "TxSource: txpool | empty | el_mempool | explicit.",
@@ -2885,6 +3126,29 @@ const docTemplate = `{
                 }
             }
         },
+        "api.CreateRPCKeyRequest": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string"
+                },
+                "rate_limit": {
+                    "description": "calls per second, 0 = unlimited; absent = default",
+                    "type": "integer"
+                }
+            }
+        },
+        "api.CreateRPCKeyResponse": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "$ref": "#/definitions/api.RPCKeyView"
+                },
+                "secret": {
+                    "type": "string"
+                }
+            }
+        },
         "api.GetValidatorsResponse": {
             "type": "object",
             "properties": {
@@ -3223,6 +3487,53 @@ const docTemplate = `{
                 }
             }
         },
+        "api.RPCAccessResponse": {
+            "type": "object",
+            "properties": {
+                "callers": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rpc.CallerStats"
+                    }
+                },
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.RPCKeyView"
+                    }
+                },
+                "upstreams": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rpc.UpstreamStats"
+                    }
+                }
+            }
+        },
+        "api.RPCKeyView": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "prefix": {
+                    "type": "string"
+                },
+                "rate_limit": {
+                    "description": "nil = txpool.rpc_key_rate",
+                    "type": "integer"
+                }
+            }
+        },
         "api.SlotBidArtifactsResponse": {
             "type": "object",
             "properties": {
@@ -3506,6 +3817,24 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "reveal_time": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.UpdateRPCKeyRequest": {
+            "type": "object",
+            "properties": {
+                "default_rate_limit": {
+                    "type": "boolean"
+                },
+                "enabled": {
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "rate_limit": {
+                    "description": "RateLimit sets the key's own limit (calls per second, 0 = unlimited);\nDefaultRateLimit returns it to txpool.rpc_key_rate.",
                     "type": "integer"
                 }
             }
@@ -3812,6 +4141,16 @@ const docTemplate = `{
                     "description": "ExplicitTxs is the explicit list length (tx source explicit / queued).",
                     "type": "integer"
                 },
+                "fill_dropped": {
+                    "type": "boolean"
+                },
+                "fill_error": {
+                    "type": "string"
+                },
+                "fill_txs": {
+                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill.",
+                    "type": "integer"
+                },
                 "inclusion_list_dropped": {
                     "description": "InclusionListDropped marks that the build only succeeded after the\ninclusion list was dropped (a spec-violating payload, for testing).",
                     "type": "boolean"
@@ -3833,6 +4172,68 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "tx_source": {
+                    "type": "string"
+                }
+            }
+        },
+        "rpc.CallerStats": {
+            "type": "object",
+            "properties": {
+                "calls": {
+                    "type": "integer"
+                },
+                "errors": {
+                    "type": "integer"
+                },
+                "first_seen": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "last_seen": {
+                    "type": "string"
+                },
+                "methods": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
+                "rate_limit": {
+                    "description": "effective calls per second (0 = unlimited)",
+                    "type": "integer"
+                },
+                "rate_limited": {
+                    "type": "integer"
+                }
+            }
+        },
+        "rpc.UpstreamStats": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "boolean"
+                },
+                "calls": {
+                    "type": "integer"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "failures": {
+                    "type": "integer"
+                },
+                "priority": {
+                    "type": "integer"
+                },
+                "target": {
                     "type": "string"
                 }
             }
@@ -4509,6 +4910,22 @@ const docTemplate = `{
                 },
                 "ceiling_applied": {
                     "type": "boolean"
+                },
+                "fill_candidates": {
+                    "description": "EL mempool fill (tx source txpool_el_fill).",
+                    "type": "integer"
+                },
+                "fill_gas_sum": {
+                    "type": "integer"
+                },
+                "fill_selected": {
+                    "type": "integer"
+                },
+                "fill_skipped": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
                 },
                 "gas_budget": {
                     "type": "integer"

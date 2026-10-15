@@ -91,6 +91,59 @@ export interface TxPoolConfig {
   max_strikes?: number;
   base_fee_ceiling_gwei?: number;
   forward_to_el: boolean;
+  // /rpc ingress access (see RPCAccessCard).
+  auth?: string; // open | api_key
+  rpc_anon_rate?: number;
+  rpc_anon_scope?: string; // per_ip | shared
+  rpc_key_rate?: number;
+  rpc_proxy_hops?: number;
+  rpc_upstreams?: string; // comma-separated <target>@<priority>
+}
+
+// /rpc ingress API key (GET /api/buildoor/rpc-access); the secret is only
+// returned once, at creation.
+export interface RPCKey {
+  id: string;
+  label: string;
+  prefix: string;
+  rate_limit?: number; // absent = txpool.rpc_key_rate
+  enabled: boolean;
+  created_at: string;
+}
+
+// Per-caller /rpc call statistics.
+export interface RPCCallerStats {
+  kind: 'anonymous' | 'api_key' | 'static' | 'login';
+  id: string; // anonymous: client IP or "shared"; api_key: key id
+  label?: string;
+  rate_limit: number; // effective calls per second, 0 = unlimited
+  calls: number;
+  errors: number;
+  rate_limited: number;
+  methods: Record<string, number>;
+  first_seen: string;
+  last_seen: string;
+}
+
+// One read upstream of the /rpc passthrough.
+export interface RPCUpstreamStats {
+  target: string;
+  priority: number;
+  available: boolean;
+  error?: string;
+  calls: number;
+  failures: number;
+}
+
+export interface RPCAccessResponse {
+  keys: RPCKey[];
+  callers: RPCCallerStats[];
+  upstreams: RPCUpstreamStats[];
+}
+
+export interface CreateRPCKeyResponse {
+  key: RPCKey;
+  secret: string;
 }
 
 // Probed availability of the EL's testing namespace + per-EL blob handling.
@@ -904,6 +957,9 @@ export interface LocalBuildPlan {
   payload_source?: string; // el | local | local_or_el | higher_value
   tx_source?: string; // txpool | empty | el_mempool | explicit
   transactions?: string[]; // 0x-hex raw transactions (tx_source explicit)
+  // Length of the explicit list when the backend hid it from a reader
+  // without a login (output only; saving it back is refused).
+  transactions_redacted?: number;
   queued?: string[]; // ordered pool tx hashes, exact or the build fails (tx_source queued)
   build_el_payload?: boolean;
   max_txs?: number;
@@ -1006,6 +1062,7 @@ export interface ResolvedLocalBuildSettings {
   payload_source: string;
   tx_source: string;
   transactions?: string[];
+  transactions_redacted?: number; // hidden explicit list length (no login)
   queued?: string[];
   build_el_payload: boolean;
   max_txs?: number;
