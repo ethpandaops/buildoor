@@ -150,8 +150,12 @@
   position: relative;
 }
 
+/* Fixed height so the page layout never shifts while slots fill in. The
+   browser's scroll anchoring is off: SlotTimeline shifts the scroll position
+   itself when slots are added on top, and the two would add up. */
 .slot-timeline-viewport {
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding-right: 4px;
 }

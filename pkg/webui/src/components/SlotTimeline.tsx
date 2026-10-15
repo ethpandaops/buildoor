@@ -160,7 +160,7 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
       <div
         ref={viewportRef}
         className="slot-timeline-viewport"
-        style={{ maxHeight: `${viewportHeight}px` }}
+        style={{ height: `${viewportHeight}px` }}
         onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       >
         <div className="slot-graphs-container">
