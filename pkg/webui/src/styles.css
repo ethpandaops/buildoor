@@ -379,6 +379,30 @@
 }
 
 .bg-local-build { background: #0dcaf0; }
+.bg-local-build-skipped { background: #adb5bd; width: 8px; height: 8px; }
+
+/* Legend swatches for the non-dot graph elements. */
+.legend-dot-selected { box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45); }
+.legend-line-build { height: 3px; background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8)); }
+.legend-crown { color: #ffc107; font-size: 9px; margin-right: 3px; }
+.legend-window {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  margin-right: 3px;
+  vertical-align: middle;
+  background: rgba(25, 135, 84, 0.15);
+  border-left: 2px solid rgba(25, 135, 84, 0.6);
+  border-right: 2px solid rgba(255, 193, 7, 0.6);
+}
+.legend-marker {
+  display: inline-block;
+  width: 2px;
+  height: 11px;
+  margin: 0 5px 0 3px;
+  vertical-align: middle;
+  background: var(--bs-purple);
+}
 
 /* Reveal call span: from attempt start to completion, ending in the reveal
    outcome dot (mirrors the build delay line's style in the reveal purple). */
@@ -793,11 +817,14 @@
 .legend-line {
   display: inline-block;
   width: 14px;
+  height: 3px;
+  border-radius: 2px;
   margin-right: 3px;
   vertical-align: middle;
 }
 
 .legend-line-head-votes {
+  height: 0;
   border-top: 1px solid rgba(0, 188, 212, 0.7);
 }
 

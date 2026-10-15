@@ -85,7 +85,8 @@ export interface KeyActionResult {
 }
 
 /**
- * Provides the mutating builder key actions (target, deposit, top-up, exit).
+ * Provides the per-key builder key actions (deposit, top-up, exit); the target
+ * is a setting edited in the settings drawer.
  * Every call carries the auth header the rest of the UI uses.
  */
 export function useBuilderKeyActions() {
@@ -125,7 +126,6 @@ export function useBuilderKeyActions() {
 
   return {
     isLoggedIn,
-    setTarget: (target: number) => post('/api/buildoor/builder-keys/target', { target }),
     depositKey: (keyIndex: number) => post(`/api/buildoor/builder-keys/${keyIndex}/deposit`),
     topupKey: (keyIndex: number) => post(`/api/buildoor/builder-keys/${keyIndex}/topup`, {}),
     exitKey: (keyIndex: number, lowerTarget: boolean) =>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { CreateRPCKeyResponse, RPCAccessResponse, RPCKey } from '../types';
 import { authHeaders, useLoggedIn } from './authFetch';
 
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 10000;
 
 export interface RPCKeyUpdate {
   label?: string;
@@ -31,7 +31,8 @@ async function call<T>(url: string, method: string, body?: unknown): Promise<Out
 }
 
 // useRPCAccess polls the /rpc ingress access state (API keys, per-caller
-// stats, read upstreams) while `active` and wraps the key mutations. The
+// stats, read upstreams) while `active` (the caller decides: Access tab open,
+// document visible, logged in) and wraps the key mutations. The
 // endpoint needs a login: `unauthorized` is set on 401, `unavailable` on 404
 // (no ingress without --el-rpc).
 export function useRPCAccess(active: boolean) {

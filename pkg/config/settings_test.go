@@ -229,3 +229,34 @@ func TestDefaultsAreValid(t *testing.T) {
 		require.NoError(t, ValidateSetting(field.Key, field.Get(defaults)), field.Key)
 	}
 }
+
+// TestSourcesFollowTheWinningLayer checks that Sources reports the layer the
+// effective value comes from, dates UI overrides, and survives a restart.
+func TestSourcesFollowTheWinningLayer(t *testing.T) {
+	dir := t.TempDir()
+	store := db.NewDatabase(&db.Config{File: filepath.Join(dir, "state.db")}, testLogger())
+	require.NoError(t, store.Init())
+
+	defaults := defaultsConfig()
+
+	svc := boot(t, store, defaults, nil)
+	_, ok := svc.Sources()[subsidyKey]
+	require.False(t, ok, "a default value has no source entry")
+
+	svc = boot(t, store, defaults, u64(500))
+	require.Equal(t, SettingSource{Source: SourceCLI}, svc.Sources()[subsidyKey])
+
+	setSubsidy(t, svc, 600)
+	src := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, src.Source)
+	require.NotZero(t, src.UpdatedAt)
+
+	// Restart with the flag unchanged: the UI override still wins, dated by
+	// its persisted write.
+	svc = boot(t, store, defaults, u64(500))
+	restarted := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, restarted.Source)
+	require.Equal(t, src.UpdatedAt, restarted.UpdatedAt)
+
+	require.NoError(t, store.Close())
+}

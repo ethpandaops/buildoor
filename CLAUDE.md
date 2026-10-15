@@ -366,8 +366,8 @@ npm run clean
      `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
      artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),
      `txpool_stats` (on pool change), `service_status` gains
-     `local_build_*`/`txpool_*`. WebUI: Mempool tab, Local Build dashboard card,
-     plan/rule editor section.
+     `local_build_*`/`txpool_*`. WebUI: Mempool page, Testing builder and
+     Mempool flow cards/drawer tabs, plan/rule editor section.
 
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
@@ -599,11 +599,38 @@ npm run clean
      (max_execution_payment) are memstore-backed too and survive restarts
 
 6. **WebUI** (`pkg/webui/`)
-   - React/TypeScript dashboard
-   - Real-time event stream via Server-Sent Events (SSE)
-   - Visual slot timeline, bid tracking, validator registrations
-   - Configuration updates via HTTP API (incl. the generic path-based
-     `POST /api/config/settings`)
+   - React/TypeScript app served publicly: everything is readable, actions
+     (switches, edits, key actions) and private data (pool contents, custom
+     payloads, callers/keys, explicit plan transactions, the audit log) need a
+     login. Two views: **Overview** (`/overview`, end users: what the builder
+     does, blocks won, last 16 slots, how to send private transactions and
+     register validators) and **Operator** (every other page)
+   - ONE SSE connection per tab (`EventStreamProvider` in
+     `hooks/useEventStream.ts`, read with `useEventStream()`), so page switches
+     neither reconnect nor replay; per-slot state is kept for the last
+     `SLOT_HISTORY` (100) slots
+   - **Dashboard**: stats row, the slot timeline (a scrollable 100-slot window
+     that renders only visible slots; follows new slots while scrolled to the
+     top) beside the Builder and Next slot (`slot_outlook`) cards, the event log
+     folded into one line, and one card per flow (`settings/flows.ts`: Engine
+     builder, Testing builder, Keys & candidates, Lifecycle, ePBS bidder,
+     Builder API, Payload reveal, Mempool /rpc) with its one-click switch and
+     its configuration read-only (`cli`/`ui` tags from `setting_sources`)
+   - **Settings drawer** (`components/settings/SettingsDrawer.tsx`, opened with
+     `openSettings(flow, tab)` from any page) is the ONLY settings editor. It
+     edits a snapshot: live updates follow untouched fields and turn edited ones
+     into explicit conflicts (never overwrite a field being typed in); Save
+     posts only the changed keys; irreversible changes (lowering the key
+     target, auto exit) need a confirmation. Fields come from the registry in
+     `settings/fields.tsx` (one entry per backend setting key: label, kind,
+     unit/scale, options, validation, help text) and are written through
+     `settings/write.ts` (generic settings endpoint, service toggle, key target)
+   - Mempool page (tabs Queue / Next block / Access / Settings) and one tabbed
+     Registrations page (Builder API registrations, proposer preferences,
+     payment caps; old /validators, /proposer-preferences,
+     /builder-preferences paths redirect)
+   - Design tokens + shared primitives in `src/styles/tokens.css` and
+     `components/ui/` (light and dark theme); self-hosted IBM Plex fonts
    - **Action Plan View**: epoch × slot timetable (rows = epochs, columns =
      slots) rendering plan chips + result status per cell; click-to-edit modal
      for future slots, full outcome detail + SSZ/JSON artifact downloads for
@@ -613,7 +640,6 @@ npm run clean
      chips; live via the `action_plan_updated`/`action_plan_rules_updated`/
      `slot_result_updated` SSE events
    - **Bids Won View**: Paginated table of our blocks included on chain
-     - Tab navigation: Dashboard / Bids Won / Action Plan
      - Real-time updates when new blocks are included (bid_won SSE from the
        inclusion tracker's `PayloadIncludedEvent`)
      - Click-to-copy block hashes, relative timestamps
@@ -691,7 +717,7 @@ Key config sections:
   deliberately no separate top-up amount), `--topup-threshold` (effective
   balance below which a key is topped up), `--deposit-max-fee` (deposits and
   top-ups wait while the queue fee is above it). All three are mutable
-  settings edited in the Builder Info card
+  settings edited in the Lifecycle drawer tab
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
@@ -750,10 +776,11 @@ CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
   form the CLI layer, so bumping a *hardcoded default* in a new release never
   clobbers a UI override.
 
-**Every registered setting must be editable from the WebUI.** The frontend writes
-settings by their canonical registry key through `POST /api/config/settings`
-(`useSettings` hook), and `pkg/webui/settings_coverage_test.go` fails when a
-registry key has no editor — never add a setting that is only reachable by CLI
+**Every registered setting must be editable from the WebUI.** Every key needs an
+entry in the frontend field registry (`pkg/webui/src/settings/fields.tsx`) and a
+place in a flow's drawer tabs (`settings/flows.ts`); the drawer writes it by its
+canonical registry key through `POST /api/config/settings`, and
+`pkg/webui/settings_coverage_test.go` fails when a registry key has no editor — never add a setting that is only reachable by CLI
 flag, and never add a second setting for something an existing one already
 means (deposits and top-ups share the single `deposit_amount`). Operator values
 from BOTH sources pass `config.ValidateSetting` (CLI at startup, UI at write
@@ -936,7 +963,9 @@ Frontend is a React/TypeScript app using Webpack:
 - Real-time updates via SSE at `/api/events`
 - Custom hook `useEventStream()` manages app state from events
 - Backend serves static files via `pkg/webui/static/`
-- **Navigation**: Simple conditional rendering without React Router (Dashboard / Bids Won tabs)
+- **Navigation**: `stores/viewStore.ts` maps paths to views (sub paths like
+  `/mempool/access` belong to their view), conditional rendering without React
+  Router
 - **Styling**: Bootstrap 5 CSS with custom components
 
 To make frontend changes:
@@ -1010,7 +1039,20 @@ To make frontend changes:
   `action_plan_updated`/`slot_result_updated` (REST is the source of truth;
   views refetch via `connectionGeneration`). `lifecycle` events are tagged with
   the current slot so they replay too
-- `chain_info` - genesis_time, seconds_per_slot, slots_per_epoch (initial state)
+- **Cost per viewer** (the UI is public): every event is JSON-encoded once at
+  fan-out, not per client; head-vote updates are coalesced to one per curve per
+  250 ms (threshold crossings immediate) with percentages rounded to 2
+  decimals; open streams are capped (1000 total, 16 per client IP behind
+  `txpool.rpc_proxy_hops`, 429 beyond). Content-hashed bundles are served
+  immutable
+- `config` - the effective config plus `setting_sources` (`{key: {source:
+  cli|ui, updated_at}}` for every non-default setting)
+- `chain_info` - genesis_time, seconds_per_slot, slots_per_epoch, network
+  (CONFIG_NAME), gloas_fork_epoch (initial state)
+- `slot_outlook` - the next slot before its build: proposer index/client,
+  Builder API registration, gossiped proposer preferences, the effective
+  (redacted) action plan and whether it is frozen. Sent at connect, every slot
+  start and after plan/rule changes
 - `bid_won` - Emitted when one of our blocks is seen included at the head (fired from
   the inclusion tracker's `PayloadIncludedEvent.WonBlock`, alongside `bid_included`)
   - Data: slot, block_hash, num_transactions, num_blobs, value_eth, value_wei, timestamp
@@ -1028,8 +1070,11 @@ To make frontend changes:
 - `txpool_stats` - Pool aggregates + counters, sent at connect and whenever the
   pool's version changed (checked once per second)
 - `slot_result_updated` - Fired when a slot's result record changes (coalesced to
-  ~1/s per slot); data is the full SlotResult. SSE is an invalidation channel —
-  the REST range endpoints are the source of truth
+  ~1/s per slot); data is only `{slot}` — an invalidation, the viewers showing
+  the slot refetch it from the REST range endpoint (the record is several KB)
+- Neither the stream nor logged-out slot results carry a custom block's
+  transaction hashes (`LocalBuildInfo.Public`): pool transactions stay private
+  until (and unless) their block is published
 
 #### WebUI Components Pattern
 
@@ -1092,10 +1137,9 @@ proposer.
   - Gracefully handles nil resultTracker (returns empty array)
 
 **Frontend Architecture:**
-- **Navigation**: Tab-based UI in `App.tsx` (Dashboard / Bids Won)
-  - Uses `useState<ViewType>` for view switching
-  - Conditional rendering without React Router
-  - Preserves Dashboard state when switching views
+- **Navigation**: `viewStore` path routing, conditional rendering in `App.tsx`
+  (no React Router); the stream state lives in the app-level provider, so it
+  survives view switches
 
 - **Data Flow**:
   1. `useBidsWon` hook fetches paginated data on mount and when offset/limit changes

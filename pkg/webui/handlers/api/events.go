@@ -11,6 +11,7 @@ import (
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
@@ -632,6 +633,10 @@ type EventStreamManager struct {
 	clients map[chan *StreamEvent]struct{}
 	// streamsPerIP counts open event streams per client IP (guarded by mu).
 	streamsPerIP map[string]int
+
+	// sources are the read-only stores of the slot outlook and the config
+	// event's setting sources (see AttachSources).
+	sources outlookSources
 	// mu guards clients, eventCache and seq. Broadcasts, cache appends and
 	// client registration all serialize on it, so a new client's replay
 	// prefill plus subsequent live events form one ordered, gapless,
@@ -1003,6 +1008,7 @@ func (m *EventStreamManager) Start() {
 						Plans: action_plan.RedactedPlans(event.Plans),
 					},
 				})
+				m.broadcastSlotOutlook(m.builderSvc.GetCurrentSlot())
 
 			case event, ok := <-ruleChangeChan:
 				if !ok {
@@ -1015,6 +1021,7 @@ func (m *EventStreamManager) Start() {
 					Timestamp: time.Now().UnixMilli(),
 					Data:      action_plan.RuleChangeEvent{Rules: action_plan.RedactedRules(event.Rules)},
 				})
+				m.broadcastSlotOutlook(m.builderSvc.GetCurrentSlot())
 
 			case event, ok := <-resultUpdateChan:
 				if !ok {
@@ -1097,6 +1104,7 @@ func (m *EventStreamManager) Start() {
 				if currentSlot != lastSlot {
 					lastSlot = currentSlot
 					m.handleSlotStart(currentSlot)
+					m.broadcastSlotOutlook(currentSlot)
 				}
 				// Periodically send stats, builder info, service status and
 				// pool stats (the latter only when the pool changed)
@@ -2104,7 +2112,16 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      configToMap(m.builderSvc.GetConfig()),
+		Data:      m.configEventData(),
+	}) {
+		return
+	}
+
+	// Send what is known about the next slot
+	if !send(&StreamEvent{
+		Type:      EventTypeSlotOutlook,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      m.buildSlotOutlook(m.builderSvc.GetCurrentSlot() + 1),
 	}) {
 		return
 	}
@@ -2199,6 +2216,8 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 				"genesis_time":     genesis.GenesisTime.UnixMilli(),
 				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
 				"slots_per_epoch":  chainSpec.SlotsPerEpoch,
+				"network":          chainSpec.ConfigName,
+				"gloas_fork_epoch": gloasForkEpoch(chainSpec),
 			},
 		}) {
 			return
@@ -2421,7 +2440,7 @@ func (m *EventStreamManager) BroadcastConfigUpdate() {
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      configToMap(m.builderSvc.GetConfig()),
+		Data:      m.configEventData(),
 	})
 }
 
@@ -2573,4 +2592,17 @@ func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) 
 			Status:  status,
 		},
 	})
+}
+
+// gloasForkEpoch returns the scheduled Gloas fork epoch, or nil when the
+// network has not scheduled Gloas.
+func gloasForkEpoch(spec *chain.ChainSpec) *uint64 {
+	for _, fork := range spec.ForkSchedule {
+		if fork.Fork == version.DataVersionGloas {
+			epoch := uint64(fork.Epoch)
+			return &epoch
+		}
+	}
+
+	return nil
 }

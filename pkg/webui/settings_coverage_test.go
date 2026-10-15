@@ -15,12 +15,13 @@ import (
 // dedicatedEditors lists the settings the UI changes through an endpoint of
 // their own rather than the generic settings endpoint, because the write has
 // side effects beyond storing the value. Each entry names the source file and
-// the text that proves the editor exists there.
+// the text that proves the editor exists there: the field registry routes the
+// setting to its writer, the writer calls the endpoint.
 var dedicatedEditors = map[string]struct{ file, marker string }{
-	config.KeyEPBSEnabled:            {"components/ConfigPanel.tsx", "epbs_enabled: !isActive"},
-	config.KeyBuilderAPIEnabled:      {"components/BuilderAPIConfigPanel.tsx", "builder_api_enabled: !isActive"},
-	config.KeyLifecycleEnabled:       {"components/BuilderInfo.tsx", "lifecycle_enabled: !lifecycleEnabled"},
-	config.KeyBuilderKeysTargetCount: {"hooks/useBuilderKeys.ts", "/api/buildoor/builder-keys/target"},
+	config.KeyEPBSEnabled:            {"settings/write.ts", "'/api/services/toggle'"},
+	config.KeyBuilderAPIEnabled:      {"settings/write.ts", "'/api/services/toggle'"},
+	config.KeyLifecycleEnabled:       {"settings/write.ts", "'/api/services/toggle'"},
+	config.KeyBuilderKeysTargetCount: {"settings/write.ts", "'/api/buildoor/builder-keys/target'"},
 }
 
 // Every mutable setting must be editable from the WebUI. A registered setting

@@ -10,6 +10,17 @@ import { BuildDelayLine } from './BuildDelayLine';
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
 
+// slotGraphHeight is the pixel height of a slot graph under a service status:
+// rows from top to bottom are chain+payload (always), ePBS and Builder API;
+// both builder rows active = 3 rows, otherwise 2 (one active, or an empty
+// row below the chain row).
+export function slotGraphHeight(status: ServiceStatus | null): number {
+  const epbsActive = status?.epbs_enabled ?? true;
+  const builderApiActive = status?.builder_api_enabled ?? false;
+  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
+  return activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+}
+
 interface SlotGraphProps {
   slot: number;
   state: SlotState;
@@ -364,11 +375,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
   const builderApiActive = effectiveServiceStatus?.builder_api_enabled ?? false;
 
-  // Rows from top to bottom:
-  //   chain+payload (always) | ePBS (if active) | Builder API (if active)
-  // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
-  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
-  const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+  const graphHeight = slotGraphHeight(effectiveServiceStatus);
 
   // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
@@ -716,7 +723,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
 
-          {/* Custom build, live: from its start until the final local_build event (which
+          {/* Testing build, live: from its start until the final local_build event (which
               waits for the engine build and the bid choice) takes over below. */}
           {(() => {
             const live = state.localBuildLive;
@@ -747,7 +754,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   ]
                 : [])
             ];
-            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
             const dotClass = live.phase === 'ready'
               ? 'local-build-created'
               : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
@@ -818,7 +825,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
               ] : [])
             ];
-            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
             const dotClass = lb.status === 'ready'
               ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
               : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
