@@ -1574,12 +1574,17 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder identity, balance, and pending payments
-	if m.epbsSvc != nil {
-		pubkey := m.epbsSvc.GetBuilderPubkey()
+	// Builder identity, balance, and pending payments come from the key
+	// registry, which exists before Gloas is scheduled (the p2p bidder does not).
+	if registry := m.keyRegistry(); registry != nil {
+		primary := registry.Primary()
+		pubkey := primary.Pubkey()
 		info.BuilderPubkey = pubkey.String()
-		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
-		info.IsRegistered = m.epbsSvc.IsRegistered()
+		info.BuilderIndex, _ = primary.BuilderIndex()
+
+		if m.epbsSvc != nil {
+			info.IsRegistered = m.epbsSvc.IsRegistered()
+		}
 
 		// Get balance and pending payments from chain state
 		if m.chainSvc != nil {
@@ -1593,7 +1598,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if m.payments != nil {
-			adjustment := m.payments.GetBalanceAdjustment(m.epbsSvc.Registry().Primary().KeyIndex())
+			adjustment := m.payments.GetBalanceAdjustment(primary.KeyIndex())
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0
