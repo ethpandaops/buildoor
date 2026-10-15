@@ -206,6 +206,8 @@ func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {
 		{KeyDepositAmount, uint64(0), false},
 		{KeyScheduleMode, "every_nth", true},
 		{KeyScheduleMode, "sometimes", false},
+		{KeyLocalBuildStartDelayMs, uint64(1000), true},
+		{KeyLocalBuildStartDelayMs, uint64(12001), false},
 	}
 
 	for _, tt := range tests {

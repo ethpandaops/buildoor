@@ -377,6 +377,10 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
   const graphHeight = slotGraphHeight(effectiveServiceStatus);
 
+  // The testing build only runs for the canonical candidate; when its block
+  // feeds the bids, the "payload created" event describes that block.
+  const testingBlockBids = !!state.localBuild?.selected && state.localBuild.status === 'ready';
+
   // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
   let rowIdx = 0;
@@ -822,6 +826,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
               ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
               ...(lb.el ? [
+                { label: 'Engine Block Hash', value: truncateHash(lb.el.block_hash), copyValue: lb.el.block_hash },
                 { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
               ] : [])
             ];
@@ -919,7 +924,9 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
-              title: multiCandidate ? 'Payloads Created' : 'Payload Created',
+              title: multiCandidate
+                ? 'Payloads Created'
+                : testingBlockBids ? 'Payload Created (testing block)' : 'Payload Created',
               wide: true,
               artifact: {
                 url: `/api/buildoor/slot-results/${slot}/payload`,
@@ -943,6 +950,14 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                 : undefined,
               items: [
                 { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                // payload_ready carries the payload the bids use: with a testing
+                // build in front that is the testing block, not the engine's.
+                ...(state.localBuild ? [{
+                  label: 'Built By',
+                  value: testingBlockBids
+                    ? 'testing build (testing_buildBlockV1), used for bids'
+                    : 'engine build, used for bids'
+                }] : []),
                 ...(state.payloadBlockHash ? [{
                   label: 'Block Hash',
                   value: truncateHash(state.payloadBlockHash),
@@ -989,7 +1004,19 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                   label: 'Contents',
                   value: `${state.payloadDetail.numTransactions ?? 0} txs, ${state.payloadDetail.numBlobs ?? 0} blobs, ` +
                     `${state.payloadDetail.numWithdrawals ?? 0} wdrls, ${state.payloadDetail.numExecRequests ?? 0} reqs`
-                }] : [])
+                }] : []),
+                ...(testingBlockBids && state.localBuild?.el ? [
+                  {
+                    label: 'Engine Block Hash',
+                    value: truncateHash(state.localBuild.el.block_hash),
+                    copyValue: state.localBuild.el.block_hash
+                  },
+                  {
+                    label: 'Engine Block',
+                    value: `${state.localBuild.el.num_transactions} txs, ` +
+                      formatGwei(Number(BigInt(state.localBuild.el.block_value_wei || '0') / 1000000000n))
+                  }
+                ] : [])
               ]
             },
             'payload'

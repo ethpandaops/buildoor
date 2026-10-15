@@ -747,7 +747,10 @@ Key config sections:
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
-- **Local build / tx pool**: `--local-build-enabled`, `--local-build-payload-source`
+- **Local build / tx pool**: `--local-build-enabled`, `--local-build-start-delay`
+  (ms after the engine build started before the testing call, 0 = at once: the
+  engine build keeps collecting arrivals until its getPayload, an immediate
+  testing call does not), `--local-build-payload-source`
   (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,

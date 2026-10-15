@@ -40,6 +40,10 @@ func ValidateSetting(key string, v any) error {
 	case KeyLocalBuildMaxAttempts, KeyTxPoolMaxPoolTxs, KeyTxPoolMaxTxsPerSender:
 		return requirePositive(key, v)
 
+	case KeyLocalBuildStartDelayMs:
+		// Beyond a slot the testing block could never feed its target.
+		return requireAtMost(key, v, maxLocalBuildStartDelayMs)
+
 	case KeyRevealGateMode:
 		return requireOneOf(key, v,
 			RevealGateTime, RevealGateVote, RevealGateVoteOrTime, RevealGateVoteAndTime)
@@ -137,6 +141,19 @@ func ValidateServeCandidates(policy string) error {
 			return fmt.Errorf("serve_candidates must be all, canonical_only "+
 				"or a comma-separated candidate key list, got %q", policy)
 		}
+	}
+
+	return nil
+}
+
+// maxLocalBuildStartDelayMs bounds local_build.start_delay_ms (one 12 s slot;
+// shorter slots need a shorter delay to be useful, which is left to the
+// operator).
+const maxLocalBuildStartDelayMs = 12000
+
+func requireAtMost(key string, v any, limit uint64) error {
+	if n, _ := v.(uint64); n > limit {
+		return fmt.Errorf("%s must be at most %d", key, limit)
 	}
 
 	return nil

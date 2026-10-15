@@ -133,7 +133,8 @@ type localOutcome struct {
 //
 // local, when non-nil, additionally runs the local build (testing_buildBlockV1)
 // for the same target; it starts once the engine forkchoiceUpdated pinned the
-// EL head to the parent and runs during the engine build's wait. The request's
+// EL head to the parent (plus the request's StartDelay) and runs during the
+// engine build's wait. The request's
 // payload source decides which payload the result exposes to consumers. An
 // error is returned when the target ends without a consumable payload; the
 // result still carries both builds' outcomes for inspection.
@@ -213,6 +214,20 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		localCh = make(chan localOutcome, 1)
 
 		go func() {
+			// The engine build collects transactions until its getPayload;
+			// a start delay lets the testing call see the late arrivals too.
+			if local.StartDelay > 0 {
+				delay := time.NewTimer(local.StartDelay)
+				select {
+				case <-buildCtx.Done():
+					delay.Stop()
+					localCh <- localOutcome{err: fmt.Errorf("local build aborted: %w", buildCtx.Err())}
+
+					return
+				case <-delay.C:
+				}
+			}
+
 			started := time.Now()
 			b.fireLocalProgress(attrs, local, started, nil)
 

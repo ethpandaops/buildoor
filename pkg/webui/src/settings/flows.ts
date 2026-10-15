@@ -202,6 +202,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
               'local_build.tx_source',
               'local_build.build_el_payload',
               'local_build.allow_blobs_without_bundle',
+              'local_build.start_delay_ms',
               'local_build.max_attempts',
             ],
           },
@@ -230,7 +231,11 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         value: (ctx) => ctx.localBuild?.availability.blob_encoding || ctx.config?.local_build?.blob_encoding || '—',
       },
       { label: 'Blobs without bundle', keys: ['local_build.allow_blobs_without_bundle'] },
-      { label: 'Max attempts', keys: ['local_build.max_attempts'] },
+      {
+        label: 'Start · attempts',
+        keys: ['local_build.start_delay_ms', 'local_build.max_attempts'],
+        value: (ctx) => `${fmt('local_build.start_delay_ms', ctx)} · ${fmt('local_build.max_attempts', ctx)}`,
+      },
       {
         label: 'Plan checks',
         keys: [],

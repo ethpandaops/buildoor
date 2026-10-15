@@ -1167,6 +1167,32 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'local_build.start_delay_ms': {
+    label: 'Start delay',
+    kind: 'number',
+    unit: 'ms',
+    min: 0,
+    max: 12000,
+    zeroLabel: 'at once',
+    hint: 'Wait after the engine build started before calling testing_buildBlockV1.',
+    validate: (value, draft) => {
+      const buildTime = num(draft, 'payload_build_time');
+      return buildTime > 0 && Number(value) >= buildTime
+        ? `Must be below the build time (${buildTime} ms): the testing block would miss its bids.`
+        : null;
+    },
+    help: (
+      <>
+        Delay of the testing build after the engine build started
+        (<code>local_build.start_delay_ms</code>, 0 = at once). testing_buildBlockV1 builds from
+        the transactions known at the moment of the call, while the engine build keeps adding
+        arrivals until its payload is fetched (<code>payload_build_time</code> later), so an early
+        testing block misses the late ones and is often worth less. A delay of about half the build
+        time catches most of them. Leave the call time to finish before the engine payload is due:
+        the slot&apos;s bids wait for both builds.
+      </>
+    ),
+  },
 
   // ----- buildoor mempool -----
   'txpool.enabled': {

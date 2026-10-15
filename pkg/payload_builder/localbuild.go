@@ -111,6 +111,9 @@ type LocalBuildRequest struct {
 	MaxStrikes  uint64
 	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
 	BaseFeeCeilingGwei uint64
+	// StartDelay holds the testing call back after the engine build started,
+	// so transactions arriving meanwhile make it into the block.
+	StartDelay time.Duration
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -178,12 +181,18 @@ type DroppedTx struct {
 // buildoor mempool keeps its transactions private, and a withheld or
 // orphaned payload never publishes them at all. Counts and reasons stay.
 func (i *LocalBuildInfo) Public() *LocalBuildInfo {
-	if i == nil || (i.ExpectedHashes == nil && len(i.Dropped) == 0) {
+	if i == nil || (i.ExpectedHashes == nil && len(i.Dropped) == 0 && (i.Selection == nil || len(i.Selection.Hashes) == 0)) {
 		return i
 	}
 
 	out := *i
 	out.ExpectedHashes = nil
+
+	if i.Selection != nil && len(i.Selection.Hashes) > 0 {
+		selection := *i.Selection
+		selection.Hashes = nil
+		out.Selection = &selection
+	}
 
 	if len(i.Dropped) > 0 {
 		out.Dropped = make([]DroppedTx, len(i.Dropped))
@@ -520,6 +529,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		BlobEncoding:       availability.BlobEncoding,
 		MaxAttempts:        settings.MaxAttempts,
 		MaxStrikes:         settings.MaxStrikes,
+		StartDelay:         time.Duration(settings.StartDelayMs) * time.Millisecond,
 		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 

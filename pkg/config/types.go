@@ -626,6 +626,15 @@ type LocalBuildConfig struct {
 	// from the attempt (and striked in the pool) and the build retries.
 	// Exact sources (explicit, queued) never retry: a refusal fails them.
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
+
+	// StartDelayMs delays the testing_buildBlockV1 call after the engine
+	// build started (its forkchoiceUpdated), in ms; 0 = at once. The testing
+	// call builds from the transactions known at that moment, while the
+	// engine build keeps adding arrivals until its getPayload, so a delay
+	// lets the testing block see the same late transactions. It should leave
+	// the call time to finish before the engine payload is due
+	// (payload_build_time): the target waits for both.
+	StartDelayMs uint64 `yaml:"start_delay_ms" json:"start_delay_ms"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the

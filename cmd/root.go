@@ -133,6 +133,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
+	rootCmd.PersistentFlags().Uint64("local-build-start-delay", defaults.LocalBuild.StartDelayMs, "Delay of the testing_buildBlockV1 call after the engine build started, in ms (0 = at once): later transaction arrivals make it into the testing block; leave it time to finish before the engine payload is due")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
@@ -337,6 +338,7 @@ func initConfig(root *cobra.Command) error {
 			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
+			StartDelayMs:            v.GetUint64("local-build-start-delay"),
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:            v.GetBool("txpool-enabled"),
