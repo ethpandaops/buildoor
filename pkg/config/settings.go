@@ -19,6 +19,14 @@ const (
 	SourceUI      = "ui"
 )
 
+// retiredKeys maps a settings key that no longer exists to the key that took
+// over its meaning. A UI override persisted under the retired key is adopted by
+// its successor on startup, so merging two settings never silently discards the
+// value an operator configured.
+var retiredKeys = map[string]string{
+	"topup_amount": KeyDepositAmount,
+}
+
 // keyState holds the in-memory 3-way state for one setting key.
 type keyState struct {
 	hasCLI   bool
@@ -127,6 +135,44 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		}
 	}
 
+	// Adopt UI overrides persisted under retired keys. An override already
+	// stored under the successor key is newer by construction and wins.
+	adopted := make(map[string]struct{}, len(retiredKeys))
+
+	for retired, successor := range retiredKeys {
+		row, ok := rowByKey[retired]
+		if !ok || row.UISeq == 0 || !row.UIValue.Valid {
+			continue
+		}
+
+		if row.UISeq > s.seq {
+			s.seq = row.UISeq
+		}
+
+		ks := s.keyState[successor]
+		if ks.hasUI {
+			continue
+		}
+
+		v, derr := s.byKey[successor].Decode(json.RawMessage(row.UIValue.String))
+		if derr != nil {
+			s.log.WithError(derr).WithField("key", retired).Warn("ignoring undecodable retired ui override")
+
+			continue
+		}
+
+		ks.hasUI = true
+		ks.uiValue = v
+		ks.uiSeq = row.UISeq
+		adopted[successor] = struct{}{}
+
+		s.log.WithFields(logrus.Fields{
+			"retired_key": retired,
+			"key":         successor,
+			"value":       v,
+		}).Info("Adopted ui override of a retired setting")
+	}
+
 	// Pass 2: reconcile the CLI layer against what the operator supplied now.
 	for _, f := range s.fields {
 		ks := s.keyState[f.Key]
@@ -144,7 +190,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		}
 
 		isSupplied := supplied[f.Key]
-		changed := false
+		_, changed := adopted[f.Key]
 
 		switch {
 		case isSupplied:
@@ -225,7 +271,7 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 			return fmt.Errorf("decode %q: %w", key, err)
 		}
 
-		if err := validateValue(key, v); err != nil {
+		if err := ValidateSetting(key, v); err != nil {
 			s.mu.Unlock()
 			return err
 		}
@@ -247,6 +293,12 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		ks.uiValue = v
 		ks.uiSeq = s.nextSeq()
 		s.persist(f, ks, actor)
+
+		s.log.WithFields(logrus.Fields{
+			"key":   key,
+			"value": v,
+			"actor": actor,
+		}).Info("Setting updated")
 	}
 
 	s.recompute()
@@ -320,54 +372,4 @@ func (s *Service) persist(f Field, ks *keyState, actor string) {
 	if err := s.store.PutSetting(row); err != nil {
 		s.log.WithError(err).WithField("key", f.Key).Warn("failed to persist setting")
 	}
-}
-
-// validateValue performs light per-field validation of incoming UI values.
-func validateValue(key string, v any) error {
-	if key == KeyScheduleMode {
-		mode, _ := v.(ScheduleMode)
-		switch mode {
-		case ScheduleModeAll, ScheduleModeEveryN, ScheduleModeNextN:
-		default:
-			return fmt.Errorf("invalid schedule mode %q", mode)
-		}
-	}
-
-	if key == KeySlotResultRetentionEpochs || key == KeySlotArtifactRetentionEpochs {
-		epochs, _ := v.(uint64)
-		if epochs == 0 {
-			return fmt.Errorf("%s must be greater than 0", key)
-		}
-	}
-
-	if key == KeyLocalBuildPayloadSource {
-		source, _ := v.(string)
-		if NormalizedPayloadSource(source, "") == "" {
-			return fmt.Errorf("invalid payload source %q (must be el, local or local_or_el)", source)
-		}
-	}
-
-	if key == KeyLocalBuildTxSource {
-		source, _ := v.(string)
-		if normalized := NormalizedTxSource(source, ""); normalized == "" ||
-			normalized == TxSourceExplicit || normalized == TxSourceQueued {
-			return fmt.Errorf("invalid tx source %q (must be txpool, empty or el_mempool)", source)
-		}
-	}
-
-	if key == KeyTxPoolOrdering {
-		ordering, _ := v.(string)
-		if NormalizedTxOrdering(ordering, "") == "" {
-			return fmt.Errorf("invalid tx ordering %q (must be fifo, tip, random or round_robin)", ordering)
-		}
-	}
-
-	if key == KeyTxPoolGasFillPct {
-		pct, _ := v.(uint64)
-		if pct == 0 || pct > 100 {
-			return fmt.Errorf("%s must be between 1 and 100", key)
-		}
-	}
-
-	return nil
 }

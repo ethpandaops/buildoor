@@ -30,6 +30,11 @@ const depositContractABI = `[{"name":"deposit","type":"function","stateMutabilit
 	`{"name":"signature","type":"bytes"},` +
 	`{"name":"deposit_data_root","type":"bytes32"}]}]`
 
+// earlyDepositMinTipGwei is the priority fee floor for early deposits. Builder
+// indices follow the deposits' queue order, which within one block is the
+// transaction order, so the deposit outbids typical tips for an early position.
+const earlyDepositMinTipGwei = 50
+
 // EarlyDepositService submits a pre-Gloas builder onboarding deposit via the regular
 // validator deposit contract. Both paths use 0xB0 withdrawal credentials, but unlike
 // the post-fork builder deposit (EIP-8282 predeploy, DOMAIN_BUILDER_DEPOSIT), an early
@@ -187,9 +192,10 @@ func (s *EarlyDepositService) earlyDepositRequest(
 	}).Info("Early builder deposit prepared (regular deposit contract)")
 
 	return wallet.TxRequest{
-		To:       depositContract,
-		Value:    value,
-		Data:     calldata,
-		GasLimit: depositGasLimit,
+		To:           depositContract,
+		Value:        value,
+		Data:         calldata,
+		GasLimit:     depositGasLimit,
+		MinGasTipCap: GweiToWei(earlyDepositMinTipGwei),
 	}, nil
 }

@@ -60,7 +60,7 @@ go run main.go run \
   --el-engine-api <ENGINE_API_URL> \
   --el-jwt-secret <JWT_SECRET_PATH> \
   --builder-api-enabled \
-  --builder-api-port 18550
+  --api-port 18550
 
 # Run with WebUI dashboard
 go run main.go run \
@@ -434,17 +434,27 @@ npm run clean
      uint16 ms-offset per member) and served via `GetVoteDetail(slot, root)`
      (zero root = primary) together with the block ground-truth bitmap — the
      WebUI heatmap endpoint groups them by validator-ranges client name
-     (retention 8 slots, in-memory only). **Subnet coverage detection**: every imported
-     block's attestations (fetched per head event, aggregate-format walk) are
-     the ground truth compared against the singles bitmap; a rolling 16-block
-     window seeing <80% of on-chain attesters (min 8 blocks / 16 attesters,
-     recover at ≥90%) sets the `Low` flag on the `vote_coverage` SSE event
-     (initial-state + on change) — the UI then shows a warning badge (hover
-     callout with the subscribe-all-subnets flags) in the Slot Timeline
-     header and hides the head-vote graph. Low coverage makes BOTH the graph
-     AND vote-threshold-gated reveals unreliable: the undercounted
-     participation opens reveal vote gates late or never (withheld at slot
-     end)
+     (retention 8 slots, in-memory only). **Sampled-subnet estimation**: a
+     slot has at most one committee per attestation subnet, so a committee
+     whose singles arrive densely (≥ min(16, half its size) distinct voters,
+     any root) sits on a subnet the BN is subscribed to; stray votes from our
+     own validators on other subnets never reach that bar. Once ≥64 members
+     are sampled, participation is EXTRAPOLATED from the sampled committees
+     (voted balance / sampled balance, `HeadVoteUpdate.Estimated`); fully
+     sampled slots (subscribe-all-subnets) report the raw share unchanged. The
+     graph, the reveal vote gate and the weak-head candidate check all consume
+     this estimate. **Subnet coverage detection**: every imported block's
+     attestations (fetched per head event, aggregate-format walk) are the
+     ground truth compared against the singles bitmap, overall and within the
+     sampled committees; a rolling 16-block window whose reliable view (raw
+     when ≥80% seen, otherwise the sampled committees) sees <80% of its
+     on-chain attesters (min 8 blocks / 16 attesters, recover at ≥90%) sets
+     the `Low` flag on the `vote_coverage` SSE event (initial-state + on
+     change) — the UI then shows a warning badge in the Slot Timeline header
+     and hides the head-vote graph; an estimated-but-healthy view shows an
+     "Estimated votes" info badge instead. Low coverage makes BOTH the graph
+     AND vote-threshold-gated reveals unreliable (gates open late or never,
+     withheld at slot end)
 
 3b. **Builder Key Registry** (`pkg/builder_keys/`) — the managed set of builder
    BLS keys and the identity dependency of every module that used to hold a
@@ -614,8 +624,11 @@ Proposer ───Builder API─────────▶ builderapi (legacy: 
 
 Configuration is managed via:
 - CLI flags (highest priority)
-- YAML config file (`--config` flag or `./buildoor.yaml`)
-- Environment variables (auto-loaded by viper)
+- YAML config file (`--config` flag or `./buildoor.yaml`): a FLAT map keyed by
+  flag name without the dashes (`deposit-amount: ...`), not the nested
+  `yaml` struct tags; unknown keys fail the start (`checkConfigFileKeys`)
+- Environment variables: `BUILDOOR_<FLAG_NAME>` with dashes as underscores
+  (`BUILDOOR_DEPOSIT_AMOUNT`)
 
 Key config sections:
 - **Builder keys**: `--builder-privkey` (BLS) or `--builder-mnemonic` +
@@ -637,6 +650,13 @@ Key config sections:
   gossip rules ignore a builder's later bids for a slot — so every bid, an
   escalated re-bid of the same payload included, takes a key that has not bid
   yet, and the submissions of one step go out concurrently
+- **Lifecycle amounts**: `--deposit-amount` (gwei; the ONE amount sent with
+  every builder key deposit — early onboarding via the regular deposit
+  contract, the registering builder deposit, and each top-up; there is
+  deliberately no separate top-up amount), `--topup-threshold` (effective
+  balance below which a key is topped up), `--deposit-max-fee` (deposits and
+  top-ups wait while the queue fee is above it). All three are mutable
+  settings edited in the Builder Info card
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
@@ -693,7 +713,20 @@ CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
   form the CLI layer, so bumping a *hardcoded default* in a new release never
   clobbers a UI override.
 
-The mutable-setting registry lives in `pkg/settings/fields.go` (keys in `keys.go`);
+**Every registered setting must be editable from the WebUI.** The frontend writes
+settings by their canonical registry key through `POST /api/config/settings`
+(`useSettings` hook), and `pkg/webui/settings_coverage_test.go` fails when a
+registry key has no editor — never add a setting that is only reachable by CLI
+flag, and never add a second setting for something an existing one already
+means (deposits and top-ups share the single `deposit_amount`). Operator values
+from BOTH sources pass `config.ValidateSetting` (CLI at startup, UI at write
+time): modules fall back to a default for values they do not recognise, so an
+unvalidated typo would be stored, displayed and ignored. A setting that is
+renamed or merged is listed in `retiredKeys` (`pkg/config/settings.go`) so its
+persisted UI override is adopted by the successor instead of being dropped.
+
+The mutable-setting registry lives in `pkg/config/settings_fields.go` (keys in
+`settings_keys.go`);
 the per-module enable flags (`epbs_enabled`, `builder_api_enabled`,
 `lifecycle_enabled`) are ordinary settings too. Write handlers call
 `settingsSvc.SetMany`, which mutates the shared config in place, persists overrides,
@@ -1050,7 +1083,7 @@ proposer.
 - **ePBS Compatibility**: Uses "Bids Won" terminology (not "Payloads Delivered")
 
 **Testing the Feature:**
-1. Enable Builder API: `--builder-api-enabled --builder-api-port 18550`
+1. Enable Builder API: `--builder-api-enabled --api-port 18550`
 2. Submit a blinded block via `POST /eth/v2/builder/blinded_blocks` and wait for the
    block to appear at the head (or win a slot via p2p bidding)
 3. Check backend logs for "Our payload was included in a beacon block!"

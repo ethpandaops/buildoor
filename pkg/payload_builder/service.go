@@ -657,7 +657,11 @@ const attrFallbackLookback = 8
 // proposal slot advances and the timestamp moves forward by the number of
 // skipped slots — every other property stays identical, since no new block
 // was built on top. Runs of multiple missing blocks are covered by searching
-// back up to attrFallbackLookback slots. The synthesized event is injected
+// back up to attrFallbackLookback slots. The fallback only applies while the
+// blocks are genuinely missing: once the chain head reached the source
+// attributes' proposal slot, their parent is stale, and a build on it would
+// rewind the execution client's head (beacon nodes that only emit attributes
+// for their own proposers leave every other slot without attributes). The synthesized event is injected
 // into the event stream (cache + dispatch), so it flows through the exact
 // same build path as a node-received one.
 func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
@@ -683,6 +687,18 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 
 	if parent == nil {
 		return
+	}
+
+	if tracker := s.chainSvc.GetHeadTracker(); tracker != nil {
+		if head := tracker.CurrentHead(); head != nil && head.Slot >= parent.ProposalSlot {
+			s.log.WithFields(logrus.Fields{
+				"slot":       targetSlot,
+				"attrs_from": parent.ProposalSlot,
+				"head_slot":  head.Slot,
+			}).Debug("No payload attributes received for slot, but the head moved past the last ones; not re-using them")
+
+			return
+		}
 	}
 
 	skippedSlots := uint64(targetSlot - parent.ProposalSlot)

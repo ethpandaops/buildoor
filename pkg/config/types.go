@@ -42,14 +42,20 @@ type Config struct {
 	EPBSEnabled       bool              `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
 	BuilderAPIEnabled bool              `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
 	BuilderAPI        BuilderAPIConfig  `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
-	DepositAmount     uint64            `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
-	TopupThreshold    uint64            `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
-	TopupAmount       uint64            `yaml:"topup_amount" json:"topup_amount"`               // Gwei
-	DepositMaxFeeGwei uint64            `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig    `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig       `yaml:"build" json:"build"`   // Payload build candidate policy
+	// DepositAmount is THE lifecycle amount in gwei: every deposit buildoor
+	// makes for a builder key — early onboarding, the builder deposit that
+	// registers it, and each top-up — sends exactly this much.
+	DepositAmount uint64 `yaml:"deposit_amount" json:"deposit_amount"`
+	// TopupThreshold is the effective balance in gwei below which a registered
+	// key is topped up (by DepositAmount).
+	TopupThreshold uint64 `yaml:"topup_threshold" json:"topup_threshold"`
+	// DepositMaxFeeGwei delays builder deposits and top-ups while the deposit
+	// contract's queue fee is above it (0 = no limit).
+	DepositMaxFeeGwei uint64         `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+	Schedule          ScheduleConfig `yaml:"schedule" json:"schedule"`
+	EPBS              EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal            RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build             BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
 	// LocalBuild is the opt-in local block building extension: an additional
 	// payload per slot built through the EL's testing_buildBlockV1 from a
 	// chosen transaction source, and the selector deciding which payload
@@ -58,8 +64,6 @@ type Config struct {
 	// TxPool is the opt-in owned transaction pool fed through the JSON-RPC
 	// ingress; the local build's txpool source selects from it.
 	TxPool           TxPoolConfig `yaml:"txpool" json:"txpool"`
-	Debug            bool         `yaml:"debug" json:"debug"`
-	Pprof            bool         `yaml:"pprof" json:"pprof"`
 	PayloadBuildTime uint64       `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used

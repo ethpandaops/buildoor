@@ -24,6 +24,10 @@ type TxRequest struct {
 	Value    *big.Int
 	Data     []byte
 	GasLimit uint64
+	// MinGasTipCap raises the priority fee to at least this value (wei) for
+	// transactions that race others for their position in a block; nil keeps
+	// the node's suggestion.
+	MinGasTipCap *big.Int
 }
 
 // TxResult is the outcome of one batch request. Index is the request's position
@@ -193,7 +197,7 @@ func (w *Wallet) runBatchRound(
 func (w *Wallet) buildAndSignWithNonce(
 	ctx context.Context, req TxRequest, nonce uint64,
 ) (*types.Transaction, error) {
-	tx, err := w.buildTransactionWithNonce(ctx, req.To, req.Value, req.Data, req.GasLimit, nonce)
+	tx, err := w.buildTransactionWithNonce(ctx, req.To, req.Value, req.Data, req.GasLimit, nonce, req.MinGasTipCap)
 	if err != nil {
 		return nil, err
 	}

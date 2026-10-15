@@ -4,7 +4,7 @@ import { useTxPool } from '../hooks/useTxPool';
 import { useSettings } from '../hooks/useSettings';
 import { useLocalBuildStatus } from '../hooks/useLocalBuildStatus';
 import { Pagination } from './Pagination';
-import type { TxPoolStats, TxPoolTx, TxSelectionSummary } from '../types';
+import type { TxPoolConfig, TxPoolStats, TxPoolTx, TxSelectionSummary } from '../types';
 
 const PAGE_LIMIT = 50;
 
@@ -135,12 +135,179 @@ const PreviewPanel: React.FC<{
   </div>
 );
 
+const ORDERINGS: Array<{ value: string; hint: string }> = [
+  { value: 'fifo', hint: 'Arrival order.' },
+  { value: 'tip', hint: 'Highest effective tip first.' },
+  { value: 'random', hint: 'Random order (nonces stay sequential per sender).' },
+  { value: 'round_robin', hint: 'One transaction per sender in turn.' },
+];
+
+type PoolForm = Omit<TxPoolConfig, 'enabled'>;
+
+const POOL_NUMBERS: Array<{ key: keyof PoolForm; label: string; hint: string; min: number; max?: number }> = [
+  { key: 'max_txs_per_block', label: 'Max txs per block', hint: '0 = unlimited', min: 0 },
+  { key: 'gas_fill_pct', label: 'Gas fill %', hint: 'Share of the block gas limit the selection fills', min: 1, max: 100 },
+  { key: 'max_pool_txs', label: 'Max pool txs', hint: 'Total queued transactions', min: 1 },
+  { key: 'max_txs_per_sender', label: 'Max txs per sender', hint: 'Queued transactions of one sender', min: 1 },
+  { key: 'tx_ttl_slots', label: 'TTL (slots)', hint: '0 = never; drops a stalled sender from its oldest expired nonce up', min: 0 },
+  { key: 'max_strikes', label: 'Max strikes', hint: 'Attributed EL refusals before a tx is dropped (0 = never)', min: 0 },
+  { key: 'base_fee_ceiling_gwei', label: 'Base fee ceiling (gwei)', hint: 'Above it the fill drops to the gas target (0 = off)', min: 0 },
+];
+
+function poolForm(cfg: TxPoolConfig | undefined): PoolForm {
+  return {
+    ordering: cfg?.ordering || 'fifo',
+    max_txs_per_block: cfg?.max_txs_per_block ?? 0,
+    gas_fill_pct: cfg?.gas_fill_pct ?? 100,
+    max_pool_txs: cfg?.max_pool_txs ?? 10000,
+    max_txs_per_sender: cfg?.max_txs_per_sender ?? 256,
+    tx_ttl_slots: cfg?.tx_ttl_slots ?? 64,
+    max_strikes: cfg?.max_strikes ?? 3,
+    base_fee_ceiling_gwei: cfg?.base_fee_ceiling_gwei ?? 0,
+    forward_to_el: cfg?.forward_to_el ?? false,
+  };
+}
+
+// PoolSettingsCard shows and edits the pool's selection and admission
+// settings through the generic settings endpoint.
+const PoolSettingsCard: React.FC<{ cfg: TxPoolConfig | undefined }> = ({ cfg }) => {
+  const { isLoggedIn, postSettings } = useSettings();
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [form, setForm] = useState<PoolForm>(() => poolForm(cfg));
+
+  useEffect(() => {
+    if (!editing) setForm(poolForm(cfg));
+  }, [cfg, editing]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMessage(null);
+    const result = await postSettings({
+      'txpool.ordering': form.ordering,
+      'txpool.max_txs_per_block': form.max_txs_per_block,
+      'txpool.gas_fill_pct': form.gas_fill_pct,
+      'txpool.max_pool_txs': form.max_pool_txs,
+      'txpool.max_txs_per_sender': form.max_txs_per_sender,
+      'txpool.tx_ttl_slots': form.tx_ttl_slots,
+      'txpool.max_strikes': form.max_strikes,
+      'txpool.base_fee_ceiling_gwei': form.base_fee_ceiling_gwei,
+      'txpool.forward_to_el': form.forward_to_el,
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setMessage(result.error ?? 'failed to update pool settings');
+      return;
+    }
+    setEditing(false);
+  };
+
+  const current = poolForm(cfg);
+
+  return (
+    <div className="card mb-3">
+      <div className="card-header py-1 d-flex align-items-center gap-2">
+        <strong className="small">Pool settings</strong>
+        {isLoggedIn && !editing && (
+          <button className="btn btn-sm btn-outline-primary ms-auto" onClick={() => setEditing(true)}>
+            <i className="fas fa-pencil-alt"></i>
+          </button>
+        )}
+      </div>
+      <div className="card-body py-2">
+        {message && <div className="alert alert-warning small py-1 px-2 mb-2">{message}</div>}
+        {!editing ? (
+          <div className="row g-2">
+            <div className="col-6 col-md-3">
+              <div className="config-item">
+                <div className="config-item-label">Ordering</div>
+                <div className="config-item-value">{current.ordering}</div>
+              </div>
+            </div>
+            {POOL_NUMBERS.map((f) => (
+              <div className="col-6 col-md-3" key={f.key}>
+                <div className="config-item" title={f.hint}>
+                  <div className="config-item-label">{f.label}</div>
+                  <div className="config-item-value">{String(current[f.key])}</div>
+                </div>
+              </div>
+            ))}
+            <div className="col-6 col-md-3">
+              <div className="config-item" title="Also submit every admitted transaction to the EL mempool">
+                <div className="config-item-label">Forward to EL</div>
+                <div className="config-item-value">{current.forward_to_el ? 'yes' : 'no'}</div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSave}>
+            <div className="row g-2">
+              <div className="col-6 col-md-3">
+                <label className="form-label small" htmlFor="txpool-ordering">Ordering</label>
+                <select
+                  id="txpool-ordering"
+                  className="form-select form-select-sm"
+                  value={form.ordering}
+                  onChange={(e) => setForm({ ...form, ordering: e.target.value })}
+                >
+                  {ORDERINGS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.value}</option>
+                  ))}
+                </select>
+                <div className="form-text">{ORDERINGS.find((o) => o.value === form.ordering)?.hint}</div>
+              </div>
+              {POOL_NUMBERS.map((f) => (
+                <div className="col-6 col-md-3" key={f.key}>
+                  <label className="form-label small" htmlFor={`txpool-${f.key}`}>{f.label}</label>
+                  <input
+                    type="number"
+                    id={`txpool-${f.key}`}
+                    className="form-control form-control-sm"
+                    min={f.min}
+                    max={f.max}
+                    value={Number(form[f.key])}
+                    onChange={(e) => setForm({ ...form, [f.key]: Number(e.target.value) })}
+                  />
+                  <div className="form-text">{f.hint}</div>
+                </div>
+              ))}
+              <div className="col-12">
+                <div className="form-check">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    id="txpool-forward-to-el"
+                    checked={form.forward_to_el}
+                    onChange={(e) => setForm({ ...form, forward_to_el: e.target.checked })}
+                  />
+                  <label className="form-check-label small" htmlFor="txpool-forward-to-el">
+                    Also forward every admitted transaction to the EL mempool (shadow mode: the
+                    transactions can then land in blocks buildoor did not build)
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="d-flex gap-2 mt-2">
+              <button type="submit" className="btn btn-sm btn-primary" disabled={busy}>Save</button>
+              <button type="button" className="btn btn-sm btn-secondary" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // MempoolView is the owned transaction pool page: enable toggle + ingress
 // URL, content aggregates (pending, senders, gas sum, value, bytes, blobs),
 // the next-block selection preview, and the paginated content table with
 // per-transaction and clear-all actions.
 export const MempoolView: React.FC = () => {
-  const { txPoolStats, serviceStatus, chainInfo } = useEventStream();
+  const { txPoolStats, serviceStatus, chainInfo, config } = useEventStream();
   const { isLoggedIn, postSettings } = useSettings();
   const { status: localStatus } = useLocalBuildStatus(serviceStatus?.txpool_enabled);
 
@@ -171,9 +338,9 @@ export const MempoolView: React.FC = () => {
   const toggle = async (next: boolean) => {
     setBusy(true);
     setMessage(null);
-    const err = await postSettings({ 'txpool.enabled': next });
+    const result = await postSettings({ 'txpool.enabled': next });
     setBusy(false);
-    if (err) setMessage(err);
+    if (!result.ok) setMessage(result.error ?? 'failed to update txpool.enabled');
   };
 
   const handleClear = async () => {
@@ -261,6 +428,8 @@ export const MempoolView: React.FC = () => {
           )}
         </div>
       </div>
+
+      <PoolSettingsCard cfg={config?.txpool} />
 
       <PreviewPanel
         selection={preview?.selection ?? null}

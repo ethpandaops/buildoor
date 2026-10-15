@@ -85,6 +85,48 @@ func TestParsePayloadAttributesEvent_Deneb(t *testing.T) {
 	require.ErrorContains(t, err, "invalid parent_beacon_block_root")
 }
 
+// gloasPayloadAttributesJSON builds a raw Gloas+ payload_attributes SSE event
+// in the beacon-APIs shape: no parent_block_number, PayloadAttributesV4 fields
+// plus any extra attribute members.
+func gloasPayloadAttributesJSON(t *testing.T, fork, slotNumber, extraAttrs string) *payloadAttributesEventJSON {
+	t.Helper()
+
+	raw := `{"version":"` + fork + `","data":{"proposer_index":"11","proposal_slot":"7",` +
+		`"parent_block_root":"0x` + zeroHex32 + `","parent_block_hash":"0x` + zeroHex32 + `",` +
+		`"payload_attributes":{"timestamp":"1700000000","prev_randao":"0x` + zeroHex32 + `",` +
+		`"suggested_fee_recipient":"0x0000000000000000000000000000000000000001","withdrawals":[],` +
+		`"parent_beacon_block_root":"0x` + zeroHex32 + `","slot_number":"` + slotNumber + `",` +
+		`"target_gas_limit":"60000000"` + extraAttrs + `}}}`
+
+	var event payloadAttributesEventJSON
+	require.NoError(t, json.Unmarshal([]byte(raw), &event))
+
+	return &event
+}
+
+// TestParsePayloadAttributesEvent_Gloas parses the Gloas (PayloadAttributesV4)
+// and Heze (PayloadAttributesV5) event shapes and rejects a slot_number that
+// contradicts the proposal slot.
+func TestParsePayloadAttributesEvent_Gloas(t *testing.T) {
+	event, err := parsePayloadAttributesEvent(gloasPayloadAttributesJSON(t, "gloas", "7", ""))
+	require.NoError(t, err)
+	assert.Equal(t, phase0.Slot(7), event.ProposalSlot)
+	assert.Equal(t, uint64(60000000), event.TargetGasLimit)
+	assert.Zero(t, event.ParentBlockNumber, "parent_block_number is absent from gloas onwards")
+	assert.Nil(t, event.InclusionListTransactions)
+
+	event, err = parsePayloadAttributesEvent(
+		gloasPayloadAttributesJSON(t, "heze", "7", `,"inclusion_list_transactions":["0x02f870"]`))
+	require.NoError(t, err)
+	assert.Equal(t, [][]byte{{0x02, 0xf8, 0x70}}, event.InclusionListTransactions)
+
+	_, err = parsePayloadAttributesEvent(gloasPayloadAttributesJSON(t, "gloas", "8", ""))
+	require.ErrorContains(t, err, "slot_number 8 does not match proposal_slot 7")
+
+	_, err = parsePayloadAttributesEvent(gloasPayloadAttributesJSON(t, "gloas", "invalid", ""))
+	require.ErrorContains(t, err, "invalid slot_number")
+}
+
 // TestParseSingleAttestationEvent parses the beacon-APIs single_attestation
 // event payload, ignoring the unused signature/source/target fields.
 func TestParseSingleAttestationEvent(t *testing.T) {

@@ -44,6 +44,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
     tx_source: 'txpool',
     build_el_payload: true,
     allow_blobs_without_bundle: false,
+    max_attempts: 3,
   });
   const [editing, setEditing] = useState(false);
 
@@ -54,6 +55,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
         tx_source: localCfg.tx_source || 'txpool',
         build_el_payload: localCfg.build_el_payload,
         allow_blobs_without_bundle: localCfg.allow_blobs_without_bundle,
+        max_attempts: localCfg.max_attempts || 3,
       });
     }
   }, [localCfg, editing]);
@@ -61,10 +63,10 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
   const apply = async (settings: Record<string, unknown>) => {
     setBusy(true);
     setMessage(null);
-    const err = await postSettings(settings);
+    const result = await postSettings(settings);
     setBusy(false);
-    if (err) setMessage(err);
-    return !err;
+    if (!result.ok) setMessage(result.error ?? 'failed to update local build settings');
+    return result.ok;
   };
 
   const handleProbe = async () => {
@@ -87,6 +89,7 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
       'local_build.tx_source': form.tx_source,
       'local_build.build_el_payload': form.build_el_payload,
       'local_build.allow_blobs_without_bundle': form.allow_blobs_without_bundle,
+      'local_build.max_attempts': form.max_attempts,
     });
     if (ok) setEditing(false);
   };
@@ -294,6 +297,12 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                   <div className="config-item-value">{localCfg?.allow_blobs_without_bundle ? 'allowed' : 'skipped'}</div>
                 </div>
               </div>
+              <div className="col-6">
+                <div className="config-item">
+                  <div className="config-item-label">Max attempts</div>
+                  <div className="config-item-value">{localCfg?.max_attempts ?? '—'}</div>
+                </div>
+              </div>
             </div>
           ) : (
             <form onSubmit={handleSave}>
@@ -346,6 +355,21 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                 <label className="form-check-label" htmlFor="local-build-allow-blobs">
                   Include blob txs on ELs without a blobs bundle (blobs cannot be revealed)
                 </label>
+              </div>
+              <div className="mb-2">
+                <label className="form-label" htmlFor="local-build-max-attempts">Max attempts</label>
+                <input
+                  type="number"
+                  min={1}
+                  className="form-control form-control-sm"
+                  id="local-build-max-attempts"
+                  value={form.max_attempts}
+                  onChange={(e) => setForm({ ...form, max_attempts: Number(e.target.value) })}
+                />
+                <div className="form-text">
+                  testing_buildBlockV1 calls per txpool build: a refused list drops the offending
+                  transactions and retries. Exact lists never retry.
+                </div>
               </div>
               <div className="d-flex gap-2">
                 <button type="submit" className="btn btn-sm btn-primary" disabled={busy}>Save</button>

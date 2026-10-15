@@ -654,6 +654,8 @@ export function useEventStream(): UseEventStreamResult {
             participation_eth: number;
             total_slot_eth: number;
             vote_count?: number;
+            estimated?: boolean;
+            sampled_pct?: number;
             threshold_pct?: number;
             threshold_met?: boolean;
             timestamp: number;
@@ -663,7 +665,9 @@ export function useEventStream(): UseEventStreamResult {
             pct: data.participation_pct,
             eth: data.participation_eth,
             voteCount: data.vote_count,
-            thresholdMet: data.threshold_met
+            thresholdMet: data.threshold_met,
+            estimated: data.estimated,
+            sampledPct: data.sampled_pct
           };
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };

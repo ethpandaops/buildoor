@@ -88,12 +88,7 @@ func (s *BalanceService) NeedsTopup(key *builder_keys.Key) (bool, uint64, error)
 		}
 	}
 
-	topupAmount := s.cfg.TopupAmount
-	if topupAmount == 0 {
-		topupAmount = threshold
-	}
-
-	return true, topupAmount, nil
+	return true, s.cfg.DepositAmount, nil
 }
 
 // CheckAndTopup tops the key up when its balance is below the threshold. It
