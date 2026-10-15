@@ -1,3 +1,4 @@
+import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
 import React, { useState } from 'react';
 import type { BidPlan, BuilderAPIPlan, RevealPlan, SlotRule } from '../../types';
 import { TransformEditor, type TransformState } from './TransformEditor';
@@ -6,6 +7,10 @@ import {
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
   BuildForm,
+  LocalBuildForm,
+  initLocalBuildState,
+  localBuildPlanFromState,
+  type LocalBuildFormState,
   CategoryForm,
   initCategoryState,
   resolveCategory,
@@ -137,6 +142,10 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(
     rule?.build?.reorg_parent_payload ? 'on' : 'off'
   );
+  const [localBuild, setLocalBuild] = useState<LocalBuildFormState>(() =>
+    initLocalBuildState(rule?.build?.local)
+  );
+  const { status: localBuildStatus } = useLocalBuildStatus();
   const [transforms, setTransforms] = useState<TransformState>({
     payload: rule?.transforms?.payload ?? '',
     bid: rule?.transforms?.bid ?? '',
@@ -157,6 +166,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     setApiState(initCategoryState(filled.builder_api, BUILDER_API_FIELDS, false));
     setRevealState(initCategoryState(filled.reveal, REVEAL_FIELDS, false));
     setBuildReorg(filled.build?.reorg_parent_payload ? 'on' : 'off');
+    setLocalBuild(initLocalBuildState(filled.build?.local));
     setTransforms({ payload: '', bid: '', envelope: '' });
     setFormError(null);
   };
@@ -210,6 +220,13 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       return;
     }
 
+    const localPlan = localBuildPlanFromState(localBuild);
+    const buildPlan = {
+      ...(buildReorg === 'on' ? { reorg_parent_payload: true } : {}),
+      ...(localPlan ? { local: localPlan } : {}),
+    };
+    const hasBuildPlan = Object.keys(buildPlan).length > 0;
+
     const next: SlotRule = {
       id: id.trim(),
       enabled,
@@ -220,7 +237,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       ...(bid.value ? { bid: bid.value } : {}),
       ...(api.value ? { builder_api: api.value } : {}),
       ...(reveal.value ? { reveal: reveal.value } : {}),
-      ...(buildReorg === 'on' ? { build: { reorg_parent_payload: true } } : {}),
+      ...(hasBuildPlan ? { build: buildPlan } : {}),
     };
 
     const transformPlan = {
@@ -375,6 +392,14 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 onChange={setRevealState}
               />
               <BuildForm bulk={false} value={buildReorg} disabled={disabled} onChange={setBuildReorg} />
+              <LocalBuildForm
+                bulk={false}
+                state={localBuild}
+                disabled={disabled}
+                available={localBuildStatus?.availability.available ?? false}
+                unavailableReason={localBuildStatus?.availability.reason}
+                onChange={setLocalBuild}
+              />
               <TransformEditor
                 bulk={false}
                 value={transforms}

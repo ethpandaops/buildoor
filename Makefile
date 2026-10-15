@@ -105,5 +105,27 @@ devnet-run-docker: devnet
 		--lifecycle \
 		--log-level debug
 
+# Point a one-shot spamoor at the local replacement's transaction pool
+# ingress (/rpc on the API port, reached through the socat sidecar's service
+# alias). buildoor is spamoor's ONLY host: the ingress proxies the read-only
+# calls spamoor needs to follow the chain, and a second (EL) host would receive
+# every transaction too — spamoor fans each submission out to all its hosts —
+# which puts them into the EL mempool and defeats the pool. The account is the
+# ethereum-package's prefunded key #1 (#0 is buildoor's lifecycle wallet).
+# Enable the pool + local build from the WebUI first (or pass
+# --txpool-enabled --local-build-enabled --local-build-payload-source local to
+# devnet-run) — with the pool disabled the ingress answers "txpool disabled".
+SPAMOOR_IMAGE ?= ethpandaops/spamoor:master
+SPAMOOR_SCENARIO ?= eoatx
+SPAMOOR_ARGS ?= --throughput 10 --max-pending 40 --max-wallets 10
+SPAMOOR_PRIVKEY ?= 39725efee3fb28614de3bacaffe4cc4bd8c436257e2c8bb887c4b5c4be45e76d
+
+devnet-spam:
+	@. .hack/devnet/generated-vars-docker.env && \
+	docker run --rm --network "$${DOCKER_NETWORK}" $(SPAMOOR_IMAGE) $(SPAMOOR_SCENARIO) \
+		-h "name(buildoor)http://$${BUILDOOR_SERVICE}:8080/rpc" \
+		-p "$(SPAMOOR_PRIVKEY)" \
+		$(SPAMOOR_ARGS)
+
 devnet-clean:
 	.hack/devnet/cleanup.sh

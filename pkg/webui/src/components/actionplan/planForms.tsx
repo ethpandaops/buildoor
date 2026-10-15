@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ActionMode } from '../../types';
+import type { LocalBuildPlan, ActionMode } from '../../types';
 
 // Shared plan-category form model, used by both the per-slot edit modal and
 // the recurring rule editor: the two author the same categories, only their
@@ -327,3 +327,240 @@ export const BuildForm: React.FC<{
     )}
   </div>
 );
+
+// ---------------------------------------------------------------------------
+// Local build (modeless overrides of the testing_buildBlockV1 extension)
+// ---------------------------------------------------------------------------
+
+// Every field is tri-state-ish: '' inherits the global setting.
+export interface LocalBuildFormState {
+  enabled: '' | 'true' | 'false';
+  payload_source: string;
+  tx_source: string;
+  transactions: string; // one 0x-hex raw transaction per line
+  queued: string; // one pool tx hash per line, exact order
+  build_el_payload: '' | 'true' | 'false';
+  max_txs: string;
+  gas_fill_pct: string;
+  ordering: string;
+}
+
+export const EMPTY_LOCAL_BUILD_STATE: LocalBuildFormState = {
+  enabled: '',
+  payload_source: '',
+  tx_source: '',
+  transactions: '',
+  queued: '',
+  build_el_payload: '',
+  max_txs: '',
+  gas_fill_pct: '',
+  ordering: '',
+};
+
+export function initLocalBuildState(plan: LocalBuildPlan | undefined): LocalBuildFormState {
+  if (!plan) return EMPTY_LOCAL_BUILD_STATE;
+  return {
+    enabled: plan.enabled === undefined ? '' : plan.enabled ? 'true' : 'false',
+    payload_source: plan.payload_source ?? '',
+    tx_source: plan.tx_source ?? (plan.transactions?.length ? 'explicit' : plan.queued?.length ? 'queued' : ''),
+    transactions: (plan.transactions ?? []).join('\n'),
+    queued: (plan.queued ?? []).join('\n'),
+    build_el_payload: plan.build_el_payload === undefined ? '' : plan.build_el_payload ? 'true' : 'false',
+    max_txs: plan.max_txs === undefined ? '' : String(plan.max_txs),
+    gas_fill_pct: plan.gas_fill_pct === undefined ? '' : String(plan.gas_fill_pct),
+    ordering: plan.ordering ?? '',
+  };
+}
+
+// localBuildPlanFromState returns the plan object, or undefined when every
+// field inherits (the category member is then omitted / cleared).
+export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildPlan | undefined {
+  const plan: LocalBuildPlan = {};
+  if (state.enabled !== '') plan.enabled = state.enabled === 'true';
+  if (state.payload_source) plan.payload_source = state.payload_source;
+  const txs = state.transactions
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '');
+  const queued = state.queued
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '');
+  if (state.tx_source === 'explicit' || (state.tx_source === '' && txs.length > 0)) {
+    plan.tx_source = 'explicit';
+    plan.transactions = txs;
+  } else if (state.tx_source === 'queued' || (state.tx_source === '' && queued.length > 0)) {
+    plan.tx_source = 'queued';
+    plan.queued = queued;
+  } else if (state.tx_source) {
+    plan.tx_source = state.tx_source;
+  }
+  if (state.build_el_payload !== '') plan.build_el_payload = state.build_el_payload === 'true';
+  if (state.max_txs.trim() !== '') plan.max_txs = Number(state.max_txs);
+  if (state.gas_fill_pct.trim() !== '') plan.gas_fill_pct = Number(state.gas_fill_pct);
+  if (state.ordering) plan.ordering = state.ordering;
+  return Object.keys(plan).length > 0 ? plan : undefined;
+}
+
+export const LocalBuildForm: React.FC<{
+  bulk: boolean;
+  state: LocalBuildFormState;
+  disabled: boolean;
+  available: boolean;
+  unavailableReason?: string;
+  onChange: (next: LocalBuildFormState) => void;
+}> = ({ bulk, state, disabled, available, unavailableReason, onChange }) => {
+  const set = (patch: Partial<LocalBuildFormState>) => onChange({ ...state, ...patch });
+  const isExplicit = state.tx_source === 'explicit';
+  const isQueued = state.tx_source === 'queued';
+
+  return (
+    <div className="mb-3">
+      <div className="d-flex align-items-center gap-2 mb-1">
+        <div className="section-header">Local build</div>
+        <select
+          className="form-select form-select-sm w-auto"
+          value={state.enabled}
+          disabled={disabled}
+          onChange={(e) => set({ enabled: e.target.value as LocalBuildFormState['enabled'] })}
+        >
+          <option value="">{bulk ? 'unchanged / inherit' : 'inherit'}</option>
+          <option value="true">enabled</option>
+          <option value="false">disabled</option>
+        </select>
+        {!available && (
+          <span className="badge bg-warning text-dark" title={unavailableReason}>
+            EL testing namespace unavailable
+          </span>
+        )}
+      </div>
+      {!available && state.enabled === 'true' && (
+        <div className="form-text mt-0 text-warning">
+          {unavailableReason || 'testing_buildBlockV1 is not available on the EL'} — the plan is rejected
+          until the namespace is enabled; availability wins at build time.
+        </div>
+      )}
+      {(state.enabled === 'true' || state.enabled === '') && (
+        <div className="row g-2">
+          <div className="col-6">
+            <label className="form-label small mb-0">Payload source</label>
+            <select
+              className="form-select form-select-sm"
+              value={state.payload_source}
+              disabled={disabled}
+              onChange={(e) => set({ payload_source: e.target.value })}
+            >
+              <option value="">inherit</option>
+              <option value="el">el (local is a shadow)</option>
+              <option value="local">local (strict)</option>
+              <option value="local_or_el">local, else el</option>
+            </select>
+          </div>
+          <div className="col-6">
+            <label className="form-label small mb-0">Tx source</label>
+            <select
+              className="form-select form-select-sm"
+              value={state.tx_source}
+              disabled={disabled}
+              onChange={(e) => set({ tx_source: e.target.value })}
+            >
+              <option value="">inherit</option>
+              <option value="txpool">txpool</option>
+              <option value="empty">empty block</option>
+              <option value="el_mempool">EL mempool (testing path)</option>
+              <option value="explicit">explicit list (raw txs)</option>
+              <option value="queued">queued list (pool tx hashes, exact order)</option>
+            </select>
+          </div>
+          {isQueued && (
+            <div className="col-12">
+              <label className="form-label small mb-0">Queued tx hashes (one per line, exact block order)</label>
+              <textarea
+                className="form-control form-control-sm font-monospace"
+                rows={4}
+                value={state.queued}
+                disabled={disabled}
+                placeholder="0x…"
+                onChange={(e) => set({ queued: e.target.value })}
+              />
+              <div className="form-text mt-0">
+                Every hash must be queued in the pool at build time and respect the senders' nonce
+                order; any deviation fails the build instead of trimming the list.
+              </div>
+            </div>
+          )}
+          {isExplicit && (
+            <div className="col-12">
+              <label className="form-label small mb-0">Transactions (0x-hex raw, one per line)</label>
+              <textarea
+                className="form-control form-control-sm font-monospace"
+                rows={4}
+                value={state.transactions}
+                disabled={disabled}
+                placeholder="0x02f8..."
+                onChange={(e) => set({ transactions: e.target.value })}
+              />
+            </div>
+          )}
+          <div className="col-4">
+            <label className="form-label small mb-0">Keep EL build</label>
+            <select
+              className="form-select form-select-sm"
+              value={state.build_el_payload}
+              disabled={disabled}
+              onChange={(e) => set({ build_el_payload: e.target.value as LocalBuildFormState['build_el_payload'] })}
+            >
+              <option value="">inherit</option>
+              <option value="true">yes</option>
+              <option value="false">no</option>
+            </select>
+          </div>
+          <div className="col-4">
+            <label className="form-label small mb-0">Max txs</label>
+            <input
+              type="number"
+              min={0}
+              className="form-control form-control-sm"
+              value={state.max_txs}
+              disabled={disabled}
+              placeholder="inherit"
+              onChange={(e) => set({ max_txs: e.target.value })}
+            />
+          </div>
+          <div className="col-4">
+            <label className="form-label small mb-0">Gas fill %</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              className="form-control form-control-sm"
+              value={state.gas_fill_pct}
+              disabled={disabled}
+              placeholder="inherit"
+              onChange={(e) => set({ gas_fill_pct: e.target.value })}
+            />
+          </div>
+          <div className="col-6">
+            <label className="form-label small mb-0">Ordering</label>
+            <select
+              className="form-select form-select-sm"
+              value={state.ordering}
+              disabled={disabled}
+              onChange={(e) => set({ ordering: e.target.value })}
+            >
+              <option value="">inherit</option>
+              <option value="fifo">fifo (arrival)</option>
+              <option value="tip">tip (highest first)</option>
+              <option value="random">random</option>
+              <option value="round_robin">round robin (one per sender per round)</option>
+            </select>
+          </div>
+          <div className="col-12 form-text mt-0">
+            Builds an additional payload through the EL's testing_buildBlockV1 from the chosen
+            transaction source; the payload source decides whether bids use it or the EL payload.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

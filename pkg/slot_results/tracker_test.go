@@ -638,3 +638,43 @@ func TestBuildOutcomeSeqOrdering(t *testing.T) {
 	})
 	require.Equal(t, BuildStatusFailed, env.tracker.Get(slot).Build.Status)
 }
+
+// TestTxPlanVerdictBeforeSeed keeps a tx plan verdict recorded before the
+// tracker processed the inclusion event that seeds the plan: the verifier
+// consumes the same event independently and can finish first.
+func TestTxPlanVerdictBeforeSeed(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+
+	env.tracker.RecordTxPlanCheck(2000, TxPlanMatch, 2, -1, "")
+
+	env.tracker.handleIncluded(&payload_bidder.PayloadIncludedEvent{
+		Payload: &payload_builder.Payload{
+			Local: &payload_builder.LocalBuildInfo{
+				TxSource:       "explicit",
+				ExpectedHashes: []string{"0x01", "0x02"},
+			},
+		},
+		WonBlock: &payload_bidder.WonBlock{Source: "epbs", Slot: 2000, BlockHash: "0xbb"},
+	})
+
+	plan := env.tracker.Get(2000).TxPlan
+	require.NotNil(t, plan)
+	require.Equal(t, TxPlanMatch, plan.Status, "the early verdict survives the seed")
+	require.Equal(t, 2, plan.IncludedCount)
+	require.Equal(t, 2, plan.ExpectedCount)
+	require.Equal(t, "explicit", plan.TxSource)
+	require.NotNil(t, plan.VerifiedAt)
+
+	// A later inclusion (re-included after a reorg) seeds a fresh pending plan.
+	env.tracker.handleIncluded(&payload_bidder.PayloadIncludedEvent{
+		Payload: &payload_builder.Payload{
+			Local: &payload_builder.LocalBuildInfo{
+				TxSource:       "explicit",
+				ExpectedHashes: []string{"0x01", "0x02"},
+			},
+		},
+		WonBlock: &payload_bidder.WonBlock{Source: "epbs", Slot: 2000, BlockHash: "0xcc"},
+	})
+
+	require.Equal(t, TxPlanPending, env.tracker.Get(2000).TxPlan.Status)
+}

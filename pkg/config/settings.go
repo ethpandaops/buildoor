@@ -58,6 +58,17 @@ type Service struct {
 	seq         int64
 	keyState    map[string]*keyState
 	subscribers []func()
+	guards      []SettingGuard
+}
+
+// SettingGuard vetoes setting writes against runtime state the config layer
+// cannot know — e.g. enabling the local build while the EL does not expose the
+// testing namespace. Guards run after the static validation of every write;
+// the first error rejects the whole update.
+type SettingGuard interface {
+	// GuardSetting returns an error when the decoded value must not be
+	// applied to the key.
+	GuardSetting(key string, value any) error
 }
 
 // New constructs the settings service.
@@ -217,6 +228,14 @@ func (s *Service) Load() *Config {
 	return s.effective
 }
 
+// AddGuard registers a runtime guard consulted on every setting write.
+func (s *Service) AddGuard(g SettingGuard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.guards = append(s.guards, g)
+}
+
 // OnChange registers a callback invoked (outside the service lock) after every
 // applied change. Used to trigger module-side resets and re-reads.
 func (s *Service) OnChange(fn func()) {
@@ -255,6 +274,13 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		if err := ValidateSetting(key, v); err != nil {
 			s.mu.Unlock()
 			return err
+		}
+
+		for _, g := range s.guards {
+			if err := g.GuardSetting(key, v); err != nil {
+				s.mu.Unlock()
+				return err
+			}
 		}
 
 		decoded[key] = v

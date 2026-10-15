@@ -37,6 +37,9 @@ func ValidateSetting(key string, v any) error {
 	case KeyDepositAmount:
 		return requirePositive(key, v)
 
+	case KeyLocalBuildMaxAttempts, KeyTxPoolMaxPoolTxs, KeyTxPoolMaxTxsPerSender:
+		return requirePositive(key, v)
+
 	case KeyRevealGateMode:
 		return requireOneOf(key, v,
 			RevealGateTime, RevealGateVote, RevealGateVoteOrTime, RevealGateVoteAndTime)
@@ -68,6 +71,31 @@ func ValidateSetting(key string, v any) error {
 		KeyBuilderAPIExecutionPaymentPct:
 		if pct, _ := v.(uint64); pct > 100 {
 			return fmt.Errorf("%s is a percentage (0-100), got %d", key, pct)
+		}
+
+	case KeyLocalBuildPayloadSource:
+		source, _ := v.(string)
+		if NormalizedPayloadSource(source, "") == "" {
+			return fmt.Errorf("%s must be el, local or local_or_el, got %q", key, source)
+		}
+
+	case KeyLocalBuildTxSource:
+		// explicit and queued are per-slot plan sources, never a global default.
+		source, _ := v.(string)
+		if normalized := NormalizedTxSource(source, ""); normalized == "" ||
+			normalized == TxSourceExplicit || normalized == TxSourceQueued {
+			return fmt.Errorf("%s must be txpool, empty or el_mempool, got %q", key, source)
+		}
+
+	case KeyTxPoolOrdering:
+		ordering, _ := v.(string)
+		if NormalizedTxOrdering(ordering, "") == "" {
+			return fmt.Errorf("%s must be fifo, tip, random or round_robin, got %q", key, ordering)
+		}
+
+	case KeyTxPoolGasFillPct:
+		if pct, _ := v.(uint64); pct == 0 || pct > 100 {
+			return fmt.Errorf("%s must be between 1 and 100, got %d", key, pct)
 		}
 
 	case KeyEPBSBidInterval, KeyRevealRetryInterval:
