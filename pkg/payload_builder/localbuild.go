@@ -450,7 +450,7 @@ type LocalBuildProgressEvent struct {
 // SubscribeLocalBuildProgress subscribes to the live custom build progress
 // (display only, never blocking the build).
 func (s *Service) SubscribeLocalBuildProgress(capacity int) *utils.Subscription[*LocalBuildProgressEvent] {
-	return s.payloadBuilder.localProgress.Subscribe(capacity, false)
+	return s.localProgress.Subscribe(capacity, false)
 }
 
 // SubscribeLocalBuild subscribes to local build outcome events. Authoritative
