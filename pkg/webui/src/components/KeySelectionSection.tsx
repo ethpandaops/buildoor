@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
+import { InfoHint } from './InfoHint';
 import type { Config, EPBSConfig } from '../types';
 
 interface KeySelectionSectionProps {
@@ -20,10 +21,81 @@ const CANDIDATE_LABELS: Record<string, string> = {
 // Order the fleet is walked in when picking the key for a bid.
 const STRATEGY_LABELS: Record<string, string> = {
   round_robin: 'round robin',
-  single: 'single (primary key only)',
+  single: 'single (lowest-index key first)',
   random: 'random',
   least_used: 'least used',
 };
+
+// Setting explanations shared by the view rows and the edit form.
+const HINT_BID_CANDIDATE = (
+  <>
+    Which built candidate payload the slot&apos;s p2p bids commit to
+    (<code>epbs.bid_candidate</code>). A specific candidate only bids when that candidate was
+    actually built (see Build Candidates). Per-slot action plans can override it.
+    <dl>
+      <dt>auto</dt>
+      <dd>The payload matching the current head and its payload status (empty-parent build when the head&apos;s payload was withheld), else the slot&apos;s primary payload.</dd>
+      <dt>all</dt>
+      <dd>Bids every built candidate, spending keys per candidate: deliberate multi-parent gossip.</dd>
+      <dt>parent (full)</dt>
+      <dd>Head block and its payload.</dd>
+      <dt>parent (empty payload)</dt>
+      <dd>Head block on its execution parent (payload-miss case).</dd>
+      <dt>grandparent (reorg)</dt>
+      <dd>Head block&apos;s parent, reorging the head out.</dd>
+      <dt>grandparent (empty payload)</dt>
+      <dd>Reorg plus a withheld grandparent payload.</dd>
+    </dl>
+  </>
+);
+
+const HINT_CANDIDATE_SWITCH = (
+  <>
+    Only affects <em>auto</em> bid candidate selection (<code>epbs.bid_candidate_switch</code>).
+    <dl>
+      <dt>sticky per slot (off)</dt>
+      <dd>Keeps bidding the first candidate chosen for the slot.</dd>
+      <dt>mid-slot allowed (on)</dt>
+      <dd>Re-selects on every bid and follows chain view changes; a switched bid rarely propagates past the gossip first-seen rule.</dd>
+    </dl>
+  </>
+);
+
+const HINT_KEY_STRATEGY = (
+  <>
+    Order the active builder keys are offered in for each bid (<code>epbs.key_strategy</code>);
+    keys that already bid this slot are skipped. Keys that cannot cover the bid sort last but are
+    still used when nothing else is left. Also used by Builder API bids unless the Builder API sets
+    its own strategy. Per-slot action plans can override it.
+    <dl>
+      <dt>round robin</dt>
+      <dd>Rotates the starting key by slot, spreading bids and payments evenly.</dd>
+      <dt>single</dt>
+      <dd>Lowest-index active key that has not bid this slot yet. Combine with Keys / Slot = 1 for single-key behaviour.</dd>
+      <dt>random</dt>
+      <dd>Shuffles the keys per slot (deterministic per slot).</dd>
+      <dt>least used</dt>
+      <dd>Prefers the keys with the fewest bids so far.</dd>
+    </dl>
+  </>
+);
+
+const HINT_KEYS_PER_SLOT = (
+  <>
+    Maximum distinct builder keys that may bid one slot (<code>epbs.bid_keys_per_slot</code>).
+    Since a key bids at most once per slot, this also caps the slot&apos;s bid count. 0 = no cap
+    beyond the active fleet; 1 = one gossiped bid per slot. Per-slot action plans can override it.
+  </>
+);
+
+const HINT_KEYS_PER_STEP = (
+  <>
+    Keys that bid a payload per bid interval step, each one bid increase above the previous
+    (<code>epbs.bid_keys_per_step</code>). 1 = walk the fleet up the price ladder one key per
+    interval; 0 = spend every remaining key at once when the window opens. Per-slot action plans can
+    override it.
+  </>
+);
 
 interface KeySelectionForm {
   bid_candidate: string;
@@ -120,7 +192,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
         <div className="row g-2">
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Bid Candidate</div>
+              <div className="config-item-label">Bid Candidate <InfoHint>{HINT_BID_CANDIDATE}</InfoHint></div>
               <div className="config-item-value">
                 {CANDIDATE_LABELS[epbs?.bid_candidate || 'auto'] ?? epbs?.bid_candidate}
               </div>
@@ -128,7 +200,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Candidate Switch</div>
+              <div className="config-item-label">Candidate Switch <InfoHint alignEnd>{HINT_CANDIDATE_SWITCH}</InfoHint></div>
               <div className="config-item-value">
                 {epbs?.bid_candidate_switch ? 'mid-slot allowed' : 'sticky per slot'}
               </div>
@@ -136,7 +208,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Key Strategy</div>
+              <div className="config-item-label">Key Strategy <InfoHint>{HINT_KEY_STRATEGY}</InfoHint></div>
               <div className="config-item-value">
                 {STRATEGY_LABELS[epbs?.key_strategy || 'round_robin'] ?? epbs?.key_strategy}
               </div>
@@ -144,7 +216,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Keys / Slot</div>
+              <div className="config-item-label">Keys / Slot <InfoHint alignEnd>{HINT_KEYS_PER_SLOT}</InfoHint></div>
               <div className="config-item-value">
                 {epbs?.bid_keys_per_slot ? epbs.bid_keys_per_slot : 'whole fleet'}
               </div>
@@ -152,7 +224,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Keys / Step</div>
+              <div className="config-item-label">Keys / Step <InfoHint>{HINT_KEYS_PER_STEP}</InfoHint></div>
               <div className="config-item-value">
                 {epbs?.bid_keys_per_step ? epbs.bid_keys_per_step : 'all remaining'}
               </div>
@@ -162,7 +234,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
       ) : (
         <form onSubmit={handleSave}>
           <div className="mb-2">
-            <label className="form-label">Bid Candidate</label>
+            <label className="form-label">Bid Candidate <InfoHint>{HINT_BID_CANDIDATE}</InfoHint></label>
             <select
               className="form-select form-select-sm"
               value={form.bid_candidate}
@@ -191,6 +263,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
             <label className="form-check-label" htmlFor="bid-candidate-switch">
               Allow switching candidate mid-slot
             </label>
+            <InfoHint>{HINT_CANDIDATE_SWITCH}</InfoHint>
             <div className="form-text">
               Lets the auto selection move to a different candidate when the
               chain view changes during the slot. Off keeps the first gossiped
@@ -200,7 +273,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
 
           <div className="mb-2">
-            <label className="form-label">Key Strategy</label>
+            <label className="form-label">Key Strategy <InfoHint>{HINT_KEY_STRATEGY}</InfoHint></label>
             <select
               className="form-select form-select-sm"
               value={form.key_strategy}
@@ -218,7 +291,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
 
           <div className="mb-2">
-            <label className="form-label">Keys per Slot</label>
+            <label className="form-label">Keys per Slot <InfoHint>{HINT_KEYS_PER_SLOT}</InfoHint></label>
             <input
               type="number"
               min={0}
@@ -236,7 +309,7 @@ export const KeySelectionSection: React.FC<KeySelectionSectionProps> = ({ config
           </div>
 
           <div className="mb-2">
-            <label className="form-label">Keys per Step</label>
+            <label className="form-label">Keys per Step <InfoHint>{HINT_KEYS_PER_STEP}</InfoHint></label>
             <input
               type="number"
               min={0}

@@ -155,9 +155,16 @@ type TxPoolResponse struct {
 // @Param sender query string false "Filter by sender address"
 // @Param sort query string false "arrival (default) | sender | tip"
 // @Success 200 {object} TxPoolResponse
+// @Failure 401 {object} map[string]string "Unauthorized (the pool holds private transactions)"
 // @Failure 404 {object} map[string]string "Pool not configured"
 // @Router /api/buildoor/txpool [get]
 func (h *APIHandler) GetTxPool(w http.ResponseWriter, r *http.Request) {
+	// The pool holds private transactions: only logged-in readers see it.
+	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	pool := h.builderSvc.TxPool()
 	if pool == nil {
 		writeError(w, http.StatusNotFound, "transaction pool not configured (no --el-rpc)")
@@ -224,10 +231,17 @@ type TxPoolPreviewResponse struct {
 // @Description contain (count, gas sum, skipped-by-reason), without building.
 // @Produce json
 // @Success 200 {object} TxPoolPreviewResponse
+// @Failure 401 {object} map[string]string "Unauthorized (the pool holds private transactions)"
 // @Failure 404 {object} map[string]string "Pool not configured or no head"
 // @Failure 500 {object} map[string]string "Selection failed"
 // @Router /api/buildoor/txpool/preview [get]
 func (h *APIHandler) GetTxPoolPreview(w http.ResponseWriter, r *http.Request) {
+	// The pool holds private transactions: only logged-in readers see it.
+	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	pool := h.builderSvc.TxPool()
 	if pool == nil {
 		writeError(w, http.StatusNotFound, "transaction pool not configured (no --el-rpc)")

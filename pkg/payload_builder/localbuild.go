@@ -3,12 +3,14 @@ package payload_builder
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -50,11 +52,13 @@ const (
 	LocalSkipSpeculativeCandidate = "speculative_candidate"
 )
 
-// Local build statuses (LocalBuildEvent.Status).
+// Local build statuses (LocalBuildEvent.Status; LocalBuildProgressEvent.Phase
+// also uses building).
 const (
-	LocalStatusReady   = "ready"
-	LocalStatusFailed  = "failed"
-	LocalStatusSkipped = "skipped"
+	LocalStatusBuilding = "building"
+	LocalStatusReady    = "ready"
+	LocalStatusFailed   = "failed"
+	LocalStatusSkipped  = "skipped"
 )
 
 // LocalBuildClient is the EL surface the local build uses: the testing
@@ -65,6 +69,9 @@ type LocalBuildClient interface {
 	) (*engineall.GetPayloadResponse, error)
 	ProbeTestingAPI(ctx context.Context) execution.TestingAPIStatus
 	ClientVersion(ctx context.Context) (string, error)
+	// PendingPoolTransactions reads the EL mempool for the txpool_el_fill
+	// source.
+	PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error)
 }
 
 var _ LocalBuildClient = (*execution.Client)(nil)
@@ -72,6 +79,8 @@ var _ LocalBuildClient = (*execution.Client)(nil)
 // LocalBuildRequest is a slot's resolved local-build instruction handed to the
 // payload builder alongside the engine build.
 type LocalBuildRequest struct {
+	// Candidate is the build target's candidate key (for progress events).
+	Candidate string
 	// TxSource is txpool, empty, el_mempool or explicit.
 	TxSource string
 	// Transactions is the explicit transaction list (tx source explicit).
@@ -79,8 +88,8 @@ type LocalBuildRequest struct {
 	// Queued is the exact ordered list of pool transaction hashes (tx source
 	// queued).
 	Queued []common.Hash
-	// PayloadSource decides which payload feeds consumers: el, local or
-	// local_or_el.
+	// PayloadSource decides which payload feeds consumers: el, local,
+	// local_or_el or higher_value.
 	PayloadSource string
 	// BuildELPayload keeps the engine build running when PayloadSource is
 	// local.
@@ -105,8 +114,8 @@ type LocalBuildRequest struct {
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
-// The el and local_or_el payload sources need the engine payload; local only
-// keeps it when BuildELPayload is set.
+// The el, local_or_el and higher_value payload sources need the engine
+// payload; local only keeps it when BuildELPayload is set.
 func (r *LocalBuildRequest) RunEL() bool {
 	if r == nil {
 		return true
@@ -138,6 +147,14 @@ type LocalBuildInfo struct {
 	// SubmittedTxs is how many transactions were handed to the EL (-1 for the
 	// el_mempool source, where the EL chooses).
 	SubmittedTxs int `json:"submitted_txs"`
+	// FillTxs is how many EL mempool transactions the txpool_el_fill source
+	// appended after the pool selection; FillError is why the EL mempool
+	// could not be read (the build then used the pool alone); FillDropped
+	// marks that the EL refused the list and the build retried without the
+	// fill.
+	FillTxs     int    `json:"fill_txs,omitempty"`
+	FillError   string `json:"fill_error,omitempty"`
+	FillDropped bool   `json:"fill_dropped,omitempty"`
 	// Attempts is how many testing_buildBlockV1 calls the build took.
 	Attempts int `json:"attempts,omitempty"`
 	// Dropped lists the pool transactions removed from the attempt after an
@@ -413,6 +430,29 @@ func (s *Service) GuardSetting(key string, value any) error {
 	return nil
 }
 
+// LocalBuildProgressEvent reports a custom build live: building when it
+// starts, then ready / failed / skipped the moment testing_buildBlockV1
+// returned. The authoritative LocalBuildEvent follows once the engine build
+// finished and the payload feeding bids was selected.
+type LocalBuildProgressEvent struct {
+	Slot            phase0.Slot
+	Candidate       string
+	Phase           string // building | ready | failed | skipped
+	TxSource        string
+	StartedAt       time.Time
+	At              time.Time
+	NumTransactions int
+	BlockValue      *big.Int
+	SkipReason      string
+	Error           string
+}
+
+// SubscribeLocalBuildProgress subscribes to the live custom build progress
+// (display only, never blocking the build).
+func (s *Service) SubscribeLocalBuildProgress(capacity int) *utils.Subscription[*LocalBuildProgressEvent] {
+	return s.localProgress.Subscribe(capacity, false)
+}
+
 // SubscribeLocalBuild subscribes to local build outcome events. Authoritative
 // consumers (the slot results tracker) should pass blocking=true.
 func (s *Service) SubscribeLocalBuild(capacity int, blocking bool) *utils.Subscription[*LocalBuildEvent] {
@@ -447,6 +487,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 	}
 
 	req := &LocalBuildRequest{
+		Candidate:          string(candidate),
 		TxSource:           settings.TxSource,
 		PayloadSource:      settings.PayloadSource,
 		BuildELPayload:     settings.BuildELPayload,

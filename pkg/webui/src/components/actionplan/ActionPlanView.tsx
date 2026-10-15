@@ -7,6 +7,7 @@ import { ActionPlanGrid } from './ActionPlanGrid';
 import { BulkEditBar } from './BulkEditBar';
 import { RulesPanel } from './RulesPanel';
 import { SlotEditModal, type ModalTarget } from './SlotEditModal';
+import { InfoHint } from '../InfoHint';
 
 // Default epoch window around the current epoch.
 const EPOCHS_BACK = 8;
@@ -125,7 +126,15 @@ export const ActionPlanView: React.FC = () => {
     <div className="container-fluid mt-2">
       <div className="card">
         <div className="card-header d-flex flex-wrap align-items-center gap-2">
-          <h5 className="mb-0">Action Plan</h5>
+          <h5 className="mb-0">
+            Action Plan
+            <InfoHint>
+              Per-slot instructions on top of the global config: force or suppress p2p bidding,
+              Builder API serving and the reveal, override their values, tweak the build. A slot&apos;s
+              plan freezes about one slot ahead; from then on (and for past slots) it is read-only
+              and the cell shows what actually happened.
+            </InfoHint>
+          </h5>
           <span className="text-muted small">
             epochs {window.start}–{window.end} (current: {currentEpoch})
             {follow && <span className="badge bg-success ms-2">live</span>}
@@ -145,6 +154,10 @@ export const ActionPlanView: React.FC = () => {
               </button>
             </div>
             <form className="d-flex align-items-center gap-1" onSubmit={handleJump}>
+              <InfoHint alignEnd>
+                Jump to an epoch: shows {EPOCHS_BACK} epochs before it and {EPOCHS_AHEAD} after.
+                &quot;Now&quot; resumes following the current epoch.
+              </InfoHint>
               <input
                 type="number"
                 className="form-control form-control-sm ap-range-input"
@@ -196,7 +209,14 @@ export const ActionPlanView: React.FC = () => {
           />
 
           <div className="d-flex flex-wrap align-items-center gap-3 mt-2 timeline-legend">
-            <span className="legend-section">Plan:</span>
+            <span className="legend-section">
+              Plan:
+              <InfoHint>
+                Chips mark the categories a slot&apos;s plan sets. Blue = custom (forced active,
+                optional overrides), red = disabled (suppressed), no chip = inherits the global
+                config. Dashed chips come from a recurring rule, not a plan stored for the slot.
+              </InfoHint>
+            </span>
             <span><span className="ap-chip ap-chip-custom">B</span> bid</span>
             <span><span className="ap-chip ap-chip-custom">A</span> builder api</span>
             <span><span className="ap-chip ap-chip-custom">R</span> reveal</span>
@@ -204,13 +224,32 @@ export const ActionPlanView: React.FC = () => {
             <span><span className="ap-chip ap-chip-transform">jq</span> transform</span>
             <span><span className="ap-chip ap-chip-disabled">B</span> disabled</span>
             <span><span className="ap-chip ap-chip-custom ap-chip-rule">B</span> from a recurring rule</span>
-            <span className="legend-section">Bid (left dot):</span>
+            <span className="legend-section">
+              Bid (left dot):
+              <InfoHint>
+                The slot&apos;s outcome, best first: <strong>included</strong> = a block committed to our
+                payload; <strong>bid, not included</strong> = p2p bids gossiped or Builder API bids
+                served, but another payload won; <strong>failed</strong> = the build failed;{' '}
+                <strong>built only</strong> = a payload was built but no bid went out;{' '}
+                <strong>nothing happened</strong> = the slot was active but no payload was built
+                (attributes missing or the build still running).
+              </InfoHint>
+            </span>
             <span><span className="ap-dot ap-dot-included d-inline-block"></span> included</span>
             <span><span className="ap-dot ap-dot-bidding d-inline-block"></span> bid, not included</span>
             <span><span className="ap-dot ap-dot-failed d-inline-block"></span> failed</span>
             <span><span className="ap-dot ap-dot-idle d-inline-block"></span> nothing happened</span>
             <span><span className="ap-dot ap-dot-built d-inline-block"></span> built only</span>
-            <span className="legend-section">Payload (right dot, won slots):</span>
+            <span className="legend-section">
+              Payload (right dot, won slots):
+              <InfoHint alignEnd>
+                Whether our payload became canonical, decided by the next canonical block and revised
+                on reorgs: <strong>canonical</strong> = built upon; <strong>missed</strong> = our block
+                stayed but its payload was skipped (withheld, too late or voted empty);{' '}
+                <strong>reorged out</strong> = our block itself left the chain;{' '}
+                <strong>pending</strong> = no follow-up block yet.
+              </InfoHint>
+            </span>
             <span><span className="ap-dot ap-dot-payload-canonical d-inline-block"></span> canonical</span>
             <span><span className="ap-dot ap-dot-payload-missed d-inline-block"></span> missed</span>
             <span><span className="ap-dot ap-dot-payload-orphaned d-inline-block"></span> reorged out</span>

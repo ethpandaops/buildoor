@@ -5,6 +5,8 @@ import { useSettings } from '../hooks/useSettings';
 import { useLocalBuildStatus } from '../hooks/useLocalBuildStatus';
 import { Pagination } from './Pagination';
 import { InfoHint } from './InfoHint';
+import { RPCAccessCard } from './RPCAccessCard';
+import { useAuthContext } from '../context/AuthContext';
 import type { TxPoolConfig, TxPoolStats, TxPoolTx, TxSelectionSummary } from '../types';
 
 const PAGE_LIMIT = 50;
@@ -329,6 +331,7 @@ const PoolSettingsCard: React.FC<{ cfg: TxPoolConfig | undefined }> = ({ cfg }) 
 export const MempoolView: React.FC = () => {
   const { txPoolStats, serviceStatus, chainInfo, config } = useEventStream();
   const { isLoggedIn, postSettings } = useSettings();
+  const { authEnabled, login } = useAuthContext();
   const { status: localStatus } = useLocalBuildStatus(serviceStatus?.txpool_enabled);
 
   const [offset, setOffset] = useState(0);
@@ -338,7 +341,7 @@ export const MempoolView: React.FC = () => {
   const [busy, setBusy] = useState(false);
 
   const query = useMemo(() => ({ offset, limit: PAGE_LIMIT, sender: sender.trim(), sort }), [offset, sender, sort]);
-  const { data, loading, error, preview, previewError, fetchPreview, clear, drop } =
+  const { data, loading, error, unauthorized, preview, previewError, fetchPreview, clear, drop } =
     useTxPool(query, txPoolStats?.version);
 
   useEffect(() => {
@@ -405,6 +408,11 @@ export const MempoolView: React.FC = () => {
                   onChange={(e) => toggle(e.target.checked)}
                 />
                 <label className="form-check-label small" htmlFor="mempool-enabled">accept transactions</label>
+                <InfoHint alignEnd>
+                  <code>txpool.enabled</code>: on, <code>/rpc</code> admits transactions into this
+                  mempool and serves the read passthrough; off, every <code>/rpc</code> call is refused
+                  and the custom build skips the buildoor mempool sources.
+                </InfoHint>
               </div>
             )}
             {isLoggedIn && (
@@ -453,98 +461,116 @@ export const MempoolView: React.FC = () => {
 
       <PoolSettingsCard cfg={config?.txpool} />
 
-      <PreviewPanel
-        selection={preview?.selection ?? null}
-        parentHash={preview?.parent_hash}
-        gasLimit={preview?.gas_limit}
-        error={previewError}
-        onRefresh={fetchPreview}
-      />
+      <RPCAccessCard cfg={config?.txpool} />
 
-      <div className="card">
-        <div className="card-header d-flex flex-wrap align-items-center gap-2">
-          <h6 className="mb-0">Queued transactions <span className="badge bg-primary ms-1">{data?.total ?? 0}</span></h6>
-          <div className="ms-auto d-flex gap-2">
-            <input
-              type="text"
-              className="form-control form-control-sm font-monospace"
-              style={{ width: '24rem' }}
-              placeholder="filter by sender 0x…"
-              value={sender}
-              onChange={(e) => { setSender(e.target.value); setOffset(0); }}
-            />
-            <select className="form-select form-select-sm w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
-              <option value="arrival">arrival</option>
-              <option value="sender">sender / nonce</option>
-              <option value="tip">tip</option>
-            </select>
+      {unauthorized ? (
+        <div className="card">
+          <div className="card-body text-center py-5 text-muted">
+            <i className="fas fa-lock me-2"></i>
+            The pool holds private transactions: log in to view the pool and the next block preview.
+            {authEnabled && (
+              <div className="mt-2">
+                <button className="btn btn-sm btn-outline-primary" onClick={login}>Log in</button>
+              </div>
+            )}
           </div>
         </div>
-        <div className="card-body p-0 position-relative">
-          {loading && (
-            <div className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-body bg-opacity-75" style={{ zIndex: 10 }}>
-              <div className="spinner-border text-primary" role="status"><span className="visually-hidden">Loading...</span></div>
+      ) : (
+        <>
+          <PreviewPanel
+            selection={preview?.selection ?? null}
+            parentHash={preview?.parent_hash}
+            gasLimit={preview?.gas_limit}
+            error={previewError}
+            onRefresh={fetchPreview}
+          />
+
+          <div className="card">
+            <div className="card-header d-flex flex-wrap align-items-center gap-2">
+              <h6 className="mb-0">Queued transactions <span className="badge bg-primary ms-1">{data?.total ?? 0}</span></h6>
+              <div className="ms-auto d-flex gap-2">
+                <input
+                  type="text"
+                  className="form-control form-control-sm font-monospace"
+                  style={{ width: '24rem' }}
+                  placeholder="filter by sender 0x…"
+                  value={sender}
+                  onChange={(e) => { setSender(e.target.value); setOffset(0); }}
+                />
+                <select className="form-select form-select-sm w-auto" value={sort} onChange={(e) => setSort(e.target.value)}>
+                  <option value="arrival">arrival</option>
+                  <option value="sender">sender / nonce</option>
+                  <option value="tip">tip</option>
+                </select>
+              </div>
             </div>
-          )}
-          {!loading && (data?.txs.length ?? 0) === 0 ? (
-            <div className="text-center py-5 text-muted">No queued transactions</div>
-          ) : (
-            <div className="table-responsive">
-              <table className="table table-sm table-hover mb-0 small">
-                <thead>
-                  <tr>
-                    <th>Hash</th>
-                    <th>Sender</th>
-                    <th className="text-end">Nonce</th>
-                    <th>Type</th>
-                    <th className="text-end">Gas</th>
-                    <th className="text-end">Max fee / tip (gwei)</th>
-                    <th className="text-end">Value (ETH)</th>
-                    <th className="text-end">Blobs</th>
-                    <th className="text-end">Size</th>
-                    <th className="text-end" title="Attributed EL refusals">Strikes</th>
-                    <th>Arrived</th>
-                    {isLoggedIn && <th></th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data?.txs ?? []).map((tx: TxPoolTx) => (
-                    <tr key={tx.hash}>
-                      <td className="font-monospace" title={tx.hash}>{tx.hash.slice(0, 10)}…{tx.hash.slice(-6)}</td>
-                      <td className="font-monospace" title={tx.sender}>
-                        <a href="#" onClick={(e) => { e.preventDefault(); setSender(tx.sender); setOffset(0); }}>
-                          {tx.sender.slice(0, 8)}…{tx.sender.slice(-4)}
-                        </a>
-                      </td>
-                      <td className="text-end">{tx.nonce}</td>
-                      <td>{TX_TYPES[tx.type] ?? tx.type}</td>
-                      <td className="text-end">{tx.gas.toLocaleString()}</td>
-                      <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}</td>
-                      <td className="text-end">{weiToEth(tx.value_wei)}</td>
-                      <td className="text-end">{tx.blobs ?? 0}</td>
-                      <td className="text-end">{formatBytes(tx.size)}</td>
-                      <td className="text-end">{tx.strikes ? <span className="badge bg-warning text-dark">{tx.strikes}</span> : ''}</td>
-                      <td title={`${tx.arrived} (slot ${tx.arrived_slot})`}>{relativeTime(tx.arrived)} <span className="text-muted">s{tx.arrived_slot}</span></td>
-                      {isLoggedIn && (
-                        <td className="text-end">
-                          <button className="btn btn-sm btn-outline-danger py-0" disabled={busy} title="Drop" onClick={() => handleDrop(tx.hash)}>
-                            <i className="fas fa-times"></i>
-                          </button>
-                        </td>
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="card-body p-0 position-relative">
+              {loading && (
+                <div className="position-absolute top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center bg-body bg-opacity-75" style={{ zIndex: 10 }}>
+                  <div className="spinner-border text-primary" role="status"><span className="visually-hidden">Loading...</span></div>
+                </div>
+              )}
+              {!loading && (data?.txs.length ?? 0) === 0 ? (
+                <div className="text-center py-5 text-muted">No queued transactions</div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table table-sm table-hover mb-0 small">
+                    <thead>
+                      <tr>
+                        <th>Hash</th>
+                        <th>Sender</th>
+                        <th className="text-end">Nonce</th>
+                        <th>Type</th>
+                        <th className="text-end">Gas</th>
+                        <th className="text-end">Max fee / tip (gwei)</th>
+                        <th className="text-end">Value (ETH)</th>
+                        <th className="text-end">Blobs</th>
+                        <th className="text-end">Size</th>
+                        <th className="text-end" title="Attributed EL refusals">Strikes</th>
+                        <th>Arrived</th>
+                        {isLoggedIn && <th></th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(data?.txs ?? []).map((tx: TxPoolTx) => (
+                        <tr key={tx.hash}>
+                          <td className="font-monospace" title={tx.hash}>{tx.hash.slice(0, 10)}…{tx.hash.slice(-6)}</td>
+                          <td className="font-monospace" title={tx.sender}>
+                            <a href="#" onClick={(e) => { e.preventDefault(); setSender(tx.sender); setOffset(0); }}>
+                              {tx.sender.slice(0, 8)}…{tx.sender.slice(-4)}
+                            </a>
+                          </td>
+                          <td className="text-end">{tx.nonce}</td>
+                          <td>{TX_TYPES[tx.type] ?? tx.type}</td>
+                          <td className="text-end">{tx.gas.toLocaleString()}</td>
+                          <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}</td>
+                          <td className="text-end">{weiToEth(tx.value_wei)}</td>
+                          <td className="text-end">{tx.blobs ?? 0}</td>
+                          <td className="text-end">{formatBytes(tx.size)}</td>
+                          <td className="text-end">{tx.strikes ? <span className="badge bg-warning text-dark">{tx.strikes}</span> : ''}</td>
+                          <td title={`${tx.arrived} (slot ${tx.arrived_slot})`}>{relativeTime(tx.arrived)} <span className="text-muted">s{tx.arrived_slot}</span></td>
+                          {isLoggedIn && (
+                            <td className="text-end">
+                              <button className="btn btn-sm btn-outline-danger py-0" disabled={busy} title="Drop" onClick={() => handleDrop(tx.hash)}>
+                                <i className="fas fa-times"></i>
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        {data && data.total > PAGE_LIMIT && (
-          <div className="card-footer">
-            <Pagination total={data.total} offset={offset} limit={PAGE_LIMIT} onPageChange={setOffset} />
+            {data && data.total > PAGE_LIMIT && (
+              <div className="card-footer">
+                <Pagination total={data.total} offset={offset} limit={PAGE_LIMIT} onPageChange={setOffset} />
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
       {chainInfo && stats?.last_admitted_at && (
         <div className="text-muted small mt-2">last admission {relativeTime(stats.last_admitted_at)}</div>
       )}

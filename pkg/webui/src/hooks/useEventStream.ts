@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -270,7 +270,11 @@ export function useEventStream(): UseEventStreamResult {
 
           if (data.status === 'ready') {
             const txs = data.local?.num_transactions ?? 0;
-            const role = data.selected ? 'bids with it' : 'compare only, bids use the engine block';
+            const role = data.selected
+              ? (data.payload_source === 'higher_value' ? 'bids with it, worth more' : 'bids with it')
+              : data.payload_source === 'higher_value'
+                ? 'engine block worth at least as much, bids use it'
+                : 'compare only, bids use the engine block';
             addEvent('local_build',
               `Custom build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
               event.timestamp);
@@ -293,6 +297,21 @@ export function useEventStream(): UseEventStreamResult {
               return prev;
             }
             return { ...prev, [data.slot]: { ...state, localBuild: data } };
+          });
+          break;
+        }
+
+        case 'local_build_progress': {
+          const data = event.data as LocalBuildProgressEvent;
+          setSlotStates(prev => {
+            const state = prev[data.slot] || { slot: data.slot };
+            // Display only: the primary target wins, and the final event (if
+            // already there) is authoritative.
+            if (state.localBuildLive && data.candidate && data.candidate !== 'parent_full' &&
+                state.localBuildLive.candidate === 'parent_full') {
+              return prev;
+            }
+            return { ...prev, [data.slot]: { ...state, localBuildLive: data } };
           });
           break;
         }

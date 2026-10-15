@@ -22,6 +22,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
+	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
 // PayloadBuilder handles execution payload building via the Engine API and,
@@ -44,6 +45,10 @@ type PayloadBuilder struct {
 	// a newer slot starts.
 	activeBuilds map[activeBuildKey]*activeBuild
 	mu           sync.Mutex
+
+	// localProgress reports each custom build live, ahead of the final
+	// LocalBuildEvent that waits for the engine build and the selection.
+	localProgress *utils.Dispatcher[*LocalBuildProgressEvent]
 }
 
 // activeBuildKey identifies one in-progress build by the full parent tuple:
@@ -89,6 +94,7 @@ func NewPayloadBuilder(
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
+		localProgress:     &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		log:               log.WithField("component", "payload-builder"),
 	}
 }
@@ -207,7 +213,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		localCh = make(chan localOutcome, 1)
 
 		go func() {
-			localCh <- b.buildLocal(buildCtx, attrs, prelude, local)
+			started := time.Now()
+			b.fireLocalProgress(attrs, local, started, nil)
+
+			outcome := b.buildLocal(buildCtx, attrs, prelude, local)
+			b.fireLocalProgress(attrs, local, started, &outcome)
+
+			localCh <- outcome
 		}()
 	}
 
@@ -238,6 +250,46 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	return result, err
+}
+
+// fireLocalProgress reports a custom build's live state: building (outcome
+// nil) or its result the moment testing_buildBlockV1 returned.
+func (b *PayloadBuilder) fireLocalProgress(
+	attrs *beacon.PayloadAttributesEvent,
+	req *LocalBuildRequest,
+	started time.Time,
+	outcome *localOutcome,
+) {
+	event := &LocalBuildProgressEvent{
+		Slot:      attrs.ProposalSlot,
+		Candidate: req.Candidate,
+		Phase:     LocalStatusBuilding,
+		TxSource:  req.TxSource,
+		StartedAt: started,
+		At:        time.Now(),
+	}
+
+	switch {
+	case outcome == nil:
+	case outcome.payload != nil:
+		event.Phase = LocalStatusReady
+		event.BlockValue = outcome.payload.BlockValue
+
+		if outcome.payload.ExecutionPayload != nil {
+			event.NumTransactions = len(outcome.payload.ExecutionPayload.Transactions)
+		}
+	case outcome.skipReason != "":
+		event.Phase = LocalStatusSkipped
+		event.SkipReason = outcome.skipReason
+	default:
+		event.Phase = LocalStatusFailed
+
+		if outcome.err != nil {
+			event.Error = outcome.err.Error()
+		}
+	}
+
+	b.localProgress.Fire(event)
 }
 
 // selectPayload picks the payload feeding the consumers per the request's
@@ -290,6 +342,18 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 
 		return result, localErr()
 
+	case config.PayloadSourceHigherValue:
+		switch {
+		case result.Local == nil:
+			return useEL()
+		case result.EL == nil:
+			return useLocal()
+		case blockValue(result.Local).Cmp(blockValue(result.EL)) > 0:
+			return useLocal()
+		default:
+			return useEL()
+		}
+
 	case config.PayloadSourceLocalOrEL:
 		if result.Local != nil {
 			return useLocal()
@@ -302,6 +366,15 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 	default:
 		return useEL()
 	}
+}
+
+// blockValue returns the payload's EL-reported block value (0 when unknown).
+func blockValue(payload *Payload) *big.Int {
+	if payload.BlockValue == nil {
+		return new(big.Int)
+	}
+
+	return payload.BlockValue
 }
 
 // prepareBuild resolves everything both build paths share for one target.
@@ -575,13 +648,29 @@ func (b *PayloadBuilder) buildLocal(
 	case config.TxSourceELMempool:
 		txs = nil
 
-	default: // txpool
+	default: // txpool, txpool_el_fill
 		if b.txPool == nil {
 			return localOutcome{skipReason: LocalSkipTxPoolUnavailable}
 		}
 
 		if !b.txPool.Enabled() {
 			return localOutcome{skipReason: LocalSkipTxPoolDisabled}
+		}
+
+		// The fill is best effort: without the EL mempool the block is built
+		// from the pool alone and the reason recorded.
+		var fill []*types.Transaction
+
+		if req.TxSource == config.TxSourceTxPoolELFill {
+			pending, err := b.localClient.PendingPoolTransactions(ctx)
+			if err != nil {
+				info.FillError = err.Error()
+
+				b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+					Warn("Cannot read the EL mempool, building the custom block from the pool alone")
+			}
+
+			fill = pending
 		}
 
 		selection, err := b.txPool.Select(ctx, &txpool.SelectParams{
@@ -596,10 +685,13 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
+			Fill:           fill,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("pool selection failed: %w", err)}
 		}
+
+		info.FillTxs = len(selection.Fill)
 
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
@@ -639,7 +731,7 @@ func (b *PayloadBuilder) buildLocal(
 	// refusal fails them, since dropping would build a block that is not the
 	// plan.
 	maxAttempts := max(req.MaxAttempts, 1)
-	if req.TxSource != config.TxSourceTxPool {
+	if req.TxSource != config.TxSourceTxPool && req.TxSource != config.TxSourceTxPoolELFill {
 		maxAttempts = 1
 	}
 
@@ -654,6 +746,20 @@ func (b *PayloadBuilder) buildLocal(
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
 		if err == nil || ctx.Err() != nil {
 			break
+		}
+
+		if info.FillTxs > 0 && !info.FillDropped {
+			// The EL mempool fill sits at the end of the list; a refusal is
+			// retried without it before anything of the pool's is dropped.
+			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+				Warn("EL refused the transaction list, retrying without the EL mempool fill")
+
+			txs = txs[:len(txs)-info.FillTxs]
+			info.FillDropped = true
+			info.SubmittedTxs = len(txs)
+			info.ExpectedHashes = txHashes(txs)
+
+			continue
 		}
 
 		if info.InclusionListTxs > 0 && !info.InclusionListDropped && txs != nil {

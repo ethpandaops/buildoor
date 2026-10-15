@@ -12,8 +12,14 @@ import {
   BID_FIELDS,
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
+  BID_CATEGORY_HINT,
+  BUILDER_API_CATEGORY_HINT,
+  REVEAL_CATEGORY_HINT,
+  CANDIDATE_KEY_HINTS,
   BuildForm,
   LocalBuildForm,
+  HiddenTransactionsNote,
+  hiddenTransactionsError,
   initLocalBuildState,
   localBuildPlanFromState,
   type LocalBuildFormState,
@@ -24,6 +30,8 @@ import {
   type CategoryFormState,
   type CategoryOutcome,
 } from './planForms';
+import { InfoHint } from '../InfoHint';
+import { ArtifactButtons } from '../ArtifactButtons';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -113,57 +121,30 @@ const StatusBadge: React.FC<{ map: Record<string, string>; status: string }> = (
 );
 
 // ---------------------------------------------------------------------------
-// Artifact access (JSON opens the endpoint, SSZ downloads via blob)
+// Artifact access (authenticated JSON / SSZ downloads via blob)
 // ---------------------------------------------------------------------------
-
-async function downloadSSZ(url: string, filename: string): Promise<void> {
-  const resp = await fetch(url, { headers: { Accept: 'application/octet-stream' } });
-  if (!resp.ok) {
-    throw new Error(`Artifact download failed: ${resp.status} ${resp.statusText}`);
-  }
-
-  const blob = await resp.blob();
-  const objectUrl = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = objectUrl;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(objectUrl);
-}
 
 const ArtifactLinks: React.FC<{
   url: string;
   filename: string;
   onError: (message: string) => void;
-}> = ({ url, filename, onError }) => (
-  <span className="d-inline-flex gap-1">
-    <a href={url} target="_blank" rel="noreferrer" className="btn btn-outline-secondary ap-artifact-btn">
-      JSON
-    </a>
-    <button
-      type="button"
-      className="btn btn-outline-secondary ap-artifact-btn"
-      onClick={() => {
-        downloadSSZ(url, filename).catch((err) =>
-          onError(err instanceof Error ? err.message : String(err))
-        );
-      }}
-    >
-      SSZ
-    </button>
-  </span>
-);
+}> = ({ url, filename, onError }) => <ArtifactButtons url={url} filename={filename} onError={onError} />;
 
 // ---------------------------------------------------------------------------
 // Read-only frozen plan + result views
 // ---------------------------------------------------------------------------
 
-const KV: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+const KV: React.FC<{ label: string; hint?: React.ReactNode; children: React.ReactNode }> = ({
+  label,
+  hint,
+  children,
+}) => (
   <div className="col-6 col-md-4">
     <div className="config-item">
-      <div className="config-item-label">{label}</div>
+      <div className="config-item-label">
+        {label}
+        {hint && <InfoHint>{hint}</InfoHint>}
+      </div>
       <div className="config-item-value">{children}</div>
     </div>
   </div>
@@ -172,13 +153,37 @@ const KV: React.FC<{ label: string; children: React.ReactNode }> = ({ label, chi
 const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
   <div className="card mb-3">
     <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
-      <strong className="small">Applied Plan (frozen)</strong>
+      <strong className="small">
+        Applied Plan (frozen)
+        <InfoHint>
+          The immutable snapshot taken when execution for this slot began (about one slot ahead):
+          the slot's plan (or matching rule) merged with the global config of that moment. Every
+          module acted on exactly these values; later config or rule changes do not alter it.
+        </InfoHint>
+      </strong>
       <span className={badgeClass('secondary')}>{frozen.fork}</span>
       <span className="text-muted small ms-auto">frozen {formatDateTime(frozen.frozen_at)}</span>
     </div>
     <div className="card-body py-2">
       <div className="row g-2 mb-2">
-        <KV label="Build">
+        <KV
+          label="Build"
+          hint={
+            <>
+              The build decision for the slot.
+              <dl>
+                <dt>build</dt>
+                <dd>a payload was built; <em>forced</em> = the plan pushed it past the schedule (does not consume the next_n budget)</dd>
+                <dt>skip (schedule)</dt>
+                <dd>the global schedule (start slot, every_nth, exhausted next_n) excluded the slot</dd>
+                <dt>skip (plan_disabled)</dt>
+                <dd>the plan suppressed the consumers that would otherwise have been active</dd>
+                <dt>skip (no_consumer)</dt>
+                <dd>no bidding or serving was active for the slot, without a plan being responsible</dd>
+              </dl>
+            </>
+          }
+        >
           {frozen.build.build ? (
             <span className={badgeClass('success')}>build{frozen.build.forced ? ' (forced)' : ''}</span>
           ) : (
@@ -197,23 +202,55 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
               custom: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
             </span>
           )}
+          {frozen.build.local?.enabled && frozen.build.local.tx_source === 'explicit' && (
+            <span className="ms-1">
+              {frozen.build.local.transactions_redacted ? (
+                <HiddenTransactionsNote count={frozen.build.local.transactions_redacted} />
+              ) : (
+                <span className="text-muted small">{frozen.build.local.transactions?.length ?? 0} explicit transactions</span>
+              )}
+            </span>
+          )}
         </KV>
-        <KV label="Build Start">{frozen.build.build_start_time_ms} ms</KV>
+        <KV label="Build Start" hint="When the payload build starts, in ms relative to slot start (negative = before the slot starts).">
+          {frozen.build.build_start_time_ms} ms
+        </KV>
       </div>
 
-      <div className="section-header mb-1">Bid (p2p)</div>
+      <div className="section-header mb-1">
+        Bid (p2p)
+        <InfoHint>
+          Effective p2p bid settings. &quot;suppressed for this slot&quot; means no p2p bidding: the
+          plan disabled it, or ePBS was globally off (or not applicable to the fork) without a custom
+          plan.
+        </InfoHint>
+      </div>
       {frozen.bid ? (
         <div className="row g-2 mb-2">
-          <KV label="Window">
+          <KV label="Window" hint="Bid start – bid end, in ms relative to slot start.">
             {frozen.bid.start_ms}–{frozen.bid.end_ms} ms
           </KV>
-          <KV label="Interval">{frozen.bid.interval_ms} ms</KV>
-          <KV label="Min / Increase">
+          <KV label="Interval" hint="Pause between successive bids of the same payload; 0 = a single bid.">
+            {frozen.bid.interval_ms} ms
+          </KV>
+          <KV label="Min / Increase" hint={<>Min: floor of <code>max(block value, min) + subsidy</code>. Increase: added per earlier bid of the same payload.</>}>
             {formatGwei(frozen.bid.min_gwei)} / {formatGwei(frozen.bid.increase_gwei)}
           </KV>
-          <KV label="Subsidy">{formatGwei(frozen.bid.subsidy_gwei)}</KV>
-          <KV label="Value Override">{formatGwei(frozen.bid.value_gwei)}</KV>
-          <KV label="Flags">
+          <KV label="Subsidy" hint="Added on top of max(block value, min); unused when a value override is set.">
+            {formatGwei(frozen.bid.subsidy_gwei)}
+          </KV>
+          <KV label="Value Override" hint="Absolute bid base replacing max(block value, min) + subsidy; — = none, the formula applied.">{formatGwei(frozen.bid.value_gwei)}</KV>
+          <KV
+            label="Flags"
+            hint={
+              <dl>
+                <dt>forced</dt>
+                <dd>a custom plan activated bidding although ePBS is globally disabled</dd>
+                <dt>ignore missing prefs</dt>
+                <dd>bids went out without gossip proposer preferences, using the payload's fee recipient</dd>
+              </dl>
+            }
+          >
             {frozen.bid.forced && <span className={`${badgeClass('warning')} me-1`}>forced</span>}
             {frozen.bid.ignore_missing_prefs && (
               <span className={badgeClass('info')}>ignore missing prefs</span>
@@ -225,14 +262,27 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
         <p className="text-muted small mb-2">suppressed for this slot</p>
       )}
 
-      <div className="section-header mb-1">Builder API</div>
+      <div className="section-header mb-1">
+        Builder API
+        <InfoHint>
+          Effective Builder API serving settings. &quot;suppressed for this slot&quot; means bid
+          requests were answered with 204 (no bid): disabled by the plan, or the Builder API was
+          globally off without a custom plan.
+        </InfoHint>
+      </div>
       {frozen.builder_api ? (
         <div className="row g-2 mb-2">
-          <KV label="Subsidy">{formatGwei(frozen.builder_api.subsidy_gwei)}</KV>
-          <KV label="Total Value Override">{formatGwei(frozen.builder_api.total_value_gwei)}</KV>
-          <KV label="Response Delay">{frozen.builder_api.delay_ms ?? 0} ms</KV>
+          <KV label="Subsidy" hint="Added to the block value of served bids; unused when a total value override is set.">
+            {formatGwei(frozen.builder_api.subsidy_gwei)}
+          </KV>
+          <KV label="Total Value Override" hint="Absolute total value served, replacing block value + subsidy; — = none.">
+            {formatGwei(frozen.builder_api.total_value_gwei)}
+          </KV>
+          <KV label="Response Delay" hint="How long each bid response was held before answering.">
+            {frozen.builder_api.delay_ms ?? 0} ms
+          </KV>
           {frozen.builder_api.forced && (
-            <KV label="Flags">
+            <KV label="Flags" hint="forced: a custom plan activated serving although the Builder API is globally disabled.">
               <span className={badgeClass('warning')}>forced</span>
             </KV>
           )}
@@ -244,24 +294,55 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
       <div className="section-header mb-1">Reveal</div>
       {frozen.reveal ? (
         <div className="row g-2 mb-2">
-          <KV label="Status">
+          <KV
+            label="Status"
+            hint="suppressed: the reveal was withheld, by a disabled plan or because reveals are globally disabled. active: a won slot gets its envelope published once the gate opens."
+          >
             {frozen.reveal.suppressed ? (
               <span className={badgeClass('danger')}>suppressed</span>
             ) : (
               <span className={badgeClass('success')}>active</span>
             )}
           </KV>
-          <KV label="Gate">{frozen.reveal.gate_mode}</KV>
-          <KV label="Reveal Time">{frozen.reveal.reveal_time_ms} ms</KV>
+          <KV
+            label="Gate"
+            hint={
+              <dl>
+                <dt>time</dt>
+                <dd>reveal at the reveal time</dd>
+                <dt>vote</dt>
+                <dd>reveal once head votes on our block reach the threshold</dd>
+                <dt>vote_or_time</dt>
+                <dd>whichever opens first</dd>
+                <dt>vote_and_time</dt>
+                <dd>at the reveal time, once the threshold is also reached</dd>
+              </dl>
+            }
+          >
+            {frozen.reveal.gate_mode}
+          </KV>
+          <KV label="Reveal Time" hint="Time gate, in ms relative to slot start.">
+            {frozen.reveal.reveal_time_ms} ms
+          </KV>
           {frozen.reveal.gate_mode !== 'time' && (
-            <KV label="Vote Threshold">{frozen.reveal.vote_threshold_pct}%</KV>
+            <KV label="Vote Threshold" hint="Head-vote participation on our block that opens the vote gate.">
+              {frozen.reveal.vote_threshold_pct}%
+            </KV>
           )}
-          <KV label="Broadcast Validation">{frozen.reveal.broadcast_validation}</KV>
-          <KV label="Retries">
+          <KV
+            label="Broadcast Validation"
+            hint="Validation the beacon node applied before broadcasting the envelope: gossip, consensus, or consensus_and_equivocation (adds the equivocation check that protects against unbundling)."
+          >
+            {frozen.reveal.broadcast_validation}
+          </KV>
+          <KV label="Retries" hint="Publish attempts × wait between failed attempts.">
             {frozen.reveal.max_attempts} × {frozen.reveal.retry_interval_ms} ms
           </KV>
           {frozen.reveal.bypass_deadline && (
-            <KV label="Flags">
+            <KV
+              label="Flags"
+              hint="bypass deadline: a custom reveal plan may publish after the slot end, at most one extra slot."
+            >
               <span className={badgeClass('warning')}>bypass deadline</span>
             </KV>
           )}
@@ -273,7 +354,15 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
       {frozen.transforms &&
         (frozen.transforms.payload || frozen.transforms.bid || frozen.transforms.envelope) && (
           <>
-            <div className="section-header mb-1">Transforms (jq)</div>
+            <div className="section-header mb-1">
+              Transforms (jq)
+              <InfoHint>
+                jq expressions applied to this slot&apos;s objects. <strong>payload</strong> rewrote the
+                built execution payload before it fed both the bid and the reveal.{' '}
+                <strong>bid</strong> / <strong>envelope</strong> rewrote the message just before
+                signing; the result was re-signed, so it is validly signed but customized.
+              </InfoHint>
+            </div>
             <div className="mb-2">
               {(['payload', 'bid', 'envelope'] as const).map((k) =>
                 frozen.transforms?.[k] ? (
@@ -287,7 +376,13 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           </>
         )}
 
-      <div className="section-header mb-1">Raw Plan</div>
+      <div className="section-header mb-1">
+        Raw Plan
+        <InfoHint>
+          The slot plan as frozen (a rule-derived plan carries its <code>rule_id</code>). Absent
+          categories inherited the global config.
+        </InfoHint>
+      </div>
       {frozen.plan ? (
         <pre className="ap-raw-plan mb-0">{JSON.stringify(frozen.plan, null, 2)}</pre>
       ) : (
@@ -330,7 +425,25 @@ const ResultView: React.FC<{
       {build && (
         <div className="card mb-3">
           <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
-            <strong className="small">Build</strong>
+            <strong className="small">
+              Build
+              <InfoHint>
+                <dl>
+                  <dt>waiting_attributes</dt>
+                  <dd>the slot is active, payload attributes have not arrived yet</dd>
+                  <dt>no_attributes</dt>
+                  <dd>no payload attributes arrived for the slot, so nothing could be built</dd>
+                  <dt>started</dt>
+                  <dd>the engine build is running</dd>
+                  <dt>ready</dt>
+                  <dd>a payload was built</dd>
+                  <dt>failed</dt>
+                  <dd>the build failed (see the error)</dd>
+                  <dt>skipped</dt>
+                  <dd>the build decision skipped the slot (schedule, plan_disabled, no_consumer)</dd>
+                </dl>
+              </InfoHint>
+            </strong>
             <StatusBadge map={BUILD_BADGES} status={build.status} />
             {build.skip_reason && <span className="text-muted small">({build.skip_reason})</span>}
             {payloadExists && (
@@ -354,7 +467,9 @@ const ResultView: React.FC<{
                   </div>
                 </div>
               )}
-              <KV label="Value">{weiToEth(build.block_value_wei)}</KV>
+              <KV label="Value" hint="The block value the EL reported for the built payload.">
+                {weiToEth(build.block_value_wei)}
+              </KV>
               <KV label="Contents">
                 {build.num_transactions ?? 0} txs, {build.num_blobs ?? 0} blobs,{' '}
                 {build.num_withdrawals ?? 0} wdrls, {build.num_execution_requests ?? 0} reqs
@@ -374,7 +489,16 @@ const ResultView: React.FC<{
               {build.timestamp !== undefined && <KV label="Timestamp">{build.timestamp}</KV>}
               {build.extra_data && <KV label="Extra Data">{build.extra_data}</KV>}
               {build.source && (
-                <KV label="Source">
+                <KV
+                  label="Source"
+                  hint={
+                    <>
+                      Which build fed bids and the reveal. <strong>el</strong>: the engine API build.{' '}
+                      <strong>local</strong>: the custom testing_buildBlockV1 build.{' '}
+                      <em>fallback</em>: the custom block was wanted but the engine block was used.
+                    </>
+                  }
+                >
                   {build.source}
                   {build.fallback && (
                     <span className={`ms-1 ${badgeClass('warning')}`} title="Custom block wanted, engine block used">
@@ -551,7 +675,26 @@ const ResultView: React.FC<{
       {(result.bids?.length || 0) > 0 && (
         <div className="card mb-3">
           <div className="card-header py-1">
-            <strong className="small">Bids</strong>
+            <strong className="small">
+              Bids
+              <InfoHint>
+                Every bid attempt of the slot, both transports. Status:
+                <dl>
+                  <dt>submitted</dt>
+                  <dd>p2p bid gossiped</dd>
+                  <dt>served</dt>
+                  <dd>Builder API bid returned to the proposer</dd>
+                  <dt>constructed</dt>
+                  <dd>p2p bid built and signed, but the gossip submission failed</dd>
+                  <dt>suppressed</dt>
+                  <dd>no bid made: Builder API serving suppressed for the slot, or a p2p bid skipped before construction (e.g. missing proposer preferences)</dd>
+                  <dt>failed</dt>
+                  <dd>bid construction (or the Builder API response) failed; hover the warning icon</dd>
+                  <dt>cancelled</dt>
+                  <dd>the Builder API request ended during the planned response delay</dd>
+                </dl>
+              </InfoHint>
+            </strong>
             {result.dropped_attempts?.['bids'] ? (
               <span className="text-muted small ms-2">
                 (+{result.dropped_attempts['bids']} dropped)
@@ -565,9 +708,24 @@ const ResultView: React.FC<{
                   <th>#</th>
                   <th>Status</th>
                   <th>Transport</th>
-                  <th className="text-end">Value</th>
-                  <th className="text-end">Exec Payment</th>
-                  <th className="text-end">Competitor High</th>
+                  <th className="text-end">
+                    Value
+                    <InfoHint>Total bid value, gwei.</InfoHint>
+                  </th>
+                  <th className="text-end">
+                    Exec Payment
+                    <InfoHint>
+                      Builder API (Gloas) only: the part of the total claimed as unbacked{' '}
+                      <code>execution_payment</code>, gwei. p2p bids always carry 0.
+                    </InfoHint>
+                  </th>
+                  <th className="text-end">
+                    Competitor High
+                    <InfoHint alignEnd>
+                      p2p only: the highest other builder&apos;s bid known when this bid went out, gwei
+                      (our own keys excluded).
+                    </InfoHint>
+                  </th>
                   <th>Block Hash</th>
                   <th className="text-end">Gas Limit</th>
                   <th className="text-end">Blobs</th>
@@ -638,7 +796,17 @@ const ResultView: React.FC<{
       {(result.block_submissions?.length || 0) > 0 && (
         <div className="card mb-3">
           <div className="card-header py-1">
-            <strong className="small">Block Submissions</strong>
+            <strong className="small">
+              Block Submissions
+              <InfoHint>
+                Signed blocks proposers submitted through the Builder API. Dialect{' '}
+                <strong>legacy</strong> = pre-Gloas blinded block (unblinded and published by
+                buildoor), <strong>epbs</strong> = Gloas signed beacon block (broadcast, reveal
+                scheduled). Status: <strong>received</strong> (block decoded),{' '}
+                <strong>accepted</strong> (published; for epbs also handed to the reveal),{' '}
+                <strong>failed</strong>.
+              </InfoHint>
+            </strong>
           </div>
           <div className="table-responsive">
             <table className="table table-sm small mb-0">
@@ -670,7 +838,25 @@ const ResultView: React.FC<{
       {(reveals.length > 0 || envelopeExists) && (
         <div className="card mb-3">
           <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
-            <strong className="small">Reveal Attempts</strong>
+            <strong className="small">
+              Reveal Attempts
+              <InfoHint>
+                <dl>
+                  <dt>published</dt>
+                  <dd>the envelope was accepted by the beacon node</dd>
+                  <dt>failed</dt>
+                  <dd>the publish attempt failed (retried up to the attempt limit)</dd>
+                  <dt>suppressed</dt>
+                  <dd>withheld by the slot&apos;s plan (<code>plan_disabled</code>)</dd>
+                  <dt>skipped</dt>
+                  <dd>
+                    <code>disabled</code> (reveals globally off), <code>late</code> (the reveal
+                    request arrived after the slot ended) or <code>vote_gate_timeout</code> (the vote gate never opened)
+                  </dd>
+                </dl>
+                The envelope artifact is kept even when the reveal was withheld or failed.
+              </InfoHint>
+            </strong>
             {envelopeExists && (
               <span className="ms-auto">
                 <ArtifactLinks
@@ -720,7 +906,25 @@ const ResultView: React.FC<{
       {result.inclusion && (
         <div className="card mb-3">
           <div className="card-header py-1 d-flex align-items-center gap-2">
-            <strong className="small">Inclusion</strong>
+            <strong className="small">
+              Inclusion
+              <InfoHint>
+                Our payload was committed to by a block seen at the head (source:{' '}
+                <strong>builder_api</strong> when the payload was served through the Builder API,{' '}
+                <strong>epbs</strong> otherwise). Payload verdict, from the next
+                canonical block and revised on reorgs:
+                <dl>
+                  <dt>pending</dt>
+                  <dd>no follow-up block seen yet</dd>
+                  <dt>canonical</dt>
+                  <dd>the next block builds on our payload</dd>
+                  <dt>missed</dt>
+                  <dd>the block stayed but the next one builds on an older payload: withheld, too late, or voted empty</dd>
+                  <dt>orphaned</dt>
+                  <dd>our block itself was reorged out</dd>
+                </dl>
+              </InfoHint>
+            </strong>
             <span className={badgeClass('success')}>{result.inclusion.source}</span>
             {result.inclusion.payload_status && (
               <span
@@ -749,7 +953,7 @@ const ResultView: React.FC<{
               <KV label="Value">{parseFloat(result.inclusion.value_eth).toFixed(6)} ETH</KV>
               <KV label="At">{formatDateTime(result.inclusion.timestamp)}</KV>
               {result.inclusion.payload_check_slot !== undefined && (
-                <KV label="Verdict from slot">{String(result.inclusion.payload_check_slot)}</KV>
+                <KV label="Verdict from slot" hint="The slot of the follow-up block the payload verdict was taken from.">{String(result.inclusion.payload_check_slot)}</KV>
               )}
             </div>
           </div>
@@ -759,7 +963,29 @@ const ResultView: React.FC<{
       {result.tx_plan && (
         <div className="card mb-3">
           <div className="card-header py-1 d-flex align-items-center gap-2">
-            <strong className="small">Tx plan check</strong>
+            <strong className="small">
+              Tx plan check
+              <InfoHint>
+                Post-inclusion check of a custom build: does the canonical block hold exactly the
+                planned transactions, in order?
+                <dl>
+                  <dt>pending</dt>
+                  <dd>included, the EL check has not run yet</dd>
+                  <dt>match</dt>
+                  <dd>exactly the plan, in order</dd>
+                  <dt>mismatch</dt>
+                  <dd>the block&apos;s transaction list differs</dd>
+                  <dt>block_not_found</dt>
+                  <dd>the EL did not serve the block in time</dd>
+                  <dt>not_included</dt>
+                  <dd>the slot passed without our payload on chain</dd>
+                  <dt>missed</dt>
+                  <dd>won, but the next block built on an older payload</dd>
+                  <dt>orphaned</dt>
+                  <dd>the won block was reorged out</dd>
+                </dl>
+              </InfoHint>
+            </strong>
             <span
               className={badgeClass(TX_PLAN_BADGES[result.tx_plan.status] || 'secondary')}
               title="Post-inclusion check: does the canonical block hold exactly the transactions buildoor submitted, in order?"
@@ -966,6 +1192,14 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
       ? localPlan !== undefined
       : JSON.stringify(localPlan ?? null) !== JSON.stringify(initialLocal ?? null);
 
+    // A hidden explicit list cannot be written back: the backend refuses it
+    // rather than dropping the transactions.
+    const hiddenError = (candidatesChanged || localChanged) ? hiddenTransactionsError(localPlan) : null;
+    if (hiddenError) {
+      setFormError(hiddenError);
+      return;
+    }
+
     if (candidatesChanged) {
       const buildObj: Record<string, unknown> = {};
       const wantReorg = buildReorg === 'on';
@@ -1113,6 +1347,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                   )}
                   <CategoryForm
                     title="Bid (p2p)"
+                    hint={BID_CATEGORY_HINT}
                     bulk={bulk}
                     state={bidState}
                     fields={BID_FIELDS}
@@ -1122,6 +1357,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                   />
                   <CategoryForm
                     title="Builder API"
+                    hint={BUILDER_API_CATEGORY_HINT}
                     bulk={bulk}
                     state={apiState}
                     fields={BUILDER_API_FIELDS}
@@ -1130,6 +1366,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                   />
                   <CategoryForm
                     title="Reveal"
+                    hint={REVEAL_CATEGORY_HINT}
                     bulk={bulk}
                     state={revealState}
                     fields={REVEAL_FIELDS}
@@ -1152,14 +1389,34 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                   />
                   {!bulk && (
                     <div className="mb-3">
-                      <div className="section-header mb-1">Build candidates</div>
+                      <div className="section-header mb-1">
+                        Build candidates
+                        <InfoHint>
+                          Which parent tuples the slot builds a payload for; each candidate is a
+                          separate engine build. Overrides apply per key.
+                          <dl>
+                            <dt>inherit</dt>
+                            <dd>the global build candidate policy for that key</dd>
+                            <dt>auto</dt>
+                            <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
+                            <dt>always</dt>
+                            <dd>build on every scheduled slot</dd>
+                            <dt>never</dt>
+                            <dd>do not build this candidate</dd>
+                          </dl>
+                          Grandparent candidates are not built across an epoch boundary.
+                        </InfoHint>
+                      </div>
                       <div className="form-text mt-0 mb-1">
                         Which candidate payloads the slot builds (parent/grandparent block,
                         full/empty parent payload). Inherit uses the global policy.
                       </div>
                       {Object.entries(buildCandidates).map(([key, mode]) => (
                         <div className="row g-2 align-items-center mb-1" key={key}>
-                          <div className="col-6 small text-secondary">{key}</div>
+                          <div className="col-6 small text-secondary">
+                            {key}
+                            {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
+                          </div>
                           <div className="col-6">
                             <select
                               className="form-select form-select-sm"
@@ -1180,7 +1437,15 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
                     </div>
                   )}
                   <div className="mb-3">
-                    <div className="section-header mb-1">Recurring rules</div>
+                    <div className="section-header mb-1">
+                      Recurring rules
+                      <InfoHint>
+                        Rules never merge with a plan: any explicit plan for the slot replaces a
+                        matching rule entirely. Ignoring rules opts the slot out without setting any
+                        category, so it runs on the plain global baseline.
+                        {bulk && ' Checked applies the opt-out to every targeted slot; unchecked leaves each slot as it is.'}
+                      </InfoHint>
+                    </div>
                     <div className="form-check">
                       <input
                         className="form-check-input"

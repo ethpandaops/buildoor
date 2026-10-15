@@ -132,6 +132,10 @@ func (h *APIHandler) GetActionPlan(w http.ResponseWriter, r *http.Request) {
 		plans = []*action_plan.SlotPlan{}
 	}
 
+	if !h.isLoggedIn(r) {
+		plans = action_plan.RedactedPlans(plans)
+	}
+
 	writeJSON(w, http.StatusOK, &ActionPlanResponse{
 		Plans:   plans,
 		MinSlot: minSlot,
@@ -228,6 +232,10 @@ func (h *APIHandler) GetActionPlanRules(w http.ResponseWriter, r *http.Request) 
 		rules = []*action_plan.SlotRule{}
 	}
 
+	if !h.isLoggedIn(r) {
+		rules = action_plan.RedactedRules(rules)
+	}
+
 	writeJSON(w, http.StatusOK, &ActionPlanRulesResponse{Rules: rules})
 }
 
@@ -314,6 +322,10 @@ func (h *APIHandler) GetSlotResults(w http.ResponseWriter, r *http.Request) {
 	results := h.resultTracker.GetRange(phase0.Slot(minSlot), phase0.Slot(maxSlot))
 	if results == nil {
 		results = []*slot_results.SlotResult{}
+	}
+
+	if !h.isLoggedIn(r) {
+		results = slot_results.RedactedResults(results)
 	}
 
 	writeJSON(w, http.StatusOK, &SlotResultsResponse{

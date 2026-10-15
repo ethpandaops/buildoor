@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
@@ -79,33 +80,41 @@ func (f *fakeEL) RawCall(_ context.Context, method string, params []any) ([]byte
 }
 
 func newServer(t *testing.T, authToken string) (*Server, *fakeEL, *txpool.Pool) {
-	var auth Authorizer
-	if authToken != "" {
-		auth = StaticAuthorizer{Token: authToken}
-	}
+	t.Helper()
 
-	return newServerWith(t, auth)
+	srv, el, pool, _ := newServerCfg(t, nil, func(cfg *config.Config) {
+		if authToken != "" {
+			cfg.TxPool.Auth = config.TxPoolAuthAPIKey
+			cfg.TxPool.AuthToken = authToken
+		}
+	})
+
+	return srv, el, pool
 }
 
-func newServerWith(t *testing.T, auth Authorizer) (*Server, *fakeEL, *txpool.Pool) {
+// newServerCfg builds an ingress over a fresh pool; keys and login may be nil.
+func newServerCfg(t *testing.T, login LoginChecker, mutate func(*config.Config)) (*Server, *fakeEL, *txpool.Pool, *KeyStore) {
 	t.Helper()
 
 	el := &fakeEL{nonce: 5}
 	cfg := config.DefaultConfig()
 	cfg.TxPool.Enabled = true
+	cfg.TxPool.RPCAnonRate = 0
+
+	if mutate != nil {
+		mutate(cfg)
+	}
 
 	pool := txpool.NewPool(cfg, el, &stubChain{}, nil, logrus.New())
 	require.NoError(t, pool.Start(context.Background()))
 
 	t.Cleanup(func() { _ = pool.Stop() })
 
-	return NewServer(pool, el, auth, "test", logrus.New()), el, pool
+	keys := NewKeyStore(memstore.New[string, *APIKey]())
+	access := NewAccess(cfg, keys, login)
+
+	return NewServer(pool, el, access, "test", logrus.New()), el, pool, keys
 }
-
-// denyAuthorizer stands in for an auth-provider check that rejects.
-type denyAuthorizer struct{}
-
-func (denyAuthorizer) Authorize(*http.Request) bool { return false }
 
 func call(t *testing.T, srv http.Handler, body string, headers ...string) (int, string) {
 	t.Helper()
@@ -217,10 +226,58 @@ func TestPendingNonceIsPoolAware(t *testing.T) {
 	require.JSONEq(t, `{"jsonrpc":"2.0","id":3,"result":"0x5"}`, body)
 	require.Contains(t, el.calls, "eth_getTransactionCount")
 
-	// Queued transactions are visible by hash.
+	// The pool is private: an anonymous caller never reads it back.
 	_, body = call(t, srv, fmt.Sprintf(`{"jsonrpc":"2.0","id":4,"method":"eth_getTransactionByHash","params":[%q]}`, tx.Hash().Hex()))
+	require.NotContains(t, body, `"blockHash":null`)
+}
+
+// TestPoolVisibility scopes reads of the private pool: an API key sees the
+// transactions it submitted, operators (static token, WebUI login) all of
+// them, anonymous callers none.
+func TestPoolVisibility(t *testing.T) {
+	srv, _, _, keys := newServerCfg(t, fakeLogin{}, func(cfg *config.Config) {
+		cfg.TxPool.AuthToken = "operator"
+	})
+
+	_, secretA, err := keys.Create("a", nil)
+	require.NoError(t, err)
+
+	_, secretB, err := keys.Create("b", nil)
+	require.NoError(t, err)
+
+	txA, rawA := signedTx(t, 5)
+	txB, rawB := signedTx(t, 5)
+
+	_, body := callPath(t, srv, "/rpc/"+secretA, fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":[%q]}`, rawA))
+	require.Contains(t, body, txA.Hash().Hex())
+
+	_, body = callPath(t, srv, "/rpc/"+secretB, fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"eth_sendRawTransaction","params":[%q]}`, rawB))
+	require.Contains(t, body, txB.Hash().Hex())
+
+	content := `{"jsonrpc":"2.0","id":2,"method":"txpool_content","params":[]}`
+	byHash := func(hash common.Hash) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":3,"method":"eth_getTransactionByHash","params":[%q]}`, hash.Hex())
+	}
+
+	_, body = callPath(t, srv, "/rpc/"+secretA, content)
+	require.Contains(t, body, txA.Hash().Hex())
+	require.NotContains(t, body, txB.Hash().Hex(), "a key never sees another key's transactions")
+
+	_, body = callPath(t, srv, "/rpc/"+secretA, byHash(txB.Hash()))
+	require.NotContains(t, body, `"blockHash":null`)
+
+	_, body = callPath(t, srv, "/rpc/"+secretA, byHash(txA.Hash()))
 	require.Contains(t, body, `"blockHash":null`)
-	require.Contains(t, body, tx.Hash().Hex())
+
+	for _, headers := range [][]string{{"X-API-Key", "operator"}, {"Authorization", "Bearer jwt"}} {
+		_, body = callPath(t, srv, "/rpc", content, headers...)
+		require.Contains(t, body, txA.Hash().Hex(), headers[0])
+		require.Contains(t, body, txB.Hash().Hex(), headers[0])
+	}
+
+	_, body = callPath(t, srv, "/rpc", content)
+	require.NotContains(t, body, txA.Hash().Hex(), "anonymous callers see nothing")
+	require.NotContains(t, body, txB.Hash().Hex())
 }
 
 func TestPassthroughAndDenylist(t *testing.T) {
@@ -256,33 +313,188 @@ func TestBatch(t *testing.T) {
 }
 
 func TestAuthModes(t *testing.T) {
-	// static
+	chainID := `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`
+
+	// api_key mode with the static token
 	srv, _, _ := newServer(t, "secret")
 
-	code, _ := call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`)
+	code, body := call(t, srv, chainID)
+	require.Equal(t, http.StatusUnauthorized, code)
+	require.Contains(t, body, ErrKeyRequired.Error())
+
+	code, _ = call(t, srv, chainID, "Authorization", "Bearer wrong")
 	require.Equal(t, http.StatusUnauthorized, code)
 
-	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer wrong")
-	require.Equal(t, http.StatusUnauthorized, code)
-
-	code, body := call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer secret")
+	code, body = call(t, srv, chainID, "Authorization", "Bearer secret")
 	require.Equal(t, http.StatusOK, code)
 	require.Contains(t, body, "0x1267")
 
-	// open
-	srv, _, _ = newServerWith(t, nil)
-	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`)
+	code, _ = call(t, srv, chainID, "X-API-Key", "secret")
 	require.Equal(t, http.StatusOK, code)
 
-	// a rejecting authorizer (auth-provider mode without a valid JWT)
-	srv, _, _ = newServerWith(t, denyAuthorizer{})
-	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer secret")
+	// open mode admits anonymous callers
+	srv, _, _ = newServer(t, "")
+	code, _ = call(t, srv, chainID)
+	require.Equal(t, http.StatusOK, code)
+}
+
+// callPath posts a request to an explicit ingress path (the /rpc/<key> form).
+func callPath(t *testing.T, srv http.Handler, path, body string, headers ...string) (int, string) {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+	req.RemoteAddr = "192.0.2.1:1234"
+
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// fakeLogin accepts "Bearer jwt" as a WebUI login.
+type fakeLogin struct{}
+
+func (fakeLogin) ValidLogin(r *http.Request) bool {
+	return r.Header.Get("Authorization") == "Bearer jwt"
+}
+
+func TestAPIKeys(t *testing.T) {
+	srv, _, _, keys := newServerCfg(t, fakeLogin{}, func(cfg *config.Config) {
+		cfg.TxPool.Auth = config.TxPoolAuthAPIKey
+	})
+
+	chainID := `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`
+
+	key, secret, err := keys.Create("spamoor", nil)
+	require.NoError(t, err)
+	require.NotContains(t, key.Hash, secret, "only the hash is stored")
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		headers []string
+	}{
+		{name: "path", path: "/rpc/" + secret},
+		{name: "x-api-key", path: "/rpc", headers: []string{"X-API-Key", secret}},
+		{name: "bearer", path: "/rpc", headers: []string{"Authorization", "Bearer " + secret}},
+	} {
+		code, body := callPath(t, srv, tc.path, chainID, tc.headers...)
+		require.Equal(t, http.StatusOK, code, tc.name)
+		require.Contains(t, body, "0x1267", tc.name)
+	}
+
+	code, _ := callPath(t, srv, "/rpc/bdr_unknown", chainID)
 	require.Equal(t, http.StatusUnauthorized, code)
 
-	// an empty static token never matches
-	srv, _, _ = newServerWith(t, StaticAuthorizer{})
-	code, _ = call(t, srv, `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`, "Authorization", "Bearer ")
+	// A WebUI login is authenticated too.
+	code, _ = callPath(t, srv, "/rpc", chainID, "Authorization", "Bearer jwt")
+	require.Equal(t, http.StatusOK, code)
+
+	disabled := false
+	_, err = keys.Update(key.ID, KeyUpdate{Enabled: &disabled})
+	require.NoError(t, err)
+
+	code, body := callPath(t, srv, "/rpc/"+secret, chainID)
 	require.Equal(t, http.StatusUnauthorized, code)
+	require.Contains(t, body, ErrKeyDisabled.Error())
+
+	require.NoError(t, keys.Delete(key.ID))
+	code, _ = callPath(t, srv, "/rpc/"+secret, chainID)
+	require.Equal(t, http.StatusUnauthorized, code)
+
+	stats := srv.Access().Stats()
+	kinds := make(map[string]uint64, len(stats))
+
+	for _, caller := range stats {
+		kinds[caller.Kind] += caller.Calls
+	}
+
+	require.Equal(t, uint64(3), kinds[CallerAPIKey])
+	require.Equal(t, uint64(1), kinds[CallerLogin])
+}
+
+func TestRateLimits(t *testing.T) {
+	chainID := `{"jsonrpc":"2.0","id":1,"method":"eth_chainId"}`
+
+	t.Run("anonymous per client IP behind one proxy", func(t *testing.T) {
+		srv, _, _, _ := newServerCfg(t, nil, func(cfg *config.Config) {
+			cfg.TxPool.RPCAnonRate = 1
+			cfg.TxPool.RPCProxyHops = 1
+		})
+
+		_, body := callPath(t, srv, "/rpc", chainID, "X-Forwarded-For", "spoofed, 198.51.100.7")
+		require.Contains(t, body, "0x1267")
+
+		_, body = callPath(t, srv, "/rpc", chainID, "X-Forwarded-For", "198.51.100.7")
+		require.Contains(t, body, `"code":-32005`, "the same client is over its limit")
+
+		_, body = callPath(t, srv, "/rpc", chainID, "X-Forwarded-For", "198.51.100.8")
+		require.Contains(t, body, "0x1267", "another client has its own budget")
+
+		stats := srv.Access().Stats()
+		require.Len(t, stats, 2)
+
+		for _, caller := range stats {
+			if caller.ID == "198.51.100.7" {
+				require.Equal(t, uint64(2), caller.Calls)
+				require.Equal(t, uint64(1), caller.RateLimited)
+				require.Equal(t, uint64(2), caller.Methods["eth_chainId"])
+			}
+		}
+	})
+
+	t.Run("anonymous shared bucket", func(t *testing.T) {
+		srv, _, _, _ := newServerCfg(t, nil, func(cfg *config.Config) {
+			cfg.TxPool.RPCAnonRate = 1
+			cfg.TxPool.RPCAnonScope = config.RPCAnonScopeShared
+		})
+
+		_, body := callPath(t, srv, "/rpc", chainID)
+		require.Contains(t, body, "0x1267")
+
+		req := httptest.NewRequest(http.MethodPost, "/rpc", bytes.NewBufferString(chainID))
+		req.RemoteAddr = "203.0.113.9:1"
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		require.Contains(t, rec.Body.String(), `"code":-32005`, "every anonymous caller shares the bucket")
+	})
+
+	t.Run("per key limit overrides the default", func(t *testing.T) {
+		srv, _, _, keys := newServerCfg(t, nil, func(cfg *config.Config) {
+			cfg.TxPool.RPCKeyRate = 1
+		})
+
+		_, limited, err := keys.Create("limited", nil)
+		require.NoError(t, err)
+
+		unlimitedRate := uint64(0)
+		_, unlimited, err := keys.Create("unlimited", &unlimitedRate)
+		require.NoError(t, err)
+
+		batch := `[` + chainID + `,` + chainID + `]`
+
+		_, body := callPath(t, srv, "/rpc/"+limited, batch)
+		require.Equal(t, 1, strings.Count(body, `"code":-32005`), "each batched call counts")
+
+		_, body = callPath(t, srv, "/rpc/"+unlimited, batch)
+		require.NotContains(t, body, `"code":-32005`)
+	})
+}
+
+func TestClientIP(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
+	req.RemoteAddr = "10.0.0.1:5555"
+	req.Header.Add("X-Forwarded-For", "1.1.1.1, 2.2.2.2")
+	req.Header.Add("X-Forwarded-For", "3.3.3.3")
+
+	require.Equal(t, "10.0.0.1", ClientIP(req, 0), "no trusted proxy: the connection")
+	require.Equal(t, "3.3.3.3", ClientIP(req, 1))
+	require.Equal(t, "2.2.2.2", ClientIP(req, 2))
+	require.Equal(t, "10.0.0.1", ClientIP(req, 4), "a shorter chain than the trusted hops is not trusted")
 }
 
 func TestMalformedRequests(t *testing.T) {

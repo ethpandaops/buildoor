@@ -44,55 +44,33 @@ type ELProxy interface {
 	RawCall(ctx context.Context, method string, params []any) ([]byte, error)
 }
 
-// Authorizer decides whether an ingress request may proceed. The three modes
-// are open (every caller), the authenticatoor JWT the mutating API endpoints
-// use, and a static shared secret.
-type Authorizer interface {
-	// Authorize reports whether the request's Authorization header is
-	// acceptable.
-	Authorize(r *http.Request) bool
-}
+// codeLimitExceeded is the EIP-1474 "limit exceeded" error of a call over the
+// caller's rate limit.
+const codeLimitExceeded = -32005
 
-// OpenAuthorizer accepts every request.
-type OpenAuthorizer struct{}
-
-// Authorize implements Authorizer.
-func (OpenAuthorizer) Authorize(*http.Request) bool { return true }
-
-// StaticAuthorizer requires "Authorization: Bearer <token>" with the
-// configured shared secret.
-type StaticAuthorizer struct {
-	Token string
-}
-
-// Authorize implements Authorizer.
-func (a StaticAuthorizer) Authorize(r *http.Request) bool {
-	return a.Token != "" && r.Header.Get("Authorization") == "Bearer "+a.Token
-}
+// PathPrefix is the ingress route; "<PathPrefix>/<key>" carries an API key in
+// the URL for tools that only take an endpoint URL.
+const PathPrefix = "/rpc"
 
 // Server is the ingress HTTP handler.
 type Server struct {
 	log     logrus.FieldLogger
 	pool    *txpool.Pool
-	el      ELProxy
-	auth    Authorizer
+	el      ELProxy // the read path: the upstream pool, or the EL directly
+	access  *Access
 	version string
 }
 
 var _ http.Handler = (*Server)(nil)
 
-// NewServer creates the ingress for the given pool. el may be nil, in which
-// case read methods answer "method not found". A nil auth means open.
-func NewServer(pool *txpool.Pool, el ELProxy, auth Authorizer, version string, log logrus.FieldLogger) *Server {
-	if auth == nil {
-		auth = OpenAuthorizer{}
-	}
-
+// NewServer creates the ingress for the given pool. el is the read path (the
+// upstream pool); nil answers read methods with "method not found".
+func NewServer(pool *txpool.Pool, el ELProxy, access *Access, version string, log logrus.FieldLogger) *Server {
 	return &Server{
 		log:     log.WithField("component", "txpool-rpc"),
 		pool:    pool,
 		el:      el,
-		auth:    auth,
+		access:  access,
 		version: version,
 	}
 }
@@ -125,8 +103,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.auth.Authorize(r) {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	pathKey := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, PathPrefix), "/")
+
+	caller, err := s.access.Resolve(r, pathKey)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnauthorized)
 
 		return
 	}
@@ -164,7 +145,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		responses := make([]response, 0, len(batch))
 		for i := range batch {
-			responses = append(responses, s.dispatch(ctx, &batch[i]))
+			responses = append(responses, s.handleCall(ctx, caller, &batch[i]))
 		}
 
 		writeResponses(w, responses, true)
@@ -179,18 +160,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeResponses(w, []response{s.dispatch(ctx, &req)}, false)
+	writeResponses(w, []response{s.handleCall(ctx, caller, &req)}, false)
 }
 
-// dispatch answers one call locally or through the EL passthrough. While the
-// pool is disabled every call is refused, the read passthrough included: the
-// ingress exists whenever --el-rpc is set, and it must not expose the EL on
-// the API port until the operator enables the pool.
-func (s *Server) dispatch(ctx context.Context, req *request) response {
+// handleCall runs one call for the caller: refused while the pool is
+// disabled, then charged against the caller's rate limit, dispatched and
+// accounted.
+func (s *Server) handleCall(ctx context.Context, caller Caller, req *request) response {
+	// While the pool is disabled every call is refused, the read passthrough
+	// included: the ingress exists whenever --el-rpc is set, and it must not
+	// expose the EL until the operator enables the pool.
 	if !s.pool.Enabled() {
+		s.access.Record(caller, req.Method, outcomeError)
+
 		return errorResponse(req.ID, codeServerError, txpool.ErrDisabled.Error())
 	}
 
+	if !s.access.Allow(caller) {
+		s.access.Record(caller, req.Method, outcomeRateLimited)
+
+		return errorResponse(req.ID, codeLimitExceeded, "rate limit exceeded")
+	}
+
+	resp := s.dispatch(ctx, caller, req)
+
+	outcome := outcomeOK
+	if resp.Error != nil {
+		outcome = outcomeError
+	}
+
+	s.access.Record(caller, req.Method, outcome)
+
+	return resp
+}
+
+// Access returns the access layer (keys, limits, caller stats).
+func (s *Server) Access() *Access { return s.access }
+
+// dispatch answers one call locally or through the read path.
+func (s *Server) dispatch(ctx context.Context, caller Caller, req *request) response {
 	if req.Method == "" {
 		return errorResponse(req.ID, codeInvalidRequest, "missing method")
 	}
@@ -202,7 +210,7 @@ func (s *Server) dispatch(ctx context.Context, req *request) response {
 
 	switch req.Method {
 	case "eth_sendRawTransaction":
-		return s.sendRawTransaction(req.ID, params)
+		return s.sendRawTransaction(req.ID, params, caller)
 	case "eth_chainId":
 		return s.chainID(req.ID)
 	case "net_version":
@@ -212,11 +220,11 @@ func (s *Server) dispatch(ctx context.Context, req *request) response {
 	case "eth_getTransactionCount":
 		return s.transactionCount(ctx, req.ID, params)
 	case "eth_getTransactionByHash":
-		return s.transactionByHash(ctx, req.ID, params)
+		return s.transactionByHash(ctx, req.ID, params, caller)
 	case "txpool_status":
 		return s.txpoolStatus(req.ID)
 	case "txpool_content":
-		return s.txpoolContent(req.ID)
+		return s.txpoolContent(req.ID, caller)
 	}
 
 	if !passthroughAllowed(req.Method) {
@@ -249,7 +257,7 @@ func passthroughAllowed(method string) bool {
 	}
 }
 
-func (s *Server) sendRawTransaction(id json.RawMessage, params []json.RawMessage) response {
+func (s *Server) sendRawTransaction(id json.RawMessage, params []json.RawMessage, caller Caller) response {
 	if len(params) < 1 {
 		return errorResponse(id, codeInvalidParams, "missing raw transaction")
 	}
@@ -259,7 +267,7 @@ func (s *Server) sendRawTransaction(id json.RawMessage, params []json.RawMessage
 		return errorResponse(id, codeInvalidParams, "invalid raw transaction: "+err.Error())
 	}
 
-	hash, err := s.pool.Add(raw)
+	hash, err := s.pool.AddFrom(raw, caller.statsKey())
 	if err != nil {
 		return errorResponse(id, codeServerError, err.Error())
 	}
@@ -319,13 +327,28 @@ func (s *Server) transactionCount(ctx context.Context, id json.RawMessage, param
 	return resultResponse(id, hexutil.Uint64(s.pool.PendingNonce(addr, uint64(latest))))
 }
 
-// transactionByHash answers from the pool for queued transactions, else
-// proxies.
-func (s *Server) transactionByHash(ctx context.Context, id json.RawMessage, params []json.RawMessage) response {
+// visibleTo reports whether a queued transaction may be read back by the
+// caller: the pool is private, so operators (the static token, a WebUI login)
+// see all of it, an API key the transactions it submitted, and anonymous
+// callers none — a client IP, shared or proxied, proves no ownership.
+func visibleTo(caller Caller, tx *txpool.PooledTx) bool {
+	switch caller.Kind {
+	case CallerStatic, CallerLogin:
+		return true
+	case CallerAPIKey:
+		return tx.Submitter == caller.statsKey()
+	default:
+		return false
+	}
+}
+
+// transactionByHash answers from the pool for queued transactions the caller
+// may see, else proxies.
+func (s *Server) transactionByHash(ctx context.Context, id json.RawMessage, params []json.RawMessage, caller Caller) response {
 	if len(params) >= 1 {
 		var hash common.Hash
 		if err := json.Unmarshal(params[0], &hash); err == nil {
-			if tx := s.pool.Get(hash); tx != nil {
+			if tx := s.pool.Get(hash); tx != nil && visibleTo(caller, tx) {
 				return resultResponse(id, pendingTxJSON(tx))
 			}
 		}
@@ -343,11 +366,16 @@ func (s *Server) txpoolStatus(id json.RawMessage) response {
 	})
 }
 
-func (s *Server) txpoolContent(id json.RawMessage) response {
+// txpoolContent lists the queued transactions the caller may see.
+func (s *Server) txpoolContent(id json.RawMessage, caller Caller) response {
 	txs, _ := s.pool.List(txpool.ListOptions{Sort: "sender"})
 	pending := make(map[string]map[string]any, 64)
 
 	for _, tx := range txs {
+		if !visibleTo(caller, tx) {
+			continue
+		}
+
 		sender := tx.Sender.Hex()
 		if pending[sender] == nil {
 			pending[sender] = make(map[string]any, 8)

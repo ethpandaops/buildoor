@@ -65,6 +65,12 @@ type SelectParams struct {
 	IncludeBlobTxs bool
 	// BlobEncoding is network (sidecar carried) or canonical.
 	BlobEncoding string
+	// Fill holds the EL mempool's pending transactions (each sender's in
+	// nonce order). They fill the gas the pool selection left, after it: each
+	// sender continues at the nonce and balance the pool selection left, the
+	// highest tip goes first, duplicates of pool transactions and blob
+	// transactions (no sidecar) are skipped.
+	Fill []*types.Transaction
 }
 
 // Selection is the assembled transaction list plus its accounting.
@@ -94,6 +100,15 @@ type Selection struct {
 	Bytes uint64
 	// Snapshot is when the pool was read.
 	Snapshot time.Time
+
+	// FillCandidates / Fill are the EL mempool transactions offered (params
+	// Fill) and the ones placed after the pool selection; FillGasSum,
+	// FillSkipped and FillBytes account them separately from the pool's.
+	FillCandidates int
+	Fill           []*PooledTx
+	FillGasSum     uint64
+	FillBytes      uint64
+	FillSkipped    map[string]int
 }
 
 // Summary is the JSON view of a selection (the transactions themselves are
@@ -111,6 +126,12 @@ type Summary struct {
 	CeilingApplied   bool           `json:"ceiling_applied,omitempty"`
 	Bytes            uint64         `json:"bytes,omitempty"`
 	Hashes           []string       `json:"hashes,omitempty"`
+
+	// EL mempool fill (tx source txpool_el_fill).
+	FillCandidates int            `json:"fill_candidates,omitempty"`
+	FillSelected   int            `json:"fill_selected,omitempty"`
+	FillGasSum     uint64         `json:"fill_gas_sum,omitempty"`
+	FillSkipped    map[string]int `json:"fill_skipped,omitempty"`
 }
 
 // Summary renders the selection for results and the API.
@@ -130,6 +151,13 @@ func (s *Selection) Summary() *Summary {
 		CeilingApplied:   s.CeilingApplied,
 		Bytes:            s.Bytes,
 		Hashes:           make([]string, 0, len(s.Selected)),
+		FillCandidates:   s.FillCandidates,
+		FillSelected:     len(s.Fill),
+		FillGasSum:       s.FillGasSum,
+	}
+
+	if len(s.FillSkipped) > 0 {
+		out.FillSkipped = s.FillSkipped
 	}
 
 	if s.BaseFee != nil {
@@ -247,7 +275,7 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		sel.PoolSize += len(txs)
 	}
 
-	if sel.PoolSize == 0 {
+	if sel.PoolSize == 0 && len(params.Fill) == 0 {
 		sel.Txs = p.prependInclusionList(sel, nil, params.InclusionList)
 
 		return sel, nil
@@ -269,9 +297,13 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 
 	sort.Slice(senders, func(i, j int) bool { return senders[i].Cmp(senders[j]) < 0 })
 
-	states, err := p.elClient.AccountStatesAt(ctx, senders, params.ParentHash, parent.Number.Uint64())
-	if err != nil {
-		return nil, fmt.Errorf("select: %w", err)
+	states := make(map[common.Address]*execution.AccountState, len(senders))
+
+	if len(senders) > 0 {
+		states, err = p.elClient.AccountStatesAt(ctx, senders, params.ParentHash, parent.Number.Uint64())
+		if err != nil {
+			return nil, fmt.Errorf("select: %w", err)
+		}
 	}
 
 	stale := make([]common.Hash, 0, 16)
@@ -288,13 +320,20 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 
 	p.evictStale(ctx, stale)
 
-	selected := p.mergeHeads(sel, params, senders, ready)
+	selected := p.mergeHeads(sel, params, senders, ready, maxBlockBytes)
 
 	sel.Selected = selected
 
-	encoded := make([][]byte, 0, len(selected))
+	fill, err := p.selectFill(ctx, sel, params, parent, states)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, tx := range selected {
+	sel.Fill = fill
+
+	encoded := make([][]byte, 0, len(selected)+len(fill))
+
+	for _, tx := range append(append([]*PooledTx(nil), selected...), fill...) {
 		raw, err := EncodeTx(tx.Tx, params.BlobEncoding)
 		if err != nil {
 			return nil, fmt.Errorf("select: encode %s: %w", tx.Hash.Hex(), err)
@@ -513,6 +552,7 @@ func (p *Pool) mergeHeads(
 	params *SelectParams,
 	senders []common.Address,
 	ready map[common.Address][]*PooledTx,
+	byteBudget uint64,
 ) []*PooledTx {
 	type cursor struct {
 		txs []*PooledTx
@@ -609,7 +649,7 @@ func (p *Pool) mergeHeads(
 			continue
 		}
 
-		if bytesUsed+tx.Size > maxBlockBytes {
+		if bytesUsed+tx.Size > byteBudget {
 			dropCursor(i, SkipSizeFull)
 
 			continue
@@ -642,6 +682,149 @@ func (p *Pool) mergeHeads(
 	sel.Blobs = blobs
 
 	return selected
+}
+
+// SkipDuplicate marks an EL mempool fill transaction that is also queued in
+// the pool (the pool selection decides about it); SkipInvalidSender one whose
+// signature does not recover.
+const (
+	SkipDuplicate     = "duplicate"
+	SkipInvalidSender = "invalid_sender"
+)
+
+// selectFill places the EL mempool's pending transactions (params.Fill) after
+// the pool selection, within the gas, byte, count and blob budgets it left.
+// Each sender continues at the nonce and balance the pool selection left,
+// the same parent-state checks apply, and the highest effective tip goes
+// first, like an EL's own block building. Blob transactions are skipped:
+// txpool_content does not carry their sidecars.
+func (p *Pool) selectFill(
+	ctx context.Context,
+	sel *Selection,
+	params *SelectParams,
+	parent *types.Header,
+	states map[common.Address]*execution.AccountState,
+) ([]*PooledTx, error) {
+	sel.FillCandidates = len(params.Fill)
+	sel.FillSkipped = make(map[string]int, 4)
+
+	if len(params.Fill) == 0 {
+		return nil, nil
+	}
+
+	fillParams := *params
+	fillParams.Ordering = config.TxOrderingTip
+	fillParams.IncludeBlobTxs = false
+	fillParams.MaxBlobs = 0
+
+	if params.MaxTxs > 0 {
+		if uint64(len(sel.Selected)) >= params.MaxTxs {
+			sel.FillSkipped[SkipMaxTxs] = len(params.Fill)
+
+			return nil, nil
+		}
+
+		fillParams.MaxTxs = params.MaxTxs - uint64(len(sel.Selected))
+	}
+
+	queues := make(map[common.Address][]*PooledTx, len(params.Fill))
+
+	for i, tx := range params.Fill {
+		if p.Get(tx.Hash()) != nil {
+			sel.FillSkipped[SkipDuplicate]++
+
+			continue
+		}
+
+		sender, err := types.Sender(p.signer, tx)
+		if err != nil {
+			sel.FillSkipped[SkipInvalidSender]++
+
+			continue
+		}
+
+		queues[sender] = append(queues[sender], &PooledTx{
+			Hash:   tx.Hash(),
+			Tx:     tx,
+			Sender: sender,
+			Size:   tx.Size(),
+			Seq:    uint64(i),
+		})
+	}
+
+	senders := make([]common.Address, 0, len(queues))
+	missing := make([]common.Address, 0, len(queues))
+
+	for sender := range queues {
+		senders = append(senders, sender)
+
+		if states[sender] == nil {
+			missing = append(missing, sender)
+		}
+	}
+
+	sort.Slice(senders, func(i, j int) bool { return senders[i].Cmp(senders[j]) < 0 })
+
+	if len(missing) > 0 {
+		fetched, err := p.elClient.AccountStatesAt(ctx, missing, params.ParentHash, parent.Number.Uint64())
+		if err != nil {
+			return nil, fmt.Errorf("select fill: %w", err)
+		}
+
+		for sender, state := range fetched {
+			states[sender] = state
+		}
+	}
+
+	// What the pool selection already spent per sender.
+	spentNonces := make(map[common.Address]uint64, len(sel.Selected))
+	spentValue := make(map[common.Address]*big.Int, len(sel.Selected))
+
+	for _, tx := range sel.Selected {
+		spentNonces[tx.Sender]++
+
+		if spentValue[tx.Sender] == nil {
+			spentValue[tx.Sender] = new(big.Int)
+		}
+
+		spentValue[tx.Sender].Add(spentValue[tx.Sender], tx.Tx.Cost())
+	}
+
+	fillSel := &Selection{
+		Skipped:   sel.FillSkipped,
+		BaseFee:   sel.BaseFee,
+		GasBudget: sel.GasBudget - min(sel.GasSum, sel.GasBudget),
+	}
+
+	ready := make(map[common.Address][]*PooledTx, len(senders))
+	ignored := make([]common.Hash, 0)
+
+	for _, sender := range senders {
+		state := states[sender]
+		if state == nil {
+			continue
+		}
+
+		remaining := &execution.AccountState{
+			Nonce:   state.Nonce + spentNonces[sender],
+			Balance: new(big.Int).Set(state.Balance),
+		}
+
+		if spent := spentValue[sender]; spent != nil {
+			remaining.Balance.Sub(remaining.Balance, spent)
+		}
+
+		// Nonce-too-low fill transactions belong to the EL's pool: never
+		// evict anything for them.
+		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, &ignored)
+	}
+
+	fill := p.mergeHeads(fillSel, &fillParams, senders, ready, maxBlockBytes-min(sel.Bytes, maxBlockBytes))
+
+	sel.FillGasSum = fillSel.GasSum
+	sel.FillBytes = fillSel.Bytes
+
+	return fill, nil
 }
 
 // effectiveTip is the priority fee a transaction actually pays over the base

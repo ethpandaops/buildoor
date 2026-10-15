@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import type { ValidatorRegistration } from '../types';
 import { Pagination } from './Pagination';
+import { InfoHint } from './InfoHint';
 
 interface ValidatorListProps {
   validators: ValidatorRegistration[];
@@ -90,9 +91,24 @@ export const ValidatorList: React.FC<ValidatorListProps> = ({ validators, loadin
                 <thead className="sticky-top" style={{ background: 'var(--bs-body-bg)' }}>
                   <tr>
                     <th className="small">Pubkey</th>
-                    <th className="small">Fee Recipient</th>
-                    <th className="small text-end">Gas Limit</th>
-                    <th className="small text-end">Registered</th>
+                    <th className="small">
+                      Fee Recipient
+                      <InfoHint>
+                        Address the validator registered; pre-Gloas payloads built for its proposals
+                        pay this fee recipient.
+                      </InfoHint>
+                    </th>
+                    <th className="small text-end">
+                      Gas Limit
+                      <InfoHint alignEnd>
+                        Gas limit target from the registration. Shown for reference only: buildoor&apos;s
+                        pre-Gloas builds do not apply it.
+                      </InfoHint>
+                    </th>
+                    <th className="small text-end">
+                      Registered
+                      <InfoHint alignEnd>Timestamp inside the signed registration message.</InfoHint>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

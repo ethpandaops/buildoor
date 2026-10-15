@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { BuilderPreference } from '../types';
 import { Pagination } from './Pagination';
+import { InfoHint } from './InfoHint';
 
 interface BuilderPreferencesListProps {
   preferences: BuilderPreference[];
@@ -85,7 +86,13 @@ export const BuilderPreferencesList: React.FC<BuilderPreferencesListProps> = ({
   return (
     <div className="card mb-3">
       <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">Builder Preferences</h5>
+        <h5 className="mb-0">
+          Builder Preferences
+          <InfoHint>
+            Preferences proposers submitted to this builder through the Gloas Builder API
+            (<code>submitBuilderPreferences</code>), kept per validator pubkey.
+          </InfoHint>
+        </h5>
         <span className="badge bg-primary">{preferences.length}</span>
       </div>
       <div className="card-body p-2">
@@ -108,7 +115,15 @@ export const BuilderPreferencesList: React.FC<BuilderPreferencesListProps> = ({
                 <thead className="sticky-top" style={{ background: 'var(--bs-body-bg)' }}>
                   <tr>
                     <th className="small">Validator Pubkey</th>
-                    <th className="small text-end">Max Execution Payment (Gwei)</th>
+                    <th className="small text-end">
+                      Max Execution Payment (Gwei)
+                      <InfoHint alignEnd>
+                        Highest <code>execution_payment</code> (trusted EL payment) the proposer
+                        accepts in a served bid. Caps the Builder API execution payment portion
+                        unless the preference limit is ignored; a proposer without an entry counts
+                        as 0.
+                      </InfoHint>
+                    </th>
                     <th className="small text-end">ETH</th>
                   </tr>
                 </thead>

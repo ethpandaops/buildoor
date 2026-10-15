@@ -1,7 +1,13 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+)
 
 // ValidatorRangesConfig configures how to load validator index → client name mappings.
 // If both are set, URL takes precedence.
@@ -498,13 +504,17 @@ const (
 	// PayloadSourceLocalOrEL uses the local payload when it succeeded and
 	// falls back to the engine payload otherwise.
 	PayloadSourceLocalOrEL = "local_or_el"
+	// PayloadSourceHigherValue builds both and uses the payload with the
+	// higher EL-reported block value (the engine payload on a tie, the one
+	// that exists when the other build failed).
+	PayloadSourceHigherValue = "higher_value"
 )
 
 // NormalizedPayloadSource returns the payload source, falling back to the
 // given default for unknown values (UI overrides are free-form strings).
 func NormalizedPayloadSource(source, fallback string) string {
 	switch source {
-	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL:
+	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL, PayloadSourceHigherValue:
 		return source
 	default:
 		return fallback
@@ -521,6 +531,12 @@ const (
 	// TxSourceELMempool lets the EL fill the block from its own mempool
 	// through the testing path (transactions: null).
 	TxSourceELMempool = "el_mempool"
+	// TxSourceTxPoolELFill selects from the owned pool first, then fills the
+	// remaining gas with the EL mempool's pending transactions (read through
+	// txpool_content, checked against the parent state like pool
+	// transactions; blob transactions are left out, their sidecars are not
+	// exposed).
+	TxSourceTxPoolELFill = "txpool_el_fill"
 	// TxSourceExplicit uses the exact transaction list of the slot's action
 	// plan; only reachable through a plan, never as a global default.
 	TxSourceExplicit = "explicit"
@@ -535,7 +551,7 @@ const (
 // normalize, but it is meaningless as a global setting.
 func NormalizedTxSource(source, fallback string) string {
 	switch source {
-	case TxSourceTxPool, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
+	case TxSourceTxPool, TxSourceTxPoolELFill, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
 		return source
 	default:
 		return fallback
@@ -576,20 +592,21 @@ type LocalBuildConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// PayloadSource decides which payload feeds bids and reveals: el
-	// (default; the local payload is an inspection-only shadow), local, or
-	// local_or_el (local when it succeeded, else the engine payload).
+	// (default; the local payload is an inspection-only shadow), local,
+	// local_or_el (local when it succeeded, else the engine payload), or
+	// higher_value (whichever of the two is worth more).
 	PayloadSource string `yaml:"payload_source" json:"payload_source"`
 
 	// TxSource is where the local build's transaction list comes from:
-	// txpool (default), empty or el_mempool. Per-slot plans may also supply
-	// an explicit list.
+	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
+	// may also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
 
 	// BuildELPayload keeps the engine-API build running when PayloadSource is
 	// local (default true, so the EL payload stays available for
 	// comparison). Set to false to skip the engine build and its wait when
-	// only the local payload matters. Ignored for el and local_or_el, which
-	// need the engine payload.
+	// only the local payload matters. Ignored for el, local_or_el and
+	// higher_value, which need the engine payload.
 	BuildELPayload bool `yaml:"build_el_payload" json:"build_el_payload"`
 
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on
@@ -663,15 +680,41 @@ type TxPoolConfig struct {
 	// transactions but stops admission and selection. Requires --el-rpc.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// Auth selects how the /rpc ingress authenticates callers: open (no
-	// check, the default), auth_token (the same authenticatoor JWT as the
-	// mutating API endpoints, requires --auth-provider-url) or static (the
-	// shared secret in AuthToken). Startup-only.
+	// Auth decides who may call the /rpc ingress: open (anonymous callers
+	// too, rate-limited by RPCAnonRate) or api_key (an API key, the static
+	// AuthToken or a WebUI login is required). Authenticated callers are
+	// always accepted.
 	Auth string `yaml:"auth" json:"auth"`
 
-	// AuthToken is the shared secret callers send as "Authorization: Bearer
-	// <token>" in static mode. Startup-only; never serialized.
+	// AuthToken is a static API key configured at startup, accepted next to
+	// the keys managed in the WebUI (rate limit RPCKeyRate). Startup-only;
+	// never serialized.
 	AuthToken string `yaml:"auth_token" json:"-"`
+
+	// RPCAnonRate limits anonymous /rpc calls per second (0 = unlimited), per
+	// client IP or shared by all anonymous callers (RPCAnonScope).
+	RPCAnonRate uint64 `yaml:"rpc_anon_rate" json:"rpc_anon_rate"`
+
+	// RPCAnonScope is per_ip (each client IP its own limit and stats row) or
+	// shared (one limit and one stats row for every anonymous caller).
+	RPCAnonScope string `yaml:"rpc_anon_scope" json:"rpc_anon_scope"`
+
+	// RPCKeyRate is the default per-key limit of /rpc calls per second
+	// (0 = unlimited); a key may override it.
+	RPCKeyRate uint64 `yaml:"rpc_key_rate" json:"rpc_key_rate"`
+
+	// RPCProxyHops is the number of trusted reverse proxies in front of the
+	// ingress: the client IP is the X-Forwarded-For entry that many hops from
+	// the right (0 = the connection's address, headers ignored).
+	RPCProxyHops uint64 `yaml:"rpc_proxy_hops" json:"rpc_proxy_hops"`
+
+	// RPCUpstreams is the pool of RPC endpoints the ingress reads through:
+	// comma-separated "<target>@<priority>" entries, target "local" (the EL
+	// behind --el-rpc) or an http(s)/ws(s) URL. The lowest priority is tried
+	// first; endpoints of equal priority take turns (round robin), and a
+	// transport failure moves on to the next endpoint. JSON-RPC errors are
+	// answers, not failures.
+	RPCUpstreams string `yaml:"rpc_upstreams" json:"rpc_upstreams"`
 
 	// Ordering is the block selection order: fifo (default), tip or random.
 	Ordering string `yaml:"ordering" json:"ordering"`
@@ -718,23 +761,97 @@ type TxPoolConfig struct {
 
 // Ingress authentication modes.
 const (
-	// TxPoolAuthOpen accepts every caller.
+	// TxPoolAuthOpen accepts anonymous callers (rate-limited) next to
+	// authenticated ones.
 	TxPoolAuthOpen = "open"
-	// TxPoolAuthToken requires the authenticatoor JWT the API endpoints use.
-	TxPoolAuthToken = "auth_token"
-	// TxPoolAuthStatic requires the configured shared bearer secret.
-	TxPoolAuthStatic = "static"
+	// TxPoolAuthAPIKey requires an API key, the static token or a WebUI login.
+	TxPoolAuthAPIKey = "api_key"
 )
 
 // NormalizedAuth returns the ingress auth mode, falling back to open for
 // unknown values.
 func (c *TxPoolConfig) NormalizedAuth() string {
-	switch c.Auth {
-	case TxPoolAuthOpen, TxPoolAuthToken, TxPoolAuthStatic:
-		return c.Auth
+	switch NormalizeRetiredTxPoolAuth(c.Auth) {
+	case TxPoolAuthAPIKey:
+		return TxPoolAuthAPIKey
 	default:
 		return TxPoolAuthOpen
 	}
+}
+
+// NormalizeRetiredTxPoolAuth maps the retired ingress modes auth_token (WebUI
+// login only) and static (shared secret only) onto api_key, which accepts
+// both credentials; any other value is returned unchanged.
+func NormalizeRetiredTxPoolAuth(auth string) string {
+	if auth == "auth_token" || auth == "static" {
+		return TxPoolAuthAPIKey
+	}
+
+	return auth
+}
+
+// Anonymous rate-limit scopes of the /rpc ingress.
+const (
+	RPCAnonScopePerIP  = "per_ip"
+	RPCAnonScopeShared = "shared"
+)
+
+// RPCUpstreamLocal names the EL behind --el-rpc in RPCUpstreams.
+const RPCUpstreamLocal = "local"
+
+// RPCUpstream is one parsed RPCUpstreams entry.
+type RPCUpstream struct {
+	Target   string // "local" or the endpoint URL
+	Priority uint64 // lower is tried first
+}
+
+// ParseRPCUpstreams parses the RPCUpstreams list. An entry without
+// "@<priority>" has priority 0; an empty list is an error (the ingress needs
+// somewhere to read from).
+func ParseRPCUpstreams(spec string) ([]RPCUpstream, error) {
+	parts := strings.Split(spec, ",")
+	upstreams := make([]RPCUpstream, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		upstream := RPCUpstream{Target: part}
+
+		if at := strings.LastIndex(part, "@"); at > 0 && !strings.Contains(part[at:], "/") {
+			priority, err := strconv.ParseUint(strings.TrimSpace(part[at+1:]), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid priority in upstream %q", part)
+			}
+
+			upstream.Target = strings.TrimSpace(part[:at])
+			upstream.Priority = priority
+		}
+
+		if upstream.Target != RPCUpstreamLocal {
+			u, err := url.Parse(upstream.Target)
+			if err != nil || u.Host == "" ||
+				(u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") {
+				return nil, fmt.Errorf("upstream %q must be %q or an http(s)/ws(s) URL", upstream.Target, RPCUpstreamLocal)
+			}
+		}
+
+		if seen[upstream.Target] {
+			return nil, fmt.Errorf("upstream %q listed twice", upstream.Target)
+		}
+
+		seen[upstream.Target] = true
+		upstreams = append(upstreams, upstream)
+	}
+
+	if len(upstreams) == 0 {
+		return nil, errors.New("at least one upstream is required (\"local\" for the EL behind --el-rpc)")
+	}
+
+	return upstreams, nil
 }
 
 // NormalizedOrdering applies the config's own ordering with the fifo fallback.

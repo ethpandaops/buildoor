@@ -1486,9 +1486,9 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   color: #fff;
 }
 
-/* InfoHint: "i" icon with a hover / focus callout explaining a setting. */
+/* InfoHint: "i" icon with a hover / focus callout explaining a setting. The
+   callout is portaled to <body> with a fixed position (see InfoHint.tsx). */
 .info-hint {
-  position: relative;
   display: inline-block;
   margin-left: 0.3rem;
   color: var(--bs-secondary-color);
@@ -1502,14 +1502,12 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   color: var(--bs-info);
 }
 
-.info-hint .info-hint-callout {
-  display: none;
-  position: absolute;
-  top: calc(100% + 6px);
-  left: -8px;
-  z-index: 1080;
+.info-hint-callout {
+  position: fixed;
+  z-index: 2000;
+  display: block;
   width: max-content;
-  max-width: min(340px, 80vw);
+  max-width: min(340px, calc(100vw - 16px));
   padding: 0.5rem 0.65rem;
   border: 1px solid var(--bs-border-color);
   border-radius: 0.375rem;
@@ -1520,17 +1518,10 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   font-weight: normal;
   line-height: 1.4;
   text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
   white-space: normal;
-}
-
-.info-hint.info-hint-end .info-hint-callout {
-  left: auto;
-  right: -8px;
-}
-
-.info-hint:hover .info-hint-callout,
-.info-hint:focus .info-hint-callout {
-  display: block;
+  pointer-events: none;
 }
 
 .info-hint-callout dl {

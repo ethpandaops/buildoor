@@ -71,8 +71,8 @@ export interface BuildConfig {
 // payload (EL or local) feeds bids and reveals.
 export interface LocalBuildConfig {
   enabled: boolean;
-  payload_source: string; // el | local | local_or_el
-  tx_source: string; // txpool | empty | el_mempool
+  payload_source: string; // el | local | local_or_el | higher_value
+  tx_source: string; // txpool | txpool_el_fill | empty | el_mempool
   build_el_payload: boolean;
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
@@ -91,6 +91,59 @@ export interface TxPoolConfig {
   max_strikes?: number;
   base_fee_ceiling_gwei?: number;
   forward_to_el: boolean;
+  // /rpc ingress access (see RPCAccessCard).
+  auth?: string; // open | api_key
+  rpc_anon_rate?: number;
+  rpc_anon_scope?: string; // per_ip | shared
+  rpc_key_rate?: number;
+  rpc_proxy_hops?: number;
+  rpc_upstreams?: string; // comma-separated <target>@<priority>
+}
+
+// /rpc ingress API key (GET /api/buildoor/rpc-access); the secret is only
+// returned once, at creation.
+export interface RPCKey {
+  id: string;
+  label: string;
+  prefix: string;
+  rate_limit?: number; // absent = txpool.rpc_key_rate
+  enabled: boolean;
+  created_at: string;
+}
+
+// Per-caller /rpc call statistics.
+export interface RPCCallerStats {
+  kind: 'anonymous' | 'api_key' | 'static' | 'login';
+  id: string; // anonymous: client IP or "shared"; api_key: key id
+  label?: string;
+  rate_limit: number; // effective calls per second, 0 = unlimited
+  calls: number;
+  errors: number;
+  rate_limited: number;
+  methods: Record<string, number>;
+  first_seen: string;
+  last_seen: string;
+}
+
+// One read upstream of the /rpc passthrough.
+export interface RPCUpstreamStats {
+  target: string;
+  priority: number;
+  available: boolean;
+  error?: string;
+  calls: number;
+  failures: number;
+}
+
+export interface RPCAccessResponse {
+  keys: RPCKey[];
+  callers: RPCCallerStats[];
+  upstreams: RPCUpstreamStats[];
+}
+
+export interface CreateRPCKeyResponse {
+  key: RPCKey;
+  secret: string;
 }
 
 // Probed availability of the EL's testing namespace + per-EL blob handling.
@@ -194,6 +247,11 @@ export interface TxSelectionSummary {
   ceiling_applied?: boolean;
   bytes?: number;
   hashes?: string[];
+  // EL mempool fill (tx source txpool_el_fill).
+  fill_candidates?: number;
+  fill_selected?: number;
+  fill_gas_sum?: number;
+  fill_skipped?: Record<string, number>;
 }
 
 export interface TxPoolPreviewResponse {
@@ -217,6 +275,25 @@ export interface LocalBuildInfo {
   attempts?: number;
   dropped?: { hash: string; reason: string }[];
   built_at?: string;
+  fill_txs?: number;
+  fill_error?: string;
+  fill_dropped?: boolean;
+}
+
+// SSE local_build_progress event: the live state of one custom build
+// (building, then ready / failed / skipped the moment testing_buildBlockV1
+// returned), ahead of the final local_build event.
+export interface LocalBuildProgressEvent {
+  slot: number;
+  candidate?: string;
+  phase: 'building' | 'ready' | 'failed' | 'skipped';
+  tx_source?: string;
+  started_at: number;
+  at: number;
+  num_transactions?: number;
+  block_value_wei?: string;
+  skip_reason?: string;
+  error?: string;
 }
 
 // SSE local_build event (slot-scoped): one build target's local outcome.
@@ -677,6 +754,8 @@ export interface SlotState {
   submitBlockBlockHash?: string;
   // Local build extension outcome for the slot's primary target.
   localBuild?: LocalBuildStreamEvent;
+  // Live custom build state, until the final localBuild event arrives.
+  localBuildLive?: LocalBuildProgressEvent;
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.
@@ -875,9 +954,12 @@ export interface BuildPlan {
 // Per-slot local build (testing_buildBlockV1) overrides; every field optional.
 export interface LocalBuildPlan {
   enabled?: boolean;
-  payload_source?: string; // el | local | local_or_el
+  payload_source?: string; // el | local | local_or_el | higher_value
   tx_source?: string; // txpool | empty | el_mempool | explicit
   transactions?: string[]; // 0x-hex raw transactions (tx_source explicit)
+  // Length of the explicit list when the backend hid it from a reader
+  // without a login (output only; saving it back is refused).
+  transactions_redacted?: number;
   queued?: string[]; // ordered pool tx hashes, exact or the build fails (tx_source queued)
   build_el_payload?: boolean;
   max_txs?: number;
@@ -980,6 +1062,7 @@ export interface ResolvedLocalBuildSettings {
   payload_source: string;
   tx_source: string;
   transactions?: string[];
+  transactions_redacted?: number; // hidden explicit list length (no login)
   queued?: string[];
   build_el_payload: boolean;
   max_txs?: number;

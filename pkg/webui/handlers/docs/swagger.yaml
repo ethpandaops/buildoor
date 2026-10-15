@@ -183,7 +183,7 @@ definitions:
       ordering:
         type: string
       payload_source:
-        description: 'PayloadSource: el | local | local_or_el.'
+        description: 'PayloadSource: el | local | local_or_el | higher_value.'
         type: string
       queued:
         description: |-
@@ -201,6 +201,11 @@ definitions:
         items:
           type: string
         type: array
+      transactions_redacted:
+        description: |-
+          TransactionsRedacted is the length of Transactions when the list was
+          hidden from a reader without a login (output only).
+        type: integer
       tx_source:
         description: |-
           TxSource: txpool | empty | el_mempool | explicit (explicit requires
@@ -435,7 +440,7 @@ definitions:
       ordering:
         type: string
       payload_source:
-        description: 'PayloadSource: el | local | local_or_el.'
+        description: 'PayloadSource: el | local | local_or_el | higher_value.'
         type: string
       queued:
         description: Queued is the exact ordered hash list for the queued source.
@@ -447,6 +452,11 @@ definitions:
         items:
           type: string
         type: array
+      transactions_redacted:
+        description: |-
+          TransactionsRedacted is the length of Transactions when the list was
+          hidden from a reader without a login (output only).
+        type: integer
       tx_source:
         description: 'TxSource: txpool | empty | el_mempool | explicit.'
         type: string
@@ -709,6 +719,21 @@ definitions:
           $ref: '#/definitions/api.BuilderPreferencesEntry'
         type: array
     type: object
+  api.CreateRPCKeyRequest:
+    properties:
+      label:
+        type: string
+      rate_limit:
+        description: calls per second, 0 = unlimited; absent = default
+        type: integer
+    type: object
+  api.CreateRPCKeyResponse:
+    properties:
+      key:
+        $ref: '#/definitions/api.RPCKeyView'
+      secret:
+        type: string
+    type: object
   api.GetValidatorsResponse:
     properties:
       validators:
@@ -935,6 +960,37 @@ definitions:
           $ref: '#/definitions/api.ProposerPreferencesEntry'
         type: array
     type: object
+  api.RPCAccessResponse:
+    properties:
+      callers:
+        items:
+          $ref: '#/definitions/rpc.CallerStats'
+        type: array
+      keys:
+        items:
+          $ref: '#/definitions/api.RPCKeyView'
+        type: array
+      upstreams:
+        items:
+          $ref: '#/definitions/rpc.UpstreamStats'
+        type: array
+    type: object
+  api.RPCKeyView:
+    properties:
+      created_at:
+        type: string
+      enabled:
+        type: boolean
+      id:
+        type: string
+      label:
+        type: string
+      prefix:
+        type: string
+      rate_limit:
+        description: nil = txpool.rpc_key_rate
+        type: integer
+    type: object
   api.SlotBidArtifactsResponse:
     properties:
       bids:
@@ -1131,6 +1187,20 @@ definitions:
       payload_build_delay:
         type: integer
       reveal_time:
+        type: integer
+    type: object
+  api.UpdateRPCKeyRequest:
+    properties:
+      default_rate_limit:
+        type: boolean
+      enabled:
+        type: boolean
+      label:
+        type: string
+      rate_limit:
+        description: |-
+          RateLimit sets the key's own limit (calls per second, 0 = unlimited);
+          DefaultRateLimit returns it to txpool.rpc_key_rate.
         type: integer
     type: object
   api.UpdateScheduleRequest:
@@ -1365,6 +1435,18 @@ definitions:
         description: ExplicitTxs is the explicit list length (tx source explicit /
           queued).
         type: integer
+      fill_dropped:
+        type: boolean
+      fill_error:
+        type: string
+      fill_txs:
+        description: |-
+          FillTxs is how many EL mempool transactions the txpool_el_fill source
+          appended after the pool selection; FillError is why the EL mempool
+          could not be read (the build then used the pool alone); FillDropped
+          marks that the EL refused the list and the build retried without the
+          fill.
+        type: integer
       inclusion_list_dropped:
         description: |-
           InclusionListDropped marks that the build only succeeded after the
@@ -1384,6 +1466,47 @@ definitions:
           el_mempool source, where the EL chooses).
         type: integer
       tx_source:
+        type: string
+    type: object
+  rpc.CallerStats:
+    properties:
+      calls:
+        type: integer
+      errors:
+        type: integer
+      first_seen:
+        type: string
+      id:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
+      last_seen:
+        type: string
+      methods:
+        additionalProperties:
+          type: integer
+        type: object
+      rate_limit:
+        description: effective calls per second (0 = unlimited)
+        type: integer
+      rate_limited:
+        type: integer
+    type: object
+  rpc.UpstreamStats:
+    properties:
+      available:
+        type: boolean
+      calls:
+        type: integer
+      error:
+        type: string
+      failures:
+        type: integer
+      priority:
+        type: integer
+      target:
         type: string
     type: object
   slot_results.AttributesSnapshot:
@@ -1889,6 +2012,17 @@ definitions:
         type: integer
       ceiling_applied:
         type: boolean
+      fill_candidates:
+        description: EL mempool fill (tx source txpool_el_fill).
+        type: integer
+      fill_gas_sum:
+        type: integer
+      fill_selected:
+        type: integer
+      fill_skipped:
+        additionalProperties:
+          type: integer
+        type: object
       gas_budget:
         type: integer
       gas_sum:
@@ -2144,6 +2278,12 @@ paths:
             $ref: '#/definitions/api.TestTransformResponse'
         "400":
           description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
           schema:
             additionalProperties:
               type: string
@@ -2585,6 +2725,148 @@ paths:
       summary: Get cached proposer preferences
       tags:
       - Buildoor
+  /api/buildoor/rpc-access:
+    get:
+      description: 'API keys (without secrets), per-caller call stats (anonymous per
+        IP or shared, per key, static token, WebUI login) and the read upstreams.
+        Requires authentication: the stats carry client IPs.'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.RPCAccessResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: No ingress
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: /rpc ingress access state
+      tags:
+      - Buildoor
+  /api/buildoor/rpc-access/keys:
+    post:
+      consumes:
+      - application/json
+      description: 'Creates an API key for the /rpc ingress. The secret is returned
+        once and never stored (only its SHA-256). Send it as "X-API-Key: <key>", "Authorization:
+        Bearer <key>" or in the URL as /rpc/<key>.'
+      parameters:
+      - description: Key
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.CreateRPCKeyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.CreateRPCKeyResponse'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Create a /rpc API key
+      tags:
+      - Buildoor
+  /api/buildoor/rpc-access/keys/{id}:
+    delete:
+      description: Deletes the key; callers using it are refused from the next request
+        on.
+      parameters:
+      - description: Key id
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Delete a /rpc API key
+      tags:
+      - Buildoor
+    post:
+      consumes:
+      - application/json
+      description: Changes a key's label, enabled flag or rate limit. A disabled key
+        is refused (401) without being deleted.
+      parameters:
+      - description: Key id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Update
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.UpdateRPCKeyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.RPCKeyView'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update a /rpc API key
+      tags:
+      - Buildoor
   /api/buildoor/slot-results:
     get:
       description: |-
@@ -2910,6 +3192,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/api.TxPoolResponse'
+        "401":
+          description: Unauthorized (the pool holds private transactions)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Pool not configured
           schema:
@@ -2975,6 +3263,12 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/api.TxPoolPreviewResponse'
+        "401":
+          description: Unauthorized (the pool holds private transactions)
+          schema:
+            additionalProperties:
+              type: string
+            type: object
         "404":
           description: Pool not configured or no head
           schema:

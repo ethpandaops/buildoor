@@ -220,10 +220,10 @@ npm run clean
    corrected, missing parent numbers backfilled) and synthesized for uncovered
    candidates (empty-parent withdrawals from the parent slot's attributes;
    grandparent candidates re-target the parent slot's attributes, refused
-   across epoch boundaries). Sequential builds run speculative candidates
-   first, canonical last (`build.parallel` opts into concurrent engine
-   builds). Consumers select at request time: p2p bids per
-   `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
+   across epoch boundaries). Candidate builds run concurrently by default
+   (`build.parallel`); sequential builds run the canonical candidate first
+   (it keeps its scheduled start), speculative ones after. Consumers select
+   at request time: p2p bids per `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
    `epbs.bid_candidate_switch`; `all` = deliberate multi-parent gossip),
    builder-api serves whichever candidate matches the requested parent
    (`builder_api.serve_candidates` policy, optional
@@ -253,8 +253,15 @@ npm run clean
      them; `local_or_el` falls back). `local_build.payload_source` decides which
      payload feeds `PayloadReady` (bids/reveals): `el` (default; the local payload
      is an inspection-only SHADOW), `local` (strict — no payload when the local
-     build fails), `local_or_el` (fallback, recorded). Tx source:
-     `txpool` | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     build fails), `local_or_el` (fallback, recorded), `higher_value` (both
+     built, the higher EL-reported block value wins; engine on a tie, the
+     surviving one when a build fails). Tx source:
+     `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
+     pending txs from `txpool_content` fill the remaining gas — same
+     parent-state checks, each sender continuing at the nonce/balance the pool
+     left, highest tip first, pool duplicates and blob txs skipped; a refusal
+     retries once without the fill, an unreadable EL mempool builds from the
+     pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
      (flagged `inclusion_list_dropped`). Consumers still receive exactly one
@@ -301,14 +308,39 @@ npm run clean
      is dropped TOGETHER with the sender's higher nonces — dropping it alone
      would leave a gap they could never cross — while fresh lower nonces
      stay; the generator restarts at the pool-aware "pending" nonce. Ingress (`pkg/txpool/rpc/`):
-     JSON-RPC 2.0 (single + batch) at `POST /rpc` on the API port; auth per
-     `txpool.auth` = `open` (default) | `auth_token` (the authenticatoor JWT the
-     mutating API endpoints use, `txpoolrpc.Authorizer` implemented in webui.go)
-     | `static` (`txpool.auth_token` bearer secret):
+     JSON-RPC 2.0 (single + batch) at `POST /rpc` (or `/rpc/<key>`) on the API
+     port. **Access** (`access.go`): a caller is an API key (WebUI-managed,
+     `X-API-Key` / `Authorization: Bearer` / `/rpc/<key>`, SHA-256 stored in the
+     `kv_store` `rpc_api_keys` namespace, secret shown once), the static
+     `--txpool-auth-token`, a WebUI login (authenticatoor JWT; never when no
+     auth provider is configured) or anonymous — allowed only with
+     `txpool.auth=open` (`api_key` requires credentials; the retired
+     `auth_token`/`static` values map to `api_key`). A presented invalid or
+     disabled key is a 401. Per-call token-bucket rate limits (burst = 1 s):
+     anonymous `txpool.rpc_anon_rate` per client IP or `shared`
+     (`txpool.rpc_anon_scope`; client IP from X-Forwarded-For
+     `txpool.rpc_proxy_hops` from the right), keys `txpool.rpc_key_rate` or
+     their own override, logins unlimited; over the limit = `-32005`. Per-caller
+     stats (calls, errors, rate-limited, per-method) in memory, anonymous IPs
+     LRU-bounded, served with the keys and upstreams by
+     `GET /api/buildoor/rpc-access`. **Reads** go through the upstream pool
+     (`upstream.go`, `txpool.rpc_upstreams` = `<local|url>@<priority>,…`):
+     lowest priority first, equal priorities round robin, transport failures
+     fail over, JSON-RPC errors are answers; the local EL is just a member.
+     **Privacy**: pool contents never leave to unauthorized readers —
+     `txpool_content` / pool hits of `eth_getTransactionByHash` show operators
+     (static token, login) everything, a key only what it submitted
+     (`PooledTx.Submitter`), anonymous callers nothing. Methods:
      `eth_sendRawTransaction` (network encoding), `eth_chainId`, `net_version`,
      `web3_clientVersion`, pool-aware `eth_getTransactionCount(..,"pending")`,
      `eth_getTransactionByHash`, `txpool_status/content` locally; read-only
-     `eth_*`/`net_*`/`web3_*` proxied to `--el-rpc`; everything else `-32601`.
+     `eth_*`/`net_*`/`web3_*` proxied through the upstreams; everything else
+     `-32601`. The same privacy rule covers the WebUI: the pool REST
+     (`/api/buildoor/txpool[/preview]`) needs a login, custom-built payload
+     artifacts (and the envelope of a slot that has one) need a login, and
+     explicit plan transaction lists are redacted to `transactions_redacted`
+     for readers without a login (REST) and always on SSE; saving a redacted
+     list back is refused.
      The route exists whenever `--el-rpc` is set, but while `txpool.enabled`
      is false EVERY call (read passthrough included) answers `txpool disabled`,
      so the EL is never reachable through the API port until the pool is on.
@@ -689,10 +721,12 @@ Key config sections:
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
 - **Local build / tx pool**: `--local-build-enabled`, `--local-build-payload-source`
-  (el | local | local_or_el), `--local-build-tx-source` (txpool | empty |
+  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
-  `--txpool-auth` + `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,
+  `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
+  `--txpool-rpc-anon-rate`, `--txpool-rpc-anon-scope`, `--txpool-rpc-key-rate`,
+  `--txpool-rpc-proxy-hops`, `--txpool-rpc-upstreams`, `--txpool-ordering`, `--txpool-block-max-txs`,
   `--txpool-gas-fill-pct`, `--txpool-max-txs`, `--txpool-max-txs-per-sender`,
   `--txpool-tx-ttl-slots`, `--txpool-forward-to-el`. Both require `--el-rpc`;
   mutable via `local_build.*` / `txpool.*` settings keys

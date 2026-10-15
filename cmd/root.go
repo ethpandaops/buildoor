@@ -128,15 +128,20 @@ func init() {
 
 	// Local block building extension (testing_buildBlockV1) and the owned transaction pool
 	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
-	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, or local_or_el")
-	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, empty or el_mempool")
+	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, local_or_el, or higher_value (whichever is worth more)")
+	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, txpool_el_fill (pool first, then the EL mempool's pending txs), empty or el_mempool")
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
-	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Authentication of the /rpc ingress: open, auth_token (the authenticatoor JWT of the API, needs --auth-provider-url) or static (--txpool-auth-token)")
-	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Shared bearer secret callers of the /rpc ingress must send in --txpool-auth=static mode")
+	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
+	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Static API key for the /rpc ingress, accepted next to the keys managed in the WebUI")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-anon-rate", defaults.TxPool.RPCAnonRate, "Anonymous /rpc calls per second (0 = unlimited), per client IP or shared (--txpool-rpc-anon-scope)")
+	rootCmd.PersistentFlags().String("txpool-rpc-anon-scope", defaults.TxPool.RPCAnonScope, "Anonymous /rpc rate-limit scope: per_ip or shared")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-key-rate", defaults.TxPool.RPCKeyRate, "Default /rpc calls per second per API key (0 = unlimited); keys may override it")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-proxy-hops", defaults.TxPool.RPCProxyHops, "Trusted reverse proxies in front of /rpc: the client IP is the X-Forwarded-For entry that many hops from the right (0 = connection address)")
+	rootCmd.PersistentFlags().String("txpool-rpc-upstreams", defaults.TxPool.RPCUpstreams, "RPC endpoints /rpc reads through: comma-separated <local|url>@<priority>, lowest priority first, equal priorities round robin")
 	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip, random or round_robin")
 	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
 	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
@@ -337,6 +342,11 @@ func initConfig(root *cobra.Command) error {
 			Enabled:            v.GetBool("txpool-enabled"),
 			Auth:               v.GetString("txpool-auth"),
 			AuthToken:          v.GetString("txpool-auth-token"),
+			RPCAnonRate:        v.GetUint64("txpool-rpc-anon-rate"),
+			RPCAnonScope:       v.GetString("txpool-rpc-anon-scope"),
+			RPCKeyRate:         v.GetUint64("txpool-rpc-key-rate"),
+			RPCProxyHops:       v.GetUint64("txpool-rpc-proxy-hops"),
+			RPCUpstreams:       v.GetString("txpool-rpc-upstreams"),
 			Ordering:           v.GetString("txpool-ordering"),
 			MaxTxsPerBlock:     v.GetUint64("txpool-block-max-txs"),
 			GasFillPct:         v.GetUint64("txpool-gas-fill-pct"),
@@ -382,6 +392,10 @@ func initConfig(root *cobra.Command) error {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
 	}
 
+	// The retired /rpc auth modes auth_token (WebUI login) and static (shared
+	// secret) both required authentication; api_key accepts either.
+	cfg.TxPool.Auth = config.NormalizeRetiredTxPoolAuth(cfg.TxPool.Auth)
+
 	// Operator-supplied values pass the same validation as UI overrides, so a
 	// typo fails the start instead of being replaced by a module's fallback.
 	for _, field := range config.Fields() {
@@ -395,18 +409,6 @@ func initConfig(root *cobra.Command) error {
 	if cfg.LocalBuild.BlobEncoding != config.NormalizedBlobEncoding(cfg.LocalBuild.BlobEncoding) {
 		return fmt.Errorf("invalid --local-build-blob-encoding %q: must be auto, network or canonical",
 			cfg.LocalBuild.BlobEncoding)
-	}
-
-	if cfg.TxPool.Auth != cfg.TxPool.NormalizedAuth() {
-		return fmt.Errorf("invalid --txpool-auth %q: must be open, auth_token or static", cfg.TxPool.Auth)
-	}
-
-	if cfg.TxPool.Auth == config.TxPoolAuthStatic && cfg.TxPool.AuthToken == "" {
-		return fmt.Errorf("--txpool-auth=static requires --txpool-auth-token")
-	}
-
-	if cfg.TxPool.Auth == config.TxPoolAuthToken && cfg.AuthProviderURL == "" {
-		return fmt.Errorf("--txpool-auth=auth_token requires --auth-provider-url")
 	}
 
 	if (cfg.LocalBuild.Enabled || cfg.TxPool.Enabled) && cfg.ELRPC == "" {

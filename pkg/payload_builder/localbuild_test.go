@@ -32,6 +32,8 @@ func TestLocalBuildRequestRunEL(t *testing.T) {
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceEL}).RunEL())
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL, BuildELPayload: false}).RunEL(),
 		"local_or_el needs the engine payload as fallback")
+	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue, BuildELPayload: false}).RunEL(),
+		"higher_value compares against the engine payload")
 	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: true}).RunEL())
 	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: false}).RunEL())
 }
@@ -39,6 +41,8 @@ func TestLocalBuildRequestRunEL(t *testing.T) {
 func TestSelectPayload(t *testing.T) {
 	el := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{1}}
 	local := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{2}}
+	richEL := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{3}, BlockValue: big.NewInt(500)}
+	richLocal := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{4}, BlockValue: big.NewInt(500)}
 	b := &PayloadBuilder{}
 
 	tests := []struct {
@@ -83,6 +87,26 @@ func TestSelectPayload(t *testing.T) {
 			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: SourceEL, wantHash: el.BlockHash, fallback: true,
 		},
 		{
+			name: "higher_value takes the more valuable local payload", result: BuildResult{EL: el, Local: richLocal},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: richLocal.BlockHash,
+		},
+		{
+			name: "higher_value takes the more valuable el payload", result: BuildResult{EL: richEL, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: richEL.BlockHash,
+		},
+		{
+			name: "higher_value prefers el on a tie", result: BuildResult{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+		},
+		{
+			name: "higher_value uses el when local failed", result: BuildResult{EL: el, LocalErr: errors.New("x")},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+		},
+		{
+			name: "higher_value uses local when el failed", result: BuildResult{ELErr: errors.New("el down"), Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: local.BlockHash,
+		},
+		{
 			name: "local_or_el with both failed errors", result: BuildResult{ELErr: errors.New("el down"), LocalErr: errors.New("x")},
 			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantErr: "el down",
 		},
@@ -114,10 +138,16 @@ func TestSelectPayload(t *testing.T) {
 // minimal payload echoing the submitted transactions (or fails the first N
 // calls with failErr, "nonce too low" by default).
 type fakeLocalClient struct {
-	calls    [][][]byte
-	failNext int
-	failErr  error
-	dropLast bool
+	calls      [][][]byte
+	failNext   int
+	failErr    error
+	dropLast   bool
+	pending    []*types.Transaction // the EL mempool (txpool_content pending)
+	pendingErr error
+}
+
+func (f *fakeLocalClient) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
+	return f.pending, f.pendingErr
 }
 
 func (f *fakeLocalClient) BuildBlockV1(_ context.Context, v enginev.DataVersion, parent common.Hash,
@@ -489,4 +519,116 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 			require.Equal(t, tc.wantReq, req != nil)
 		})
 	}
+}
+
+// TestBuildLocalELFill appends the EL mempool's pending transactions after the
+// pool selection and retries without them when the EL refuses the list.
+func TestBuildLocalELFill(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TxPool.Enabled = true
+
+	pool := txpool.NewPool(cfg, &fakePoolEL{}, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
+	require.NoError(t, pool.Start(context.Background()))
+
+	t.Cleanup(func() { _ = pool.Stop() })
+
+	sign := func(nonce uint64) *types.Transaction {
+		key, err := crypto.GenerateKey()
+		require.NoError(t, err)
+
+		tx, err := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(1)), &types.DynamicFeeTx{
+			ChainID: big.NewInt(1), Nonce: nonce, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 21000,
+		})
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	own := sign(0)
+	raw, err := own.MarshalBinary()
+	require.NoError(t, err)
+
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	elTx := sign(0)
+
+	req := &LocalBuildRequest{
+		TxSource:    config.TxSourceTxPoolELFill,
+		MaxAttempts: 3,
+		Ordering:    config.TxOrderingFIFO,
+		GasFillPct:  100,
+	}
+
+	t.Run("pool first, then the EL mempool", func(t *testing.T) {
+		client := &fakeLocalClient{pending: []*types.Transaction{own, elTx}}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Len(t, client.calls, 1)
+		require.Equal(t, []string{own.Hash().Hex(), elTx.Hash().Hex()}, out.info.ExpectedHashes,
+			"the pool transaction first, the EL's own copy of it skipped, the EL transaction after")
+		require.Equal(t, 1, out.info.FillTxs)
+		require.Equal(t, 1, out.info.Selection.FillSkipped[txpool.SkipDuplicate])
+	})
+
+	t.Run("refusal retries without the fill", func(t *testing.T) {
+		client := &fakeLocalClient{pending: []*types.Transaction{elTx}, failNext: 1, failErr: errors.New("invalid transaction")}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Len(t, client.calls, 2)
+		require.Len(t, client.calls[0], 2)
+		require.Len(t, client.calls[1], 1, "the retry carries the pool transaction only")
+		require.True(t, out.info.FillDropped)
+		require.Equal(t, []string{own.Hash().Hex()}, out.info.ExpectedHashes)
+	})
+
+	t.Run("unreadable EL mempool builds from the pool alone", func(t *testing.T) {
+		client := &fakeLocalClient{pendingErr: errors.New("method not found")}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Contains(t, out.info.FillError, "method not found")
+		require.Equal(t, []string{own.Hash().Hex()}, out.info.ExpectedHashes)
+	})
+}
+
+// TestFireLocalProgress reports the custom build live: building at the start,
+// then its own outcome without waiting for the engine build.
+func TestFireLocalProgress(t *testing.T) {
+	b, attrs, _ := newLocalTestBuilder(&fakeLocalClient{})
+	sub := b.localProgress.Subscribe(8, false)
+
+	defer sub.Unsubscribe()
+
+	req := &LocalBuildRequest{Candidate: "parent_full", TxSource: config.TxSourceTxPool}
+	started := time.Now()
+
+	b.fireLocalProgress(attrs, req, started, nil)
+	b.fireLocalProgress(attrs, req, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
+	b.fireLocalProgress(attrs, req, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
+	b.fireLocalProgress(attrs, req, started, &localOutcome{err: errors.New("boom")})
+
+	phases := make([]*LocalBuildProgressEvent, 0, 4)
+	for range 4 {
+		phases = append(phases, <-sub.Channel())
+	}
+
+	require.Equal(t, LocalStatusBuilding, phases[0].Phase)
+	require.Equal(t, "parent_full", phases[0].Candidate)
+	require.Equal(t, attrs.ProposalSlot, phases[0].Slot)
+	require.Equal(t, LocalStatusReady, phases[1].Phase)
+	require.Equal(t, big.NewInt(7), phases[1].BlockValue)
+	require.Equal(t, started, phases[1].StartedAt)
+	require.Equal(t, LocalStatusSkipped, phases[2].Phase)
+	require.Equal(t, LocalSkipTxPoolDisabled, phases[2].SkipReason)
+	require.Equal(t, LocalStatusFailed, phases[3].Phase)
+	require.Equal(t, "boom", phases[3].Error)
 }

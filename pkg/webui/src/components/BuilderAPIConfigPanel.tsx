@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { BuilderAPIConfig, BuilderAPIStatus, Config, ServiceStatus } from '../types';
 import { useAuth } from '../hooks/useAuth';
 import { useSettings } from '../hooks/useSettings';
+import { InfoHint } from './InfoHint';
 
 interface BuilderAPIConfigPanelProps {
   status: BuilderAPIStatus | null;
@@ -24,6 +25,103 @@ const KEY_STRATEGY_LABELS: Record<string, string> = {
   random: 'random',
   least_used: 'least used',
 };
+
+// Setting explanations, shared by the view rows and the edit form.
+const HINT_SUBSIDY = (
+  <>
+    <code>builder_api.block_value_subsidy_gwei</code> (gwei), added on top of the block value of
+    every served bid (pre-Gloas getHeader and Gloas getExecutionPayloadBid). 0 = bid the plain
+    block value. Per-slot action plans can override it.
+  </>
+);
+const HINT_VALUE_OVERRIDE = (
+  <>
+    <code>builder_api.value_override_gwei</code> (gwei): when non-zero, the served bid&apos;s total
+    value is exactly this amount, replacing block value + subsidy (may exceed or undercut the real
+    block value). 0 = off. Per-slot action plans can override it.
+  </>
+);
+const HINT_EXEC_PAYMENT = (
+  <>
+    Gloas only: part of the served total value claimed as <code>execution_payment</code>, the rest
+    is paid trustlessly via the bid <code>value</code>. The claim is deliberately unbacked (buildoor
+    never makes the EL payment) and capped by the proposer&apos;s advertised
+    <code>max_execution_payment</code> (0 when never submitted) unless the preference limit is
+    ignored.
+    <dl>
+      <dt>Gwei (<code>builder_api.execution_payment_gwei</code>)</dt>
+      <dd>absolute amount, clamped to the total value; wins over the percentage</dd>
+      <dt>% (<code>builder_api.execution_payment_percent</code>)</dt>
+      <dd>0-100 % of the total value, used only while the absolute amount is 0</dd>
+    </dl>
+    Both 0 = off (everything paid via <code>value</code>).
+  </>
+);
+const HINT_PREF_LIMIT = (
+  <>
+    <code>builder_api.ignore_preference_limit</code>. Spec-violating testing knob.
+    <dl>
+      <dt>respected</dt>
+      <dd>the execution payment is capped at the proposer&apos;s <code>max_execution_payment</code></dd>
+      <dt>ignored</dt>
+      <dd>the configured execution payment is served beyond that limit; clients should reject such bids</dd>
+    </dl>
+  </>
+);
+const HINT_SERVE_CANDIDATES = (
+  <>
+    <code>builder_api.serve_candidates</code> (Gloas): which built candidate payloads a bid request
+    may be answered from; the candidate matching the requested parent is served.
+    <dl>
+      <dt>all</dt>
+      <dd>any candidate (default)</dd>
+      <dt>canonical_only</dt>
+      <dd>only <code>parent_full</code> and unclassified payloads</dd>
+      <dt>comma list</dt>
+      <dd>only the named keys: <code>parent_full</code>, <code>parent_empty</code>,
+        <code>grandparent_full</code>, <code>grandparent_empty</code></dd>
+    </dl>
+    Per-slot action plans can override it.
+  </>
+);
+const HINT_ON_DEMAND = (
+  <>
+    <code>builder_api.on_demand_build</code> (Gloas): when on, a bid request for a legal parent that
+    no built candidate covers triggers a build on the fly, bounded by the request&apos;s response
+    budget. Off = such requests get no bid.
+  </>
+);
+const HINT_KEY_STRATEGY = (
+  <>
+    <code>builder_api.key_strategy</code> (Gloas): which managed builder key signs served bids. The
+    choice is sticky per slot and parent, so a polling proposer keeps seeing the same builder.
+    <dl>
+      <dt>follow ePBS bidder</dt>
+      <dd>empty value, use <code>epbs.key_strategy</code></dd>
+      <dt>round robin</dt>
+      <dd>rotate through the active keys by slot</dd>
+      <dt>single</dt>
+      <dd>always the lowest-index active key</dd>
+      <dt>random</dt>
+      <dd>per-slot shuffle (reproducible within the slot)</dd>
+      <dt>least used</dt>
+      <dd>prefer the keys that have bid least</dd>
+    </dl>
+    Keys that cannot cover the bid sort last but are still used when nothing else is left.
+  </>
+);
+const HINT_REQUEST_AUTH = (
+  <>
+    <code>builder_api.require_request_auth</code> (Gloas getExecutionPayloadBid).
+    <dl>
+      <dt>optional</dt>
+      <dd>requests without a <code>SignedRequestAuthV1</code> body are served</dd>
+      <dt>required</dt>
+      <dd>requests without one are rejected with 401</dd>
+    </dl>
+    A supplied auth body is always verified either way.
+  </>
+);
 
 interface BuilderAPIForm {
   block_value_subsidy_gwei: number;
@@ -171,13 +269,28 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
               <div className="row g-2 mb-2">
                 <div className="col-6">
                   <div className="config-item">
-                    <div className="config-item-label">Validators</div>
+                    <div className="config-item-label">
+                      Validators
+                      <InfoHint>
+                        Number of validator registrations (<code>registerValidators</code>) stored
+                        for the pre-Gloas Builder API; payloads for a registered proposer pay
+                        its registered fee recipient.
+                      </InfoHint>
+                    </div>
                     <div className="config-item-value">{status.validator_count}</div>
                   </div>
                 </div>
                 <div className="col-6">
                   <div className="config-item">
-                    <div className="config-item-label">Builder URL</div>
+                    <div className="config-item-label">
+                      Builder URL
+                      <InfoHint alignEnd>
+                        <code>--builder-api-url</code>: this builder&apos;s public URL. Its hostname
+                        (or the URL verbatim) must match <code>auth.message.data</code> of the
+                        proposer&apos;s request auth on the Gloas bid and preferences endpoints.
+                        Empty (—) = the match is skipped.
+                      </InfoHint>
+                    </div>
                     <div className="config-item-value">{api?.builder_url || '—'}</div>
                   </div>
                 </div>
@@ -197,13 +310,13 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                   <div className="row g-2">
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Block Value Subsidy</div>
+                        <div className="config-item-label">Block Value Subsidy<InfoHint>{HINT_SUBSIDY}</InfoHint></div>
                         <div className="config-item-value">{formatGwei(api?.block_value_subsidy_gwei)}</div>
                       </div>
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Value Override</div>
+                        <div className="config-item-label">Value Override<InfoHint alignEnd>{HINT_VALUE_OVERRIDE}</InfoHint></div>
                         <div className="config-item-value">
                           {api?.value_override_gwei ? formatGwei(api.value_override_gwei) : 'off'}
                         </div>
@@ -211,7 +324,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Execution Payment</div>
+                        <div className="config-item-label">Execution Payment<InfoHint>{HINT_EXEC_PAYMENT}</InfoHint></div>
                         <div className="config-item-value">
                           {api?.execution_payment_gwei
                             ? formatGwei(api.execution_payment_gwei)
@@ -223,7 +336,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Preference Limit</div>
+                        <div className="config-item-label">Preference Limit<InfoHint alignEnd>{HINT_PREF_LIMIT}</InfoHint></div>
                         <div className="config-item-value">
                           {api?.ignore_preference_limit ? 'ignored' : 'respected'}
                         </div>
@@ -231,19 +344,19 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Serve Candidates</div>
+                        <div className="config-item-label">Serve Candidates<InfoHint>{HINT_SERVE_CANDIDATES}</InfoHint></div>
                         <div className="config-item-value">{api?.serve_candidates || 'all'}</div>
                       </div>
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">On-Demand Build</div>
+                        <div className="config-item-label">On-Demand Build<InfoHint alignEnd>{HINT_ON_DEMAND}</InfoHint></div>
                         <div className="config-item-value">{api?.on_demand_build ? 'on' : 'off'}</div>
                       </div>
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Key Strategy</div>
+                        <div className="config-item-label">Key Strategy<InfoHint>{HINT_KEY_STRATEGY}</InfoHint></div>
                         <div className="config-item-value">
                           {KEY_STRATEGY_LABELS[api?.key_strategy ?? ''] ?? api?.key_strategy}
                         </div>
@@ -251,7 +364,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                     <div className="col-6">
                       <div className="config-item">
-                        <div className="config-item-label">Request Auth</div>
+                        <div className="config-item-label">Request Auth<InfoHint alignEnd>{HINT_REQUEST_AUTH}</InfoHint></div>
                         <div className="config-item-value">
                           {api?.require_request_auth ? 'required' : 'optional'}
                         </div>
@@ -263,7 +376,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                 <>
                   <div className="section-header mb-1">Configuration</div>
                   <div className="mb-2">
-                    <label className="form-label">Block Value Subsidy (Gwei)</label>
+                    <label className="form-label">Block Value Subsidy (Gwei)<InfoHint>{HINT_SUBSIDY}</InfoHint></label>
                     <input
                       type="number"
                       min={0}
@@ -274,7 +387,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     <div className="form-text">Added to the block value of every served bid.</div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label">Value Override (Gwei)</label>
+                    <label className="form-label">Value Override (Gwei)<InfoHint>{HINT_VALUE_OVERRIDE}</InfoHint></label>
                     <input
                       type="number"
                       min={0}
@@ -287,7 +400,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label">Execution Payment (Gwei)</label>
+                    <label className="form-label">Execution Payment (Gwei)<InfoHint>{HINT_EXEC_PAYMENT}</InfoHint></label>
                     <input
                       type="number"
                       min={0}
@@ -302,7 +415,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label">Execution Payment (%)</label>
+                    <label className="form-label">Execution Payment (%)<InfoHint>{HINT_EXEC_PAYMENT}</InfoHint></label>
                     <input
                       type="number"
                       min={0}
@@ -327,6 +440,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     />
                     <label className="form-check-label" htmlFor="builder-api-ignore-preference-limit">
                       Ignore the proposer's max_execution_payment
+                      <InfoHint>{HINT_PREF_LIMIT}</InfoHint>
                     </label>
                     <div className="form-text">
                       Serves the execution payment beyond the advertised limit — a
@@ -334,7 +448,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label">Serve Candidates</label>
+                    <label className="form-label">Serve Candidates<InfoHint>{HINT_SERVE_CANDIDATES}</InfoHint></label>
                     <input
                       type="text"
                       className="form-control form-control-sm"
@@ -356,6 +470,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     />
                     <label className="form-check-label" htmlFor="builder-api-on-demand-build">
                       Build on demand
+                      <InfoHint>{HINT_ON_DEMAND}</InfoHint>
                     </label>
                     <div className="form-text">
                       Builds a payload on the fly when a bid request asks for a legal
@@ -363,7 +478,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     </div>
                   </div>
                   <div className="mb-2">
-                    <label className="form-label">Key Strategy</label>
+                    <label className="form-label">Key Strategy<InfoHint>{HINT_KEY_STRATEGY}</InfoHint></label>
                     <select
                       className="form-select form-select-sm"
                       value={formData.key_strategy}
@@ -384,6 +499,7 @@ export const BuilderAPIConfigPanel: React.FC<BuilderAPIConfigPanelProps> = ({ st
                     />
                     <label className="form-check-label" htmlFor="builder-api-require-request-auth">
                       Require request auth
+                      <InfoHint>{HINT_REQUEST_AUTH}</InfoHint>
                     </label>
                     <div className="form-text">
                       Rejects bid requests without a SignedRequestAuthV1 body (401).

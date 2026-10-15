@@ -54,6 +54,7 @@ type Service struct {
 	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
 	buildSkippedDispatcher *utils.Dispatcher[*BuildSkippedEvent]
 	localBuildDispatcher   *utils.Dispatcher[*LocalBuildEvent]
+	localProgress          *utils.Dispatcher[*LocalBuildProgressEvent]
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
@@ -136,6 +137,7 @@ func NewService(
 		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
 		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
 		localBuildDispatcher:   &utils.Dispatcher[*LocalBuildEvent]{},
+		localProgress:          &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		slotBuilds:             make(map[phase0.Slot]*slotBuildState, 16),
@@ -169,6 +171,10 @@ func (s *Service) Start(ctx context.Context) error {
 		s.log,
 		s.settingsResolvers,
 	)
+
+	// Subscribers attach before the builder starts (the WebUI does), so the
+	// service owns the progress dispatcher and the payload builder fires on it.
+	s.payloadBuilder.localProgress = s.localProgress
 
 	// Start event stream
 	if err := s.clClient.Events().Start(s.ctx); err != nil {

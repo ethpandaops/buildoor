@@ -2,9 +2,52 @@ import React, { useEffect, useState } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import type { BuilderInfo as BuilderInfoType, ServiceStatus, Config } from '../types';
 import { CopyableHash } from './CopyableHash';
+import { InfoHint } from './InfoHint';
 import { useBuilderKeyActions } from '../hooks/useBuilderKeys';
 import { useSettings } from '../hooks/useSettings';
 import { setView } from '../stores/viewStore';
+
+// Explanations shared by the view rows and the lifecycle edit form.
+const HINT_LIFECYCLE = (
+  <>
+    Lifecycle management (<code>lifecycle_enabled</code>): keeps the managed key set at the target
+    count by depositing, topping up and exiting builder keys from the funding wallet, one
+    transaction per pass. Paused = no automatic lifecycle transactions. Only available when
+    started with <code>--el-rpc</code> and <code>--wallet-privkey</code>.
+  </>
+);
+
+const HINT_TARGET_KEYS = (
+  <>
+    Number of builder keys kept registered and funded (<code>builder_keys.target_count</code>),
+    derived from the entry key (index 0 is the entry key itself; 1 = single-key setup). Raising it
+    deposits new keys; lowering it exits surplus keys, highest index first, when auto exit is on.
+    Capped by the derivation limit (<code>builder_keys.max_index</code> + 1).
+  </>
+);
+
+const HINT_DEPOSIT_AMOUNT = (
+  <>
+    The one amount sent with every builder key deposit (<code>deposit_amount</code>): early
+    pre-Gloas onboarding, the registering builder deposit and each top-up. Must be greater than 0.
+  </>
+);
+
+const HINT_TOPUP_THRESHOLD = (
+  <>
+    A registered key whose effective balance (balance minus pending payments) drops below this is
+    topped up by the deposit amount (<code>topup_threshold</code>). Exiting or exited keys are
+    never topped up.
+  </>
+);
+
+const HINT_MAX_DEPOSIT_FEE = (
+  <>
+    Upper bound in gwei for the builder deposit contract&apos;s queue fee
+    (<code>deposit_max_fee</code>). Deposits and top-ups wait while the current fee is above it,
+    which also slows a fleet ramp-up when the queue grows. 0 = no limit.
+  </>
+);
 
 interface BuilderInfoProps {
   builderInfo: BuilderInfoType | null;
@@ -155,6 +198,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             ) : (
               <span className="badge bg-secondary">Lifecycle Inactive</span>
             )}
+            <span className="ms-1"><InfoHint>{HINT_LIFECYCLE}</InfoHint></span>
             {isLoggedIn && (
               <button
                 className={`btn btn-sm ms-auto ${lifecycleEnabled ? 'btn-outline-danger' : 'btn-outline-success'}`}
@@ -168,7 +212,10 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
           </>
         )}
         {!lifecycleAvailable && (
-          <span className="badge bg-dark">No Lifecycle</span>
+          <>
+            <span className="badge bg-dark">No Lifecycle</span>
+            <span className="ms-1"><InfoHint>{HINT_LIFECYCLE}</InfoHint></span>
+          </>
         )}
       </div>
       <div className="card-body p-2">
@@ -188,13 +235,28 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
           <tbody>
             {/* Builder Identity */}
             <tr>
-              <td className="text-muted">Pubkey:</td>
+              <td className="text-muted">
+                Pubkey:{' '}
+                <InfoHint>
+                  BLS public key of the primary builder key: the entry key from{' '}
+                  <code>--builder-privkey</code> or the mnemonic (internal index 0). Other managed
+                  keys are listed on the Builder Keys page.
+                </InfoHint>
+              </td>
               <td className="text-end font-monospace small">
                 <CopyableHash value={builderInfo.builder_pubkey} chars={8} />
               </td>
             </tr>
             <tr>
-              <td className="text-muted">Index:</td>
+              <td className="text-muted">
+                Index:{' '}
+                <InfoHint>
+                  The primary key&apos;s builder index in the beacon state registry, assigned at
+                  deposit and reused by other builders after an exit. The badge shows the
+                  registration state: registered, pending finalization, exiting, exited, awaiting
+                  Gloas, registering or unregistered.
+                </InfoHint>
+              </td>
               <td className="text-end">
                 {(() => {
                   const state = serviceStatus?.epbs_registration_state;
@@ -224,7 +286,9 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                 deposits new keys, lowering it exits surplus ones. */}
             {lifecycleAvailable && (
               <tr>
-                <td className="text-muted">Target keys:</td>
+                <td className="text-muted">
+                  Target keys: <InfoHint>{HINT_TARGET_KEYS}</InfoHint>
+                </td>
                 <td className="text-end">
                   {!editingTarget ? (
                     <>
@@ -284,7 +348,13 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             {/* Wallet Info */}
             {builderInfo.wallet_address && (
               <tr>
-                <td className="text-muted">Wallet:</td>
+                <td className="text-muted">
+                  Wallet:{' '}
+                  <InfoHint>
+                    Funding wallet (<code>--wallet-privkey</code>) that pays every deposit, top-up
+                    and exit transaction.
+                  </InfoHint>
+                </td>
                 <td className="text-end font-monospace small">
                   <CopyableHash value={builderInfo.wallet_address} chars={6} />
                 </td>
@@ -298,7 +368,14 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
 
             {/* CL Balance */}
             <tr>
-              <td className="text-muted">{isFleet ? 'CL Balance (all keys):' : 'CL Balance:'}</td>
+              <td className="text-muted">
+                {isFleet ? 'CL Balance (all keys):' : 'CL Balance:'}{' '}
+                <InfoHint>
+                  Builder balance on the consensus layer from the latest epoch state, adjusted live
+                  for top-ups and revealed bid payments since then. Summed over all managed keys when
+                  more than one is managed.
+                </InfoHint>
+              </td>
               <td className="text-end">
                 <span className="text-primary fw-bold">
                   {formatGwei(isFleet ? builderInfo.total_balance_gwei : builderInfo.cl_balance_gwei)} ETH
@@ -308,7 +385,13 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
 
             {/* Pending Payments (always shown) */}
             <tr>
-              <td className="text-muted">Pending Payments:</td>
+              <td className="text-muted">
+                Pending Payments:{' '}
+                <InfoHint>
+                  Bid payments the beacon state still owes to proposers for won slots; they are
+                  deducted from the balance once they settle.
+                </InfoHint>
+              </td>
               <td className="text-end text-warning">
                 {(() => {
                   const pending = isFleet
@@ -322,7 +405,12 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
             {/* Effective Balance (shown when pending payments reduce it) */}
             {(isFleet ? builderInfo.total_pending_payments_gwei : builderInfo.pending_payments_gwei) > 0 && (
               <tr>
-                <td className="text-muted">Effective Balance:</td>
+                <td className="text-muted">
+                  Effective Balance:{' '}
+                  <InfoHint>
+                    CL balance minus pending payments: what is actually left to back new bids.
+                  </InfoHint>
+                </td>
                 <td className="text-end text-success fw-bold">
                   {formatGwei(
                     isFleet ? builderInfo.total_effective_gwei : builderInfo.effective_balance_gwei,
@@ -338,7 +426,10 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                   <td colSpan={2}><hr className="my-1" /></td>
                 </tr>
                 <tr>
-                  <td className="text-muted">Wallet Balance:</td>
+                  <td className="text-muted">
+                    Wallet Balance:{' '}
+                    <InfoHint>Execution-layer balance of the funding wallet.</InfoHint>
+                  </td>
                   <td className="text-end">
                     {formatWei(builderInfo.wallet_balance_wei)} ETH
                   </td>
@@ -353,12 +444,21 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                   <td colSpan={2}><hr className="my-1" /></td>
                 </tr>
                 <tr>
-                  <td className="text-muted small">Deposit Epoch:</td>
+                  <td className="text-muted small">
+                    Deposit Epoch:{' '}
+                    <InfoHint>Epoch the primary key&apos;s builder deposit was processed.</InfoHint>
+                  </td>
                   <td className="text-end small">{builderInfo.deposit_epoch}</td>
                 </tr>
                 {builderInfo.withdrawable_epoch > 0 && builderInfo.withdrawable_epoch < 18446744073709551615 && (
                   <tr>
-                    <td className="text-muted small text-warning">Withdrawable:</td>
+                    <td className="text-muted small text-warning">
+                      Withdrawable:{' '}
+                      <InfoHint>
+                        Epoch from which the exited primary key&apos;s balance can be withdrawn
+                        back to the wallet.
+                      </InfoHint>
+                    </td>
                     <td className="text-end small text-warning">Epoch {builderInfo.withdrawable_epoch}</td>
                   </tr>
                 )}
@@ -377,7 +477,7 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                         className="text-muted small"
                         title="Sent with every builder key deposit: early onboarding, registration and each top-up"
                       >
-                        Deposit Amount:
+                        Deposit Amount: <InfoHint>{HINT_DEPOSIT_AMOUNT}</InfoHint>
                       </td>
                       <td className="text-end small">
                         {formatGwei(config.deposit_amount)} ETH
@@ -393,11 +493,15 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                       </td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Topup Threshold:</td>
+                      <td className="text-muted small">
+                        Topup Threshold: <InfoHint>{HINT_TOPUP_THRESHOLD}</InfoHint>
+                      </td>
                       <td className="text-end small">{formatGwei(config.topup_threshold)} ETH</td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Max Deposit Fee:</td>
+                      <td className="text-muted small">
+                        Max Deposit Fee: <InfoHint>{HINT_MAX_DEPOSIT_FEE}</InfoHint>
+                      </td>
                       <td className="text-end small">
                         {config.deposit_max_fee > 0
                           ? `${config.deposit_max_fee.toLocaleString()} gwei`
@@ -408,7 +512,9 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                 ) : (
                   <>
                     <tr>
-                      <td className="text-muted small">Deposit Amount (ETH):</td>
+                      <td className="text-muted small">
+                        Deposit Amount (ETH): <InfoHint>{HINT_DEPOSIT_AMOUNT}</InfoHint>
+                      </td>
                       <td className="text-end">
                         <input
                           type="number"
@@ -428,7 +534,9 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                       </td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Topup Threshold (ETH):</td>
+                      <td className="text-muted small">
+                        Topup Threshold (ETH): <InfoHint>{HINT_TOPUP_THRESHOLD}</InfoHint>
+                      </td>
                       <td className="text-end">
                         <input
                           type="number"
@@ -441,7 +549,9 @@ export const BuilderInfo: React.FC<BuilderInfoProps> = ({ builderInfo, serviceSt
                       </td>
                     </tr>
                     <tr>
-                      <td className="text-muted small">Max Deposit Fee (gwei):</td>
+                      <td className="text-muted small">
+                        Max Deposit Fee (gwei): <InfoHint>{HINT_MAX_DEPOSIT_FEE}</InfoHint>
+                      </td>
                       <td className="text-end">
                         <input
                           type="number"

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
+import { InfoHint } from './InfoHint';
 import type { BuildConfig, Config } from '../types';
 
 interface CandidatePolicySectionProps {
@@ -9,28 +10,96 @@ interface CandidatePolicySectionProps {
 // The build-parent candidates, in canonical order. A slot may build one
 // payload per candidate so bids and Builder API requests can be answered on
 // whichever parent the proposer ends up on.
-const CANDIDATES: Array<{ key: keyof BuildConfig; label: string; hint: string }> = [
+const CANDIDATES: Array<{
+  key: keyof BuildConfig;
+  label: string;
+  hint: string;
+  // What "auto" reacts to for this candidate.
+  auto: string;
+  defaultMode: string;
+}> = [
   {
     key: 'candidate_parent_full',
     label: 'Parent (full)',
     hint: 'The normal build: head block and its revealed payload.',
+    auto: 'builds unless the head block’s payload is known to be withheld.',
+    defaultMode: 'always',
   },
   {
     key: 'candidate_parent_empty',
     label: 'Parent (empty payload)',
     hint: 'Head block, but on the payload it built upon — the Gloas payload-miss case.',
+    auto: 'builds until the head block’s payload is confirmed revealed.',
+    defaultMode: 'auto',
   },
   {
     key: 'candidate_grandparent_full',
     label: 'Grandparent (reorg)',
     hint: 'Head block’s parent: the proposer reorgs the head block out.',
+    auto: 'builds while the head block’s vote participation is below the weak head threshold.',
+    defaultMode: 'auto',
   },
   {
     key: 'candidate_grandparent_empty',
     label: 'Grandparent (empty payload)',
     hint: 'Reorg combined with a withheld grandparent payload (rare).',
+    auto: 'builds while the head is weak and the grandparent’s payload is not confirmed revealed.',
+    defaultMode: 'never',
   },
 ];
+
+// candidateHint explains one candidate's setting and each of its modes.
+const candidateHint = (candidate: (typeof CANDIDATES)[number]) => (
+  <>
+    {candidate.hint} Setting <code>build.{candidate.key}</code>, default{' '}
+    <strong>{candidate.defaultMode}</strong>; per-slot action plans can override it.
+    <dl>
+      <dt>auto</dt>
+      <dd>Follows chain signals: {candidate.auto}</dd>
+      <dt>always</dt>
+      <dd>Builds every scheduled slot.</dd>
+      <dt>never</dt>
+      <dd>Never builds this candidate.</dd>
+    </dl>
+  </>
+);
+
+const HINT_WEAK_HEAD = (
+  <>
+    Head-vote participation in percent below which the head block counts as contested
+    (<code>build.auto_weak_head_pct</code>), arming the grandparent (reorg) candidates set to auto.
+    0 = off: auto reorg candidates never build.
+  </>
+);
+
+const HINT_PARALLEL = (
+  <>
+    How the slot&apos;s candidate builds run against the EL (<code>build.parallel</code>).
+    <dl>
+      <dt>parallel</dt>
+      <dd>All selected candidates build concurrently, each with its own payload ID and the full payload build delay.</dd>
+      <dt>sequential</dt>
+      <dd>One after another, canonical (parent full) first so it keeps its scheduled start; speculative ones follow.</dd>
+    </dl>
+  </>
+);
+
+const HINT_SPECULATIVE_TIME = (
+  <>
+    EL build time in ms for the speculative candidates (everything but parent full) when builds
+    run sequentially (<code>build.speculative_build_time_ms</code>). Ignored for parallel builds.
+    0 = same as the payload build delay.
+  </>
+);
+
+const HINT_ENFORCE_GAS_LIMIT = (
+  <>
+    Gloas only (<code>build.enforce_bid_gas_limit</code>): when the EL ignored the proposer&apos;s
+    target gas limit, rewrites the built payload&apos;s gas limit to the exact value the bid gossip
+    rules require (EL parent gas limit stepped toward the target) and recomputes the block hash.
+    Skipped when the payload&apos;s gas used would not fit.
+  </>
+);
 
 const MODE_LABELS: Record<string, string> = {
   auto: 'auto (chain signals)',
@@ -142,10 +211,13 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
 
       {!editing ? (
             <div className="row g-2">
-              {CANDIDATES.map((candidate) => (
+              {CANDIDATES.map((candidate, i) => (
                 <div className="col-6" key={candidate.key}>
                   <div className="config-item">
-                    <div className="config-item-label">{candidate.label}</div>
+                    <div className="config-item-label">
+                      {candidate.label}{' '}
+                      <InfoHint alignEnd={i % 2 === 1}>{candidateHint(candidate)}</InfoHint>
+                    </div>
                     <div className="config-item-value">
                       {MODE_SHORT[(build?.[candidate.key] as string) ?? ''] ??
                         (build?.[candidate.key] as string) ?? '—'}
@@ -155,7 +227,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               ))}
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Weak Head Below</div>
+                  <div className="config-item-label">Weak Head Below <InfoHint>{HINT_WEAK_HEAD}</InfoHint></div>
                   <div className="config-item-value">
                     {build?.auto_weak_head_pct ? `${build.auto_weak_head_pct}%` : 'off'}
                   </div>
@@ -163,7 +235,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Engine Builds</div>
+                  <div className="config-item-label">Engine Builds <InfoHint alignEnd>{HINT_PARALLEL}</InfoHint></div>
                   <div className="config-item-value">
                     {build?.parallel ? 'parallel' : 'sequential'}
                   </div>
@@ -171,7 +243,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Speculative Time</div>
+                  <div className="config-item-label">Speculative Time <InfoHint>{HINT_SPECULATIVE_TIME}</InfoHint></div>
                   <div className="config-item-value">
                     {build?.speculative_build_time_ms
                       ? `${build.speculative_build_time_ms} ms`
@@ -181,7 +253,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Enforce Bid Gas Limit</div>
+                  <div className="config-item-label">Enforce Bid Gas Limit <InfoHint alignEnd>{HINT_ENFORCE_GAS_LIMIT}</InfoHint></div>
                   <div className="config-item-value">
                     {build?.enforce_bid_gas_limit ? 'on' : 'off'}
                   </div>
@@ -192,7 +264,9 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
             <form onSubmit={handleSave}>
               {CANDIDATES.map((candidate) => (
                 <div className="mb-2" key={candidate.key}>
-                  <label className="form-label">{candidate.label}</label>
+                  <label className="form-label">
+                    {candidate.label} <InfoHint>{candidateHint(candidate)}</InfoHint>
+                  </label>
                   <select
                     className="form-select form-select-sm"
                     value={(form[candidate.key] as string) ?? 'auto'}
@@ -207,7 +281,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               ))}
 
               <div className="mb-2">
-                <label className="form-label">Weak Head Threshold (%)</label>
+                <label className="form-label">Weak Head Threshold (%) <InfoHint>{HINT_WEAK_HEAD}</InfoHint></label>
                 <input
                   type="number"
                   min={0}
@@ -227,7 +301,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
               </div>
 
               <div className="mb-2">
-                <label className="form-label">Speculative Build Time (ms)</label>
+                <label className="form-label">Speculative Build Time (ms) <InfoHint>{HINT_SPECULATIVE_TIME}</InfoHint></label>
                 <input
                   type="number"
                   min={0}
@@ -257,6 +331,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
                 <label className="form-check-label" htmlFor="build-parallel">
                   Build candidates in parallel
                 </label>
+                <InfoHint>{HINT_PARALLEL}</InfoHint>
                 <div className="form-text">
                   Builds every selected candidate concurrently, each with its
                   own payload ID, so they all complete within the designated
@@ -275,6 +350,7 @@ export const CandidatePolicySection: React.FC<CandidatePolicySectionProps> = ({ 
                 <label className="form-check-label" htmlFor="build-enforce-gas-limit">
                   Enforce bid gas limit
                 </label>
+                <InfoHint>{HINT_ENFORCE_GAS_LIMIT}</InfoHint>
                 <div className="form-text">
                   Rewrites the built payload&apos;s gas limit to the exact value
                   the bid gossip rules require when the EL ignored the

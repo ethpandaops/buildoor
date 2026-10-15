@@ -59,6 +59,12 @@ const (
 	KeyTxPoolMaxStrikes      = "txpool.max_strikes"
 	KeyTxPoolBaseFeeCeiling  = "txpool.base_fee_ceiling_gwei"
 	KeyTxPoolForwardToEL     = "txpool.forward_to_el"
+	KeyTxPoolAuth            = "txpool.auth"
+	KeyTxPoolRPCAnonRate     = "txpool.rpc_anon_rate"
+	KeyTxPoolRPCAnonScope    = "txpool.rpc_anon_scope"
+	KeyTxPoolRPCKeyRate      = "txpool.rpc_key_rate"
+	KeyTxPoolRPCProxyHops    = "txpool.rpc_proxy_hops"
+	KeyTxPoolRPCUpstreams    = "txpool.rpc_upstreams"
 
 	KeyPayloadBuildTime              = "payload_build_time"
 	KeyExtraData                     = "extra_data"

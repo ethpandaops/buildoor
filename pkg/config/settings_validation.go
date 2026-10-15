@@ -76,7 +76,7 @@ func ValidateSetting(key string, v any) error {
 	case KeyLocalBuildPayloadSource:
 		source, _ := v.(string)
 		if NormalizedPayloadSource(source, "") == "" {
-			return fmt.Errorf("%s must be el, local or local_or_el, got %q", key, source)
+			return fmt.Errorf("%s must be el, local, local_or_el or higher_value, got %q", key, source)
 		}
 
 	case KeyLocalBuildTxSource:
@@ -84,13 +84,30 @@ func ValidateSetting(key string, v any) error {
 		source, _ := v.(string)
 		if normalized := NormalizedTxSource(source, ""); normalized == "" ||
 			normalized == TxSourceExplicit || normalized == TxSourceQueued {
-			return fmt.Errorf("%s must be txpool, empty or el_mempool, got %q", key, source)
+			return fmt.Errorf("%s must be txpool, txpool_el_fill, empty or el_mempool, got %q", key, source)
 		}
 
 	case KeyTxPoolOrdering:
 		ordering, _ := v.(string)
 		if NormalizedTxOrdering(ordering, "") == "" {
 			return fmt.Errorf("%s must be fifo, tip, random or round_robin, got %q", key, ordering)
+		}
+
+	case KeyTxPoolAuth:
+		return requireOneOf(key, v, TxPoolAuthOpen, TxPoolAuthAPIKey)
+
+	case KeyTxPoolRPCAnonScope:
+		return requireOneOf(key, v, RPCAnonScopePerIP, RPCAnonScopeShared)
+
+	case KeyTxPoolRPCProxyHops:
+		if hops, _ := v.(uint64); hops > 16 {
+			return fmt.Errorf("%s must be at most 16, got %d", key, hops)
+		}
+
+	case KeyTxPoolRPCUpstreams:
+		spec, _ := v.(string)
+		if _, err := ParseRPCUpstreams(spec); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
 		}
 
 	case KeyTxPoolGasFillPct:

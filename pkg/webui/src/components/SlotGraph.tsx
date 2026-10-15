@@ -403,6 +403,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   }, []);
 
   // Calculate marker positions
+  const pctMinus25X = calculatePosition(-slotDuration * 0.25, rangeStart, totalRange);
   const slotStartX = calculatePosition(0, rangeStart, totalRange);
   const pct25X = calculatePosition(slotDuration * 0.25, rangeStart, totalRange);
   const pct50X = calculatePosition(slotDuration * 0.50, rangeStart, totalRange);
@@ -493,6 +494,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
       <div className="slot-graph-area">
         <div className="slot-graph-bg">
           {/* Slot markers */}
+          <div className="slot-marker pct-marker" style={{ left: `${pctMinus25X}%` }}>
+            <span className="marker-label">-25%</span>
+          </div>
           <div className="slot-marker slot-start-marker" style={{ left: `${slotStartX}%` }}>
             <span className="marker-label">0%</span>
           </div>
@@ -712,6 +716,60 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
 
+          {/* Custom build, live: from its start until the final local_build event (which
+              waits for the engine build and the bid choice) takes over below. */}
+          {(() => {
+            const live = state.localBuildLive;
+            if (!live || state.localBuild || genesisTime <= 0 || !epbsConfig) return null;
+
+            const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
+            if (startX >= 100) return null;
+
+            const items = [
+              { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
+              ...(live.phase === 'building'
+                ? [{ label: 'Status', value: 'building…' }]
+                : [
+                    {
+                      label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
+                      value: `${live.at - slotStartTime}ms`
+                    },
+                    { label: 'Duration', value: `${live.at - live.started_at}ms` },
+                    { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
+                  ]),
+              ...(live.error ? [{ label: 'Error', value: live.error }] : []),
+              { label: 'Tx Source', value: live.tx_source || '—' },
+              ...(live.phase === 'ready'
+                ? [
+                    { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
+                    { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
+                    { label: 'Bids With', value: 'decided once the engine build finishes' }
+                  ]
+                : [])
+            ];
+            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const dotClass = live.phase === 'ready'
+              ? 'local-build-created'
+              : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+
+            return (
+              <>
+                {live.phase !== 'skipped' && (
+                  <BuildDelayLine
+                    leftPct={startX}
+                    slotStartTime={slotStartTime}
+                    rangeStart={rangeStart}
+                    totalRange={totalRange}
+                    endAt={live.phase === 'building' ? undefined : live.at}
+                    className="local-build-line"
+                    onClick={(e) => showPopover(e, data)}
+                  />
+                )}
+                {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, 'local-build')}
+              </>
+            );
+          })()}
+
           {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
               line. Shown when it ran next to an engine build (two distinct builds) or when it
               did not produce a payload; a local-only build is already the primary line. */}
@@ -733,7 +791,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
               { label: 'Tx Source', value: lb.tx_source || '—' },
               { label: 'Payload Source', value: lb.payload_source || '—' },
-              { label: 'Bids With', value: lb.selected ? 'custom block' : lb.fallback ? 'engine block (fallback)' : 'engine block (custom is compare-only)' },
+              { label: 'Bids With', value: lb.selected
+                ? (lb.payload_source === 'higher_value' ? 'custom block (worth more)' : 'custom block')
+                : lb.fallback ? 'engine block (fallback)'
+                  : lb.payload_source === 'higher_value' ? 'engine block (worth at least as much)'
+                    : 'engine block (custom is compare-only)' },
               ...(lb.local ? [
                 { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
                 { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },
@@ -742,10 +804,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ] : []),
               ...(lb.info?.selection ? [
                 { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
+                ...(lb.info.selection.fill_candidates
+                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
+                  : []),
                 ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
                   ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
                   : [])
               ] : []),
+              ...(lb.info?.fill_error ? [{ label: 'EL Mempool', value: `unreadable: ${lb.info.fill_error}` }] : []),
               ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
               ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
               ...(lb.el ? [

@@ -136,6 +136,12 @@ func Fields() []Field {
 		newField(KeyTxPoolMaxStrikes, "txpool-max-strikes", func(c *Config) *uint64 { return &c.TxPool.MaxStrikes }),
 		newField(KeyTxPoolBaseFeeCeiling, "txpool-base-fee-ceiling-gwei", func(c *Config) *uint64 { return &c.TxPool.BaseFeeCeilingGwei }),
 		newField(KeyTxPoolForwardToEL, "txpool-forward-to-el", func(c *Config) *bool { return &c.TxPool.ForwardToEL }),
+		newField(KeyTxPoolAuth, "txpool-auth", func(c *Config) *string { return &c.TxPool.Auth }),
+		newField(KeyTxPoolRPCAnonRate, "txpool-rpc-anon-rate", func(c *Config) *uint64 { return &c.TxPool.RPCAnonRate }),
+		newField(KeyTxPoolRPCAnonScope, "txpool-rpc-anon-scope", func(c *Config) *string { return &c.TxPool.RPCAnonScope }),
+		newField(KeyTxPoolRPCKeyRate, "txpool-rpc-key-rate", func(c *Config) *uint64 { return &c.TxPool.RPCKeyRate }),
+		newField(KeyTxPoolRPCProxyHops, "txpool-rpc-proxy-hops", func(c *Config) *uint64 { return &c.TxPool.RPCProxyHops }),
+		newField(KeyTxPoolRPCUpstreams, "txpool-rpc-upstreams", func(c *Config) *string { return &c.TxPool.RPCUpstreams }),
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
