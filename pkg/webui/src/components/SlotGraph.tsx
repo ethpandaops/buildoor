@@ -389,13 +389,8 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   if (!epbsActive && !builderApiActive) rowIdx++; // empty second row
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
-  // Slot label
-  let slotLabel = `Slot ${slot}`;
-  if (slot === currentDisplaySlot) {
-    slotLabel += ' (now)';
-  } else if (slot === currentDisplaySlot + 1) {
-    slotLabel += ' (next)';
-  }
+  // The now/next tag goes on its own line: the label column is too narrow for both.
+  const slotTag = slot === currentDisplaySlot ? 'now' : slot === currentDisplaySlot + 1 ? 'next' : null;
 
   const showPopover = useCallback((e: React.MouseEvent, data: PopoverData,
     extra?: Omit<PopoverState, 'data' | 'x' | 'y'>) => {
@@ -494,7 +489,10 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   return (
     <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
       <div className="slot-graph-label">
-        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>{slotLabel}</span>
+        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>
+          <span className="slot-graph-slot-number">Slot {slot}</span>
+          {slotTag && <span className="slot-graph-slot-tag">{slotTag}</span>}
+        </span>
         {epbsActive && epbsRowBottom >= 0 && (
           <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
         )}
