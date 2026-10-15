@@ -352,6 +352,8 @@ type HeadVotesStreamEvent struct {
 	ParticipationETH uint64  `json:"participation_eth"`
 	TotalSlotETH     uint64  `json:"total_slot_eth"`
 	VoteCount        int     `json:"vote_count"`
+	Estimated        bool    `json:"estimated"`
+	SampledPct       float64 `json:"sampled_pct"`
 	ThresholdPct     float64 `json:"threshold_pct"`
 	ThresholdMet     bool    `json:"threshold_met"`
 	Timestamp        int64   `json:"timestamp"`
@@ -406,13 +408,18 @@ type BlockDetailPayload struct {
 }
 
 // VoteCoverageStreamEvent reports how many next-block attesters were seen as
-// raw single attestations beforehand. `low` marks the vote graph unreliable
-// (beacon node likely running without subscribe-all-subnets).
+// raw single attestations beforehand, overall and within the sampled
+// committees. `estimated` marks participation as extrapolated from sampled
+// subnets; `low` marks the vote graph unreliable.
 type VoteCoverageStreamEvent struct {
-	Slots     int     `json:"slots"`
-	Attesters int     `json:"attesters"`
-	SeenPct   float64 `json:"seen_pct"`
-	Low       bool    `json:"low"`
+	Slots            int     `json:"slots"`
+	Attesters        int     `json:"attesters"`
+	SeenPct          float64 `json:"seen_pct"`
+	SampledAttesters int     `json:"sampled_attesters"`
+	SampledPct       float64 `json:"sampled_pct"`
+	SampledSeenPct   float64 `json:"sampled_seen_pct"`
+	Estimated        bool    `json:"estimated"`
+	Low              bool    `json:"low"`
 }
 
 // BidWonStreamEvent is sent when a bid is won (block successfully delivered).
@@ -1461,10 +1468,14 @@ func (m *EventStreamManager) handleBlockDetail(block *eth2all.SignedBeaconBlock)
 // voteCoverageEvent converts a tracker coverage summary to the wire shape.
 func voteCoverageEvent(cov *chain.SubnetCoverage) VoteCoverageStreamEvent {
 	return VoteCoverageStreamEvent{
-		Slots:     cov.Slots,
-		Attesters: cov.Attesters,
-		SeenPct:   cov.SeenPct,
-		Low:       cov.Low,
+		Slots:            cov.Slots,
+		Attesters:        cov.Attesters,
+		SeenPct:          cov.SeenPct,
+		SampledAttesters: cov.SampledAttesters,
+		SampledPct:       cov.SampledPct,
+		SampledSeenPct:   cov.SampledSeenPct,
+		Estimated:        cov.Estimated,
+		Low:              cov.Low,
 	}
 }
 
@@ -1479,6 +1490,8 @@ func (m *EventStreamManager) handleHeadVoteUpdate(event *chain.HeadVoteUpdate) {
 			ParticipationETH: event.ParticipationETH,
 			TotalSlotETH:     event.TotalSlotETH,
 			VoteCount:        event.VoteCount,
+			Estimated:        event.Estimated,
+			SampledPct:       event.SampledPct,
 			ThresholdPct:     event.ThresholdPct,
 			ThresholdMet:     event.ThresholdMet,
 			Timestamp:        event.Timestamp,
@@ -1574,12 +1587,17 @@ func (m *EventStreamManager) sendBuilderInfo() {
 func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 	info := BuilderInfoEvent{}
 
-	// Get builder identity, balance, and pending payments
-	if m.epbsSvc != nil {
-		pubkey := m.epbsSvc.GetBuilderPubkey()
+	// Builder identity, balance, and pending payments come from the key
+	// registry, which exists before Gloas is scheduled (the p2p bidder does not).
+	if registry := m.keyRegistry(); registry != nil {
+		primary := registry.Primary()
+		pubkey := primary.Pubkey()
 		info.BuilderPubkey = pubkey.String()
-		info.BuilderIndex = m.epbsSvc.GetBuilderIndex()
-		info.IsRegistered = m.epbsSvc.IsRegistered()
+		info.BuilderIndex, _ = primary.BuilderIndex()
+
+		if m.epbsSvc != nil {
+			info.IsRegistered = m.epbsSvc.IsRegistered()
+		}
 
 		// Get balance and pending payments from chain state
 		if m.chainSvc != nil {
@@ -1593,7 +1611,7 @@ func (m *EventStreamManager) getBuilderInfo() BuilderInfoEvent {
 
 		// Apply local balance adjustment (topups + revealed bid deductions since last state refresh)
 		if m.payments != nil {
-			adjustment := m.payments.GetBalanceAdjustment(m.epbsSvc.Registry().Primary().KeyIndex())
+			adjustment := m.payments.GetBalanceAdjustment(primary.KeyIndex())
 			adjusted := int64(info.CLBalance) + adjustment
 			if adjusted < 0 {
 				adjusted = 0
@@ -1785,7 +1803,7 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	if !send(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      m.builderSvc.GetConfig(),
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	}) {
 		return
 	}
@@ -2074,11 +2092,10 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 
 // BroadcastConfigUpdate broadcasts a config update event.
 func (m *EventStreamManager) BroadcastConfigUpdate() {
-	cfg := m.builderSvc.GetConfig()
 	m.Broadcast(&StreamEvent{
 		Type:      EventTypeConfig,
 		Timestamp: time.Now().UnixMilli(),
-		Data:      cfg,
+		Data:      configToMap(m.builderSvc.GetConfig()),
 	})
 }
 

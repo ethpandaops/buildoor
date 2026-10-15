@@ -571,12 +571,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             : null;
           const lineStroke = metOffset !== null ? `url(#hvline-${slot})` : '#00bcd4';
 
+          const estimatePrefix = maxVote.estimated ? '~' : '';
           const popoverItems = [
-            { label: 'Max Participation', value: `${maxVote.pct.toFixed(1)}%` },
-            { label: 'Participating ETH', value: `${maxVote.eth.toLocaleString()} ETH` }
+            { label: 'Max Participation', value: `${estimatePrefix}${maxVote.pct.toFixed(1)}%` },
+            { label: 'Participating ETH', value: `${estimatePrefix}${maxVote.eth.toLocaleString()} ETH` }
           ];
           if (maxVote.voteCount !== undefined) {
             popoverItems.push({ label: 'Votes', value: maxVote.voteCount.toLocaleString() });
+          }
+          if (maxVote.estimated && maxVote.sampledPct !== undefined) {
+            popoverItems.push({
+              label: 'Estimated from',
+              value: `${maxVote.sampledPct.toFixed(0)}% sampled subnets`
+            });
           }
           if (thresholdPct > 0) {
             popoverItems.push({ label: 'Threshold', value: `${thresholdPct.toFixed(0)}%` });

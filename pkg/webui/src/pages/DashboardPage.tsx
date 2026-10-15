@@ -95,18 +95,42 @@ const DashboardPage: React.FC = () => {
                       </span>
                       Only {voteCoverage.seen_pct.toFixed(0)}% of the attesters that landed
                       on chain were seen as raw single attestations (last{' '}
-                      {voteCoverage.slots} blocks). The beacon node is likely running
-                      without subscribe-all-subnets, so live vote tracking undercounts
-                      participation: the head-vote graph has been hidden, and{' '}
+                      {voteCoverage.slots} blocks)
+                      {voteCoverage.sampled_attesters > 0 && (
+                        <>
+                          , and only {voteCoverage.sampled_seen_pct.toFixed(0)}% within the
+                          subnets the beacon node delivers
+                        </>
+                      )}
+                      . Too few votes are seen to estimate participation: the head-vote
+                      graph has been hidden, and{' '}
                       <strong>vote-threshold-gated payload reveals are unreliable</strong>{' '}
                       — the reveal vote gate opens late or never (payloads may be
                       withheld at slot end). Use a time-based reveal gate or fix the
                       subnet subscription.
                       <br />
-                      Enable it via <code>--subscribe-all-subnets</code>{' '}
+                      Subscribe to all subnets via <code>--subscribe-all-subnets</code>{' '}
                       (Lighthouse/Prysm/Nimbus/Grandine),{' '}
                       <code>--p2p-subscribe-all-subnets-enabled</code> (Teku) or{' '}
                       <code>--subscribeAllSubnets</code> (Lodestar).
+                    </span>
+                  </span>
+                )}
+                {voteCoverage && voteCoverage.estimated && !voteCoverage.low && (
+                  <span className="badge bg-info text-dark coverage-warning">
+                    <i className="fas fa-chart-pie me-1"></i>
+                    Estimated votes
+                    <span className="coverage-callout">
+                      <span className="coverage-callout-title">
+                        Head votes estimated from sampled subnets
+                      </span>
+                      The beacon node only delivers single attestations for some subnets
+                      ({voteCoverage.seen_pct.toFixed(0)}% of the attesters that landed on
+                      chain were seen, last {voteCoverage.slots} blocks). Participation is
+                      extrapolated from the committees on those subnets, which hold{' '}
+                      {voteCoverage.sampled_pct.toFixed(0)}% of the attesters and whose
+                      votes were seen at {voteCoverage.sampled_seen_pct.toFixed(0)}%. The
+                      head-vote graph and vote-gated payload reveals use this estimate.
                     </span>
                   </span>
                 )}
@@ -151,7 +175,7 @@ const DashboardPage: React.FC = () => {
           <ConfigPanel config={config} serviceStatus={serviceStatus} />
 
           {/* Builder API */}
-          <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} loading={builderAPIStatusLoading} />
+          <BuilderAPIConfigPanel status={builderAPIStatus} serviceStatus={serviceStatus} config={config} loading={builderAPIStatusLoading} />
 
           {/* Payload Reveal (shared by both flows) */}
           <RevealConfigPanel config={config} />

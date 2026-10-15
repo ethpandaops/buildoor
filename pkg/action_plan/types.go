@@ -240,8 +240,8 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	}
 
 	if p.ServeCandidates != nil {
-		if err := validateServeCandidates(*p.ServeCandidates); err != nil {
-			return err
+		if err := config.ValidateServeCandidates(*p.ServeCandidates); err != nil {
+			return fmt.Errorf("builder_api: %w", err)
 		}
 	}
 
@@ -249,24 +249,6 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 		if strategy := *p.KeyStrategy; strategy != builder_keys.NormalizedStrategy(strategy) {
 			return fmt.Errorf(
 				"builder_api: key_strategy must be round_robin, single, random or least_used, got %q", strategy)
-		}
-	}
-
-	return nil
-}
-
-// validateServeCandidates checks a serve-candidates policy string: all,
-// canonical_only, or a comma-separated list of candidate keys.
-func validateServeCandidates(policy string) error {
-	switch policy {
-	case "all", "canonical_only":
-		return nil
-	}
-
-	for _, key := range strings.Split(policy, ",") {
-		if !chain.IsValidCandidateKey(strings.TrimSpace(key)) {
-			return fmt.Errorf("builder_api: serve_candidates must be all, canonical_only "+
-				"or a comma-separated candidate key list, got %q", policy)
 		}
 	}
 

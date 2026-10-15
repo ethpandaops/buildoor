@@ -52,6 +52,7 @@ const (
 	KeyBuilderAPIServeCandidates     = "builder_api.serve_candidates"
 	KeyBuilderAPIOnDemandBuild       = "builder_api.on_demand_build"
 	KeyBuilderAPIKeyStrategy         = "builder_api.key_strategy"
+	KeyBuilderAPIRequireRequestAuth  = "builder_api.require_request_auth"
 
 	KeySlotResultRetentionEpochs   = "slot_result_retention_epochs"
 	KeySlotArtifactRetentionEpochs = "slot_artifact_retention_epochs"
@@ -59,7 +60,7 @@ const (
 
 	KeyDepositAmount  = "deposit_amount"
 	KeyTopupThreshold = "topup_threshold"
-	KeyTopupAmount    = "topup_amount"
+	KeyDepositMaxFee  = "deposit_max_fee"
 
 	KeyBuilderKeysTargetCount = "builder_keys.target_count"
 	KeyBuilderKeysMaxIndex    = "builder_keys.max_index"
