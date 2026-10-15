@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
+	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -197,6 +199,53 @@ func (c *Client) ClientVersion(ctx context.Context) (string, error) {
 	}
 
 	return version, nil
+}
+
+// PendingPoolTransactions returns the executable transactions of the EL's own
+// mempool (txpool_content "pending"), each sender's in nonce order. The
+// queued (nonce-gapped) part is left out. Blob transactions come without
+// their sidecars.
+func (c *Client) PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error) {
+	var content struct {
+		Pending map[common.Address]map[string]*types.Transaction `json:"pending"`
+	}
+
+	if err := c.rpcClient.CallContext(ctx, &content, "txpool_content"); err != nil {
+		return nil, fmt.Errorf("failed to read the EL mempool: %w", err)
+	}
+
+	senders := make([]common.Address, 0, len(content.Pending))
+	for sender := range content.Pending {
+		senders = append(senders, sender)
+	}
+
+	sort.Slice(senders, func(i, j int) bool { return senders[i].Cmp(senders[j]) < 0 })
+
+	txs := make([]*types.Transaction, 0, len(content.Pending))
+
+	for _, sender := range senders {
+		byNonce := content.Pending[sender]
+
+		nonces := make([]uint64, 0, len(byNonce))
+		for key := range byNonce {
+			nonce, err := strconv.ParseUint(key, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("EL mempool: invalid nonce key %q of %s", key, sender.Hex())
+			}
+
+			nonces = append(nonces, nonce)
+		}
+
+		sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })
+
+		for _, nonce := range nonces {
+			if tx := byNonce[strconv.FormatUint(nonce, 10)]; tx != nil {
+				txs = append(txs, tx)
+			}
+		}
+	}
+
+	return txs, nil
 }
 
 // SendRawTransaction submits an already-encoded transaction to the EL mempool.

@@ -1,6 +1,32 @@
 import React, { useState, useEffect } from 'react';
 import { useSettings } from '../hooks/useSettings';
+import { InfoHint } from './InfoHint';
 import type { Config } from '../types';
+
+// Setting explanations shared by the view rows and the edit form.
+const HINT_RESULT_RETENTION = (
+  <>
+    Epochs of per-slot history kept before pruning (<code>slot_result_retention_epochs</code>):
+    slot results (build, bids, reveals, inclusion, Bids Won) and past action plans, in memory and
+    in the state-db. Pruned on epoch transitions; future plans are never pruned. Must be at least 1.
+  </>
+);
+
+const HINT_ARTIFACT_RETENTION = (
+  <>
+    Epochs of raw SSZ artifacts (built payloads, signed bids, envelopes) kept in the state-db
+    (<code>slot_artifact_retention_epochs</code>). Raw payloads dominate disk usage. Without{' '}
+    <code>--state-db</code> only the newest 64 slots are kept in memory regardless. Must be at
+    least 1.
+  </>
+);
+
+const HINT_ARTIFACT_CAPTURE = (
+  <>
+    Whether raw SSZ artifacts are captured per slot (<code>slot_artifact_capture_enabled</code>).
+    Off = no artifact downloads for new slots; slot result summaries are recorded either way.
+  </>
+);
 
 interface HistorySettingsSectionProps {
   config: Config | null;
@@ -63,7 +89,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
         <div className="row g-2">
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Result Retention</div>
+              <div className="config-item-label">Result Retention <InfoHint>{HINT_RESULT_RETENTION}</InfoHint></div>
               <div className="config-item-value">
                 {config?.slot_result_retention_epochs ?? 0} epochs
               </div>
@@ -71,7 +97,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Artifact Retention</div>
+              <div className="config-item-label">Artifact Retention <InfoHint alignEnd>{HINT_ARTIFACT_RETENTION}</InfoHint></div>
               <div className="config-item-value">
                 {config?.slot_artifact_retention_epochs ?? 0} epochs
               </div>
@@ -79,7 +105,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
           </div>
           <div className="col-6">
             <div className="config-item">
-              <div className="config-item-label">Artifact Capture</div>
+              <div className="config-item-label">Artifact Capture <InfoHint>{HINT_ARTIFACT_CAPTURE}</InfoHint></div>
               <div className="config-item-value">
                 {config?.slot_artifact_capture_enabled ? 'on' : 'off'}
               </div>
@@ -89,7 +115,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
       ) : (
         <form onSubmit={handleSave}>
           <div className="mb-2">
-            <label className="form-label">Result Retention (epochs)</label>
+            <label className="form-label">Result Retention (epochs) <InfoHint>{HINT_RESULT_RETENTION}</InfoHint></label>
             <input
               type="number"
               min={1}
@@ -105,7 +131,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
             </div>
           </div>
           <div className="mb-2">
-            <label className="form-label">Artifact Retention (epochs)</label>
+            <label className="form-label">Artifact Retention (epochs) <InfoHint>{HINT_ARTIFACT_RETENTION}</InfoHint></label>
             <input
               type="number"
               min={1}
@@ -132,6 +158,7 @@ export const HistorySettingsSection: React.FC<HistorySettingsSectionProps> = ({ 
             <label className="form-check-label" htmlFor="slot-artifact-capture-enabled">
               Capture raw SSZ artifacts
             </label>
+            <InfoHint>{HINT_ARTIFACT_CAPTURE}</InfoHint>
             <div className="form-text">
               Slot results are recorded either way; this only controls the raw objects.
             </div>

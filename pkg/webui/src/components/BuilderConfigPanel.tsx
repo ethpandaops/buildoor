@@ -3,7 +3,73 @@ import { useAuthContext } from '../context/AuthContext';
 import { CandidatePolicySection } from './CandidatePolicySection';
 import { HistorySettingsSection } from './HistorySettingsSection';
 import { useSettings } from '../hooks/useSettings';
+import { InfoHint } from './InfoHint';
 import type { Config, ScheduleConfig } from '../types';
+
+// Setting explanations shared by the view rows and the edit forms.
+const HINT_BUILD_START = (
+  <>
+    When the slot&apos;s payload build starts, in ms relative to the proposal slot&apos;s start
+    (<code>epbs.build_start_time</code>); negative = before the slot starts. Applies to p2p bids
+    and the Builder API alike. Startup default: -3400 ms at 12 s slots, scaled to the slot time.
+    If no payload attributes arrived by then, the previous slot&apos;s are re-used (missing-block
+    fallback).
+  </>
+);
+
+const HINT_BUILD_DELAY = (
+  <>
+    Time in ms the EL gets to fill the block between the build trigger (forkchoiceUpdated) and
+    fetching it (getPayload) (<code>payload_build_time</code>). Too short returns a near-empty
+    payload. Startup default: 2600 ms at 12 s slots, scaled to the slot time.
+  </>
+);
+
+const HINT_EXTRA_DATA = (
+  <>
+    Prefix written into every built block&apos;s extra-data field (<code>extra_data</code>), followed
+    by <code>/</code> and the EL&apos;s own extra data, truncated to 32 bytes. Marks blocks built by
+    this instance. Empty = keep the EL&apos;s extra data unchanged.
+  </>
+);
+
+const HINT_SCHEDULE_MODE = (
+  <>
+    Which slots the builder builds for (<code>schedule.mode</code>). Slots before the start slot
+    are always skipped; a per-slot action plan that activates bidding or Builder API serving builds
+    regardless.
+    <dl>
+      <dt>all</dt>
+      <dd>Build every slot.</dd>
+      <dt>every_nth</dt>
+      <dd>Build only every Nth slot, counted from the start slot (or slot 0).</dd>
+      <dt>next_n</dt>
+      <dd>Build the next N slots, then stop. The count restarts whenever any setting is saved while this mode is active.</dd>
+    </dl>
+  </>
+);
+
+const HINT_EVERY_NTH = (
+  <>
+    Slot step for <em>every_nth</em> mode (<code>schedule.every_nth</code>): builds slots where
+    (slot - start slot) is a multiple of N. 1 = every slot. Ignored in other modes.
+  </>
+);
+
+const HINT_NEXT_N = (
+  <>
+    Build budget for <em>next_n</em> mode (<code>schedule.next_n</code>): the number of slots to
+    build before stopping. 0 = build nothing. Plan-forced builds do not consume it. Ignored in
+    other modes.
+  </>
+);
+
+const HINT_START_SLOT = (
+  <>
+    First slot the schedule may build for (<code>schedule.start_slot</code>); earlier slots are
+    skipped in every mode. Also the origin for <em>every_nth</em> counting. 0 = no lower bound.
+  </>
+);
 
 interface BuilderConfigPanelProps {
   config: Config | null;
@@ -124,19 +190,19 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
             <div className="row g-2 mb-3">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Build Start</div>
+                  <div className="config-item-label">Build Start <InfoHint>{HINT_BUILD_START}</InfoHint></div>
                   <div className="config-item-value">{config?.epbs?.build_start_time || 0} ms</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Payload Build Delay</div>
+                  <div className="config-item-label">Payload Build Delay <InfoHint alignEnd>{HINT_BUILD_DELAY}</InfoHint></div>
                   <div className="config-item-value">{payloadBuildDelay} ms</div>
                 </div>
               </div>
               <div className="col-12">
                 <div className="config-item">
-                  <div className="config-item-label">Extra Data</div>
+                  <div className="config-item-label">Extra Data <InfoHint>{HINT_EXTRA_DATA}</InfoHint></div>
                   <div className="config-item-value">{config?.extra_data || '—'}</div>
                 </div>
               </div>
@@ -144,7 +210,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
           ) : (
             <form onSubmit={handleSave} className="mb-3">
               <div className="mb-2">
-                <label className="form-label">Build Start Time (ms)</label>
+                <label className="form-label">Build Start Time (ms) <InfoHint>{HINT_BUILD_START}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -154,7 +220,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Payload Build Delay (ms)</label>
+                <label className="form-label">Payload Build Delay (ms) <InfoHint>{HINT_BUILD_DELAY}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -164,7 +230,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Extra Data</label>
+                <label className="form-label">Extra Data <InfoHint>{HINT_EXTRA_DATA}</InfoHint></label>
                 <input
                   type="text"
                   className="form-control form-control-sm"
@@ -204,25 +270,25 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
             <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Mode</div>
+                  <div className="config-item-label">Mode <InfoHint>{HINT_SCHEDULE_MODE}</InfoHint></div>
                   <div className="config-item-value">{schedule?.mode || 'all'}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Every Nth</div>
+                  <div className="config-item-label">Every Nth <InfoHint alignEnd>{HINT_EVERY_NTH}</InfoHint></div>
                   <div className="config-item-value">{schedule?.every_nth || 1}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Next N</div>
+                  <div className="config-item-label">Next N <InfoHint>{HINT_NEXT_N}</InfoHint></div>
                   <div className="config-item-value">{schedule?.next_n || 0}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Start Slot</div>
+                  <div className="config-item-label">Start Slot <InfoHint alignEnd>{HINT_START_SLOT}</InfoHint></div>
                   <div className="config-item-value">{schedule?.start_slot || 0}</div>
                 </div>
               </div>
@@ -230,7 +296,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
           ) : (
             <form onSubmit={handleScheduleSave}>
               <div className="mb-2">
-                <label className="form-label">Mode</label>
+                <label className="form-label">Mode <InfoHint>{HINT_SCHEDULE_MODE}</InfoHint></label>
                 <select
                   className="form-select form-select-sm"
                   value={scheduleForm.mode}
@@ -243,7 +309,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                 </select>
               </div>
               <div className="mb-2">
-                <label className="form-label">Every Nth</label>
+                <label className="form-label">Every Nth <InfoHint>{HINT_EVERY_NTH}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -253,7 +319,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Next N</label>
+                <label className="form-label">Next N <InfoHint>{HINT_NEXT_N}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -263,7 +329,7 @@ export const BuilderConfigPanel: React.FC<BuilderConfigPanelProps> = ({ config }
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Start Slot</label>
+                <label className="form-label">Start Slot <InfoHint>{HINT_START_SLOT}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"

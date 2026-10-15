@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import type { Config, RevealConfig } from '../types';
+import { InfoHint } from './InfoHint';
 
 interface RevealConfigPanelProps {
   config: Config | null;
@@ -32,6 +33,73 @@ const BROADCAST_VALIDATION_SHORT: Record<string, string> = {
   consensus: 'consensus',
   consensus_and_equivocation: 'cons. + equiv.',
 };
+
+// Setting explanations, shared by the view rows and the edit form.
+const HINT_GATE_MODE = (
+  <>
+    <code>reveal.gate_mode</code>: when a won payload&apos;s envelope is published.
+    <dl>
+      <dt>time</dt>
+      <dd>at the reveal time</dd>
+      <dt>vote</dt>
+      <dd>as soon as head-vote participation on the committing block reaches the vote threshold</dd>
+      <dt>vote_or_time</dt>
+      <dd>whichever of the two opens first (default)</dd>
+      <dt>vote_and_time</dt>
+      <dd>only once both are open</dd>
+    </dl>
+    A vote gate still unsatisfied at slot end withholds the reveal (<code>vote_gate_timeout</code>).
+    Per-slot action plans can override it.
+  </>
+);
+const HINT_REVEAL_TIME = (
+  <>
+    <code>reveal.time_ms</code>: the time gate, in ms after slot start. Unused in <code>vote</code>{' '}
+    mode. Auto default (CLI value 0): 5000 ms at 12 s slots, scaled to the slot time (2500 ms at
+    6 s); the Gloas payload deadline is 50% of the slot. Per-slot action plans can override it.
+  </>
+);
+const HINT_VOTE_THRESHOLD = (
+  <>
+    <code>reveal.vote_threshold_pct</code>: head-vote participation (% of the slot&apos;s attesting
+    balance voting for the committing block, counted from single attestations) that opens the vote
+    gate. Default 60 = the Gloas builder payment quorum. Unused in <code>time</code> mode; low
+    subnet coverage undercounts votes and delays the gate.
+  </>
+);
+const HINT_BROADCAST_VALIDATION = (
+  <>
+    <code>reveal.broadcast_validation</code>: the validation level the beacon node applies to the
+    envelope before broadcasting it.
+    <dl>
+      <dt>gossip</dt>
+      <dd>gossip-level checks only</dd>
+      <dt>consensus</dt>
+      <dd>full consensus validation</dd>
+      <dt>consensus + equivocation</dt>
+      <dd>consensus validation plus an equivocating-block check, the builder&apos;s protection
+        against unbundling (default)</dd>
+    </dl>
+  </>
+);
+const HINT_MAX_ATTEMPTS = (
+  <>
+    <code>reveal.max_attempts</code>: total publish attempts per reveal (at least 1) before the
+    reveal gives up.
+  </>
+);
+const HINT_RETRY_INTERVAL = (
+  <>
+    <code>reveal.retry_interval_ms</code>: wait in ms between failed publish attempts.
+  </>
+);
+const HINT_REBIND = (
+  <>
+    <code>reveal.rebind_on_reorg</code>: when the block a reveal was scheduled for is reorged out
+    and our payload is re-included under a different block root, rebuild and re-sign the envelope
+    for the new root (payload unchanged). Off = only the original block is revealed for.
+  </>
+);
 
 // RevealConfigPanel is the standalone payload-reveal settings card: the
 // reveal serves both flows (p2p bidder and Builder API), so its settings
@@ -152,7 +220,14 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
             </div>
           )}
           <div className="d-flex justify-content-between align-items-center mb-2">
-            <div className="section-header">Reveal Settings</div>
+            <div className="section-header">
+              Reveal Settings
+              <InfoHint>
+                Payload reveals serve both the p2p bidder and the Builder API. The header button
+                toggles <code>reveal.enabled</code>: disabled withholds every won payload, except
+                slots whose action plan sets the reveal to custom (those force their reveal).
+              </InfoHint>
+            </div>
             {isLoggedIn && !editing && (
               <button className="btn btn-sm btn-outline-primary" onClick={() => setEditing(true)}>
                 <i className="fas fa-pencil-alt"></i>
@@ -164,13 +239,13 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
             <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Gate</div>
+                  <div className="config-item-label">Gate<InfoHint>{HINT_GATE_MODE}</InfoHint></div>
                   <div className="config-item-value">{GATE_MODE_SHORT[gateMode] ?? gateMode}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Reveal Time</div>
+                  <div className="config-item-label">Reveal Time<InfoHint alignEnd>{HINT_REVEAL_TIME}</InfoHint></div>
                   <div className="config-item-value">
                     {timeGated ? `${reveal?.time_ms ?? 0} ms` : '—'}
                   </div>
@@ -178,7 +253,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Vote Threshold</div>
+                  <div className="config-item-label">Vote Threshold<InfoHint>{HINT_VOTE_THRESHOLD}</InfoHint></div>
                   <div className="config-item-value">
                     {voteGated ? `${reveal?.vote_threshold_pct ?? 0}%` : '—'}
                   </div>
@@ -186,7 +261,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Broadcast Valid.</div>
+                  <div className="config-item-label">Broadcast Valid.<InfoHint alignEnd>{HINT_BROADCAST_VALIDATION}</InfoHint></div>
                   <div className="config-item-value">
                     {BROADCAST_VALIDATION_SHORT[reveal?.broadcast_validation ?? 'gossip'] ??
                       reveal?.broadcast_validation}
@@ -195,19 +270,19 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Max Attempts</div>
+                  <div className="config-item-label">Max Attempts<InfoHint>{HINT_MAX_ATTEMPTS}</InfoHint></div>
                   <div className="config-item-value">{reveal?.max_attempts ?? 0}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Retry Interval</div>
+                  <div className="config-item-label">Retry Interval<InfoHint alignEnd>{HINT_RETRY_INTERVAL}</InfoHint></div>
                   <div className="config-item-value">{reveal?.retry_interval_ms ?? 0} ms</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Rebind on Reorg</div>
+                  <div className="config-item-label">Rebind on Reorg<InfoHint>{HINT_REBIND}</InfoHint></div>
                   <div className="config-item-value">{reveal?.rebind_on_reorg ? 'on' : 'off'}</div>
                 </div>
               </div>
@@ -215,7 +290,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
           ) : (
             <form onSubmit={handleSave}>
               <div className="mb-2">
-                <label className="form-label">Gate Mode</label>
+                <label className="form-label">Gate Mode<InfoHint>{HINT_GATE_MODE}</InfoHint></label>
                 <select
                   className="form-select form-select-sm"
                   value={form.gate_mode}
@@ -232,7 +307,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 </div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Reveal Time (ms into slot)</label>
+                <label className="form-label">Reveal Time (ms into slot)<InfoHint>{HINT_REVEAL_TIME}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -243,7 +318,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Vote Threshold (%)</label>
+                <label className="form-label">Vote Threshold (%)<InfoHint>{HINT_VOTE_THRESHOLD}</InfoHint></label>
                 <input
                   type="number"
                   min={0}
@@ -260,7 +335,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 </div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Broadcast Validation</label>
+                <label className="form-label">Broadcast Validation<InfoHint>{HINT_BROADCAST_VALIDATION}</InfoHint></label>
                 <select
                   className="form-select form-select-sm"
                   value={form.broadcast_validation}
@@ -277,7 +352,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 </div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Max Attempts</label>
+                <label className="form-label">Max Attempts<InfoHint>{HINT_MAX_ATTEMPTS}</InfoHint></label>
                 <input
                   type="number"
                   min={1}
@@ -288,7 +363,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Retry Interval (ms)</label>
+                <label className="form-label">Retry Interval (ms)<InfoHint>{HINT_RETRY_INTERVAL}</InfoHint></label>
                 <input
                   type="number"
                   min={0}
@@ -308,6 +383,7 @@ export const RevealConfigPanel: React.FC<RevealConfigPanelProps> = ({ config }) 
                 />
                 <label className="form-check-label" htmlFor="reveal-rebind-on-reorg">
                   Rebind on reorg
+                  <InfoHint>{HINT_REBIND}</InfoHint>
                 </label>
                 <div className="form-text">
                   When the block a reveal was scheduled for is reorged out and

@@ -220,10 +220,10 @@ npm run clean
    corrected, missing parent numbers backfilled) and synthesized for uncovered
    candidates (empty-parent withdrawals from the parent slot's attributes;
    grandparent candidates re-target the parent slot's attributes, refused
-   across epoch boundaries). Sequential builds run speculative candidates
-   first, canonical last (`build.parallel` opts into concurrent engine
-   builds). Consumers select at request time: p2p bids per
-   `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
+   across epoch boundaries). Candidate builds run concurrently by default
+   (`build.parallel`); sequential builds run the canonical candidate first
+   (it keeps its scheduled start), speculative ones after. Consumers select
+   at request time: p2p bids per `epbs.bid_candidate` (auto = match chain view, sticky per slot unless
    `epbs.bid_candidate_switch`; `all` = deliberate multi-parent gossip),
    builder-api serves whichever candidate matches the requested parent
    (`builder_api.serve_candidates` policy, optional
@@ -256,7 +256,12 @@ npm run clean
      build fails), `local_or_el` (fallback, recorded), `higher_value` (both
      built, the higher EL-reported block value wins; engine on a tie, the
      surviving one when a build fails). Tx source:
-     `txpool` | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
+     pending txs from `txpool_content` fill the remaining gas — same
+     parent-state checks, each sender continuing at the nonce/balance the pool
+     left, highest tip first, pool duplicates and blob txs skipped; a refusal
+     retries once without the fill, an unreadable EL mempool builds from the
+     pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
      (flagged `inclusion_list_dropped`). Consumers still receive exactly one
@@ -691,7 +696,7 @@ Key config sections:
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
 - **Local build / tx pool**: `--local-build-enabled`, `--local-build-payload-source`
-  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | empty |
+  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` + `--txpool-auth-token` (startup-only), `--txpool-ordering`, `--txpool-block-max-txs`,

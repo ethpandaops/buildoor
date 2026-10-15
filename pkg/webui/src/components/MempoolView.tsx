@@ -405,6 +405,11 @@ export const MempoolView: React.FC = () => {
                   onChange={(e) => toggle(e.target.checked)}
                 />
                 <label className="form-check-label small" htmlFor="mempool-enabled">accept transactions</label>
+                <InfoHint alignEnd>
+                  <code>txpool.enabled</code>: on, <code>/rpc</code> admits transactions into this
+                  mempool and serves the read passthrough; off, every <code>/rpc</code> call is refused
+                  and the custom build skips the buildoor mempool sources.
+                </InfoHint>
               </div>
             )}
             {isLoggedIn && (

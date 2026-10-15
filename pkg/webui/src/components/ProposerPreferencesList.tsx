@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { ProposerPreference } from '../types';
 import { Pagination } from './Pagination';
+import { InfoHint } from './InfoHint';
 
 interface ProposerPreferencesListProps {
   preferences: ProposerPreference[];
@@ -82,7 +83,15 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
   return (
     <div className="card mb-3">
       <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">Proposer Preferences</h5>
+        <h5 className="mb-0">
+          Proposer Preferences
+          <InfoHint>
+            Gloas proposer preferences received from the gossip stream, first one per slot. They
+            set the fee recipient and gas limit target of the payloads buildoor builds for that
+            slot, and the p2p bidder only bids for slots with a cached preference (unless an action
+            plan ignores missing preferences).
+          </InfoHint>
+        </h5>
         <span className="badge bg-primary">{preferences.length}</span>
       </div>
       <div className="card-body p-2">
@@ -104,11 +113,23 @@ export const ProposerPreferencesList: React.FC<ProposerPreferencesListProps> = (
               <table className="table table-sm table-borderless mb-0">
                 <thead className="sticky-top" style={{ background: 'var(--bs-body-bg)' }}>
                   <tr>
-                    <th className="small">Slot</th>
+                    <th className="small">
+                      Slot
+                      <InfoHint>The proposal slot the preference applies to.</InfoHint>
+                    </th>
                     <th className="small">Validator Index</th>
-                    <th className="small">Client</th>
+                    <th className="small">
+                      Client
+                      <InfoHint>Client name of the validator, from the validator-ranges mapping (— = unknown).</InfoHint>
+                    </th>
                     <th className="small">Fee Recipient</th>
-                    <th className="small text-end">Gas Limit</th>
+                    <th className="small text-end">
+                      Gas Limit
+                      <InfoHint alignEnd>
+                        The proposer&apos;s target gas limit. The bid&apos;s gas limit is the parent
+                        gas limit stepped toward this target (within the per-block adjustment bound).
+                      </InfoHint>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>

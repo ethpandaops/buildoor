@@ -22,9 +22,25 @@ const PAYLOAD_SOURCES: Array<{ value: string; label: string; hint: string }> = [
 
 const TX_SOURCES: Array<{ value: string; label: string; hint: string }> = [
   { value: 'txpool', label: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
+  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions are left out). If the EL refuses the list, the build retries once without the EL part." },
   { value: 'el_mempool', label: 'EL mempool', hint: "The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths)." },
   { value: 'empty', label: 'None (empty block)', hint: 'No transactions at all.' },
 ];
+
+const optionList = (options: Array<{ value: string; label: string; hint: string }>) => (
+  <dl>
+    {options.map((o) => (
+      <React.Fragment key={o.value}>
+        <dt>{o.label}</dt>
+        <dd>{o.hint}</dd>
+      </React.Fragment>
+    ))}
+  </dl>
+);
+
+const HINT_KEEP_ENGINE = 'Only matters when bidding with the custom block alone: keep building the engine block next to it for comparison. The other choices always build it.';
+const HINT_BLOBS = 'Some ELs (reth, ethrex) return no blobs bundle from testing_buildBlockV1, so the blob sidecars of a custom block are unknown. Off skips blob transactions on those ELs; on includes them anyway.';
+const HINT_MAX_ATTEMPTS = 'For the buildoor mempool sources: when the EL refuses the list, the offending transactions are dropped (and get a strike in the pool) and the build retries, up to this many calls. Exact lists from action plans never retry.';
 
 const optionLabel = (options: Array<{ value: string; label: string }>, value: string | undefined, fallback: string) =>
   options.find((o) => o.value === (value || fallback))?.label ?? value ?? fallback;
@@ -177,7 +193,9 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
           <div className="row g-2 mb-3">
             <div className="col-6">
               <div className="config-item">
-                <div className="config-item-label">EL</div>
+                <div className="config-item-label">
+                  EL<InfoHint>The EL client behind <code>--el-rpc</code> (from <code>web3_clientVersion</code>) and whether its testing namespace answered the last probe.</InfoHint>
+                </div>
                 <div className="config-item-value">
                   {availability?.el_code || '—'}{' '}
                   {availability?.configured && (
@@ -190,7 +208,15 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
             </div>
             <div className="col-6">
               <div className="config-item">
-                <div className="config-item-label">Blob txs</div>
+                <div className="config-item-label">
+                  Blob txs
+                  <InfoHint alignEnd>
+                    How blob transactions are handed to this EL: <strong>network</strong> carries the
+                    sidecar (geth, besu, nethermind), <strong>canonical</strong> strips it (reth, ethrex).
+                    <em>no bundle</em>: the EL returns no blobs bundle, so blob transactions are skipped
+                    unless allowed below. Set at startup by <code>--local-build-blob-encoding</code>.
+                  </InfoHint>
+                </div>
                 <div className="config-item-value">
                   {availability?.configured
                     ? `${availability.blob_encoding}${availability.blob_bundle ? '' : ', no bundle'}`
@@ -266,19 +292,30 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
               <div className="row g-2 mb-3">
                 <div className="col-4">
                   <div className="config-item">
-                    <div className="config-item-label">Checked</div>
+                    <div className="config-item-label">
+                      Checked<InfoHint>Included custom blocks built from a transaction list that were re-read from the EL and compared with the list.</InfoHint>
+                    </div>
                     <div className="config-item-value">{status.plan_checks.checked}</div>
                   </div>
                 </div>
                 <div className="col-4">
                   <div className="config-item">
-                    <div className="config-item-label">Match</div>
+                    <div className="config-item-label">
+                      Match<InfoHint>The block on chain holds exactly the submitted transactions, in order.</InfoHint>
+                    </div>
                     <div className="config-item-value text-success">{status.plan_checks.match}</div>
                   </div>
                 </div>
                 <div className="col-4">
                   <div className="config-item">
-                    <div className="config-item-label">Failed</div>
+                    <div className="config-item-label">
+                      Failed
+                      <InfoHint alignEnd>
+                        Mismatch (different transactions or order), block not found on the EL, payload
+                        missed (never revealed) or orphaned (reorged out). Each logs{' '}
+                        <code>TX PLAN CHECK FAILED</code>.
+                      </InfoHint>
+                    </div>
                     <div className={`config-item-value ${
                       status.plan_checks.mismatch + status.plan_checks.block_not_found + status.plan_checks.missed + status.plan_checks.orphaned > 0
                         ? 'text-danger' : ''}`}>
@@ -308,31 +345,51 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
             <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid with</div>
+                  <div className="config-item-label">
+                    Bid with
+                    <InfoHint>
+                      Which block feeds bids, Builder API headers and the reveal
+                      (<code>local_build.payload_source</code>).
+                      {optionList(PAYLOAD_SOURCES)}
+                    </InfoHint>
+                  </div>
                   <div className="config-item-value">{optionLabel(PAYLOAD_SOURCES, localCfg?.payload_source, 'el')}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Custom block txs</div>
+                  <div className="config-item-label">
+                    Custom block txs
+                    <InfoHint alignEnd>
+                      Where the custom block&apos;s transactions come from
+                      (<code>local_build.tx_source</code>).
+                      {optionList(TX_SOURCES)}
+                    </InfoHint>
+                  </div>
                   <div className="config-item-value">{optionLabel(TX_SOURCES, localCfg?.tx_source, 'txpool')}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Keep engine build</div>
+                  <div className="config-item-label">
+                    Keep engine build<InfoHint>{HINT_KEEP_ENGINE}</InfoHint>
+                  </div>
                   <div className="config-item-value">{localCfg?.build_el_payload ? 'yes' : 'no'}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Blobs w/o bundle</div>
+                  <div className="config-item-label">
+                    Blobs w/o bundle<InfoHint alignEnd>{HINT_BLOBS}</InfoHint>
+                  </div>
                   <div className="config-item-value">{localCfg?.allow_blobs_without_bundle ? 'allowed' : 'skipped'}</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Max attempts</div>
+                  <div className="config-item-label">
+                    Max attempts<InfoHint>{HINT_MAX_ATTEMPTS}</InfoHint>
+                  </div>
                   <div className="config-item-value">{localCfg?.max_attempts ?? '—'}</div>
                 </div>
               </div>
@@ -371,9 +428,9 @@ export const LocalBuildPanel: React.FC<LocalBuildPanelProps> = ({ config, servic
                   Custom block transactions
                   <InfoHint>
                     Where the custom block&apos;s transactions come from
-                    (<code>local_build.tx_source</code>). One source per block: the two mempools are
-                    not combined. The engine block always uses the EL mempool. Per-slot action plans
-                    can also hand an exact list (<em>explicit</em>, <em>queued</em>).
+                    (<code>local_build.tx_source</code>). The engine block always uses the EL
+                    mempool. Per-slot action plans can also hand an exact list (<em>explicit</em>,
+                    <em>queued</em>).
                     <dl>
                       {TX_SOURCES.map((o) => (
                         <React.Fragment key={o.value}>

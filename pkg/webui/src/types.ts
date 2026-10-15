@@ -72,7 +72,7 @@ export interface BuildConfig {
 export interface LocalBuildConfig {
   enabled: boolean;
   payload_source: string; // el | local | local_or_el | higher_value
-  tx_source: string; // txpool | empty | el_mempool
+  tx_source: string; // txpool | txpool_el_fill | empty | el_mempool
   build_el_payload: boolean;
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
@@ -194,6 +194,11 @@ export interface TxSelectionSummary {
   ceiling_applied?: boolean;
   bytes?: number;
   hashes?: string[];
+  // EL mempool fill (tx source txpool_el_fill).
+  fill_candidates?: number;
+  fill_selected?: number;
+  fill_gas_sum?: number;
+  fill_skipped?: Record<string, number>;
 }
 
 export interface TxPoolPreviewResponse {
@@ -217,6 +222,9 @@ export interface LocalBuildInfo {
   attempts?: number;
   dropped?: { hash: string; reason: string }[];
   built_at?: string;
+  fill_txs?: number;
+  fill_error?: string;
+  fill_dropped?: boolean;
 }
 
 // SSE local_build event (slot-scoped): one build target's local outcome.

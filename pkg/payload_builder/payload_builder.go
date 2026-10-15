@@ -596,13 +596,29 @@ func (b *PayloadBuilder) buildLocal(
 	case config.TxSourceELMempool:
 		txs = nil
 
-	default: // txpool
+	default: // txpool, txpool_el_fill
 		if b.txPool == nil {
 			return localOutcome{skipReason: LocalSkipTxPoolUnavailable}
 		}
 
 		if !b.txPool.Enabled() {
 			return localOutcome{skipReason: LocalSkipTxPoolDisabled}
+		}
+
+		// The fill is best effort: without the EL mempool the block is built
+		// from the pool alone and the reason recorded.
+		var fill []*types.Transaction
+
+		if req.TxSource == config.TxSourceTxPoolELFill {
+			pending, err := b.localClient.PendingPoolTransactions(ctx)
+			if err != nil {
+				info.FillError = err.Error()
+
+				b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+					Warn("Cannot read the EL mempool, building the custom block from the pool alone")
+			}
+
+			fill = pending
 		}
 
 		selection, err := b.txPool.Select(ctx, &txpool.SelectParams{
@@ -617,10 +633,13 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
+			Fill:           fill,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("pool selection failed: %w", err)}
 		}
+
+		info.FillTxs = len(selection.Fill)
 
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
@@ -660,7 +679,7 @@ func (b *PayloadBuilder) buildLocal(
 	// refusal fails them, since dropping would build a block that is not the
 	// plan.
 	maxAttempts := max(req.MaxAttempts, 1)
-	if req.TxSource != config.TxSourceTxPool {
+	if req.TxSource != config.TxSourceTxPool && req.TxSource != config.TxSourceTxPoolELFill {
 		maxAttempts = 1
 	}
 
@@ -675,6 +694,20 @@ func (b *PayloadBuilder) buildLocal(
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
 		if err == nil || ctx.Err() != nil {
 			break
+		}
+
+		if info.FillTxs > 0 && !info.FillDropped {
+			// The EL mempool fill sits at the end of the list; a refusal is
+			// retried without it before anything of the pool's is dropped.
+			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
+				Warn("EL refused the transaction list, retrying without the EL mempool fill")
+
+			txs = txs[:len(txs)-info.FillTxs]
+			info.FillDropped = true
+			info.SubmittedTxs = len(txs)
+			info.ExpectedHashes = txHashes(txs)
+
+			continue
 		}
 
 		if info.InclusionListTxs > 0 && !info.InclusionListDropped && txs != nil {

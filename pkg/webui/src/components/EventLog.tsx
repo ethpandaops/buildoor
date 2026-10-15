@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo, useEffect, useLayoutEffect } from 're
 import type { LogEvent } from '../types';
 import { getEventTypeClass, getEventCategory, formatEventTime, EVENT_CATEGORIES } from '../utils';
 import { CopyableHash } from './CopyableHash';
+import { InfoHint } from './InfoHint';
 
 const SCROLLBACK_KEY = 'buildoor.eventlog.scrollback';
 const DEFAULT_SCROLLBACK = 1000;
@@ -384,7 +385,13 @@ export const EventLog: React.FC<EventLogProps> = ({ events, onClear, height }) =
                 </div>
 
                 <div className="mb-2">
-                  <label className="form-label small text-secondary mb-1">Scrollback limit</label>
+                  <label className="form-label small text-secondary mb-1">
+                    Scrollback limit
+                    <InfoHint>
+                      Maximum number of matching log rows shown (10–{MAX_SCROLLBACK}). Remembered
+                      in this browser; the text and type filters reset on reload.
+                    </InfoHint>
+                  </label>
                   <input
                     type="number"
                     className="form-control form-control-sm"

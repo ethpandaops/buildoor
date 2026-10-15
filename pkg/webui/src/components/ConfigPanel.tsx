@@ -2,7 +2,80 @@ import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext';
 import { KeySelectionSection } from './KeySelectionSection';
 import { useSettings } from '../hooks/useSettings';
+import { InfoHint } from './InfoHint';
 import type { Config, EPBSConfig, ServiceStatus } from '../types';
+
+// Setting explanations shared by the view rows and the edit form.
+const HINT_ENABLED = (
+  <>
+    Global switch for p2p bidding via gossip (<code>epbs_enabled</code>). Bidding also needs the
+    Gloas fork and at least one active builder key. Per-slot action plans override it either way:
+    a <em>custom</em> bid plan bids even while this is off, a <em>disabled</em> one suppresses a
+    slot while it is on.
+  </>
+);
+
+const HINT_BID_START = (
+  <>
+    Opening of the bid window in ms relative to the proposal slot&apos;s start
+    (<code>epbs.bid_start_time</code>). Negative = before the slot starts. Startup default:
+    -400 ms at 12 s slots, scaled to the slot time. Per-slot action plans can override the window.
+  </>
+);
+
+const HINT_BID_END = (
+  <>
+    Close of the bid window in ms relative to the proposal slot&apos;s start
+    (<code>epbs.bid_end_time</code>, exclusive). Bidding also stops as soon as the slot&apos;s
+    block is seen. Startup default: -100 ms at 12 s slots, scaled to the slot time.
+  </>
+);
+
+const HINT_BID_MIN = (
+  <>
+    Floor for the bid base in gwei (<code>epbs.bid_min_amount</code>): the first bid is
+    max(block value, bid min) + subsidy. Ignored while a bid value override is set.
+  </>
+);
+
+const HINT_BID_INCREASE = (
+  <>
+    Gwei added per re-bid of the same payload (<code>epbs.bid_increase</code>): the n-th bid is
+    the base + (n-1) &times; increase. Also applies on top of a bid value override.
+  </>
+);
+
+const HINT_BID_INTERVAL = (
+  <>
+    Minimum ms between two bids on the same payload inside the bid window
+    (<code>epbs.bid_interval</code>). 0 = bid each payload only once. Each re-bid needs a key that
+    has not bid this slot yet (see Key Selection).
+  </>
+);
+
+const HINT_BID_SUBSIDY = (
+  <>
+    Flat gwei added to every bid (<code>epbs.bid_subsidy</code>) so it clears the proposer&apos;s
+    local-EL threshold; otherwise the beacon node self-builds when its local block is worth more.
+    0 = bid the real block value. Ignored while a bid value override is set.
+  </>
+);
+
+const HINT_BID_VALUE_OVERRIDE = (
+  <>
+    Absolute bid base in gwei (<code>epbs.bid_value_override</code>) replacing max(block value,
+    bid min) + subsidy, so it can underbid the block value. Bid increase still applies per re-bid.
+    0 = off. A per-slot plan value wins over it.
+  </>
+);
+
+const HINT_VOTE_MARKER = (
+  <>
+    Head-vote participation in percent marked as reached in the slot graph
+    (<code>epbs.head_vote_threshold_pct</code>). Default 60 = the Gloas builder payment quorum.
+    Display only: the reveal vote gate uses its own threshold under Payload Reveal. 0 = off.
+  </>
+);
 
 interface ConfigPanelProps {
   config: Config | null;
@@ -103,6 +176,9 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
         ) : (
           <span className="badge bg-secondary">Inactive</span>
         )}
+        <span className="ms-1" onClick={(e) => e.stopPropagation()}>
+          <InfoHint>{HINT_ENABLED}</InfoHint>
+        </span>
         {canEdit && (
           <button
             className={`btn btn-sm ms-auto ${isActive ? 'btn-outline-danger' : 'btn-outline-success'}`}
@@ -152,43 +228,43 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
             <div className="row g-2">
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Start</div>
+                  <div className="config-item-label">Bid Start <InfoHint>{HINT_BID_START}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_start_time || 0} ms</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid End</div>
+                  <div className="config-item-label">Bid End <InfoHint alignEnd>{HINT_BID_END}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_end_time || 0} ms</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Min</div>
+                  <div className="config-item-label">Bid Min <InfoHint>{HINT_BID_MIN}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_min_amount || 0} gwei</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Increase</div>
+                  <div className="config-item-label">Bid Increase <InfoHint alignEnd>{HINT_BID_INCREASE}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_increase || 0} gwei</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Interval</div>
+                  <div className="config-item-label">Bid Interval <InfoHint>{HINT_BID_INTERVAL}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_interval || 0} ms</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Subsidy</div>
+                  <div className="config-item-label">Bid Subsidy <InfoHint alignEnd>{HINT_BID_SUBSIDY}</InfoHint></div>
                   <div className="config-item-value">{epbs?.bid_subsidy || 0} gwei</div>
                 </div>
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Bid Value Override</div>
+                  <div className="config-item-label">Bid Value Override <InfoHint>{HINT_BID_VALUE_OVERRIDE}</InfoHint></div>
                   <div className="config-item-value">
                     {epbs?.bid_value_override ? `${epbs.bid_value_override} gwei` : 'off'}
                   </div>
@@ -196,7 +272,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
               </div>
               <div className="col-6">
                 <div className="config-item">
-                  <div className="config-item-label">Vote Marker</div>
+                  <div className="config-item-label">Vote Marker <InfoHint alignEnd>{HINT_VOTE_MARKER}</InfoHint></div>
                   <div className="config-item-value">
                     {epbs?.head_vote_threshold_pct ? `${epbs.head_vote_threshold_pct}%` : 'off'}
                   </div>
@@ -206,7 +282,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
           ) : (
             <form onSubmit={handleTimingSave}>
               <div className="mb-2">
-                <label className="form-label">Bid Start Time (ms)</label>
+                <label className="form-label">Bid Start Time (ms) <InfoHint>{HINT_BID_START}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -216,7 +292,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid End Time (ms)</label>
+                <label className="form-label">Bid End Time (ms) <InfoHint>{HINT_BID_END}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -226,7 +302,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid Min Amount (gwei)</label>
+                <label className="form-label">Bid Min Amount (gwei) <InfoHint>{HINT_BID_MIN}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -236,7 +312,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid Increase (gwei)</label>
+                <label className="form-label">Bid Increase (gwei) <InfoHint>{HINT_BID_INCREASE}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -246,7 +322,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid Interval (ms)</label>
+                <label className="form-label">Bid Interval (ms) <InfoHint>{HINT_BID_INTERVAL}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -256,7 +332,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 />
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid Subsidy (gwei)</label>
+                <label className="form-label">Bid Subsidy (gwei) <InfoHint>{HINT_BID_SUBSIDY}</InfoHint></label>
                 <input
                   type="number"
                   className="form-control form-control-sm"
@@ -270,7 +346,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 </div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Bid Value Override (gwei)</label>
+                <label className="form-label">Bid Value Override (gwei) <InfoHint>{HINT_BID_VALUE_OVERRIDE}</InfoHint></label>
                 <input
                   type="number"
                   min={0}
@@ -286,7 +362,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, serviceStatus 
                 </div>
               </div>
               <div className="mb-2">
-                <label className="form-label">Vote Marker Threshold (%)</label>
+                <label className="form-label">Vote Marker Threshold (%) <InfoHint>{HINT_VOTE_MARKER}</InfoHint></label>
                 <input
                   type="number"
                   min={0}

@@ -525,6 +525,12 @@ const (
 	// TxSourceELMempool lets the EL fill the block from its own mempool
 	// through the testing path (transactions: null).
 	TxSourceELMempool = "el_mempool"
+	// TxSourceTxPoolELFill selects from the owned pool first, then fills the
+	// remaining gas with the EL mempool's pending transactions (read through
+	// txpool_content, checked against the parent state like pool
+	// transactions; blob transactions are left out, their sidecars are not
+	// exposed).
+	TxSourceTxPoolELFill = "txpool_el_fill"
 	// TxSourceExplicit uses the exact transaction list of the slot's action
 	// plan; only reachable through a plan, never as a global default.
 	TxSourceExplicit = "explicit"
@@ -539,7 +545,7 @@ const (
 // normalize, but it is meaningless as a global setting.
 func NormalizedTxSource(source, fallback string) string {
 	switch source {
-	case TxSourceTxPool, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
+	case TxSourceTxPool, TxSourceTxPoolELFill, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
 		return source
 	default:
 		return fallback
@@ -586,8 +592,8 @@ type LocalBuildConfig struct {
 	PayloadSource string `yaml:"payload_source" json:"payload_source"`
 
 	// TxSource is where the local build's transaction list comes from:
-	// txpool (default), empty or el_mempool. Per-slot plans may also supply
-	// an explicit list.
+	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
+	// may also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
 
 	// BuildELPayload keeps the engine-API build running when PayloadSource is

@@ -138,10 +138,16 @@ func TestSelectPayload(t *testing.T) {
 // minimal payload echoing the submitted transactions (or fails the first N
 // calls with failErr, "nonce too low" by default).
 type fakeLocalClient struct {
-	calls    [][][]byte
-	failNext int
-	failErr  error
-	dropLast bool
+	calls      [][][]byte
+	failNext   int
+	failErr    error
+	dropLast   bool
+	pending    []*types.Transaction // the EL mempool (txpool_content pending)
+	pendingErr error
+}
+
+func (f *fakeLocalClient) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
+	return f.pending, f.pendingErr
 }
 
 func (f *fakeLocalClient) BuildBlockV1(_ context.Context, v enginev.DataVersion, parent common.Hash,
@@ -513,4 +519,83 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 			require.Equal(t, tc.wantReq, req != nil)
 		})
 	}
+}
+
+// TestBuildLocalELFill appends the EL mempool's pending transactions after the
+// pool selection and retries without them when the EL refuses the list.
+func TestBuildLocalELFill(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TxPool.Enabled = true
+
+	pool := txpool.NewPool(cfg, &fakePoolEL{}, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
+	require.NoError(t, pool.Start(context.Background()))
+
+	t.Cleanup(func() { _ = pool.Stop() })
+
+	sign := func(nonce uint64) *types.Transaction {
+		key, err := crypto.GenerateKey()
+		require.NoError(t, err)
+
+		tx, err := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(1)), &types.DynamicFeeTx{
+			ChainID: big.NewInt(1), Nonce: nonce, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 21000,
+		})
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	own := sign(0)
+	raw, err := own.MarshalBinary()
+	require.NoError(t, err)
+
+	_, err = pool.Add(raw)
+	require.NoError(t, err)
+
+	elTx := sign(0)
+
+	req := &LocalBuildRequest{
+		TxSource:    config.TxSourceTxPoolELFill,
+		MaxAttempts: 3,
+		Ordering:    config.TxOrderingFIFO,
+		GasFillPct:  100,
+	}
+
+	t.Run("pool first, then the EL mempool", func(t *testing.T) {
+		client := &fakeLocalClient{pending: []*types.Transaction{own, elTx}}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Len(t, client.calls, 1)
+		require.Equal(t, []string{own.Hash().Hex(), elTx.Hash().Hex()}, out.info.ExpectedHashes,
+			"the pool transaction first, the EL's own copy of it skipped, the EL transaction after")
+		require.Equal(t, 1, out.info.FillTxs)
+		require.Equal(t, 1, out.info.Selection.FillSkipped[txpool.SkipDuplicate])
+	})
+
+	t.Run("refusal retries without the fill", func(t *testing.T) {
+		client := &fakeLocalClient{pending: []*types.Transaction{elTx}, failNext: 1, failErr: errors.New("invalid transaction")}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Len(t, client.calls, 2)
+		require.Len(t, client.calls[0], 2)
+		require.Len(t, client.calls[1], 1, "the retry carries the pool transaction only")
+		require.True(t, out.info.FillDropped)
+		require.Equal(t, []string{own.Hash().Hex()}, out.info.ExpectedHashes)
+	})
+
+	t.Run("unreadable EL mempool builds from the pool alone", func(t *testing.T) {
+		client := &fakeLocalClient{pendingErr: errors.New("method not found")}
+		b, attrs, prelude := newLocalTestBuilder(client)
+		b.txPool = pool
+
+		out := b.buildLocal(context.Background(), attrs, prelude, req)
+		require.NoError(t, out.err)
+		require.Contains(t, out.info.FillError, "method not found")
+		require.Equal(t, []string{own.Hash().Hex()}, out.info.ExpectedHashes)
+	})
 }

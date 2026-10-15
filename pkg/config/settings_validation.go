@@ -84,7 +84,7 @@ func ValidateSetting(key string, v any) error {
 		source, _ := v.(string)
 		if normalized := NormalizedTxSource(source, ""); normalized == "" ||
 			normalized == TxSourceExplicit || normalized == TxSourceQueued {
-			return fmt.Errorf("%s must be txpool, empty or el_mempool, got %q", key, source)
+			return fmt.Errorf("%s must be txpool, txpool_el_fill, empty or el_mempool, got %q", key, source)
 		}
 
 	case KeyTxPoolOrdering:

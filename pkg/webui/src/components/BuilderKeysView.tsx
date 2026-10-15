@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { BuilderKeysTable } from './BuilderKeysTable';
+import { InfoHint } from './InfoHint';
 import { useBuilderKeyActions, useBuilderKeys } from '../hooks/useBuilderKeys';
 import { useSettings } from '../hooks/useSettings';
 import type { BuilderKeysAggregate } from '../types';
@@ -106,6 +107,21 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
         <span className="badge bg-success">{aggregate.active} active</span>
         <span className="badge bg-secondary">{aggregate.managed} managed</span>
         <span className="badge bg-info">target {settings.target_count}</span>
+        <InfoHint>
+          <dl>
+            <dt>active</dt>
+            <dd>registered on chain with a finalized deposit and not exiting: may bid</dd>
+            <dt>managed</dt>
+            <dd>keys counting toward the target: depositing, pending or active (exiting and exited
+              keys never bid again and are replaced)</dd>
+            <dt>target</dt>
+            <dd><code>builder_keys.target_count</code>: keys the lifecycle manager keeps registered
+              and funded (at least 1, at most max key index + 1). Key 0 is the entry key; key n is
+              derived from it. Raising it deposits new keys (auto-deposit), lowering it exits the
+              highest-index surplus keys (auto-exit, irreversible).</dd>
+          </dl>
+          Deposits, exits and top-ups only run with the lifecycle manager (<code>--lifecycle</code>).
+        </InfoHint>
         {aggregate.depositing > 0 && (
           <span className="badge bg-warning text-dark">
             <i className="fas fa-spinner fa-spin me-1"></i>
@@ -116,7 +132,14 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
         {!settings.auto_exit && <span className="badge bg-dark">auto-exit off</span>}
 
         <div className="ms-auto d-flex align-items-center gap-2">
-          <span className="text-muted small">Total effective:</span>
+          <span className="text-muted small">
+            Total effective:
+            <InfoHint alignEnd>
+              Sum over all registered keys of the effective balance: the chain balance plus local
+              adjustments minus pending (not yet settled) bid payments, i.e. what the fleet can
+              still bid against.
+            </InfoHint>
+          </span>
           <span className="fw-bold">{formatGwei(aggregate.total_effective_gwei)} ETH</span>
 
           {actions.isLoggedIn && !editingTarget && (
@@ -172,6 +195,12 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
               />
               <label className="form-check-label" htmlFor="builder-keys-auto-deposit">
                 Auto-deposit keys below the target
+                <InfoHint>
+                  <code>builder_keys.auto_deposit</code>: when on, the lifecycle manager deposits new
+                  keys (one transaction per reconcile pass, from the funding wallet) until the
+                  managed count reaches the target. Off = no new keys are deposited automatically;
+                  the Deposit button still works.
+                </InfoHint>
               </label>
             </div>
             <div className="form-check mb-0">
@@ -184,10 +213,23 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
               />
               <label className="form-check-label" htmlFor="builder-keys-auto-exit">
                 Auto-exit keys above the target
+                <InfoHint>
+                  <code>builder_keys.auto_exit</code>: when on, managed keys above the target are
+                  exited, highest index first, skipping keys with pending payments. Irreversible:
+                  an exited builder key can never be reactivated. Off = surplus keys stay
+                  registered.
+                </InfoHint>
               </label>
             </div>
             <div className="d-flex align-items-center gap-2">
-              <label className="form-label mb-0" htmlFor="builder-keys-max-index">Max key index</label>
+              <label className="form-label mb-0" htmlFor="builder-keys-max-index">
+                Max key index
+                <InfoHint>
+                  <code>builder_keys.max_index</code>: highest derivation index buildoor may use
+                  (index 0 = the entry key). Caps the target at max index + 1 keys and bounds the
+                  startup scan for previously used keys.
+                </InfoHint>
+              </label>
               <input
                 type="number"
                 min={0}

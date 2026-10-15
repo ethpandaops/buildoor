@@ -23,50 +23,297 @@ export interface FieldDef {
   // Boolean fields render as a true/false select (options must be
   // ['true', 'false']) and are sent as real booleans.
   bool?: boolean;
+  // Explanation shown in the field's info callout.
+  hint?: React.ReactNode;
 }
 
+// Candidate keys name the parent tuple a payload extends; shared by the bid
+// candidate, serve candidates and build candidates explanations.
+export const CANDIDATE_KEY_HINTS: Record<string, React.ReactNode> = {
+  parent_full: 'the head block on its revealed payload (the normal build)',
+  parent_empty: 'the head block, its payload treated as missing (builds on its execution parent; Gloas only)',
+  grandparent_full: "the head block's parent on its payload: a deliberate reorg of the head block",
+  grandparent_empty: "the head block's parent with its payload treated as missing (reorg + payload miss; Gloas only)",
+};
+
+const CandidateKeyList: React.FC = () => (
+  <>
+    {Object.entries(CANDIDATE_KEY_HINTS).map(([key, text]) => (
+      <React.Fragment key={key}>
+        <dt>{key}</dt>
+        <dd>{text}</dd>
+      </React.Fragment>
+    ))}
+  </>
+);
+
 export const BID_FIELDS: FieldDef[] = [
-  { key: 'bid_start_time', label: 'Bid Start (rel. slot)', unit: 'ms' },
-  { key: 'bid_end_time', label: 'Bid End (rel. slot)', unit: 'ms' },
-  { key: 'bid_min_amount', label: 'Bid Min', unit: 'gwei' },
-  { key: 'bid_increase', label: 'Bid Increase', unit: 'gwei' },
-  { key: 'bid_interval', label: 'Bid Interval', unit: 'ms' },
-  { key: 'bid_subsidy', label: 'Bid Subsidy', unit: 'gwei' },
-  { key: 'bid_value_gwei', label: 'Bid Value Override', unit: 'gwei' },
+  {
+    key: 'bid_start_time', label: 'Bid Start (rel. slot)', unit: 'ms',
+    hint: <>When the first bid of the slot may go out, in ms relative to slot start (negative = before the slot starts).</>,
+  },
+  {
+    key: 'bid_end_time', label: 'Bid End (rel. slot)', unit: 'ms',
+    hint: <>Last moment a bid is sent, in ms relative to slot start (negative = before the slot starts).</>,
+  },
+  {
+    key: 'bid_min_amount', label: 'Bid Min', unit: 'gwei',
+    hint: (
+      <>
+        Floor of the bid base: <code>max(block value, min) + subsidy</code>. Ignored when a Bid Value
+        Override applies.
+      </>
+    ),
+  },
+  {
+    key: 'bid_increase', label: 'Bid Increase', unit: 'gwei',
+    hint: (
+      <>
+        Added once per earlier bid of the same payload, so every re-bid lands one step higher. Also
+        applies on top of a Bid Value Override.
+      </>
+    ),
+  },
+  {
+    key: 'bid_interval', label: 'Bid Interval', unit: 'ms',
+    hint: <>Pause between successive bids of the same payload inside the bid window. <code>0</code> = a single bid.</>,
+  },
+  {
+    key: 'bid_subsidy', label: 'Bid Subsidy', unit: 'gwei',
+    hint: (
+      <>
+        Added <strong>on top of</strong> <code>max(block value, min)</code>, so it outbids competitors
+        whatever the block is worth. Ignored when a Bid Value Override applies.
+      </>
+    ),
+  },
+  {
+    key: 'bid_value_gwei', label: 'Bid Value Override', unit: 'gwei',
+    hint: (
+      <>
+        Absolute bid base that <strong>replaces</strong> <code>max(block value, min) + subsidy</code>;
+        Bid Increase still applies per re-bid. Can deliberately underbid the block value, and silently
+        loses the auction when set below the other builders' bids.
+      </>
+    ),
+  },
   {
     key: 'bid_candidate', label: 'Bid Candidate', unit: '',
     options: ['auto', 'all', 'parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'],
+    hint: (
+      <>
+        Which built candidate payload the p2p bids commit to. A specific key only bids when that
+        candidate was built for the slot.
+        <dl>
+          <dt>inherit</dt>
+          <dd>the global ePBS bid candidate setting</dd>
+          <dt>auto</dt>
+          <dd>the candidate matching the chain view (head block + its payload status); sticky for the slot unless candidate switching is enabled globally</dd>
+          <dt>all</dt>
+          <dd>a bid for every built candidate (multi-parent gossip testing; most nodes only propagate a builder's first bid per slot)</dd>
+          <CandidateKeyList />
+        </dl>
+      </>
+    ),
   },
 ];
 
 export const BUILDER_API_FIELDS: FieldDef[] = [
-  { key: 'value_subsidy_gwei', label: 'Value Subsidy', unit: 'gwei' },
-  { key: 'total_value_override_gwei', label: 'Total Value Override', unit: 'gwei' },
-  { key: 'execution_payment_gwei', label: 'Execution Payment', unit: 'gwei' },
-  { key: 'execution_payment_percent', label: 'Execution Payment', unit: '%' },
+  {
+    key: 'value_subsidy_gwei', label: 'Value Subsidy', unit: 'gwei',
+    hint: (
+      <>
+        Added to the block value of bids served to proposers; replaces the global Builder API subsidy
+        for this slot. Ignored when a Total Value Override applies.
+      </>
+    ),
+  },
+  {
+    key: 'total_value_override_gwei', label: 'Total Value Override', unit: 'gwei',
+    hint: (
+      <>
+        Absolute total bid value served to the proposer, <strong>replacing</strong> block value +
+        subsidy (before the Gloas execution-payment split). May exceed the block value.
+      </>
+    ),
+  },
+  {
+    key: 'execution_payment_gwei', label: 'Execution Payment', unit: 'gwei',
+    hint: (
+      <>
+        Gloas bids only: the part of the served total claimed as <code>execution_payment</code> instead
+        of the trustless on-chain value. Deliberately unbacked, buildoor never makes the EL payment.
+        Capped by the proposer's advertised <code>max_execution_payment</code> (0 when none was
+        submitted) unless Ignore Pref Limit is true. A non-zero value wins over the percent;{' '}
+        <code>0</code> = none.
+      </>
+    ),
+  },
+  {
+    key: 'execution_payment_percent', label: 'Execution Payment', unit: '%',
+    hint: (
+      <>
+        The execution payment as a percentage (0–100) of the served total. Only used while the
+        absolute Execution Payment (gwei) is 0; same cap and unbacked claim.
+      </>
+    ),
+  },
   {
     key: 'ignore_preference_limit', label: 'Ignore Pref Limit', unit: '',
     options: ['true', 'false'], bool: true,
+    hint: (
+      <>
+        Whether the execution payment may exceed the proposer's advertised{' '}
+        <code>max_execution_payment</code>.
+        <dl>
+          <dt>inherit</dt>
+          <dd>the global setting</dd>
+          <dt>true</dt>
+          <dd>serve beyond the limit: a spec-violating bid clients should reject</dd>
+          <dt>false</dt>
+          <dd>cap the execution payment at the proposer's limit</dd>
+        </dl>
+      </>
+    ),
   },
-  { key: 'response_delay_ms', label: 'Response Delay', unit: 'ms' },
+  {
+    key: 'response_delay_ms', label: 'Response Delay', unit: 'ms',
+    hint: (
+      <>
+        Holds the bid response this long before answering (0 up to one slot). Ends early, without
+        serving, when the requesting client gives up.
+      </>
+    ),
+  },
   {
     key: 'serve_candidates', label: 'Serve Candidates', unit: '',
     options: ['all', 'canonical_only', 'parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'],
+    hint: (
+      <>
+        Which built candidate payloads a bid request for this slot may be answered from.
+        <dl>
+          <dt>inherit</dt>
+          <dd>the global Builder API setting</dd>
+          <dt>all</dt>
+          <dd>whichever candidate matches the parent the proposer asks for</dd>
+          <dt>canonical_only</dt>
+          <dd>only parent_full (and unclassified) payloads</dd>
+          <dt>a candidate key</dt>
+          <dd>only that candidate:</dd>
+          <CandidateKeyList />
+        </dl>
+      </>
+    ),
   },
 ];
 
 export const REVEAL_FIELDS: FieldDef[] = [
-  { key: 'reveal_time_ms', label: 'Reveal Time (rel. slot)', unit: 'ms' },
+  {
+    key: 'reveal_time_ms', label: 'Reveal Time (rel. slot)', unit: 'ms',
+    hint: (
+      <>
+        Time gate: when the envelope is published, in ms relative to slot start. A custom reveal may
+        run past the slot end (at most one extra slot) for late-reveal testing.
+      </>
+    ),
+  },
   {
     key: 'gate_mode', label: 'Gate Mode', unit: '',
     options: ['time', 'vote', 'vote_or_time', 'vote_and_time'],
+    hint: (
+      <>
+        What opens the reveal. A vote gate that never opens withholds the payload at the deadline
+        (<code>vote_gate_timeout</code>).
+        <dl>
+          <dt>inherit</dt>
+          <dd>the global reveal gate mode</dd>
+          <dt>time</dt>
+          <dd>at the Reveal Time</dd>
+          <dt>vote</dt>
+          <dd>as soon as head-vote participation on our block reaches the Vote Threshold</dd>
+          <dt>vote_or_time</dt>
+          <dd>whichever of the two opens first</dd>
+          <dt>vote_and_time</dt>
+          <dd>at the Reveal Time, but only once the threshold is also reached</dd>
+        </dl>
+      </>
+    ),
   },
-  { key: 'vote_threshold_pct', label: 'Vote Threshold', unit: '%' },
+  {
+    key: 'vote_threshold_pct', label: 'Vote Threshold', unit: '%',
+    hint: (
+      <>
+        Head-vote participation (percent of the slot's attesting balance voting for the block that
+        committed to our bid) that opens the vote gate. Unused with gate mode <code>time</code>.
+      </>
+    ),
+  },
   {
     key: 'broadcast_validation', label: 'Broadcast Validation', unit: '',
     options: ['gossip', 'consensus', 'consensus_and_equivocation'],
+    hint: (
+      <>
+        Validation the beacon node applies before broadcasting the envelope.
+        <dl>
+          <dt>inherit</dt>
+          <dd>the global reveal setting</dd>
+          <dt>gossip</dt>
+          <dd>gossip checks only (fastest)</dd>
+          <dt>consensus</dt>
+          <dd>full consensus validation first</dd>
+          <dt>consensus_and_equivocation</dt>
+          <dd>consensus validation plus an equivocation check: the builder's protection against unbundling</dd>
+        </dl>
+      </>
+    ),
   },
 ];
+
+// Category explanations for the section headers of the plan and rule editors.
+export const BID_CATEGORY_HINT: React.ReactNode = (
+  <>
+    p2p bidding (ePBS, Gloas+): bids gossiped to the network inside the bid window. Bidding still
+    needs the Gloas fork and an active builder registration.
+  </>
+);
+
+export const BUILDER_API_CATEGORY_HINT: React.ReactNode = (
+  <>
+    Bids served to proposers asking through the Builder API (<code>getHeader</code> /{' '}
+    <code>getExecutionPayloadBid</code>). A suppressed slot answers 204 (no bid). Serving still needs
+    the API server to be running.
+  </>
+);
+
+export const REVEAL_CATEGORY_HINT: React.ReactNode = (
+  <>
+    Publishing the execution payload envelope of a won Gloas slot, for p2p and Builder API wins
+    alike. <strong>disabled</strong> withholds it: the block exists, its payload does not (recorded
+    as <code>suppressed</code> / <code>plan_disabled</code>).
+  </>
+);
+
+// The mode select of a category: what each choice does for the slot.
+const ModeHint: React.FC<{ bulk: boolean }> = ({ bulk }) => (
+  <InfoHint>
+    How this category runs for the slot. Availability still wins: a custom slot cannot act
+    without the fork, registration or server it needs.
+    <dl>
+      {bulk && (
+        <>
+          <dt>unchanged</dt>
+          <dd>leave this category as it is on every targeted slot</dd>
+        </>
+      )}
+      <dt>{bulk ? 'inherit (clear)' : 'inherit'}</dt>
+      <dd>no instruction: follow the global config, including the module's enable flag</dd>
+      <dt>custom</dt>
+      <dd>force the category active for the slot, even when the module is globally disabled; filled fields override the global values</dd>
+      <dt>disabled</dt>
+      <dd>suppress the category for the slot</dd>
+    </dl>
+  </InfoHint>
+);
 
 export interface CategoryFormState {
   mode: FormMode;
@@ -207,16 +454,20 @@ export function resolveCategory(
 
 export const CategoryForm: React.FC<{
   title: string;
+  hint?: React.ReactNode;
   bulk: boolean;
   state: CategoryFormState;
   fields: FieldDef[];
   disabled: boolean;
   showIgnorePrefs?: boolean;
   onChange: (next: CategoryFormState) => void;
-}> = ({ title, bulk, state, fields, disabled, showIgnorePrefs, onChange }) => (
+}> = ({ title, hint, bulk, state, fields, disabled, showIgnorePrefs, onChange }) => (
   <div className="mb-3">
     <div className="d-flex align-items-center gap-2 mb-1">
-      <div className="section-header">{title}</div>
+      <div className="section-header">
+        {title}
+        {hint && <InfoHint>{hint}</InfoHint>}
+      </div>
       <select
         className="form-select form-select-sm w-auto"
         value={state.mode}
@@ -228,13 +479,18 @@ export const CategoryForm: React.FC<{
         <option value="custom">custom</option>
         <option value="disabled">disabled</option>
       </select>
+      <ModeHint bulk={bulk} />
     </div>
 
     {state.mode === 'custom' && (
       <div className="row g-2">
-        {fields.map((def) => (
+        {fields.map((def, i) => (
           <div key={def.key} className="col-6 col-lg-4">
-            <label className="form-label small mb-0">{def.label}</label>
+            <label className="form-label small mb-0">
+              {def.label}
+              {/* The third column opens its callout leftwards to stay inside the modal. */}
+              {def.hint && <InfoHint alignEnd={i % 3 === 2}>{def.hint}</InfoHint>}
+            </label>
             {def.options ? (
               <select
                 className="form-select form-select-sm"
@@ -280,6 +536,10 @@ export const CategoryForm: React.FC<{
               <label className="form-check-label small" htmlFor="ap-ignore-prefs">
                 Ignore missing proposer preferences (bid with the payload's fee recipient)
               </label>
+              <InfoHint>
+                Without gossip proposer preferences for the slot the bidder normally skips it. Checked,
+                it bids anyway, using the built payload's fee recipient.
+              </InfoHint>
             </div>
           </div>
         )}
@@ -306,7 +566,30 @@ export const BuildForm: React.FC<{
 }> = ({ bulk, value, disabled, onChange }) => (
   <div className="mb-3">
     <div className="d-flex align-items-center gap-2 mb-1">
-      <div className="section-header">Build</div>
+      <div className="section-header">
+        Build
+        <InfoHint>
+          Changes how the slot's payload is built when a build happens; it never forces or
+          suppresses the build itself.
+          <dl>
+            {bulk && (
+              <>
+                <dt>unchanged</dt>
+                <dd>leave the flag as it is on every targeted slot</dd>
+              </>
+            )}
+            <dt>normal parent</dt>
+            <dd>build on the immediate parent payload</dd>
+            <dt>reorg parent (build on n-2)</dt>
+            <dd>
+              build on the grandparent (n-2) execution payload: parent hash, parent number and
+              withdrawals come from the parent slot's attributes, everything else from this slot.
+              Rejected by mainnet forkchoice; falls back to a normal build when the parent slot's
+              attributes are unavailable.
+            </dd>
+          </dl>
+        </InfoHint>
+      </div>
       <select
         className="form-select form-select-sm w-auto"
         value={value}
@@ -477,6 +760,8 @@ export const LocalBuildForm: React.FC<{
               Custom block transactions
               <InfoHint>
                 <strong>buildoor mempool</strong>: transactions sent to <code>/rpc</code>.{' '}
+                <strong>buildoor mempool, then EL mempool</strong>: ours first, the EL&apos;s pending
+                transactions fill the remaining gas (highest tip first, no blob transactions).{' '}
                 <strong>EL mempool</strong>: the EL fills the block itself.{' '}
                 <strong>explicit</strong>: exactly the raw transactions below.{' '}
                 <strong>queued</strong>: exactly these buildoor-mempool hashes, in this order. Any
@@ -491,6 +776,7 @@ export const LocalBuildForm: React.FC<{
             >
               <option value="">inherit</option>
               <option value="txpool">buildoor mempool</option>
+              <option value="txpool_el_fill">buildoor mempool, then EL mempool</option>
               <option value="el_mempool">EL mempool</option>
               <option value="empty">none (empty block)</option>
               <option value="explicit">explicit list (raw txs)</option>

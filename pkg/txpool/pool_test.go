@@ -800,3 +800,55 @@ func TestStaleEvictionWaitsForClassification(t *testing.T) {
 	require.Nil(t, pool.Get(staleTx.Hash()))
 	require.Equal(t, uint64(1), pool.Stats().EvictedNonceTooLow)
 }
+
+// TestSelectFillsFromELMempool places EL mempool transactions after the pool
+// selection: a sender continues at the nonce the pool selection left, the
+// highest tip goes first, pool duplicates and nonce gaps are skipped, and the
+// fill stays within the gas the pool selection left.
+func TestSelectFillsFromELMempool(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	shared := newAccount(t) // in both pools
+	cheap := newAccount(t)
+	rich := newAccount(t)
+	gapped := newAccount(t)
+
+	fund(el, shared, 0, 100)
+	fund(el, cheap, 0, 100)
+	fund(el, rich, 0, 100)
+	fund(el, gapped, 0, 100)
+
+	poolTx, raw := signTx(t, shared, txOpts{nonce: 0})
+	_, err := pool.Add(raw)
+	require.NoError(t, err)
+
+	sharedNext, _ := signTx(t, shared, txOpts{nonce: 1, tip: 2})
+	cheapTx, _ := signTx(t, cheap, txOpts{nonce: 0, tip: 1})
+	richTx, _ := signTx(t, rich, txOpts{nonce: 0}) // 1 gwei tip
+	gappedTx, _ := signTx(t, gapped, txOpts{nonce: 3})
+
+	sel, err := pool.Select(context.Background(), &SelectParams{
+		ParentHash: common.Hash{0xaa},
+		GasLimit:   3 * 21000, // the pool transaction + two fill transactions
+		Ordering:   config.TxOrderingFIFO,
+		Fill:       []*types.Transaction{poolTx, sharedNext, cheapTx, richTx, gappedTx},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, sel.Selected, 1)
+	require.Equal(t, poolTx.Hash(), sel.Selected[0].Hash)
+
+	require.Len(t, sel.Fill, 2)
+	require.Equal(t, richTx.Hash(), sel.Fill[0].Hash, "highest tip first")
+	require.Equal(t, sharedNext.Hash(), sel.Fill[1].Hash, "continues the sender after the pool's nonce")
+
+	require.Len(t, sel.Txs, 3)
+	require.Equal(t, 5, sel.FillCandidates)
+	require.Equal(t, 1, sel.FillSkipped[SkipDuplicate])
+	require.Equal(t, 1, sel.FillSkipped[SkipNonceGap])
+	require.Equal(t, 1, sel.FillSkipped[SkipGasFull])
+	require.Equal(t, uint64(42000), sel.FillGasSum)
+	require.Equal(t, 2, sel.Summary().FillSelected)
+	require.NotNil(t, pool.Get(poolTx.Hash()), "fill accounting never evicts pool transactions")
+}

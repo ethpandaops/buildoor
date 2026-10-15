@@ -750,10 +750,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ] : []),
               ...(lb.info?.selection ? [
                 { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
+                ...(lb.info.selection.fill_candidates
+                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
+                  : []),
                 ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
                   ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
                   : [])
               ] : []),
+              ...(lb.info?.fill_error ? [{ label: 'EL Mempool', value: `unreadable: ${lb.info.fill_error}` }] : []),
               ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
               ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
               ...(lb.el ? [

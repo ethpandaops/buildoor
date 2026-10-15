@@ -180,7 +180,7 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 |------|---------|-------------|
 | `--local-build-enabled` | `false` | Build the additional local payload per slot |
 | `--local-build-payload-source` | `el` | Which payload feeds bids/reveals: `el` (local is a shadow), `local`, `local_or_el`, `higher_value` (whichever block is worth more) |
-| `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `empty`, `el_mempool` (per-slot plans may set an explicit list) |
+| `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `txpool_el_fill` (pool first, then the EL mempool's pending txs fill the block), `empty`, `el_mempool` (per-slot plans may set an explicit list) |
 | `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
