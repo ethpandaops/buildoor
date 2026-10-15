@@ -111,6 +111,9 @@ type LocalBuildRequest struct {
 	MaxStrikes  uint64
 	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
 	BaseFeeCeilingGwei uint64
+	// StartDelay holds the testing call back after the engine build started,
+	// so transactions arriving meanwhile make it into the block.
+	StartDelay time.Duration
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -160,6 +163,8 @@ type LocalBuildInfo struct {
 	// Dropped lists the pool transactions removed from the attempt after an
 	// attributed EL refusal (txpool source only), with the failure class.
 	Dropped []DroppedTx `json:"dropped,omitempty"`
+	// StartedAt is when the testing build began (after the start delay).
+	StartedAt time.Time `json:"started_at"`
 	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
 	// build runs during the engine build's wait, so this is usually well
 	// before the payload's ReadyAt (the hand-over to the consumers).
@@ -169,8 +174,36 @@ type LocalBuildInfo struct {
 // DroppedTx is a pool transaction removed from a build attempt after the EL
 // refused the list.
 type DroppedTx struct {
-	Hash   string `json:"hash"`
+	Hash   string `json:"hash,omitempty"`
 	Reason string `json:"reason"`
+}
+
+// Public returns the info without transaction hashes, for readers who must
+// not learn what the custom block holds before it is published: the
+// buildoor mempool keeps its transactions private, and a withheld or
+// orphaned payload never publishes them at all. Counts and reasons stay.
+func (i *LocalBuildInfo) Public() *LocalBuildInfo {
+	if i == nil || (i.ExpectedHashes == nil && len(i.Dropped) == 0 && (i.Selection == nil || len(i.Selection.Hashes) == 0)) {
+		return i
+	}
+
+	out := *i
+	out.ExpectedHashes = nil
+
+	if i.Selection != nil && len(i.Selection.Hashes) > 0 {
+		selection := *i.Selection
+		selection.Hashes = nil
+		out.Selection = &selection
+	}
+
+	if len(i.Dropped) > 0 {
+		out.Dropped = make([]DroppedTx, len(i.Dropped))
+		for idx, dropped := range i.Dropped {
+			out.Dropped[idx] = DroppedTx{Reason: dropped.Reason}
+		}
+	}
+
+	return &out
 }
 
 // BuildResult is the outcome of one build target: the payload feeding the
@@ -498,6 +531,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		BlobEncoding:       availability.BlobEncoding,
 		MaxAttempts:        settings.MaxAttempts,
 		MaxStrikes:         settings.MaxStrikes,
+		StartDelay:         time.Duration(settings.StartDelayMs) * time.Millisecond,
 		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 
@@ -535,4 +569,26 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 // decodeHexBytes parses a 0x-prefixed hex string.
 func decodeHexBytes(s string) ([]byte, error) {
 	return hexutil.Decode(s)
+}
+
+// PrivateTxs counts the transactions of a testing build that buildoor
+// supplied itself — from its own mempool or an action plan's list — rather
+// than taking them from the EL's public mempool (the EL mempool fill and the
+// inclusion-list transactions). The list sent to the EL is exactly what the
+// payload holds (it is verified against the payload before use).
+func (i *LocalBuildInfo) PrivateTxs() int {
+	if i == nil || i.ExpectedHashes == nil {
+		return 0
+	}
+
+	public := 0
+	if !i.FillDropped {
+		public += i.FillTxs
+	}
+
+	if !i.InclusionListDropped {
+		public += i.InclusionListTxs
+	}
+
+	return max(0, len(i.ExpectedHashes)-public)
 }

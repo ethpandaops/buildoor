@@ -567,10 +567,16 @@ func TestOnSlotBuiltNextNAccounting(t *testing.T) {
 	svc.OnSlotBuilt(2003)
 	require.Equal(t, uint64(2), svc.GetSlotsBuilt(), "forced build must not consume the budget")
 
-	// Switching (back) to next_n via UpdateConfig resets the counter.
+	// An unrelated settings write keeps the budget.
+	cfg.EPBS.BidSubsidy++
+	svc.UpdateConfig()
+	require.Equal(t, uint64(2), svc.GetSlotsBuilt())
+
+	// A schedule change restarts it.
+	cfg.Schedule.NextN = 3
 	svc.UpdateConfig()
 	require.Equal(t, uint64(0), svc.GetSlotsBuilt())
-	require.Equal(t, 2, svc.GetSlotsRemaining())
+	require.Equal(t, 3, svc.GetSlotsRemaining())
 }
 
 func TestSubscribeChangesDeliversCommittedEvents(t *testing.T) {

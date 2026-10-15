@@ -125,6 +125,7 @@ func Fields() []Field {
 		newField(KeyLocalBuildBuildELPayload, "local-build-el-payload", func(c *Config) *bool { return &c.LocalBuild.BuildELPayload }),
 		newField(KeyLocalBuildAllowBlobsNoBundle, "local-build-allow-blobs-without-bundle", func(c *Config) *bool { return &c.LocalBuild.AllowBlobsWithoutBundle }),
 		newField(KeyLocalBuildMaxAttempts, "local-build-max-attempts", func(c *Config) *uint64 { return &c.LocalBuild.MaxAttempts }),
+		newField(KeyLocalBuildStartDelayMs, "local-build-start-delay", func(c *Config) *uint64 { return &c.LocalBuild.StartDelayMs }),
 
 		newField(KeyTxPoolEnabled, "txpool-enabled", func(c *Config) *bool { return &c.TxPool.Enabled }),
 		newField(KeyTxPoolOrdering, "txpool-ordering", func(c *Config) *string { return &c.TxPool.Ordering }),
@@ -167,6 +168,7 @@ func Fields() []Field {
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
 		newField(KeyDepositMaxFee, "deposit-max-fee", func(c *Config) *uint64 { return &c.DepositMaxFeeGwei }),
+		newField(KeyEarlyDepositTip, "early-deposit-tip", func(c *Config) *uint64 { return &c.EarlyDepositTipGwei }),
 
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),

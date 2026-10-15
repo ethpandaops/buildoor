@@ -702,7 +702,7 @@ export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildP
 // login, so writing the plan back would lose them.
 export function hiddenTransactionsError(plan: LocalBuildPlan | undefined): string | null {
   if (!plan?.transactions_redacted || plan.transactions?.length) return null;
-  return `The custom build's ${plan.transactions_redacted} explicit transactions are hidden (no login): ` +
+  return `The testing build's ${plan.transactions_redacted} explicit transactions are hidden (no login): ` +
     'log in and reopen the plan to edit them, or replace the list before saving.';
 }
 
@@ -731,10 +731,10 @@ export const LocalBuildForm: React.FC<{
     <div className="mb-3">
       <div className="d-flex align-items-center gap-2 mb-1">
         <div className="section-header">
-          Custom build
+          Testing build
           <InfoHint>
             The testing_buildBlockV1 build next to the engine build: buildoor hands the EL the
-            transaction list. Overrides the global Custom Build settings for these slots.
+            transaction list. Overrides the global Testing builder settings for these slots.
           </InfoHint>
         </div>
         <select

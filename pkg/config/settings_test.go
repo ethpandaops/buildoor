@@ -204,8 +204,13 @@ func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {
 		{KeyBuilderAPIExecutionPaymentPct, uint64(250), false},
 		{KeyDepositAmount, uint64(32000000000), true},
 		{KeyDepositAmount, uint64(0), false},
+		{KeyEarlyDepositTip, uint64(0), true},
+		{KeyEarlyDepositTip, uint64(10000), true},
+		{KeyEarlyDepositTip, uint64(10001), false},
 		{KeyScheduleMode, "every_nth", true},
 		{KeyScheduleMode, "sometimes", false},
+		{KeyLocalBuildStartDelayMs, uint64(1000), true},
+		{KeyLocalBuildStartDelayMs, uint64(12001), false},
 	}
 
 	for _, tt := range tests {
@@ -228,4 +233,35 @@ func TestDefaultsAreValid(t *testing.T) {
 	for _, field := range Fields() {
 		require.NoError(t, ValidateSetting(field.Key, field.Get(defaults)), field.Key)
 	}
+}
+
+// TestSourcesFollowTheWinningLayer checks that Sources reports the layer the
+// effective value comes from, dates UI overrides, and survives a restart.
+func TestSourcesFollowTheWinningLayer(t *testing.T) {
+	dir := t.TempDir()
+	store := db.NewDatabase(&db.Config{File: filepath.Join(dir, "state.db")}, testLogger())
+	require.NoError(t, store.Init())
+
+	defaults := defaultsConfig()
+
+	svc := boot(t, store, defaults, nil)
+	_, ok := svc.Sources()[subsidyKey]
+	require.False(t, ok, "a default value has no source entry")
+
+	svc = boot(t, store, defaults, u64(500))
+	require.Equal(t, SettingSource{Source: SourceCLI}, svc.Sources()[subsidyKey])
+
+	setSubsidy(t, svc, 600)
+	src := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, src.Source)
+	require.NotZero(t, src.UpdatedAt)
+
+	// Restart with the flag unchanged: the UI override still wins, dated by
+	// its persisted write.
+	svc = boot(t, store, defaults, u64(500))
+	restarted := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, restarted.Source)
+	require.Equal(t, src.UpdatedAt, restarted.UpdatedAt)
+
+	require.NoError(t, store.Close())
 }

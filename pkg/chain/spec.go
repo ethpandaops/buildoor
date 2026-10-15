@@ -25,6 +25,10 @@ type ChainSpec struct {
 	SecondsPerSlot time.Duration
 	SlotsPerEpoch  uint64
 
+	// ConfigName is the network's CONFIG_NAME (e.g. "hoodi"; empty when the
+	// beacon node does not serve it).
+	ConfigName string
+
 	// Duty calculation parameters
 	ShuffleRoundCount          uint64
 	TargetCommitteeSize        uint64
@@ -142,6 +146,8 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 
 		s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
 	}
+
+	s.ConfigName = specData["CONFIG_NAME"]
 
 	slotsPerEpochStr, ok := specData["SLOTS_PER_EPOCH"]
 	if !ok {

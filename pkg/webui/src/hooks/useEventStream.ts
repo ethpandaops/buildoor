@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent } from '../types';
+import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -46,6 +46,9 @@ function dispatchStreamEvent(type: string, data: unknown) {
   }
 }
 
+// Slots of per-slot state kept for the timeline's scroll window.
+export const SLOT_HISTORY = 100;
+
 // Connection generation: incremented on every successful (re)connect of the
 // SSE stream, so views can refetch REST state after a reconnect (events that
 // occurred during the gap were never delivered).
@@ -68,7 +71,7 @@ function bumpConnectionGeneration() {
   generationListeners.forEach((listener) => listener());
 }
 
-interface UseEventStreamResult {
+export interface UseEventStreamResult {
   connected: boolean;
   config: Config | null;
   chainInfo: ChainInfo | null;
@@ -78,6 +81,7 @@ interface UseEventStreamResult {
   builderKeysAggregate: BuilderKeysAggregate | null;
   serviceStatus: ServiceStatus | null;
   voteCoverage: VoteCoverage | null;
+  slotOutlook: SlotOutlook | null;
   txPoolStats: TxPoolStats | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
@@ -88,7 +92,7 @@ interface UseEventStreamResult {
   connectionGeneration: number;
 }
 
-export function useEventStream(): UseEventStreamResult {
+function useEventStreamConnection(): UseEventStreamResult {
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<Config | null>(null);
   const [chainInfo, setChainInfo] = useState<ChainInfo | null>(null);
@@ -99,6 +103,7 @@ export function useEventStream(): UseEventStreamResult {
     useState<BuilderKeysAggregate | null>(null);
   const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
+  const [slotOutlook, setSlotOutlook] = useState<SlotOutlook | null>(null);
   const [txPoolStats, setTxPoolStats] = useState<TxPoolStats | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
@@ -147,6 +152,31 @@ export function useEventStream(): UseEventStreamResult {
 
     return () => clearInterval(interval);
   }, [chainInfo]);
+
+  // Keep the per-slot state of the timeline's scroll window only; a tab left
+  // open for days must not accumulate every slot it ever saw.
+  useEffect(() => {
+    if (!currentSlot) return;
+    const oldest = currentSlot - SLOT_HISTORY;
+    const prune = <T,>(prev: Record<number, T>): Record<number, T> => {
+      let stale = false;
+      for (const key in prev) {
+        if (Number(key) < oldest) {
+          stale = true;
+          break;
+        }
+      }
+      if (!stale) return prev;
+      const next: Record<number, T> = {};
+      for (const key in prev) {
+        if (Number(key) >= oldest) next[key] = prev[key];
+      }
+      return next;
+    };
+    setSlotStates(prune);
+    setSlotConfigs(prune);
+    setSlotServiceStatuses(prune);
+  }, [currentSlot]);
 
   const clearEvents = useCallback(() => {
     setEvents([]);
@@ -260,6 +290,10 @@ export function useEventStream(): UseEventStreamResult {
           setVoteCoverage(event.data as VoteCoverage);
           break;
 
+        case 'slot_outlook':
+          setSlotOutlook(event.data as SlotOutlook);
+          break;
+
         case 'txpool_stats':
           setTxPoolStats(event.data as TxPoolStats);
           break;
@@ -276,15 +310,15 @@ export function useEventStream(): UseEventStreamResult {
                 ? 'engine block worth at least as much, bids use it'
                 : 'compare only, bids use the engine block';
             addEvent('local_build',
-              `Custom build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
+              `Testing build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
               event.timestamp);
           } else if (data.status === 'skipped') {
             addEvent('local_build',
-              `Custom build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (engine block used)' : ''}`,
+              `Testing build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (engine block used)' : ''}`,
               event.timestamp);
           } else {
             addEvent('local_build_failed',
-              `Custom build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (engine block used)' : ''}`,
+              `Testing build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (engine block used)' : ''}`,
               event.timestamp);
           }
 
@@ -858,6 +892,7 @@ export function useEventStream(): UseEventStreamResult {
     builderKeysAggregate,
     serviceStatus,
     voteCoverage,
+    slotOutlook,
     txPoolStats,
     currentSlot,
     slotStates,
@@ -867,4 +902,24 @@ export function useEventStream(): UseEventStreamResult {
     clearEvents,
     connectionGeneration: generation
   };
+}
+
+const EventStreamContext = createContext<UseEventStreamResult | null>(null);
+
+/**
+ * Owns the tab's single /api/events connection. Every page reads the stream
+ * through useEventStream(), so switching pages neither reconnects nor makes
+ * the server replay its event cache again.
+ */
+export function EventStreamProvider({ children }: { children: ReactNode }) {
+  const value = useEventStreamConnection();
+  return createElement(EventStreamContext.Provider, { value }, children);
+}
+
+export function useEventStream(): UseEventStreamResult {
+  const value = useContext(EventStreamContext);
+  if (!value) {
+    throw new Error('useEventStream must be used inside EventStreamProvider');
+  }
+  return value;
 }

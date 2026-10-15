@@ -1,49 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
 import { REFRESH_INTERVAL_SLOW_MS } from './refreshIntervals';
+import { usePolledList } from './usePolledList';
 import type { BuilderPreference, BuilderPreferencesResponse } from '../types';
 
+// useBuilderPreferences lists the payment caps (max_execution_payment) that
+// proposers submitted through the Gloas Builder API, highest cap first. A 404
+// means the Builder API is not enabled.
 export function useBuilderPreferences() {
-  const [preferences, setPreferences] = useState<BuilderPreference[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const initialFetchDone = useRef(false);
-
-  const fetchPreferences = async () => {
-    try {
-      const response = await fetch('/api/buildoor/builder-preferences');
-
-      if (response.status === 404) {
-        setPreferences([]);
-        setError('builder API not enabled');
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch builder preferences: ${response.statusText}`);
-      }
-
-      const data: BuilderPreferencesResponse = await response.json();
-      const sorted = (data.preferences || [])
-        .slice()
-        .sort((a, b) => b.max_execution_payment - a.max_execution_payment);
-      setPreferences(sorted);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      if (!initialFetchDone.current) {
-        initialFetchDone.current = true;
-        setLoading(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    fetchPreferences();
-    // Builder preferences change rarely; slow aligned background refresh.
-    const interval = setInterval(fetchPreferences, REFRESH_INTERVAL_SLOW_MS);
-    return () => clearInterval(interval);
-  }, []);
-
-  return { preferences, loading, error, refetch: fetchPreferences };
+  // Builder preferences change rarely; slow aligned background refresh.
+  return usePolledList<BuilderPreference, BuilderPreferencesResponse>({
+    url: '/api/buildoor/builder-preferences',
+    intervalMs: REFRESH_INTERVAL_SLOW_MS,
+    select: (body) => body.preferences,
+    compare: (a, b) => b.max_execution_payment - a.max_execution_payment,
+    what: 'payment caps',
+  });
 }

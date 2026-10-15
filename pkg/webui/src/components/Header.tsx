@@ -2,21 +2,25 @@ import React from 'react';
 import { BrandHeader } from './BrandHeader';
 import { HeaderNav } from './HeaderNav';
 import { UserDisplay } from './UserDisplay';
+import { LiveStatus } from './LiveStatus';
 import { setView } from '../stores/viewStore';
-import { getRuntimeConfig } from '../utils/runtimeConfig';
+import '../styles/header.css';
 
+// Header is the app bar: brand, the Overview/Operator switch with the
+// operator pages, the live stream status and the login.
 export const Header: React.FC = () => {
-  // When an overview UI is configured, the brand link leaves this instance
-  // for the multi-instance overview; otherwise it stays a dashboard shortcut.
-  const { overviewURL } = getRuntimeConfig();
-
   return (
     <BrandHeader
       title="Buildoor"
-      brandHref={overviewURL || '/'}
-      onBrandClick={overviewURL ? undefined : () => setView('dashboard')}
+      brandHref="/"
+      onBrandClick={() => setView('overview')}
       navItems={<HeaderNav />}
-      endContent={<UserDisplay />}
+      endContent={
+        <span className="d-flex align-items-center gap-3">
+          <LiveStatus />
+          <UserDisplay />
+        </span>
+      }
     />
   );
 };

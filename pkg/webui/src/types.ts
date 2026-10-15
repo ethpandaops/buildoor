@@ -19,6 +19,8 @@ export interface StreamEvent {
   data: unknown;
 }
 
+import type { SettingSource } from './settings/types';
+
 export interface Config {
   schedule: ScheduleConfig;
   epbs: EPBSConfig;
@@ -31,11 +33,14 @@ export interface Config {
   deposit_amount: number;
   topup_threshold: number;
   deposit_max_fee: number;
+  early_deposit_tip?: number;
   payload_build_time?: number;
   extra_data?: string;
   slot_result_retention_epochs?: number;
   slot_artifact_retention_epochs?: number;
   slot_artifact_capture_enabled?: boolean;
+  // Layer of every setting whose value is not the hardcoded default.
+  setting_sources?: Record<string, SettingSource>;
 }
 
 // Builder API bid-serving settings (global baseline; per-slot action plans
@@ -251,6 +256,7 @@ export interface TxSelectionSummary {
   fill_candidates?: number;
   fill_selected?: number;
   fill_gas_sum?: number;
+  fill_blobs?: number;
   fill_skipped?: Record<string, number>;
 }
 
@@ -273,14 +279,14 @@ export interface LocalBuildInfo {
   dropped_by_el?: number;
   submitted_txs: number;
   attempts?: number;
-  dropped?: { hash: string; reason: string }[];
+  dropped?: { hash?: string; reason: string }[];
   built_at?: string;
   fill_txs?: number;
   fill_error?: string;
   fill_dropped?: boolean;
 }
 
-// SSE local_build_progress event: the live state of one custom build
+// SSE local_build_progress event: the live state of one testing build
 // (building, then ready / failed / skipped the moment testing_buildBlockV1
 // returned), ahead of the final local_build event.
 export interface LocalBuildProgressEvent {
@@ -310,6 +316,7 @@ export interface LocalBuildStreamEvent {
   local?: StreamPayloadSummary;
   el?: StreamPayloadSummary;
   info?: LocalBuildInfo;
+  started_at?: number; // unix ms, when the testing build began (after its start delay)
   built_at?: number; // unix ms, when testing_buildBlockV1 returned (ready only)
   el_ready_at?: number; // unix ms, when the engine payload of the target was ready
   at: number;
@@ -381,6 +388,10 @@ export interface ChainInfo {
   genesis_time: number;
   seconds_per_slot: number;
   slots_per_epoch: number;
+  // CONFIG_NAME of the network (empty when the beacon node does not serve it).
+  network?: string;
+  // Scheduled Gloas fork epoch (null/absent when not scheduled).
+  gloas_fork_epoch?: number | null;
 }
 
 export interface Stats {
@@ -388,7 +399,7 @@ export interface Stats {
   blocks_included: number;
   bids_submitted: number;
   bids_won: number;
-  total_paid: number;
+  total_paid_gwei: number;
   reveals_success: number;
   reveals_failed: number;
   reveals_skipped: number;
@@ -754,7 +765,7 @@ export interface SlotState {
   submitBlockBlockHash?: string;
   // Local build extension outcome for the slot's primary target.
   localBuild?: LocalBuildStreamEvent;
-  // Live custom build state, until the final localBuild event arrives.
+  // Live testing build state, until the final localBuild event arrives.
   localBuildLive?: LocalBuildProgressEvent;
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
@@ -844,6 +855,9 @@ export interface BidWonEntry {
   slot: number;
   block_hash: string;
   num_transactions: number;
+  // Transactions buildoor supplied itself (its own mempool or a plan list);
+  // the rest came from the EL's public mempool. Absent on older records.
+  num_private_txs?: number;
   num_blobs: number;
   value_eth: string;
   value_wei: string;
@@ -1278,7 +1292,7 @@ export type TxPlanStatus = 'pending' | 'match' | 'mismatch' | 'block_not_found' 
 export interface TxPlanResult {
   tx_source: string;
   expected_count: number;
-  expected_hashes: string[];
+  expected_hashes?: string[];
   truncated?: boolean;
   status: TxPlanStatus;
   included_count?: number;
@@ -1324,4 +1338,19 @@ export interface BidArtifactMetaEntry {
 export interface SlotBidArtifactsResponse {
   slot: number;
   bids: BidArtifactMetaEntry[];
+}
+
+// What is known about the next slot before its build starts (SSE
+// slot_outlook): the proposer, what it told buildoor, and its action plan.
+export interface SlotOutlook {
+  slot: number;
+  proposer_index?: number;
+  proposer_client?: string;
+  builder_api_registered?: boolean;
+  registered_gas_limit?: number;
+  proposer_prefs?: boolean;
+  prefs_fee_recipient?: string;
+  prefs_gas_limit?: number;
+  plan?: SlotPlan;
+  frozen: boolean;
 }

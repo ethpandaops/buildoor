@@ -1,0 +1,321 @@
+/* Overview (public landing) page. Colours come from tokens.css only. */
+
+.ov-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-bottom: 8px;
+}
+
+.ov-small {
+  font-size: 13px;
+}
+
+.ov-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.ov-link {
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+/* ---------------------------------------------------------------- hero -- */
+
+.ov-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding: 8px 0 4px;
+}
+
+.ov-hero-text {
+  flex: 1 1 420px;
+  min-width: 0;
+}
+
+.ov-hero-title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.ov-hero-lead {
+  margin: 8px 0 0;
+  max-width: 68ch;
+  color: var(--bd-muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.ov-hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ---------------------------------------------------------------- kpis -- */
+
+.ov-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+/* --------------------------------------------------------- slot strip -- */
+
+.ov-strip {
+  display: grid;
+  grid-template-columns: repeat(16, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ov-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 6px 2px;
+  border-radius: var(--bd-radius-sm);
+  border: 1px solid transparent;
+  min-width: 0;
+}
+
+.ov-slot-num {
+  font: 500 12px var(--bs-font-monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-slot-label {
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.ov-slot-won {
+  background: var(--bd-accent);
+  border-color: var(--bd-accent);
+  color: var(--bd-accent-contrast);
+}
+
+.ov-slot-built {
+  background: var(--bd-surface-3);
+  border-color: var(--bd-border-strong);
+  color: var(--bd-text);
+}
+
+.ov-slot-built .ov-slot-label {
+  color: var(--bd-muted);
+}
+
+.ov-slot-none {
+  background: transparent;
+  border: 1px dashed var(--bd-border-strong);
+  color: var(--bd-faint);
+}
+
+.ov-slot-current {
+  outline: 2px solid var(--bd-accent);
+  outline-offset: 2px;
+}
+
+.ov-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--bd-muted);
+}
+
+.ov-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ov-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+}
+
+.ov-swatch.ov-slot-current {
+  outline-width: 2px;
+  outline-offset: 1px;
+}
+
+/* ------------------------------------------------------------ columns -- */
+
+.ov-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ov-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ov-table {
+  font-size: 13px;
+}
+
+.ov-table th {
+  font-weight: 500;
+}
+
+.ov-table thead th {
+  color: var(--bd-muted);
+  font-size: 12px;
+  border-bottom-color: var(--bd-border);
+}
+
+.ov-table td,
+.ov-table tbody th {
+  border-bottom-color: var(--bd-border);
+  white-space: nowrap;
+}
+
+.ov-hash {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ov-hash code {
+  color: var(--bd-text);
+  font-size: 12px;
+}
+
+/* -------------------------------------------------------------- copy -- */
+
+.ov-copy-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--bd-border);
+  border-radius: var(--bd-radius-sm);
+  background: var(--bd-surface-2);
+  min-width: 0;
+}
+
+.ov-copy-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 0;
+  color: var(--bd-text);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.ov-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--bd-muted);
+  cursor: pointer;
+}
+
+.ov-copy-btn:hover {
+  background: var(--bd-surface-3);
+  color: var(--bd-text);
+}
+
+.ov-copy-btn:focus-visible {
+  outline: 2px solid var(--bd-accent);
+  outline-offset: 1px;
+}
+
+.ov-facts {
+  margin-top: 14px;
+}
+
+/* -------------------------------------------------------------- footer -- */
+
+.ov-footer {
+  border-top: 1px solid var(--bd-border);
+  padding-top: 14px;
+  font-size: 13px;
+}
+
+.ov-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.ov-footer a {
+  text-decoration: none;
+}
+
+/* ---------------------------------------------------------- responsive -- */
+
+@media (max-width: 991.98px) {
+  .ov-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .ov-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ov-strip {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+
+  .ov-hero-title {
+    font-size: 24px;
+  }
+}

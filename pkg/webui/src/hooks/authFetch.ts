@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { authStore } from '../stores/authStore';
-import type { FrozenPlan, LocalBuildPlan, ResolvedLocalBuildSettings, SlotPlan, SlotRule } from '../types';
+import type { LocalBuildPlan, SlotPlan, SlotRule } from '../types';
 
 // authHeaders returns the login Authorization header (empty when logged out
 // or in open mode), plus any extra headers.
@@ -23,7 +23,7 @@ export function useLoggedIn(): boolean {
   return useSyncExternalStore(subscribeAuth, getLoggedIn);
 }
 
-function localRedacted(local: LocalBuildPlan | ResolvedLocalBuildSettings | undefined): boolean {
+function localRedacted(local: LocalBuildPlan | undefined): boolean {
   return !!local?.transactions_redacted && !local.transactions?.length;
 }
 
@@ -32,8 +32,4 @@ function localRedacted(local: LocalBuildPlan | ResolvedLocalBuildSettings | unde
 // carries such a hidden list.
 export function planRedacted(plan: SlotPlan | SlotRule | null | undefined): boolean {
   return localRedacted(plan?.build?.local);
-}
-
-export function frozenRedacted(frozen: FrozenPlan | null | undefined): boolean {
-  return planRedacted(frozen?.plan) || localRedacted(frozen?.build?.local);
 }

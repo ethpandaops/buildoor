@@ -87,6 +87,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
+	rootCmd.PersistentFlags().Uint64("early-deposit-tip", defaults.EarlyDepositTipGwei, "Priority fee floor in Gwei of the early onboarding deposit transactions (0 = EL suggestion)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
@@ -133,6 +134,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
+	rootCmd.PersistentFlags().Uint64("local-build-start-delay", defaults.LocalBuild.StartDelayMs, "Delay of the testing_buildBlockV1 call after the engine build started, in ms (0 = at once): later transaction arrivals make it into the testing block; leave it time to finish before the engine payload is due")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
@@ -303,10 +305,11 @@ func initConfig(root *cobra.Command) error {
 			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
 			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
-		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
-		DepositAmount:     v.GetUint64("deposit-amount"),
-		TopupThreshold:    v.GetUint64("topup-threshold"),
-		ExtraData:         v.GetString("extra-data"),
+		DepositMaxFeeGwei:   v.GetUint64("deposit-max-fee"),
+		EarlyDepositTipGwei: v.GetUint64("early-deposit-tip"),
+		DepositAmount:       v.GetUint64("deposit-amount"),
+		TopupThreshold:      v.GetUint64("topup-threshold"),
+		ExtraData:           v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
@@ -337,6 +340,7 @@ func initConfig(root *cobra.Command) error {
 			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
+			StartDelayMs:            v.GetUint64("local-build-start-delay"),
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:            v.GetBool("txpool-enabled"),

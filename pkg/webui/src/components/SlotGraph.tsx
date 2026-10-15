@@ -10,6 +10,17 @@ import { BuildDelayLine } from './BuildDelayLine';
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
 
+// slotGraphHeight is the pixel height of a slot graph under a service status:
+// rows from top to bottom are chain+payload (always), ePBS and Builder API;
+// both builder rows active = 3 rows, otherwise 2 (one active, or an empty
+// row below the chain row).
+export function slotGraphHeight(status: ServiceStatus | null): number {
+  const epbsActive = status?.epbs_enabled ?? true;
+  const builderApiActive = status?.builder_api_enabled ?? false;
+  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
+  return activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+}
+
 interface SlotGraphProps {
   slot: number;
   state: SlotState;
@@ -324,7 +335,7 @@ const parentRows = (
 const truncateHashStr = (hash: string, len = 16): string =>
   hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
 
-export const SlotGraph: React.FC<SlotGraphProps> = ({
+const SlotGraphView: React.FC<SlotGraphProps> = ({
   slot,
   state,
   originalConfig,
@@ -364,11 +375,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
   const builderApiActive = effectiveServiceStatus?.builder_api_enabled ?? false;
 
-  // Rows from top to bottom:
-  //   chain+payload (always) | ePBS (if active) | Builder API (if active)
-  // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
-  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
-  const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+  const graphHeight = slotGraphHeight(effectiveServiceStatus);
+
+  // The testing build only runs for the canonical candidate; when its block
+  // feeds the bids, the "payload created" event describes that block.
+  const testingBlockBids = !!state.localBuild?.selected && state.localBuild.status === 'ready';
 
   // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
@@ -378,13 +389,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   if (!epbsActive && !builderApiActive) rowIdx++; // empty second row
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
-  // Slot label
-  let slotLabel = `Slot ${slot}`;
-  if (slot === currentDisplaySlot) {
-    slotLabel += ' (now)';
-  } else if (slot === currentDisplaySlot + 1) {
-    slotLabel += ' (next)';
-  }
+  // The now/next tag goes on its own line: the label column is too narrow for both.
+  const slotTag = slot === currentDisplaySlot ? 'now' : slot === currentDisplaySlot + 1 ? 'next' : null;
 
   const showPopover = useCallback((e: React.MouseEvent, data: PopoverData,
     extra?: Omit<PopoverState, 'data' | 'x' | 'y'>) => {
@@ -483,7 +489,10 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   return (
     <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
       <div className="slot-graph-label">
-        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>{slotLabel}</span>
+        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>
+          <span className="slot-graph-slot-number">Slot {slot}</span>
+          {slotTag && <span className="slot-graph-slot-tag">{slotTag}</span>}
+        </span>
         {epbsActive && epbsRowBottom >= 0 && (
           <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
         )}
@@ -716,7 +725,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           )}
 
 
-          {/* Custom build, live: from its start until the final local_build event (which
+          {/* Testing build, live: from its start until the final local_build event (which
               waits for the engine build and the bid choice) takes over below. */}
           {(() => {
             const live = state.localBuildLive;
@@ -747,7 +756,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   ]
                 : [])
             ];
-            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
             const dotClass = live.phase === 'ready'
               ? 'local-build-created'
               : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
@@ -779,12 +788,18 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             if (lb.status === 'ready' && !lb.el) return null;
 
             const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
+            // The testing build may start after the engine build (start delay).
+            const localStartMs = lb.started_at ? lb.started_at - slotStartTime : buildStartMs;
+            const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
             const items = [
-              { label: 'Build Start', value: `${buildStartMs}ms` },
+              { label: 'Build Start', value: `${localStartMs}ms` },
+              ...(localStartMs !== buildStartMs
+                ? [{ label: 'Start Delay', value: `${localStartMs - buildStartMs}ms after the engine build` }]
+                : []),
               ...(lb.status === 'ready' && lb.built_at
                 ? [
                     { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },
-                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - buildStartMs}ms` }
+                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - localStartMs}ms` }
                   ]
                 : [{ label: lb.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${lb.at - slotStartTime}ms` }]),
               { label: 'Status', value: `${lb.status}${lb.skip_reason ? ` (${lb.skip_reason})` : ''}` },
@@ -805,7 +820,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.info?.selection ? [
                 { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
                 ...(lb.info.selection.fill_candidates
-                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
+                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
                   : []),
                 ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
                   ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
@@ -815,19 +830,20 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
               ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
               ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
               ...(lb.el ? [
+                { label: 'Engine Block Hash', value: truncateHash(lb.el.block_hash), copyValue: lb.el.block_hash },
                 { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
               ] : [])
             ];
-            const data = { title: 'Custom Build (testing_buildBlockV1)', items };
+            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
             const dotClass = lb.status === 'ready'
               ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
               : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
             return (
               <>
-                {lb.status === 'ready' && buildStartX < 100 && (
+                {lb.status === 'ready' && localStartX < 100 && (
                   <BuildDelayLine
-                    leftPct={buildStartX}
+                    leftPct={localStartX}
                     slotStartTime={slotStartTime}
                     rangeStart={rangeStart}
                     totalRange={totalRange}
@@ -912,7 +928,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
-              title: multiCandidate ? 'Payloads Created' : 'Payload Created',
+              title: multiCandidate
+                ? 'Payloads Created'
+                : testingBlockBids ? 'Payload Created (testing block)' : 'Payload Created',
               wide: true,
               artifact: {
                 url: `/api/buildoor/slot-results/${slot}/payload`,
@@ -936,6 +954,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 : undefined,
               items: [
                 { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                // payload_ready carries the payload the bids use: with a testing
+                // build in front that is the testing block, not the engine's.
+                ...(state.localBuild ? [{
+                  label: 'Built By',
+                  value: testingBlockBids
+                    ? 'testing build (testing_buildBlockV1), used for bids'
+                    : 'engine build, used for bids'
+                }] : []),
                 ...(state.payloadBlockHash ? [{
                   label: 'Block Hash',
                   value: truncateHash(state.payloadBlockHash),
@@ -982,7 +1008,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   label: 'Contents',
                   value: `${state.payloadDetail.numTransactions ?? 0} txs, ${state.payloadDetail.numBlobs ?? 0} blobs, ` +
                     `${state.payloadDetail.numWithdrawals ?? 0} wdrls, ${state.payloadDetail.numExecRequests ?? 0} reqs`
-                }] : [])
+                }] : []),
+                ...(testingBlockBids && state.localBuild?.el ? [
+                  {
+                    label: 'Engine Block Hash',
+                    value: truncateHash(state.localBuild.el.block_hash),
+                    copyValue: state.localBuild.el.block_hash
+                  },
+                  {
+                    label: 'Engine Block',
+                    value: `${state.localBuild.el.num_transactions} txs, ` +
+                      formatGwei(Number(BigInt(state.localBuild.el.block_value_wei || '0') / 1000000000n))
+                  }
+                ] : [])
               ]
             },
             'payload'
@@ -1449,7 +1487,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           </div>
         )}
 
-        {/* Current time indicator - animated via requestAnimationFrame */}
+        {/* Current time indicator - a compositor animation, no per-frame script */}
         <CurrentTimeIndicator
           slotStartTime={slotStartTime}
           rangeStart={rangeStart}
@@ -1475,3 +1513,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     </div>
   );
 };
+
+// SlotGraph re-renders only when its own slot's state (or the config/status
+// it shows) changes; the stream updates one slot at a time, and the time
+// based parts (now-line, growing build lines) are compositor animations.
+export const SlotGraph = React.memo(SlotGraphView);

@@ -62,6 +62,9 @@ type PlanService struct {
 	// slotsBuilt counts schedule-consuming builds for next_n mode (forced
 	// builds are exempt). Guarded by mu.
 	slotsBuilt uint64
+	// schedule is the schedule the next_n budget was started for; only a
+	// change of it restarts the budget. Guarded by mu.
+	schedule config.ScheduleConfig
 
 	changes     utils.Dispatcher[*PlanChangeEvent]
 	ruleChanges utils.Dispatcher[*RuleChangeEvent]
@@ -82,6 +85,7 @@ func NewPlanService(cfg *config.Config, chainSvc chain.Service, log logrus.Field
 		store:    memstore.New[phase0.Slot, *SlotPlan](),
 		rules:    memstore.New[string, *SlotRule](),
 		frozen:   make(map[phase0.Slot]*FrozenPlan, 64),
+		schedule: cfg.Schedule,
 		log:      log.WithField("component", "action-plan"),
 	}
 }
@@ -327,12 +331,20 @@ func (s *PlanService) OnSlotBuilt(slot phase0.Slot) {
 	s.slotsBuilt++
 }
 
-// UpdateConfig reacts to global settings changes. Switching to next_n mode
-// resets the built-slot counter so the budget restarts (mirroring the
-// previous slot-manager behavior).
+// UpdateConfig reacts to global settings changes. A changed schedule in
+// next_n mode resets the built-slot counter so the new budget starts fresh;
+// writes of other settings leave the running budget alone.
 func (s *PlanService) UpdateConfig() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Every settings write lands here; the budget restarts only when the
+	// schedule itself changed.
+	if s.cfg.Schedule == s.schedule {
+		return
+	}
+
+	s.schedule = s.cfg.Schedule
 
 	if s.cfg.Schedule.Mode == config.ScheduleModeNextN {
 		s.slotsBuilt = 0
