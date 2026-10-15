@@ -259,7 +259,13 @@ npm run clean
      `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
      pending txs from `txpool_content` fill the remaining gas — same
      parent-state checks, each sender continuing at the nonce/balance the pool
-     left, highest tip first, pool duplicates and blob txs skipped; a refusal
+     left, highest tip first, pool duplicates skipped; `txpool_content` lists
+     blob txs without their blobs, so the SELECTED ones are completed from the
+     EL blob pool via `engine_getBlobs` (V1 pre-Osaka, V2 after: one batch
+     request, per-tx fallback since it answers all-or-nothing; commitments
+     computed and checked against the versioned hashes — `payload_builder/
+     blobsidecars.go`), an incomplete one is dropped with its sender's later
+     fill txs (`blob_unavailable`); a refusal
      retries once without the fill, an unreadable EL mempool builds from the
      pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL

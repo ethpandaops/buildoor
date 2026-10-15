@@ -678,9 +678,16 @@ func (b *PayloadBuilder) buildLocal(
 
 		// The fill is best effort: without the EL mempool the block is built
 		// from the pool alone and the reason recorded.
-		var fill []*types.Transaction
+		var (
+			fill         []*types.Transaction
+			fillSidecars txpool.SidecarSource
+		)
 
 		if req.TxSource == config.TxSourceTxPoolELFill {
+			if source, ok := newEngineBlobSource(b.engineClient, prelude.engineVersion); ok {
+				fillSidecars = source
+			}
+
 			pending, err := b.localClient.PendingPoolTransactions(ctx)
 			if err != nil {
 				info.FillError = err.Error()
@@ -705,6 +712,7 @@ func (b *PayloadBuilder) buildLocal(
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
 			Fill:           fill,
+			FillSidecars:   fillSidecars,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("pool selection failed: %w", err)}

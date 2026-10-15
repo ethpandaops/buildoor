@@ -256,6 +256,7 @@ export interface TxSelectionSummary {
   fill_candidates?: number;
   fill_selected?: number;
   fill_gas_sum?: number;
+  fill_blobs?: number;
   fill_skipped?: Record<string, number>;
 }
 

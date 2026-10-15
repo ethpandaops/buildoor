@@ -122,7 +122,7 @@ const PAYLOAD_SOURCES = [
 
 const TX_SOURCES = [
   { value: 'txpool', label: 'buildoor mempool', short: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
-  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions are left out). If the EL refuses the list, the build retries once without the EL part." },
+  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs; geth does not list its blob transactions, so they stay out there). If the EL refuses the list, the build retries once without the EL part." },
   { value: 'el_mempool', label: 'EL mempool', short: 'EL mempool', hint: 'The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths).' },
   { value: 'empty', label: 'None (empty block)', short: 'empty', hint: 'No transactions at all.' },
 ];

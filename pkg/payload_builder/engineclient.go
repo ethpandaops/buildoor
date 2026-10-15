@@ -28,6 +28,13 @@ type EngineClient interface {
 		payloadID paris.PayloadID,
 	) (*engineall.GetPayloadResponse, error)
 
+	// GetBlobsAgnostic reads blobs and proofs from the EL blob pool
+	// (engine_getBlobsV1 / V2 by the request version), all-or-nothing.
+	GetBlobsAgnostic(
+		ctx context.Context,
+		request *engineall.GetBlobsRequest,
+	) (*engineall.GetBlobsResponse, error)
+
 	// ClientVersion exchanges client identity via engine_getClientVersionV1.
 	ClientVersion(
 		ctx context.Context,

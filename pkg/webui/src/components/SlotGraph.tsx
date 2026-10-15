@@ -820,7 +820,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               ...(lb.info?.selection ? [
                 { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
                 ...(lb.info.selection.fill_candidates
-                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
+                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
                   : []),
                 ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
                   ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
