@@ -345,7 +345,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
           },
         ],
       },
-      { id: 'amounts', label: 'Amounts', sections: [{ keys: ['deposit_amount', 'topup_threshold', 'deposit_max_fee'] }] },
+      { id: 'amounts', label: 'Amounts', sections: [{ keys: ['deposit_amount', 'topup_threshold', 'deposit_max_fee', 'early_deposit_tip'] }] },
     ],
     summary: [
       { label: 'Target keys', keys: ['builder_keys.target_count'] },

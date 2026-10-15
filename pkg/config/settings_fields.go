@@ -168,6 +168,7 @@ func Fields() []Field {
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
 		newField(KeyDepositMaxFee, "deposit-max-fee", func(c *Config) *uint64 { return &c.DepositMaxFeeGwei }),
+		newField(KeyEarlyDepositTip, "early-deposit-tip", func(c *Config) *uint64 { return &c.EarlyDepositTipGwei }),
 
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),

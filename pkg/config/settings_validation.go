@@ -40,6 +40,9 @@ func ValidateSetting(key string, v any) error {
 	case KeyLocalBuildMaxAttempts, KeyTxPoolMaxPoolTxs, KeyTxPoolMaxTxsPerSender:
 		return requirePositive(key, v)
 
+	case KeyEarlyDepositTip:
+		return requireAtMost(key, v, maxEarlyDepositTipGwei)
+
 	case KeyLocalBuildStartDelayMs:
 		// Beyond a slot the testing block could never feed its target.
 		return requireAtMost(key, v, maxLocalBuildStartDelayMs)
@@ -145,6 +148,10 @@ func ValidateServeCandidates(policy string) error {
 
 	return nil
 }
+
+// maxEarlyDepositTipGwei bounds early_deposit_tip: at ~100k gas per deposit a
+// tip of 10000 gwei already costs about 1 ETH per transaction.
+const maxEarlyDepositTipGwei = 10000
 
 // maxLocalBuildStartDelayMs bounds local_build.start_delay_ms (one 12 s slot;
 // shorter slots need a shorter delay to be useful, which is left to the

@@ -155,6 +155,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--deposit-amount` | `50000000000` | Amount of every builder key deposit — early onboarding, registration and each top-up (Gwei, default 50 ETH). There is no separate top-up amount |
 | `--topup-threshold` | `10000000000` | Effective balance below which a key is topped up by `--deposit-amount` (Gwei, default 10 ETH) |
 | `--deposit-max-fee` | `1000000` | Max builder deposit queue fee; deposits and top-ups wait above it (Gwei, 0 = no limit) |
+| `--early-deposit-tip` | `50` | Priority fee floor of the early onboarding deposit transactions (Gwei, 0 = EL suggestion) |
 
 ### Local Build & Transaction Pool Flags
 

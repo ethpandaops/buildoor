@@ -24,6 +24,7 @@ func DefaultConfig() *Config {
 		DepositAmount:               50000000000, // 50 ETH in Gwei; deposits and top-ups alike
 		TopupThreshold:              10000000000, // 10 ETH in Gwei
 		DepositMaxFeeGwei:           1000000,     // 0.001 ETH in Gwei; delay deposits/topups above this queue fee
+		EarlyDepositTipGwei:         50,
 		ExtraData:                   "buildoor/",
 		SlotResultRetentionEpochs:   100,
 		SlotArtifactRetentionEpochs: 100,

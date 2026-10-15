@@ -83,9 +83,10 @@ const (
 	KeySlotArtifactRetentionEpochs = "slot_artifact_retention_epochs"
 	KeySlotArtifactCaptureEnabled  = "slot_artifact_capture_enabled"
 
-	KeyDepositAmount  = "deposit_amount"
-	KeyTopupThreshold = "topup_threshold"
-	KeyDepositMaxFee  = "deposit_max_fee"
+	KeyDepositAmount   = "deposit_amount"
+	KeyTopupThreshold  = "topup_threshold"
+	KeyDepositMaxFee   = "deposit_max_fee"
+	KeyEarlyDepositTip = "early_deposit_tip"
 
 	KeyBuilderKeysTargetCount = "builder_keys.target_count"
 	KeyBuilderKeysMaxIndex    = "builder_keys.max_index"

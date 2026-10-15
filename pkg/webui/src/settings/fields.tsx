@@ -1554,6 +1554,23 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'early_deposit_tip': {
+    label: 'Early deposit priority fee',
+    short: 'Early deposit tip',
+    kind: 'number',
+    unit: 'gwei',
+    min: 0,
+    max: 10000,
+    zeroLabel: 'EL suggestion',
+    hint: 'Minimum priority fee of the early onboarding deposits sent before the Gloas fork (0 = EL suggestion).',
+    help: (
+      <>
+        Minimum priority fee in gwei of the early onboarding deposit transactions
+        (<code>early_deposit_tip</code>), sent through the regular deposit contract before the
+        Gloas fork. The EL&apos;s suggested tip is used when it is higher. At most 10000 gwei.
+      </>
+    ),
+  },
 };
 
 // execPaymentHelp is shared by the absolute and the percentage execution

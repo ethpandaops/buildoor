@@ -57,11 +57,14 @@ type Config struct {
 	TopupThreshold uint64 `yaml:"topup_threshold" json:"topup_threshold"`
 	// DepositMaxFeeGwei delays builder deposits and top-ups while the deposit
 	// contract's queue fee is above it (0 = no limit).
-	DepositMaxFeeGwei uint64         `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
+	DepositMaxFeeGwei uint64 `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+	// EarlyDepositTipGwei is the priority fee floor in gwei of the early
+	// onboarding deposit transactions (0 = the EL's suggestion).
+	EarlyDepositTipGwei uint64         `yaml:"early_deposit_tip" json:"early_deposit_tip"`
+	Schedule            ScheduleConfig `yaml:"schedule" json:"schedule"`
+	EPBS                EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal              RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build               BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
 	// LocalBuild is the opt-in local block building extension: an additional
 	// payload per slot built through the EL's testing_buildBlockV1 from a
 	// chosen transaction source, and the selector deciding which payload

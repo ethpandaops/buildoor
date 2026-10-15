@@ -87,6 +87,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
+	rootCmd.PersistentFlags().Uint64("early-deposit-tip", defaults.EarlyDepositTipGwei, "Priority fee floor in Gwei of the early onboarding deposit transactions (0 = EL suggestion)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
@@ -304,10 +305,11 @@ func initConfig(root *cobra.Command) error {
 			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
 			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
-		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
-		DepositAmount:     v.GetUint64("deposit-amount"),
-		TopupThreshold:    v.GetUint64("topup-threshold"),
-		ExtraData:         v.GetString("extra-data"),
+		DepositMaxFeeGwei:   v.GetUint64("deposit-max-fee"),
+		EarlyDepositTipGwei: v.GetUint64("early-deposit-tip"),
+		DepositAmount:       v.GetUint64("deposit-amount"),
+		TopupThreshold:      v.GetUint64("topup-threshold"),
+		ExtraData:           v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),

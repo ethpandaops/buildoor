@@ -33,6 +33,7 @@ export interface Config {
   deposit_amount: number;
   topup_threshold: number;
   deposit_max_fee: number;
+  early_deposit_tip?: number;
   payload_build_time?: number;
   extra_data?: string;
   slot_result_retention_epochs?: number;

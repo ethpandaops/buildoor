@@ -539,7 +539,8 @@ npm run clean
      wired from the settings `OnChange`)
    - Early onboarding covers the WHOLE target set: the pre-Gloas deposits sit in
      the pending queue together and the fork transition converts them all, so
-     `pending_deposit_sim.go` asks whether the batch's LAST entry survives
+     `pending_deposit_sim.go` asks whether the batch's FIRST entry survives
+     (the queue drains from the front)
    - Optional component (only active with `--lifecycle` flag)
 
 4b. **Slot Results Tracker** (`pkg/slot_results/`) — generic per-slot outcome history
@@ -721,8 +722,10 @@ Key config sections:
   contract, the registering builder deposit, and each top-up; there is
   deliberately no separate top-up amount), `--topup-threshold` (effective
   balance below which a key is topped up), `--deposit-max-fee` (deposits and
-  top-ups wait while the queue fee is above it). All three are mutable
-  settings edited in the Lifecycle drawer tab
+  top-ups wait while the queue fee is above it), `--early-deposit-tip`
+  (priority fee floor of the early onboarding deposits, default 50 gwei, max
+  10000, 0 = EL suggestion). All four are mutable settings edited in the
+  Lifecycle drawer tab
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
