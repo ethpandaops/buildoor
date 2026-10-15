@@ -323,6 +323,19 @@ jq -e '.txpool.available == true' <<<"$local_status" >/dev/null
 update_settings '{"epbs_enabled": true, "builder_api_enabled": false, "txpool.enabled": true, "local_build.enabled": true, "local_build.payload_source": "local", "local_build.tx_source": "txpool"}'
 local_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
 
+# spamoor calls /rpc with an API key: anonymous callers are rate limited
+# (txpool.rpc_anon_rate, 20 calls/s by default), which the burst of its
+# wallet preparation exceeds, while keys default to unlimited
+# (txpool.rpc_key_rate 0). The key travels in the URL path.
+rpc_key=$(curl --fail --silent --show-error \
+  -H 'Content-Type: application/json' \
+  -d '{"label":"e2e-spamoor"}' \
+  "$BUILDOOR_URL/api/buildoor/rpc-access/keys" | jq -r '.secret')
+if [[ -z "$rpc_key" || "$rpc_key" == "null" ]]; then
+  echo "Could not create an /rpc API key for spamoor" >&2
+  exit 1
+fi
+
 # Fill the pool. buildoor's /rpc is spamoor's ONLY host: it proxies the
 # read-only calls spamoor follows the chain with, and any additional host
 # would receive every transaction too (spamoor fans submissions out to all
@@ -330,7 +343,7 @@ local_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
 # spamoor runs until the phase is done: the verification below needs
 # sustained load across several won blocks, not a one-shot burst.
 docker run --rm --network "kt-$ENCLAVE_NAME" "$SPAMOOR_IMAGE" eoatx \
-  -h "name(buildoor)http://buildoor:8080/rpc" \
+  -h "name(buildoor)http://buildoor:8080/rpc/$rpc_key" \
   -p "$SPAMOOR_PRIVKEY" \
   --throughput "$SPAMOOR_THROUGHPUT" --max-pending 100 --max-wallets 10 \
   --basefee 100 --tipfee 2 --rebroadcast 30 \
