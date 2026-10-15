@@ -662,3 +662,30 @@ func TestLocalBuildInfoPublicDropsTransactionHashes(t *testing.T) {
 	require.Equal(t, []string{"0x01"}, info.Selection.Hashes)
 	require.Equal(t, "0x03", info.Dropped[0].Hash)
 }
+
+// TestLocalBuildInfoPrivateTxs counts the transactions buildoor supplied
+// itself: the sent list minus the EL mempool fill and the inclusion list,
+// unless those were dropped on a retry.
+func TestLocalBuildInfoPrivateTxs(t *testing.T) {
+	hashes := func(n int) []string { return make([]string, n) }
+
+	tests := []struct {
+		name string
+		info *LocalBuildInfo
+		want int
+	}{
+		{name: "engine payload", info: nil, want: 0},
+		{name: "el mempool source", info: &LocalBuildInfo{TxSource: "el_mempool"}, want: 0},
+		{name: "pool only", info: &LocalBuildInfo{ExpectedHashes: hashes(3)}, want: 3},
+		{name: "pool and fill", info: &LocalBuildInfo{ExpectedHashes: hashes(30), FillTxs: 29}, want: 1},
+		{name: "fill dropped", info: &LocalBuildInfo{ExpectedHashes: hashes(1), FillTxs: 29, FillDropped: true}, want: 1},
+		{name: "inclusion list", info: &LocalBuildInfo{ExpectedHashes: hashes(5), InclusionListTxs: 2}, want: 3},
+		{name: "inclusion list dropped", info: &LocalBuildInfo{ExpectedHashes: hashes(3), InclusionListTxs: 2, InclusionListDropped: true}, want: 3},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.info.PrivateTxs())
+		})
+	}
+}

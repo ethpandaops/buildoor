@@ -465,6 +465,7 @@ type BidWonStreamEvent struct {
 	Slot            uint64 `json:"slot"`
 	BlockHash       string `json:"block_hash"`
 	NumTransactions int    `json:"num_transactions"`
+	NumPrivateTxs   *int   `json:"num_private_txs,omitempty"`
 	NumBlobs        int    `json:"num_blobs"`
 	ValueETH        string `json:"value_eth"`
 	ValueWei        string `json:"value_wei"`
@@ -2570,6 +2571,7 @@ func (m *EventStreamManager) BroadcastBidWon(wonBlock *payload_bidder.WonBlock) 
 			Slot:            wonBlock.Slot,
 			BlockHash:       wonBlock.BlockHash,
 			NumTransactions: wonBlock.NumTransactions,
+			NumPrivateTxs:   wonBlock.NumPrivateTxs,
 			NumBlobs:        wonBlock.NumBlobs,
 			ValueETH:        wonBlock.ValueETH,
 			ValueWei:        wonBlock.ValueWei,

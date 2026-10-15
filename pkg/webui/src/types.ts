@@ -852,6 +852,9 @@ export interface BidWonEntry {
   slot: number;
   block_hash: string;
   num_transactions: number;
+  // Transactions buildoor supplied itself (its own mempool or a plan list);
+  // the rest came from the EL's public mempool. Absent on older records.
+  num_private_txs?: number;
   num_blobs: number;
   value_eth: string;
   value_wei: string;

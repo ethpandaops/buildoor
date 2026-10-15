@@ -1130,8 +1130,10 @@ proposer.
   filtered included-slot view (`GetWonBlocks`, slot-descending). History length
   follows `slot-result-retention-epochs` (default 100 epochs) instead of the old
   1000-entry cap; the legacy `won_blocks` kv namespace is migrated once on start
-- `WonBlock` wire fields (unchanged): source, slot, block_hash, num_transactions,
-  num_blobs, value_wei, value_eth, timestamp
+- `WonBlock` wire fields: source, slot, block_hash, num_transactions,
+  num_private_txs (supplied by buildoor itself — own mempool or plan list — vs
+  the EL's public mempool; `LocalBuildInfo.PrivateTxs`, absent on older
+  records), num_blobs, value_wei, value_eth, timestamp
 
 - **REST API** (`pkg/webui/handlers/api/api.go`):
   - Endpoint: `GET /api/buildoor/bids-won?offset=0&limit=20`

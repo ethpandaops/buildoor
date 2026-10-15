@@ -568,3 +568,25 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 func decodeHexBytes(s string) ([]byte, error) {
 	return hexutil.Decode(s)
 }
+
+// PrivateTxs counts the transactions of a testing build that buildoor
+// supplied itself — from its own mempool or an action plan's list — rather
+// than taking them from the EL's public mempool (the EL mempool fill and the
+// inclusion-list transactions). The list sent to the EL is exactly what the
+// payload holds (it is verified against the payload before use).
+func (i *LocalBuildInfo) PrivateTxs() int {
+	if i == nil || i.ExpectedHashes == nil {
+		return 0
+	}
+
+	public := 0
+	if !i.FillDropped {
+		public += i.FillTxs
+	}
+
+	if !i.InclusionListDropped {
+		public += i.InclusionListTxs
+	}
+
+	return max(0, len(i.ExpectedHashes)-public)
+}

@@ -57,6 +57,9 @@ export const BlocksWonCard: React.FC<BlocksWonCardProps> = ({ entries, total, lo
                 <th scope="col" className="text-end">
                   Txs
                 </th>
+                <th scope="col" className="text-end" title="Transactions from buildoor's private mempool / from the public mempool">
+                  Private / public
+                </th>
                 <th scope="col" className="text-end">
                   Blobs
                 </th>
@@ -81,6 +84,11 @@ export const BlocksWonCard: React.FC<BlocksWonCardProps> = ({ entries, total, lo
                     </span>
                   </td>
                   <td className="text-end">{entry.num_transactions}</td>
+                  <td className="text-end">
+                    {entry.num_private_txs === undefined
+                      ? '—'
+                      : `${entry.num_private_txs} / ${entry.num_transactions - entry.num_private_txs}`}
+                  </td>
                   <td className="text-end">{entry.num_blobs}</td>
                   <td className="text-end ov-num">{formatValue(entry.value_eth)}</td>
                   <td className="text-end bd-muted">

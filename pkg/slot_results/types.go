@@ -279,13 +279,16 @@ type RevealAttempt struct {
 // InclusionResult records that the slot's payload was seen included at the
 // head. Field semantics match the WonBlock wire shape (minus the slot).
 type InclusionResult struct {
-	Source          string    `json:"source"` // "epbs" | "builder_api"
-	BlockHash       string    `json:"block_hash"`
-	NumTransactions int       `json:"num_transactions"`
-	NumBlobs        int       `json:"num_blobs"`
-	ValueWei        string    `json:"value_wei"`
-	ValueETH        string    `json:"value_eth"`
-	Timestamp       time.Time `json:"timestamp"`
+	Source          string `json:"source"` // "epbs" | "builder_api"
+	BlockHash       string `json:"block_hash"`
+	NumTransactions int    `json:"num_transactions"`
+	// NumPrivateTxs counts the transactions buildoor supplied itself (own
+	// mempool or plan list); absent on records from before it was tracked.
+	NumPrivateTxs *int      `json:"num_private_txs,omitempty"`
+	NumBlobs      int       `json:"num_blobs"`
+	ValueWei      string    `json:"value_wei"`
+	ValueETH      string    `json:"value_eth"`
+	Timestamp     time.Time `json:"timestamp"`
 
 	// PayloadStatus is the canonical verdict for the won payload: pending
 	// until the first follow-up block is seen, then canonical or missed based
