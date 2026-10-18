@@ -194,8 +194,10 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}))
 
 	// pprof handler — net/http/pprof registers itself on http.DefaultServeMux
-	// via the blank import above.
-	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
+	// via the blank import above. Profiles need a login (bearer token, as
+	// for every private API): the UI is public, and a profile both exposes
+	// the process internals and costs CPU to collect.
+	router.PathPrefix("/debug/pprof/").Handler(requireLogin(authHandler, http.DefaultServeMux))
 
 	// Optional raw HTML snippet injected into <head> of the served index.html
 	// (e.g. the panda menu loader / analytics). The CLI flag wins; fall back
@@ -254,4 +256,19 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}()
 
 	return apiHandler
+}
+
+// requireLogin answers 401 unless the request carries a valid login token
+// (always valid when no auth provider is configured).
+func requireLogin(authHandler *auth.AuthHandler, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "login required", http.StatusUnauthorized)
+
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }

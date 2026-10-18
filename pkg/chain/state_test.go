@@ -22,13 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func testValidators(pubkeys ...phase0.BLSPubKey) []*phase0.Validator {
-	out := make([]*phase0.Validator, len(pubkeys))
-	for i, pk := range pubkeys {
-		out[i] = &phase0.Validator{PublicKey: pk}
-	}
-
-	return out
+// testValidators returns a freshly allocated pubkey array, as every state
+// snapshot decodes its own.
+func testValidators(pubkeys ...phase0.BLSPubKey) []phase0.BLSPubKey {
+	return append([]phase0.BLSPubKey(nil), pubkeys...)
 }
 
 func TestPublishValidatorIndexCache_NeverAliasesThePreviousBackingArray(t *testing.T) {

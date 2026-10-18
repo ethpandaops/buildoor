@@ -57,6 +57,9 @@ type Tracker struct {
 
 	store     *memstore.Store[phase0.Slot, *SlotResult]
 	artifacts *ArtifactStore
+	// kv reads back the full records of slots whose memory keeps only the
+	// summary (see resident.go); nil without a state-db.
+	kv *db.KVPersistence[phase0.Slot, *SlotResult]
 
 	mu        sync.Mutex
 	lastFired map[phase0.Slot]time.Time // update-event coalescing per slot
@@ -107,7 +110,13 @@ func NewTracker(cfg *config.Config, chainSvc chain.Service, stateDB *db.Database
 func (t *Tracker) SetPersistence(ctx context.Context, stateDB *db.Database) {
 	migrateWonBlocks(stateDB, t.chainSvc.GetChainSpec().SlotsPerEpoch, t.log)
 
-	t.store.SetPersistence(ctx, db.NewKVPersistence(stateDB, Namespace, ResultCodec{}), t.log)
+	persistence := db.NewKVPersistence(stateDB, Namespace, ResultCodec{})
+	t.store.SetPersistence(ctx, persistence, t.log)
+
+	if stateDB.Enabled() {
+		t.kv = persistence
+		t.compactBefore(t.residentBefore(t.chainSvc.GetCurrentSlot()))
+	}
 }
 
 // Start subscribes to all outcome sources and launches the tracker loop and
@@ -1092,7 +1101,13 @@ func (t *Tracker) upsert(slot phase0.Slot, mutate func(*SlotResult)) {
 
 	var result *SlotResult
 	if existing, ok := t.store.Get(slot); ok {
-		result = existing.Clone()
+		full, ok := t.full(slot, existing)
+		if !ok {
+			// Mutating the summary would persist it over the full record.
+			return
+		}
+
+		result = full.Clone()
 	} else {
 		frozen := t.planSvc.Freeze(slot)
 		result = &SlotResult{
@@ -1185,7 +1200,9 @@ func (t *Tracker) Get(slot phase0.Slot) *SlotResult {
 		return nil
 	}
 
-	return result.Clone()
+	full, _ := t.full(slot, result)
+
+	return full.Clone()
 }
 
 // GetRange returns deep copies of all results within [minSlot, maxSlot],
@@ -1196,7 +1213,26 @@ func (t *Tracker) GetRange(minSlot, maxSlot phase0.Slot) []*SlotResult {
 
 	for slot, result := range entries {
 		if slot >= minSlot && slot <= maxSlot {
-			results = append(results, result.Clone())
+			full, _ := t.full(slot, result)
+			results = append(results, full.Clone())
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool { return results[i].Slot < results[j].Slot })
+
+	return results
+}
+
+// GetSummaries returns the summaries (SlotResult.Summary) of all results
+// within [minSlot, maxSlot], slot-ascending, without reading full records
+// back from the state-db.
+func (t *Tracker) GetSummaries(minSlot, maxSlot phase0.Slot) []*SlotResult {
+	entries := t.store.Entries()
+	results := make([]*SlotResult, 0, len(entries))
+
+	for slot, result := range entries {
+		if slot >= minSlot && slot <= maxSlot {
+			results = append(results, result.Summary())
 		}
 	}
 
@@ -1294,4 +1330,6 @@ func (t *Tracker) pruneForEpoch(epoch phase0.Epoch) {
 		cutoff := phase0.Slot((uint64(epoch) - retention) * slotsPerEpoch)
 		t.artifacts.PruneBefore(cutoff)
 	}
+
+	t.compactBefore(t.residentBefore(phase0.Slot(uint64(epoch) * slotsPerEpoch)))
 }

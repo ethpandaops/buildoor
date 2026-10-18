@@ -320,19 +320,21 @@ func (h *APIHandler) GetSlotResults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := h.resultTracker.GetRange(phase0.Slot(minSlot), phase0.Slot(maxSlot))
+	// The grid needs a few fields per slot; the full records of a wide range
+	// run to megabytes (and older ones are read back from the state-db).
+	var results []*slot_results.SlotResult
+	if r.URL.Query().Get("view") == "summary" {
+		results = h.resultTracker.GetSummaries(phase0.Slot(minSlot), phase0.Slot(maxSlot))
+	} else {
+		results = h.resultTracker.GetRange(phase0.Slot(minSlot), phase0.Slot(maxSlot))
+	}
+
 	if results == nil {
 		results = []*slot_results.SlotResult{}
 	}
 
 	if !h.isLoggedIn(r) {
 		results = slot_results.RedactedResults(results)
-	}
-
-	// The grid needs a few fields per slot; the full records of a wide range
-	// run to megabytes.
-	if r.URL.Query().Get("view") == "summary" {
-		results = slot_results.SummaryResults(results)
 	}
 
 	writeJSON(w, http.StatusOK, &SlotResultsResponse{

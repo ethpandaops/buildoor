@@ -307,6 +307,10 @@ type SlotResult struct {
 	Epoch uint64      `json:"epoch"`
 	Fork  string      `json:"fork"`
 
+	// resident marks the in-memory summary of a record whose full version
+	// lives in the state-db (see Tracker.compactBefore).
+	resident bool
+
 	// AppliedPlan is the frozen plan snapshot the slot executed under.
 	AppliedPlan *action_plan.FrozenPlan `json:"applied_plan,omitempty"`
 
@@ -574,14 +578,4 @@ func (r *SlotResult) Summary() *SlotResult {
 	}
 
 	return s
-}
-
-// SummaryResults applies Summary to every result.
-func SummaryResults(results []*SlotResult) []*SlotResult {
-	out := make([]*SlotResult, len(results))
-	for i, result := range results {
-		out[i] = result.Summary()
-	}
-
-	return out
 }
