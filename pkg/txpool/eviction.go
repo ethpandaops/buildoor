@@ -41,6 +41,7 @@ func (p *Pool) run() {
 		case event := <-headSub.Channel():
 			if hash, ok := p.executionHashOf(event.Block); ok {
 				pending[hash] = event.Slot
+				p.mirror.noteBlock(p.ctx, hash)
 			}
 
 			p.processPending(pending, event.Slot)
@@ -49,6 +50,7 @@ func (p *Pool) run() {
 		case event := <-payloadSub.Channel():
 			if hash, ok := p.executionHashOf(event.BlockRoot); ok {
 				pending[hash] = event.Slot
+				p.mirror.noteBlock(p.ctx, hash)
 			}
 
 			p.processPending(pending, event.Slot)

@@ -89,7 +89,7 @@ func TestSelectFillCompletesBlobTransactions(t *testing.T) {
 		MaxBlobs:       2,
 		IncludeBlobTxs: true,
 		BlobEncoding:   config.BlobEncodingNetwork,
-		Fill:           []*types.Transaction{completedTx, missingTx, missingNext, largeTx, plainTx},
+		Fill:           fillOf(t, completedTx, missingTx, missingNext, largeTx, plainTx),
 		FillSidecars:   source,
 	})
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestSelectFillBlobTransactionsBySource(t *testing.T) {
 			MaxBlobs:       6,
 			IncludeBlobTxs: true,
 			BlobEncoding:   encoding,
-			Fill:           []*types.Transaction{blobTx},
+			Fill:           fillOf(t, blobTx),
 			FillSidecars:   source,
 		}
 	}

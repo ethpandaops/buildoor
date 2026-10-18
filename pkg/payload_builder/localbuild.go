@@ -10,7 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -69,9 +68,6 @@ type LocalBuildClient interface {
 	) (*engineall.GetPayloadResponse, error)
 	ProbeTestingAPI(ctx context.Context) execution.TestingAPIStatus
 	ClientVersion(ctx context.Context) (string, error)
-	// PendingPoolTransactions reads the EL mempool for the txpool_el_fill
-	// source.
-	PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error)
 }
 
 var _ LocalBuildClient = (*execution.Client)(nil)
@@ -156,10 +152,12 @@ type LocalBuildInfo struct {
 	// appended after the pool selection; FillError is why the EL mempool
 	// could not be read (the build then used the pool alone); FillDropped
 	// marks that the EL refused the list and the build retried without the
-	// fill.
-	FillTxs     int    `json:"fill_txs,omitempty"`
-	FillError   string `json:"fill_error,omitempty"`
-	FillDropped bool   `json:"fill_dropped,omitempty"`
+	// fill; FillBlobsDropped that a refused list was first retried without
+	// the fill's blob transactions (and their senders' later fill txs).
+	FillTxs          int    `json:"fill_txs,omitempty"`
+	FillError        string `json:"fill_error,omitempty"`
+	FillDropped      bool   `json:"fill_dropped,omitempty"`
+	FillBlobsDropped bool   `json:"fill_blobs_dropped,omitempty"`
 	// Attempts is how many testing_buildBlockV1 calls the build took.
 	Attempts int `json:"attempts,omitempty"`
 	// Dropped lists the pool transactions removed from the attempt after an

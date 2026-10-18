@@ -49,6 +49,57 @@ type fakeEL struct {
 	txBlocks    map[common.Hash]common.Hash // tx hash -> including block
 	lookupErr   error                       // TransactionBlockHashes failure
 	sent        []common.Hash
+
+	// The EL mempool: txpool_content lists pending (no blob transactions,
+	// like geth), the filter reports arrivals, lookups resolve mempool.
+	pending  []*types.Transaction
+	mempool  map[common.Hash]*types.Transaction
+	arrivals []common.Hash
+	filters  int // installed filters
+
+	stateReads []common.Address // accounts AccountStatesAt was asked for
+}
+
+func (f *fakeEL) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]*types.Transaction(nil), f.pending...), nil
+}
+
+func (f *fakeEL) NewPendingTransactionFilter(context.Context) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.filters++
+
+	return "0x1", nil
+}
+
+func (f *fakeEL) PendingTransactionFilterChanges(context.Context, string) ([]common.Hash, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := f.arrivals
+	f.arrivals = nil
+
+	return out, nil
+}
+
+func (f *fakeEL) UninstallFilter(context.Context, string) error { return nil }
+
+func (f *fakeEL) TransactionsByHash(_ context.Context, hashes []common.Hash) (map[common.Hash]*types.Transaction, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	out := make(map[common.Hash]*types.Transaction, len(hashes))
+	for _, hash := range hashes {
+		if tx := f.mempool[hash]; tx != nil {
+			out[hash] = tx
+		}
+	}
+
+	return out, nil
 }
 
 func newFakeEL() *fakeEL {
@@ -63,6 +114,7 @@ func newFakeEL() *fakeEL {
 		blobBaseFee: big.NewInt(1),
 		blocks:      make(map[common.Hash]*execution.BlockTxList),
 		txBlocks:    make(map[common.Hash]common.Hash),
+		mempool:     make(map[common.Hash]*types.Transaction),
 	}
 }
 
@@ -87,6 +139,10 @@ func (f *fakeEL) HeaderByHash(context.Context, common.Hash) (*types.Header, erro
 func (f *fakeEL) AccountStatesAt(_ context.Context, addrs []common.Address, _ common.Hash, _ uint64,
 ) (map[common.Address]*execution.AccountState, error) {
 	out := make(map[common.Address]*execution.AccountState, len(addrs))
+
+	f.mu.Lock()
+	f.stateReads = append(f.stateReads, addrs...)
+	f.mu.Unlock()
 
 	for _, addr := range addrs {
 		state, ok := f.states[addr]
@@ -838,7 +894,7 @@ func TestSelectFillsFromELMempool(t *testing.T) {
 		ParentHash: common.Hash{0xaa},
 		GasLimit:   3 * 21000, // the pool transaction + two fill transactions
 		Ordering:   config.TxOrderingFIFO,
-		Fill:       []*types.Transaction{poolTx, sharedNext, cheapTx, richTx, gappedTx},
+		Fill:       fillOf(t, poolTx, sharedNext, cheapTx, richTx, gappedTx),
 	})
 	require.NoError(t, err)
 
@@ -857,4 +913,22 @@ func TestSelectFillsFromELMempool(t *testing.T) {
 	require.Equal(t, uint64(42000), sel.FillGasSum)
 	require.Equal(t, 2, sel.Summary().FillSelected)
 	require.NotNil(t, pool.Get(poolTx.Hash()), "fill accounting never evicts pool transactions")
+}
+
+// fillOf wraps EL mempool transactions as the mirror hands them to the
+// selection: senders recovered, in the given order.
+func fillOf(t *testing.T, txs ...*types.Transaction) []*PooledTx {
+	t.Helper()
+
+	signer := types.LatestSignerForChainID(testChainID)
+	out := make([]*PooledTx, 0, len(txs))
+
+	for i, tx := range txs {
+		sender, err := types.Sender(signer, tx)
+		require.NoError(t, err)
+
+		out = append(out, &PooledTx{Hash: tx.Hash(), Tx: tx, Sender: sender, Size: tx.Size(), Seq: uint64(i)})
+	}
+
+	return out
 }

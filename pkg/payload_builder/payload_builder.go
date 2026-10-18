@@ -654,8 +654,9 @@ func (b *PayloadBuilder) buildLocal(
 		txs [][]byte
 		// poolSelected are the pool entries behind txs (txpool source only);
 		// submitted is the list error attribution works on — the pool entries
-		// once txs holds nothing but them (no inclusion-list prefix).
-		poolSelected, submitted []*txpool.PooledTx
+		// once txs holds nothing but them (no inclusion-list prefix); fill
+		// is the EL mempool part at the end of txs.
+		poolSelected, submitted, fill []*txpool.PooledTx
 	)
 
 	switch req.TxSource {
@@ -715,7 +716,7 @@ func (b *PayloadBuilder) buildLocal(
 		// The fill is best effort: without the EL mempool the block is built
 		// from the pool alone and the reason recorded.
 		var (
-			fill         []*types.Transaction
+			pending      []*txpool.PooledTx
 			fillSidecars txpool.SidecarSource
 		)
 
@@ -724,7 +725,7 @@ func (b *PayloadBuilder) buildLocal(
 				fillSidecars = source
 			}
 
-			pending, err := b.localClient.PendingPoolTransactions(ctx)
+			mirrored, err := b.txPool.ELMempool(ctx)
 			if err != nil {
 				info.FillError = err.Error()
 
@@ -732,7 +733,7 @@ func (b *PayloadBuilder) buildLocal(
 					Warn("Cannot read the EL mempool, building the custom block from the pool alone")
 			}
 
-			fill = pending
+			pending = mirrored
 		}
 
 		selection, err := b.txPool.Select(ctx, &txpool.SelectParams{
@@ -748,7 +749,7 @@ func (b *PayloadBuilder) buildLocal(
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
 			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
-			Fill:           fill,
+			Fill:           pending,
 			FillSidecars:   fillSidecars,
 		})
 		if err != nil {
@@ -756,6 +757,7 @@ func (b *PayloadBuilder) buildLocal(
 		}
 
 		info.FillTxs = len(selection.Fill)
+		fill = selection.Fill
 
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
@@ -810,6 +812,32 @@ func (b *PayloadBuilder) buildLocal(
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
 		if err == nil || ctx.Err() != nil {
 			break
+		}
+
+		if !info.FillDropped && !info.FillBlobsDropped && hasBlobTxs(fill) {
+			// The fill's blob transactions carry sidecars assembled from the
+			// EL blob pool: the likeliest part to be refused, so they go
+			// first, together with their senders' later fill transactions.
+			kept := withoutFillBlobTxs(fill)
+
+			encoded, encErr := encodeTxs(kept, req.BlobEncoding)
+			if encErr != nil {
+				return localOutcome{info: info, err: encErr}
+			}
+
+			b.log.WithError(err).WithFields(logrus.Fields{
+				"slot":    attrs.ProposalSlot,
+				"dropped": len(fill) - len(kept),
+			}).Warn("EL refused the transaction list, retrying without the EL mempool blob transactions")
+
+			txs = append(txs[:len(txs)-info.FillTxs:len(txs)-info.FillTxs], encoded...)
+			fill = kept
+			info.FillTxs = len(kept)
+			info.FillBlobsDropped = true
+			info.SubmittedTxs = len(txs)
+			info.ExpectedHashes = txHashes(txs)
+
+			continue
 		}
 
 		if info.FillTxs > 0 && !info.FillDropped {
@@ -917,6 +945,52 @@ func (b *PayloadBuilder) buildLocal(
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
 	return localOutcome{payload: payload, info: info}
+}
+
+// hasBlobTxs reports whether any of the transactions is a blob transaction.
+func hasBlobTxs(txs []*txpool.PooledTx) bool {
+	for _, tx := range txs {
+		if tx.Tx.Type() == types.BlobTxType {
+			return true
+		}
+	}
+
+	return false
+}
+
+// withoutFillBlobTxs drops the blob transactions of a fill and every later
+// fill transaction of their senders, which would follow a nonce gap.
+func withoutFillBlobTxs(fill []*txpool.PooledTx) []*txpool.PooledTx {
+	kept := make([]*txpool.PooledTx, 0, len(fill))
+	dropped := make(map[common.Address]bool, 4)
+
+	for _, tx := range fill {
+		if dropped[tx.Sender] || tx.Tx.Type() == types.BlobTxType {
+			dropped[tx.Sender] = true
+
+			continue
+		}
+
+		kept = append(kept, tx)
+	}
+
+	return kept
+}
+
+// encodeTxs encodes pool entries for the testing call.
+func encodeTxs(txs []*txpool.PooledTx, blobEncoding string) ([][]byte, error) {
+	out := make([][]byte, 0, len(txs))
+
+	for _, tx := range txs {
+		raw, err := txpool.EncodeTx(tx.Tx, blobEncoding)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s: %w", tx.Hash.Hex(), err)
+		}
+
+		out = append(out, raw)
+	}
+
+	return out, nil
 }
 
 // gweiToWei converts a gwei amount to wei (nil for 0).

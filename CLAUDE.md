@@ -257,17 +257,25 @@ npm run clean
      built, the higher EL-reported block value wins; engine on a tie, the
      surviving one when a build fails). Tx source:
      `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
-     pending txs from `txpool_content` fill the remaining gas — same
-     parent-state checks, each sender continuing at the nonce/balance the pool
-     left, highest tip first, pool duplicates skipped; `txpool_content` lists
+     pending txs fill the remaining gas — same parent-state checks, each
+     sender continuing at the nonce/balance the pool left, highest tip first,
+     pool duplicates skipped, txs below the next base fee dropped BEFORE any
+     sender's state is read. The txs come from the pool's EL mempool MIRROR
+     (`txpool/elmirror.go`), not a txpool_content read per build: decoded
+     and sender-recovered once, arrivals via `eth_newPendingTransactionFilter`
+     (500 ms poll; it reports blob txs too, which geth's txpool_content
+     omits), removals by included block (+ lower nonces), stale nonces found
+     by the selection and a full txpool_content resync every 5 min (blob
+     entries, which the resync cannot confirm, expire by age); it starts on
+     the first use and stops after 10 idle minutes. The EL mempool lists
      blob txs without their blobs, so the SELECTED ones are completed from the
      EL blob pool via `engine_getBlobs` (V1 pre-Osaka, V2 after: one batch
      request, per-tx fallback since it answers all-or-nothing; commitments
      computed and checked against the versioned hashes — `payload_builder/
      blobsidecars.go`), an incomplete one is dropped with its sender's later
      fill txs (`blob_unavailable`); a refusal
-     retries once without the fill, an unreadable EL mempool builds from the
-     pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     retries without the fill's blob txs first (`fill_blobs_dropped`), then
+     without the fill, an unreadable EL mempool builds from the pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
      (flagged `inclusion_list_dropped`). Consumers still receive exactly one

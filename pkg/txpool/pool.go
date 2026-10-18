@@ -80,6 +80,13 @@ type ELClient interface {
 	BlockTransactions(ctx context.Context, blockHash common.Hash) (*execution.BlockTxList, bool, error)
 	TransactionBlockHashes(ctx context.Context, hashes []common.Hash) (map[common.Hash]common.Hash, error)
 	SendRawTransaction(ctx context.Context, raw []byte) (common.Hash, error)
+
+	// The EL mempool mirror (see elMirror).
+	PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error)
+	NewPendingTransactionFilter(ctx context.Context) (string, error)
+	PendingTransactionFilterChanges(ctx context.Context, id string) ([]common.Hash, error)
+	UninstallFilter(ctx context.Context, id string) error
+	TransactionsByHash(ctx context.Context, hashes []common.Hash) (map[common.Hash]*types.Transaction, error)
 }
 
 var _ ELClient = (*execution.Client)(nil)
@@ -158,6 +165,8 @@ type Pool struct {
 	builtMu     sync.Mutex
 	builtBlocks map[common.Hash]phase0.Slot // block hashes of payloads we built
 
+	mirror *elMirror // the EL mempool's pending transactions, for the fill
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -185,6 +194,7 @@ func NewPool(
 	}
 
 	p.enabled.Store(cfg.TxPool.Enabled)
+	p.mirror = newELMirror(p)
 
 	return p
 }
@@ -205,6 +215,14 @@ func (p *Pool) Start(ctx context.Context) error {
 	p.chainID = chainID
 	p.signer = types.LatestSignerForChainID(chainID)
 	p.mu.Unlock()
+
+	p.wg.Add(1)
+
+	go func() {
+		defer p.wg.Done()
+
+		p.mirror.run(p.ctx)
+	}()
 
 	// The eviction loop follows beacon head events; without a beacon client
 	// (tests, tooling) the pool only admits and selects.
@@ -254,6 +272,13 @@ func (p *Pool) Stop() error {
 	p.wg.Wait()
 
 	return nil
+}
+
+// ELMempool returns the EL mempool's pending transactions (senders
+// recovered, each sender's in nonce order) from the mirror, which a build's
+// fill reads instead of the whole txpool_content.
+func (p *Pool) ELMempool(ctx context.Context) ([]*PooledTx, error) {
+	return p.mirror.Pending(ctx)
 }
 
 // SetEnabled switches admission and selection on or off. The queued content

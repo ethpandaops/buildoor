@@ -76,12 +76,12 @@ type SelectParams struct {
 	// CellProofs marks an Osaka+ block: the network encoding then needs
 	// version 1 (cell proof) sidecars, before it version 0 ones.
 	CellProofs bool
-	// Fill holds the EL mempool's pending transactions (each sender's in
-	// nonce order). They fill the gas and blobs the pool selection left,
-	// after it: each sender continues at the nonce and balance the pool
-	// selection left, the highest tip goes first, duplicates of pool
-	// transactions are skipped.
-	Fill []*types.Transaction
+	// Fill holds the EL mempool's pending transactions (senders recovered,
+	// each sender's in nonce order). They fill the gas and blobs the pool
+	// selection left, after it: each sender continues at the nonce and
+	// balance the pool selection left, the highest tip goes first,
+	// duplicates of pool transactions are skipped.
+	Fill []*PooledTx
 	// FillSidecars completes the selected fill blob transactions, which
 	// txpool_content lists without their blobs. Without it the network
 	// encoding cannot carry them and the fill skips blob transactions; the
@@ -719,12 +719,8 @@ func (p *Pool) mergeHeads(
 }
 
 // SkipDuplicate marks an EL mempool fill transaction that is also queued in
-// the pool (the pool selection decides about it); SkipInvalidSender one whose
-// signature does not recover.
-const (
-	SkipDuplicate     = "duplicate"
-	SkipInvalidSender = "invalid_sender"
-)
+// the pool (the pool selection decides about it).
+const SkipDuplicate = "duplicate"
 
 // selectFill places the EL mempool's pending transactions (params.Fill) after
 // the pool selection, within the gas, byte, count and blob budgets it left.
@@ -767,29 +763,26 @@ func (p *Pool) selectFill(
 		fillParams.MaxTxs = params.MaxTxs - uint64(len(sel.Selected))
 	}
 
-	queues := make(map[common.Address][]*PooledTx, len(params.Fill))
+	queues := make(map[common.Address][]*PooledTx, 64)
 
-	for i, tx := range params.Fill {
-		if p.Get(tx.Hash()) != nil {
+	for _, tx := range params.Fill {
+		if p.Get(tx.Hash) != nil {
 			sel.FillSkipped[SkipDuplicate]++
 
 			continue
 		}
 
-		sender, err := types.Sender(p.signer, tx)
-		if err != nil {
-			sel.FillSkipped[SkipInvalidSender]++
+		// Most of a busy EL mempool sits below the base fee. Dropped before
+		// any sender's state is read, which is the per-build cost that
+		// scales with the mempool; a sender's later nonces then fail on
+		// the gap.
+		if tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0 {
+			sel.FillSkipped[SkipFeeBelowBase]++
 
 			continue
 		}
 
-		queues[sender] = append(queues[sender], &PooledTx{
-			Hash:   tx.Hash(),
-			Tx:     tx,
-			Sender: sender,
-			Size:   tx.Size(),
-			Seq:    uint64(i),
-		})
+		queues[tx.Sender] = append(queues[tx.Sender], tx)
 	}
 
 	senders := make([]common.Address, 0, len(queues))
@@ -856,9 +849,11 @@ func (p *Pool) selectFill(
 		}
 
 		// Nonce-too-low fill transactions belong to the EL's pool: never
-		// evict anything for them.
+		// evict anything of ours for them, only the mirror's stale copies.
 		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, &ignored)
 	}
+
+	p.mirror.dropStale(ignored)
 
 	fill := p.mergeHeads(fillSel, &fillParams, senders, ready, maxBlockBytes-min(sel.Bytes, maxBlockBytes))
 
@@ -951,9 +946,9 @@ func (p *Pool) completeFillBlobs(
 	return kept
 }
 
-func hasBlobTx(txs []*types.Transaction) bool {
+func hasBlobTx(txs []*PooledTx) bool {
 	for _, tx := range txs {
-		if tx.Type() == types.BlobTxType {
+		if tx.Tx.Type() == types.BlobTxType {
 			return true
 		}
 	}
