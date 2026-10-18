@@ -130,3 +130,5 @@ func newTestPayload(slot phase0.Slot, blockHash phase0.Hash32, blockValueWei *bi
 		ReadyAt:    time.Now(),
 	}
 }
+
+func (m *stubChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }

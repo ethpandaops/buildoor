@@ -38,6 +38,8 @@ const (
 	KeyBuildCandidateGrandparentFull  = "build.candidate_grandparent_full"
 	KeyBuildCandidateGrandparentEmpty = "build.candidate_grandparent_empty"
 	KeyBuildEngineEnabled             = "build.engine_enabled"
+	KeyBuildInclusionListMode         = "build.inclusion_list_mode"
+	KeyBuildInclusionListBits         = "build.inclusion_list_bits"
 	KeyBuildParallel                  = "build.parallel"
 	KeyBuildSpeculativeBuildTime      = "build.speculative_build_time_ms"
 	KeyBuildAutoWeakHeadPct           = "build.auto_weak_head_pct"

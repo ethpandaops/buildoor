@@ -6,6 +6,7 @@ package action_plan
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -361,6 +362,66 @@ type BuildPlan struct {
 	// this slot; absent = inherit the global local_build settings. The EL's
 	// availability of the testing namespace still wins at build time.
 	Local *LocalBuildPlan `json:"local,omitempty"`
+
+	// InclusionList overrides the inclusion list (FOCIL, Heze) handling for
+	// this slot; absent = inherit build.inclusion_list_mode/_bits.
+	InclusionList *InclusionListPlan `json:"inclusion_list,omitempty"`
+}
+
+// InclusionListPlan is the per-slot inclusion list instruction; empty
+// fields inherit the global settings.
+type InclusionListPlan struct {
+	// Mode: include or omit (see config.InclusionListInclude).
+	Mode string `json:"mode,omitempty"`
+	// Bits: view, all or none (see config.InclusionListBitsView).
+	Bits string `json:"bits,omitempty"`
+	// OmitTxs leaves these transactions (0x hashes) out of the slot's
+	// builds even in include mode: a payload censoring exactly them.
+	OmitTxs []string `json:"omit_txs,omitempty"`
+}
+
+func (p *InclusionListPlan) clone() *InclusionListPlan {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.OmitTxs = append([]string(nil), p.OmitTxs...)
+
+	return &c
+}
+
+func (p *InclusionListPlan) isZero() bool {
+	return p == nil || (p.Mode == "" && p.Bits == "" && len(p.OmitTxs) == 0)
+}
+
+func (p *InclusionListPlan) validate() error {
+	if p.Mode != "" && config.NormalizedInclusionListMode(p.Mode, "") == "" {
+		return fmt.Errorf("build.inclusion_list.mode: must be include or omit (got %q)", p.Mode)
+	}
+
+	if p.Bits != "" && config.NormalizedInclusionListBits(p.Bits, "") == "" {
+		return fmt.Errorf("build.inclusion_list.bits: must be view, all or none (got %q)", p.Bits)
+	}
+
+	for i, hash := range p.OmitTxs {
+		if !isTxHash(hash) {
+			return fmt.Errorf("build.inclusion_list.omit_txs[%d]: not a 0x-prefixed 32-byte hash: %q", i, hash)
+		}
+	}
+
+	return nil
+}
+
+// isTxHash reports a 0x-prefixed 32-byte hex hash.
+func isTxHash(s string) bool {
+	if len(s) != 66 || !strings.HasPrefix(s, "0x") {
+		return false
+	}
+
+	_, err := hex.DecodeString(s[2:])
+
+	return err == nil
 }
 
 // LocalBuildPlan is the per-slot local build instruction. Every field is
@@ -523,6 +584,7 @@ func (p *BuildPlan) clone() *BuildPlan {
 	}
 
 	c.Local = p.Local.clone()
+	c.InclusionList = p.InclusionList.clone()
 
 	return &c
 }
@@ -530,7 +592,8 @@ func (p *BuildPlan) clone() *BuildPlan {
 // isZero reports whether the build plan carries no active instruction; such a
 // plan is dropped rather than persisted.
 func (p *BuildPlan) isZero() bool {
-	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0 && p.Local.isZero())
+	return p == nil || (!p.ReorgParentPayload && len(p.Candidates) == 0 && p.Local.isZero() &&
+		p.InclusionList.isZero())
 }
 
 func (p *BuildPlan) validate() error {
@@ -546,6 +609,12 @@ func (p *BuildPlan) validate() error {
 
 	if p.Local != nil {
 		if err := p.Local.validate(); err != nil {
+			return err
+		}
+	}
+
+	if p.InclusionList != nil {
+		if err := p.InclusionList.validate(); err != nil {
 			return err
 		}
 	}

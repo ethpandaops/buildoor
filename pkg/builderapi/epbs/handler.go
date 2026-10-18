@@ -20,6 +20,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -90,6 +91,9 @@ type Handler struct {
 	// registry is the managed builder key set: it decides which key signs each
 	// served bid and supplies the builder index that goes into it.
 	registry *builder_keys.Registry
+	// inclusionLists supplies the served bids' inclusion list bits (nil
+	// claims none in view mode).
+	inclusionLists *inclusionlist.Store
 
 	// planSvc is the mandatory per-slot scheduling/settings authority: bid
 	// serving is decided exclusively by the slot's frozen plan.
@@ -124,17 +128,18 @@ type Handler struct {
 // (via Freeze) on every getExecutionPayloadBid request.
 func NewHandler(cfg *config.BuilderAPIConfig, log logrus.FieldLogger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
-	registry *builder_keys.Registry) *Handler {
+	registry *builder_keys.Registry, inclusionLists *inclusionlist.Store) *Handler {
 	return &Handler{
-		cfg:          cfg,
-		log:          log.WithField("component", "builderapi-epbs"),
-		chainSvc:     chainSvc,
-		planSvc:      planSvc,
-		payloadCache: payloadCache,
-		registry:     registry,
-		prefsStore:   NewBuilderPreferencesStore(),
-		lastBids:     make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
-		bidKeys:      make(map[bidKeyTarget]uint64, maxRecordedBidSlots),
+		inclusionLists: inclusionLists,
+		cfg:            cfg,
+		log:            log.WithField("component", "builderapi-epbs"),
+		chainSvc:       chainSvc,
+		planSvc:        planSvc,
+		payloadCache:   payloadCache,
+		registry:       registry,
+		prefsStore:     NewBuilderPreferencesStore(),
+		lastBids:       make(map[phase0.Slot]recordedBid, maxRecordedBidSlots),
+		bidKeys:        make(map[bidKeyTarget]uint64, maxRecordedBidSlots),
 	}
 }
 

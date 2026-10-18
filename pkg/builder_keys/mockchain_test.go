@@ -89,3 +89,5 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 }
 
 func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
+
+func (m *stubChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }

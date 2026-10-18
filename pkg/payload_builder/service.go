@@ -16,6 +16,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
@@ -44,6 +45,7 @@ type Service struct {
 	clClient               *beacon.Client
 	chainSvc               chain.Service
 	planSvc                *action_plan.PlanService // per-slot scheduling authority
+	ilStore                *inclusionlist.Store     // gossiped inclusion lists (FOCIL, Heze)
 	engineClient           EngineClient
 	feeRecipient           common.Address
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
@@ -129,6 +131,7 @@ func NewService(
 		clClient:               clClient,
 		chainSvc:               chainSvc,
 		planSvc:                planSvc,
+		ilStore:                inclusionlist.NewStore(chainSvc, serviceLog),
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
@@ -175,11 +178,14 @@ func (s *Service) Start(ctx context.Context) error {
 	// Subscribers attach before the builder starts (the WebUI does), so the
 	// service owns the progress dispatcher and the payload builder fires on it.
 	s.payloadBuilder.localProgress = s.localProgress
+	s.payloadBuilder.ilStore = s.ilStore
 
 	// Start event stream
 	if err := s.clClient.Events().Start(s.ctx); err != nil {
 		return fmt.Errorf("failed to start event stream: %w", err)
 	}
+
+	s.ilStore.Start(s.ctx, s.clClient.Events())
 
 	// Start main loop
 	s.wg.Add(1)
@@ -919,7 +925,8 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		BuildSeq:  build.seq,
 	})
 
-	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
+	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq,
+		newInclusionListRequest(s.planSvc.Freeze(slot).Build.InclusionList))
 
 	// Testing builds still running in their window publish better payloads
 	// after this hand-over; followed once the hand-over itself is published,

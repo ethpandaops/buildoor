@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"time"
 
@@ -37,6 +38,9 @@ const (
 	SkipBlobUnavailable = "blob_unavailable"
 	SkipSizeFull        = "size_full"
 	SkipDisabled        = "txpool_disabled"
+	// SkipNonceTaken: an earlier placed transaction (the inclusion list's,
+	// or the pool's for the fill) took the transaction's nonce.
+	SkipNonceTaken = "nonce_taken"
 )
 
 // maxBlockBytes bounds the encoded transaction bytes of a selection: geth's
@@ -100,9 +104,19 @@ type SidecarSource interface {
 type Selection struct {
 	// Txs are the encoded transactions in block order (inclusion list first).
 	Txs [][]byte
+	// Ordered are the transactions behind Txs, in block order (Select only).
+	Ordered []*PooledTx
 	// Selected are the pool transactions in the order they were placed.
 	Selected []*PooledTx
-	// GasSum is the gas limit sum of the selected pool transactions.
+	// InclusionList are the inclusion list transactions placed: valid on the
+	// parent state, at the front of the block (or right after the pool
+	// transaction that filled their sender's nonce gap).
+	InclusionList []*PooledTx
+	// InclusionListSkipped counts the list's transactions left out, by why
+	// they could not execute: such a list is still satisfied (EIP-7805).
+	InclusionListSkipped map[string]int
+	// GasSum is the gas limit sum of the placed inclusion list and pool
+	// transactions.
 	GasSum uint64
 	// Blobs is the number of blobs the selection carries.
 	Blobs int
@@ -144,13 +158,16 @@ type Summary struct {
 	Blobs            int            `json:"blobs,omitempty"`
 	Skipped          map[string]int `json:"skipped,omitempty"`
 	InclusionListTxs int            `json:"inclusion_list_txs,omitempty"`
-	PoolSize         int            `json:"pool_size"`
-	BaseFee          string         `json:"base_fee,omitempty"`
-	BlobBaseFee      string         `json:"blob_base_fee,omitempty"`
-	GasBudget        uint64         `json:"gas_budget"`
-	CeilingApplied   bool           `json:"ceiling_applied,omitempty"`
-	Bytes            uint64         `json:"bytes,omitempty"`
-	Hashes           []string       `json:"hashes,omitempty"`
+	// InclusionListSkipped counts the list's transactions that could not
+	// execute, by reason.
+	InclusionListSkipped map[string]int `json:"inclusion_list_skipped,omitempty"`
+	PoolSize             int            `json:"pool_size"`
+	BaseFee              string         `json:"base_fee,omitempty"`
+	BlobBaseFee          string         `json:"blob_base_fee,omitempty"`
+	GasBudget            uint64         `json:"gas_budget"`
+	CeilingApplied       bool           `json:"ceiling_applied,omitempty"`
+	Bytes                uint64         `json:"bytes,omitempty"`
+	Hashes               []string       `json:"hashes,omitempty"`
 
 	// EL mempool fill (tx source txpool_el_fill).
 	FillCandidates int            `json:"fill_candidates,omitempty"`
@@ -172,15 +189,17 @@ func (s *Selection) Summary() *Summary {
 		Blobs:            s.Blobs,
 		Skipped:          s.Skipped,
 		InclusionListTxs: s.InclusionListTxs,
-		PoolSize:         s.PoolSize,
-		GasBudget:        s.GasBudget,
-		CeilingApplied:   s.CeilingApplied,
-		Bytes:            s.Bytes,
-		Hashes:           make([]string, 0, len(s.Selected)),
-		FillCandidates:   s.FillCandidates,
-		FillSelected:     len(s.Fill),
-		FillGasSum:       s.FillGasSum,
-		FillBlobs:        s.FillBlobs,
+
+		InclusionListSkipped: s.InclusionListSkipped,
+		PoolSize:             s.PoolSize,
+		GasBudget:            s.GasBudget,
+		CeilingApplied:       s.CeilingApplied,
+		Bytes:                s.Bytes,
+		Hashes:               make([]string, 0, len(s.Selected)),
+		FillCandidates:       s.FillCandidates,
+		FillSelected:         len(s.Fill),
+		FillGasSum:           s.FillGasSum,
+		FillBlobs:            s.FillBlobs,
 	}
 
 	if len(s.FillSkipped) > 0 {
@@ -258,8 +277,9 @@ func calcNextBaseFee(parent *types.Header) *big.Int {
 // are exhausted. Nonce-too-low transactions found on the way are evicted.
 func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, error) {
 	sel := &Selection{
-		Skipped:  make(map[string]int, 8),
-		Snapshot: time.Now(),
+		Skipped:              make(map[string]int, 8),
+		InclusionListSkipped: make(map[string]int, 4),
+		Snapshot:             time.Now(),
 	}
 
 	if !p.enabled.Load() {
@@ -302,9 +322,9 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		sel.PoolSize += len(txs)
 	}
 
-	if sel.PoolSize == 0 && len(params.Fill) == 0 {
-		sel.Txs = p.prependInclusionList(sel, nil, params.InclusionList)
+	inclusionList := p.decodeInclusionList(sel, params.InclusionList)
 
+	if sel.PoolSize == 0 && len(params.Fill) == 0 && len(inclusionList) == 0 {
 		return sel, nil
 	}
 
@@ -324,13 +344,31 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 
 	sort.Slice(senders, func(i, j int) bool { return senders[i].Cmp(senders[j]) < 0 })
 
-	states := make(map[common.Address]*execution.AccountState, len(senders))
+	// The inclusion list's senders need their parent state too.
+	stateSenders := append([]common.Address(nil), senders...)
+	for _, tx := range inclusionList {
+		if _, pooled := queues[tx.Sender]; !pooled && !slices.Contains(stateSenders, tx.Sender) {
+			stateSenders = append(stateSenders, tx.Sender)
+		}
+	}
 
-	if len(senders) > 0 {
-		states, err = p.elClient.AccountStatesAt(ctx, senders, params.ParentHash, parent.Number.Uint64())
+	states := make(map[common.Address]*execution.AccountState, len(stateSenders))
+
+	if len(stateSenders) > 0 {
+		states, err = p.elClient.AccountStatesAt(ctx, stateSenders, params.ParentHash, parent.Number.Uint64())
 		if err != nil {
 			return nil, fmt.Errorf("select: %w", err)
 		}
+	}
+
+	// The inclusion list goes in first: its transactions are mandatory
+	// whenever they can execute, and they use up gas, bytes and count before
+	// the pool's.
+	ilPlan := p.placeInclusionList(sel, params, inclusionList, states)
+
+	poolParams := *params
+	if params.MaxTxs > 0 {
+		poolParams.MaxTxs = params.MaxTxs - min(uint64(len(ilPlan.head)), params.MaxTxs)
 	}
 
 	stale := make([]common.Hash, 0, 16)
@@ -342,14 +380,18 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 			continue
 		}
 
-		ready[sender] = p.readyRun(sel, params, queues[sender], state, &stale)
+		ready[sender] = p.readyRun(sel, &poolParams, queues[sender], ilPlan.senderState(sender, state),
+			state.Nonce, ilPlan.hashes, &stale)
 	}
 
 	p.evictStale(ctx, stale)
 
-	selected := p.mergeHeads(sel, params, senders, ready, maxBlockBytes)
+	selected := p.mergeHeads(sel, &poolParams, senders, ready, maxBlockBytes)
 
 	sel.Selected = selected
+	tail := p.placeDeferred(sel, params, ilPlan)
+	sel.InclusionList = append(append([]*PooledTx(nil), ilPlan.head...), tail...)
+	sel.InclusionListTxs = len(sel.InclusionList)
 
 	fill, err := p.selectFill(ctx, sel, params, parent, states)
 	if err != nil {
@@ -358,18 +400,26 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 
 	sel.Fill = fill
 
-	encoded := make([][]byte, 0, len(selected)+len(fill))
+	// Block order: the inclusion list, the pool, the list transactions a
+	// pool transaction made executable, the EL mempool fill.
+	ordered := make([]*PooledTx, 0, len(ilPlan.head)+len(selected)+len(tail)+len(fill))
+	ordered = append(ordered, ilPlan.head...)
+	ordered = append(ordered, selected...)
+	ordered = append(ordered, tail...)
+	ordered = append(ordered, fill...)
 
-	for _, tx := range append(append([]*PooledTx(nil), selected...), fill...) {
+	sel.Txs = make([][]byte, 0, len(ordered))
+
+	for _, tx := range ordered {
 		raw, err := EncodeTx(tx.Tx, params.BlobEncoding)
 		if err != nil {
 			return nil, fmt.Errorf("select: encode %s: %w", tx.Hash.Hex(), err)
 		}
 
-		encoded = append(encoded, raw)
+		sel.Txs = append(sel.Txs, raw)
 	}
 
-	sel.Txs = p.prependInclusionList(sel, encoded, params.InclusionList)
+	sel.Ordered = ordered
 
 	return sel, nil
 }
@@ -531,6 +581,8 @@ func (p *Pool) readyRun(
 	params *SelectParams,
 	queue []*PooledTx,
 	state *execution.AccountState,
+	chainNonce uint64,
+	placed map[common.Hash]struct{},
 	stale *[]common.Hash,
 ) []*PooledTx {
 	nonce := state.Nonce
@@ -540,9 +592,22 @@ func (p *Pool) readyRun(
 	for i, tx := range queue {
 		txNonce := tx.Nonce()
 
+		if _, ok := placed[tx.Hash]; ok {
+			sel.Skipped[SkipInInclusionList]++
+
+			continue
+		}
+
 		if txNonce < nonce {
-			sel.Skipped[SkipNonceTooLow]++
-			*stale = append(*stale, tx.Hash)
+			// Below the chain nonce the transaction is stale; above it an
+			// earlier placed transaction took the nonce (the inclusion list,
+			// or the pool for the fill).
+			if txNonce < chainNonce {
+				sel.Skipped[SkipNonceTooLow]++
+				*stale = append(*stale, tx.Hash)
+			} else {
+				sel.Skipped[SkipNonceTaken]++
+			}
 
 			continue
 		}
@@ -610,9 +675,8 @@ func (p *Pool) mergeHeads(
 
 	selected := make([]*PooledTx, 0, 64)
 
-	var gasUsed, bytesUsed uint64
-
-	blobs := 0
+	// Continue after what is already placed (the inclusion list).
+	gasUsed, bytesUsed, blobs := sel.GasSum, sel.Bytes, sel.Blobs
 	rrNext := 0
 
 	pick := func() int {
@@ -757,18 +821,29 @@ func (p *Pool) selectFill(
 	}
 
 	if params.MaxTxs > 0 {
-		if uint64(len(sel.Selected)) >= params.MaxTxs {
+		if uint64(len(sel.Selected)+len(sel.InclusionList)) >= params.MaxTxs {
 			sel.FillSkipped[SkipMaxTxs] = len(params.Fill)
 
 			return nil, nil
 		}
 
-		fillParams.MaxTxs = params.MaxTxs - uint64(len(sel.Selected))
+		fillParams.MaxTxs = params.MaxTxs - min(uint64(len(sel.Selected)+len(sel.InclusionList)), params.MaxTxs)
 	}
 
 	queues := make(map[common.Address][]*PooledTx, 64)
 
+	listed := make(map[common.Hash]struct{}, len(sel.InclusionList))
+	for _, tx := range sel.InclusionList {
+		listed[tx.Hash] = struct{}{}
+	}
+
 	for _, tx := range params.Fill {
+		if _, ok := listed[tx.Hash]; ok {
+			sel.FillSkipped[SkipInInclusionList]++
+
+			continue
+		}
+
 		if p.Get(tx.Hash) != nil {
 			sel.FillSkipped[SkipDuplicate]++
 
@@ -812,11 +887,12 @@ func (p *Pool) selectFill(
 		}
 	}
 
-	// What the pool selection already spent per sender.
+	// What the inclusion list and the pool selection already spent per
+	// sender.
 	spentNonces := make(map[common.Address]uint64, len(sel.Selected))
 	spentValue := make(map[common.Address]*big.Int, len(sel.Selected))
 
-	for _, tx := range sel.Selected {
+	for _, tx := range append(append([]*PooledTx(nil), sel.InclusionList...), sel.Selected...) {
 		spentNonces[tx.Sender]++
 
 		if spentValue[tx.Sender] == nil {
@@ -853,7 +929,7 @@ func (p *Pool) selectFill(
 
 		// Nonce-too-low fill transactions belong to the EL's pool: never
 		// evict anything of ours for them, only the mirror's stale copies.
-		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, &ignored)
+		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, state.Nonce, listed, &ignored)
 	}
 
 	p.mirror.dropStale(ignored)

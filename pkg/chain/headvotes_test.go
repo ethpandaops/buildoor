@@ -74,6 +74,8 @@ func (s *stubChainService) GetValidatorPubkeyByIndex(_ phase0.ValidatorIndex) *p
 }
 func (s *stubChainService) RefreshBuilders(_ context.Context) error { return nil }
 
+func (s *stubChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }
+
 // newVoteTestTracker builds a tracker over a synthetic epoch: slotsPerEpoch=4,
 // the given per-slot committees (validator index == active indice index), and
 // 32 ETH effective balance per validator.

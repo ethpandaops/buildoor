@@ -246,11 +246,26 @@ export interface TxPoolResponse {
 }
 
 // Pool selection summary (dry-run preview and per-build results).
+// The inclusion list view (FOCIL, Heze) a payload was built against.
+export interface InclusionListBuild {
+  slot: number; // the inclusion list slot (payload slot - 1)
+  dependent_root: string;
+  mode: string; // include | omit
+  lists: number;
+  timely: number;
+  equivocators?: number;
+  transactions: number; // the view's unique transactions
+  omitted?: number; // left out on purpose (omit mode / omit_txs)
+  bits?: string; // 0x committee bitvector
+}
+
 export interface TxSelectionSummary {
   selected: number;
   gas_sum: number;
   blobs?: number;
   skipped?: Record<string, number>;
+  // Inclusion list transactions that could not execute, by reason.
+  inclusion_list_skipped?: Record<string, number>;
   inclusion_list_txs?: number;
   pool_size: number;
   base_fee?: string;
@@ -319,6 +334,7 @@ export interface TxPoolPreviewResponse {
 
 // How a local payload's transaction list was assembled.
 export interface LocalBuildInfo {
+  inclusion_list?: InclusionListBuild;
   tx_source: string;
   selection?: TxSelectionSummary;
   explicit_txs?: number;
@@ -827,6 +843,8 @@ export interface SlotState {
   revealInFlight?: { attempt: number; startedAt: number };
   // Full built-payload properties (list fields aggregated to counts).
   payloadDetail?: PayloadDetail;
+  // The inclusion list view the primary payload was built against (Heze).
+  payloadInclusionList?: InclusionListBuild;
   // Imported block summary (from the block_detail event).
   blockDetail?: BlockDetail;
   // Envelope summary attached to the payload_available event.
@@ -1050,6 +1068,15 @@ export interface BuildPlan {
   candidates?: Record<string, string>;
   // Local build extension overrides (absent = inherit the global settings).
   local?: LocalBuildPlan;
+  // Inclusion list (FOCIL, Heze) overrides (absent = inherit the global settings).
+  inclusion_list?: InclusionListPlan;
+}
+
+// Per-slot inclusion list handling; every field optional ('' / absent inherits).
+export interface InclusionListPlan {
+  mode?: string; // include | omit
+  bits?: string; // view | all | none
+  omit_txs?: string[]; // 0x tx hashes left out of the builds
 }
 
 // Per-slot local build (testing_buildBlockV1) overrides; every field optional.
@@ -1278,6 +1305,7 @@ export interface BuildOutcome {
   source?: string;
   // The local payload was wanted but the engine payload was used.
   fallback?: boolean;
+  inclusion_list?: InclusionListBuild;
   local_build?: LocalBuildOutcome;
   error?: string;
   at: string;

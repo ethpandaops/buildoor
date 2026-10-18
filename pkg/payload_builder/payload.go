@@ -44,6 +44,10 @@ type Payload struct {
 	EngineExecutionRequests []prague.ExecutionRequest
 	EngineVersion           enginev.DataVersion
 
+	// InclusionList is the inclusion list view (FOCIL, Heze) the payload was
+	// built against; nil before Heze.
+	InclusionList *InclusionListBuild
+
 	// Source records how the payload was built: el (engine API, the EL's
 	// mempool) or local (testing_buildBlockV1 from a buildoor-chosen list).
 	Source string

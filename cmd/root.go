@@ -125,6 +125,8 @@ func init() {
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-full", defaults.Build.CandidateGrandparentFull, "Build the reorg candidate on the head block's parent: auto, always or never")
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-empty", defaults.Build.CandidateGrandparentEmpty, "Build the reorg + payload-miss candidate: auto, always or never")
 	rootCmd.PersistentFlags().Bool("engine-build-enabled", defaults.Build.EngineEnabled, "Run the engine-API build (forkchoiceUpdated → getPayload); disabled, the testing build alone feeds the bids and slots without one are skipped")
+	rootCmd.PersistentFlags().String("build-inclusion-list-mode", defaults.Build.InclusionListMode, "Inclusion lists (FOCIL, Heze): include the observed lists in the builds, or omit them (a censoring payload, for enforcement tests)")
+	rootCmd.PersistentFlags().String("build-inclusion-list-bits", defaults.Build.InclusionListBits, "Inclusion list bits a bid claims: view (the lists observed), all or none")
 	rootCmd.PersistentFlags().Bool("build-parallel", defaults.Build.Parallel, "Build selected candidates concurrently against the EL instead of sequentially (canonical first, speculative after)")
 	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
@@ -386,6 +388,8 @@ func initConfig(root *cobra.Command) error {
 			CandidateGrandparentFull:  v.GetString("build-candidate-grandparent-full"),
 			CandidateGrandparentEmpty: v.GetString("build-candidate-grandparent-empty"),
 			EngineEnabled:             v.GetBool("engine-build-enabled"),
+			InclusionListMode:         v.GetString("build-inclusion-list-mode"),
+			InclusionListBits:         v.GetString("build-inclusion-list-bits"),
 			Parallel:                  v.GetBool("build-parallel"),
 			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
 			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),

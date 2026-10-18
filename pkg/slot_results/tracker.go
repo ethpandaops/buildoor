@@ -438,6 +438,7 @@ func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
 	outcome.Candidate = string(payload.Candidate)
 	outcome.Source = payload.Source
 	outcome.BuildSeq = payload.BuildSeq
+	outcome.InclusionList = payload.InclusionList
 
 	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
 		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,

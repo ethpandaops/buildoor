@@ -55,6 +55,12 @@ func ValidateSetting(key string, v any) error {
 		KeyBuildCandidateGrandparentFull, KeyBuildCandidateGrandparentEmpty:
 		return requireOneOf(key, v, CandidateModeAuto, CandidateModeAlways, CandidateModeNever)
 
+	case KeyBuildInclusionListMode:
+		return requireOneOf(key, v, InclusionListInclude, InclusionListOmit)
+
+	case KeyBuildInclusionListBits:
+		return requireOneOf(key, v, InclusionListBitsView, InclusionListBitsAll, InclusionListBitsNone)
+
 	case KeyEPBSKeyStrategy:
 		return requireOneOf(key, v, KeyStrategies...)
 

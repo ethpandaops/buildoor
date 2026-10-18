@@ -183,6 +183,9 @@ type EngineCallsStream struct {
 
 type PayloadReadyStreamEvent struct {
 	Slot uint64 `json:"slot"`
+	// InclusionList is the inclusion list view the payload was built
+	// against (Heze; absent before).
+	InclusionList *payload_builder.InclusionListBuild `json:"inclusion_list,omitempty"`
 	// EngineCalls times the engine build's calls (absent without one).
 	EngineCalls *EngineCallsStream `json:"engine_calls,omitempty"`
 	Candidate   string             `json:"candidate,omitempty"`
@@ -1424,6 +1427,8 @@ func (m *EventStreamManager) payloadReadyStreamEvent(
 	if event.BlobsBundle != nil {
 		data.NumBlobs = len(event.BlobsBundle.Commitments)
 	}
+
+	data.InclusionList = event.InclusionList
 
 	if reqs := event.ExecutionRequests; reqs != nil {
 		data.NumExecRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +

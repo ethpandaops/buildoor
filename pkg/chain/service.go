@@ -56,6 +56,12 @@ type Service interface {
 	// Validator access
 	GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey
 
+	// GetInclusionListCommittee returns the slot's inclusion list committee
+	// (FOCIL, Heze): its beacon committees concatenated, the first
+	// InclusionListCommitteeSize members (wrapping around). Nil when the
+	// slot's epoch stats are not cached.
+	GetInclusionListCommittee(slot phase0.Slot) []phase0.ValidatorIndex
+
 	// RefreshBuilders re-fetches the beacon state to pick up new builder registrations.
 	RefreshBuilders(ctx context.Context) error
 }
@@ -292,6 +298,48 @@ const (
 	// pubkeyLookupLimit bounds the on-demand pubkey cache (cleared when full).
 	pubkeyLookupLimit = 4096
 )
+
+// GetInclusionListCommittee implements Service.
+func (s *service) GetInclusionListCommittee(slot phase0.Slot) []phase0.ValidatorIndex {
+	stats := s.GetEpochStats(s.GetEpochOfSlot(slot))
+	if stats == nil {
+		return nil
+	}
+
+	return inclusionListCommittee(stats, slot, s.chainSpec)
+}
+
+// inclusionListCommittee is get_inclusion_list_committee over the epoch's
+// precomputed attester duties.
+func inclusionListCommittee(stats *EpochStats, slot phase0.Slot, spec *ChainSpec) []phase0.ValidatorIndex {
+	slotIndex := uint64(slot) % spec.SlotsPerEpoch
+	if slotIndex >= uint64(len(stats.AttesterDuties)) {
+		return nil
+	}
+
+	members := make([]phase0.ValidatorIndex, 0, 128)
+
+	for _, committee := range stats.AttesterDuties[slotIndex] {
+		for _, active := range committee {
+			if int(active) < len(stats.ActiveIndices) {
+				members = append(members, stats.ActiveIndices[active])
+			}
+		}
+	}
+
+	if len(members) == 0 {
+		return nil
+	}
+
+	size := spec.InclusionListCommitteeSize
+	committee := make([]phase0.ValidatorIndex, size)
+
+	for i := range size {
+		committee[i] = members[i%uint64(len(members))]
+	}
+
+	return committee
+}
 
 // GetChainSpec returns the chain specification.
 func (s *service) GetChainSpec() *ChainSpec {

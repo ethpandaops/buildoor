@@ -6,7 +6,7 @@ import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
-import { engineBuildRan, testingRuns } from './slotGraphBuilds';
+import { engineBuildRan, inclusionListItems, testingRuns } from './slotGraphBuilds';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -1014,6 +1014,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                   label: 'Blob Gas',
                   value: `${state.payloadDetail.blobGasUsed.toLocaleString()} (excess ${(state.payloadDetail.excessBlobGas ?? 0).toLocaleString()})`
                 }] : []),
+                ...inclusionListItems(state.payloadInclusionList),
                 ...(state.payloadDetail ? [{
                   label: 'Contents',
                   value: `${state.payloadDetail.numTransactions ?? 0} txs, ${state.payloadDetail.numBlobs ?? 0} blobs, ` +

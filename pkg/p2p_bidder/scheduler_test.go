@@ -221,7 +221,7 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 	svc.SetEnabled(opts.serviceEnabled)
 
 	submitter := &mockBidSubmitter{}
-	bidCreator := NewBidCreator(submitter, chainSvc, log)
+	bidCreator := NewBidCreator(submitter, chainSvc, nil, log)
 	bidTracker := NewBidTracker(registry, log)
 	cache := payload_builder.NewPayloadCache(8)
 
@@ -643,11 +643,11 @@ func TestBidCreatorReturnsBidOnSubmitFailure(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			submitter := &mockBidSubmitter{err: tt.submitErr}
-			creator := NewBidCreator(submitter, chainSvc, log)
+			creator := NewBidCreator(submitter, chainSvc, nil, log)
 
 			payload := newSchedulerTestPayload(testSlot, gweiToWei(100))
 
-			signedBid, err := creator.CreateAndSubmitBid(context.Background(), key, payload, 42, "")
+			signedBid, err := creator.CreateAndSubmitBid(context.Background(), key, payload, 42, "", "")
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {

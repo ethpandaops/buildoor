@@ -1,5 +1,5 @@
 import React from 'react';
-import type { LocalBuildPlan, ActionMode } from '../../types';
+import type { InclusionListPlan, LocalBuildPlan, ActionMode } from '../../types';
 import { InfoHint } from '../InfoHint';
 
 // Shared plan-category form model, used by both the per-slot edit modal and
@@ -624,6 +624,190 @@ export const BuildForm: React.FC<{
     )}
   </div>
 );
+
+// ---------------------------------------------------------------------------
+// Build candidates: per-key overrides of the global candidate policy
+// ---------------------------------------------------------------------------
+
+const CANDIDATE_KEYS = ['parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'];
+
+// initCandidates is the form state: every candidate key, '' = inherit.
+export function initCandidates(candidates: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(CANDIDATE_KEYS.map((key) => [key, candidates?.[key] ?? '']));
+}
+
+// candidatesFromState returns the overrides, or undefined when all inherit.
+export function candidatesFromState(state: Record<string, string>): Record<string, string> | undefined {
+  const entries = Object.entries(state).filter(([, mode]) => mode !== '');
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+export const CandidatesForm: React.FC<{
+  state: Record<string, string>;
+  disabled: boolean;
+  onChange: (next: Record<string, string>) => void;
+}> = ({ state, disabled, onChange }) => (
+    <div className="mb-3">
+      <div className="section-header mb-1">
+        Build candidates
+        <InfoHint>
+          Which parent tuples the slot builds a payload for; each candidate is a
+          separate engine build. Overrides apply per key.
+          <dl>
+            <dt>inherit</dt>
+            <dd>the global build candidate policy for that key</dd>
+            <dt>auto</dt>
+            <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
+            <dt>always</dt>
+            <dd>build on every scheduled slot</dd>
+            <dt>never</dt>
+            <dd>do not build this candidate</dd>
+          </dl>
+          Grandparent candidates are not built across an epoch boundary.
+        </InfoHint>
+      </div>
+      {Object.entries(state).map(([key, mode]) => (
+        <div className="row g-2 align-items-center mb-1" key={key}>
+          <div className="col-6 small text-secondary">
+            {key}
+            {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
+          </div>
+          <div className="col-6">
+            <select
+              className="form-select form-select-sm"
+              value={mode}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...state, [key]: e.target.value })}
+            >
+              <option value="">inherit</option>
+              <option value="auto">auto</option>
+              <option value="always">always</option>
+              <option value="never">never</option>
+            </select>
+          </div>
+        </div>
+      ))}
+    </div>
+);
+
+// ---------------------------------------------------------------------------
+// Inclusion lists (FOCIL, Heze): modeless overrides of the global handling
+// ---------------------------------------------------------------------------
+
+export interface InclusionListFormState {
+  mode: '' | 'include' | 'omit';
+  bits: '' | 'view' | 'all' | 'none';
+  omitTxs: string; // one 0x hash per line
+}
+
+export const EMPTY_INCLUSION_LIST_STATE: InclusionListFormState = { mode: '', bits: '', omitTxs: '' };
+
+export function initInclusionListState(plan: InclusionListPlan | undefined): InclusionListFormState {
+  if (!plan) return EMPTY_INCLUSION_LIST_STATE;
+  return {
+    mode: (plan.mode ?? '') as InclusionListFormState['mode'],
+    bits: (plan.bits ?? '') as InclusionListFormState['bits'],
+    omitTxs: (plan.omit_txs ?? []).join('\n'),
+  };
+}
+
+const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+
+// inclusionListPlanFromState returns the plan object, or undefined when every
+// field inherits.
+export function inclusionListPlanFromState(state: InclusionListFormState): InclusionListPlan | undefined {
+  const plan: InclusionListPlan = {};
+  if (state.mode) plan.mode = state.mode;
+  if (state.bits) plan.bits = state.bits;
+  const omit = state.omitTxs
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '');
+  if (omit.length > 0) plan.omit_txs = omit;
+  return Object.keys(plan).length > 0 ? plan : undefined;
+}
+
+// inclusionListError explains a malformed omit list (null = fine).
+export function inclusionListError(state: InclusionListFormState): string | null {
+  const bad = state.omitTxs
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t !== '' && !TX_HASH_RE.test(t));
+  return bad.length > 0 ? `Not a transaction hash: ${bad[0]}` : null;
+}
+
+export const InclusionListForm: React.FC<{
+  bulk: boolean;
+  state: InclusionListFormState;
+  disabled: boolean;
+  onChange: (next: InclusionListFormState) => void;
+}> = ({ bulk, state, disabled, onChange }) => {
+  const inherit = bulk ? 'unchanged' : 'inherit';
+  const error = inclusionListError(state);
+
+  return (
+    <div className="mb-3">
+      <div className="section-header mb-1">
+        Inclusion lists
+        <InfoHint>
+          FOCIL (Heze): the inclusion lists of the slot before the payload, as the beacon node
+          gossips them. Unset fields {bulk ? 'leave each slot as it is' : 'inherit the global settings'}.
+          <dl>
+            <dt>include</dt>
+            <dd>build with them: every list transaction that can execute goes in</dd>
+            <dt>omit</dt>
+            <dd>build without them: a censoring payload, for testing the network&apos;s enforcement</dd>
+            <dt>bits</dt>
+            <dd>
+              which committee lists the slot&apos;s bids claim: the observed ones (view), all or none
+            </dd>
+            <dt>omit transactions</dt>
+            <dd>leave exactly these transactions out, even in include mode</dd>
+          </dl>
+        </InfoHint>
+      </div>
+      <div className="row g-2 mb-2">
+        <div className="col-6">
+          <label className="form-label small text-secondary mb-0">Mode</label>
+          <select
+            className="form-select form-select-sm"
+            value={state.mode}
+            disabled={disabled}
+            onChange={(e) => onChange({ ...state, mode: e.target.value as InclusionListFormState['mode'] })}
+          >
+            <option value="">{inherit}</option>
+            <option value="include">include</option>
+            <option value="omit">omit (censoring payload)</option>
+          </select>
+        </div>
+        <div className="col-6">
+          <label className="form-label small text-secondary mb-0">Bid bits</label>
+          <select
+            className="form-select form-select-sm"
+            value={state.bits}
+            disabled={disabled}
+            onChange={(e) => onChange({ ...state, bits: e.target.value as InclusionListFormState['bits'] })}
+          >
+            <option value="">{inherit}</option>
+            <option value="view">the lists observed</option>
+            <option value="all">every position</option>
+            <option value="none">none</option>
+          </select>
+        </div>
+      </div>
+      <label className="form-label small text-secondary mb-0">Omit transactions</label>
+      <textarea
+        className={`form-control form-control-sm font-monospace${error ? ' is-invalid' : ''}`}
+        rows={2}
+        placeholder="0x… one transaction hash per line"
+        value={state.omitTxs}
+        disabled={disabled}
+        onChange={(e) => onChange({ ...state, omitTxs: e.target.value })}
+      />
+      {error && <div className="invalid-feedback d-block">{error}</div>}
+    </div>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Local build (modeless overrides of the testing_buildBlockV1 extension)

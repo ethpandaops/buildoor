@@ -436,6 +436,45 @@ npm run clean
      `local_build_*`/`txpool_*`. WebUI: Mempool page, Testing builder and
      Mempool flow cards/drawer tabs, plan/rule editor section.
 
+0e. **Inclusion lists** (FOCIL, EIP-7805, Heze) — `pkg/inclusionlist/` keeps the
+   lists the beacon node gossips (`inclusion_list` SSE topic) keyed like the
+   spec's `InclusionListStore` by (slot, dependent root): one list per
+   committee member, equivocators ignored, timeliness from arrival against
+   `INCLUSION_LIST_DUE_BPS`, pruned after 8 slots. `Store.View(slot, parent)`
+   is the builder's view for a payload of slot+1 (only_timely=False): the
+   unique transactions in committee order plus the committee bits
+   (`chain.Service.GetInclusionListCommittee`, from the cached attester
+   duties); several dependent roots are told apart by walking the parent
+   chain. The builder service owns the store (`Service.InclusionLists()`).
+   - Builds (`payload_builder/inclusionlist.go`): the view merged with the
+     payload attributes' list, minus the plan's omissions, is recorded as
+     `Payload.InclusionList` (`InclusionListBuild`). The engine build gets it
+     in the forkchoiceUpdated V5 attributes (always present from Heze, empty
+     if need be) and restarts with a new forkchoiceUpdated when a new list
+     changes it during the wait (`restartWithInclusionList`; same deadline).
+     Every testing build re-reads the view; a new list bumps the rebuild
+     trigger. The pool selection (`txpool/inclusion.go`) places each list
+     transaction that can execute on the parent state at the front of the
+     block (sender nonce chain, base fee, balance, budgets; a nonce gap a
+     pool transaction fills goes right after it); the others are recorded in
+     `inclusion_list_skipped` (a list is satisfied when every missing
+     transaction would be invalid appended to the block). Pool/fill
+     transactions displaced at a list transaction's nonce count as
+     `nonce_taken`, not stale. Refusals go through error attribution, list
+     transactions included; only the exact sources (explicit, empty) carry
+     the list verbatim and retry once without it.
+   - Bids: `bid.inclusion_list_bits` per `build.inclusion_list_bits` —
+     `view` (the lists observed at bid time, the honest builder; gossip
+     ignores a bid missing a timely list a node saw, a proposer one missing a
+     list it saw), `all`, `none` (`payload_bidder.InclusionListBits`, both
+     the p2p and the Builder API paths).
+   - Testing knobs: `build.inclusion_list_mode` include | omit (omit = a
+     censoring payload) and the per-slot plan `build.inclusion_list
+     {mode, bits, omit_txs}` (omit_txs censors exactly those transactions);
+     the action plan grid draws an `IL` chip. Visible on slot results
+     (`build.inclusion_list`, the testing build's `local_build.info`) and the
+     slot graph's payload / testing build popovers
+
 1. **Builder Service** (`pkg/payload_builder/`)
    - Main orchestrator for payload building
    - Subscribes to beacon node's `payload_attributes` events
@@ -839,6 +878,9 @@ Key config sections:
 - **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`, `--el-ws`
   (optional websocket: the EL mempool mirror follows arrivals live)
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
+- **Inclusion lists** (Heze): `--build-inclusion-list-mode` (include | omit),
+  `--build-inclusion-list-bits` (view | all | none); mutable via the
+  `build.inclusion_list_*` settings keys (Engine builder drawer tab)
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
   `--epbs-bid-subsidy` / `--builder-api-subsidy` (SIGNED gwei: positive pads

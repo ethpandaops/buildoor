@@ -674,16 +674,24 @@ func (s *Scheduler) submitBid(
 		"ms_into_slot": msRelativeToSlot,
 	}).Info("Creating and submitting bid")
 
-	// Submit bid, applying the slot's frozen bid transform if any.
-	var bidTransform string
+	// Submit bid, applying the slot's frozen bid transform and inclusion
+	// list bits mode.
+	var bidTransform, inclusionListBits string
 
 	s.mu.Lock()
-	if frozen := s.getSlotState(slot).Frozen; frozen != nil && frozen.Transforms != nil {
-		bidTransform = frozen.Transforms.Bid
+	if frozen := s.getSlotState(slot).Frozen; frozen != nil {
+		if frozen.Transforms != nil {
+			bidTransform = frozen.Transforms.Bid
+		}
+
+		if frozen.Build != nil && frozen.Build.InclusionList != nil {
+			inclusionListBits = frozen.Build.InclusionList.Bits
+		}
 	}
 	s.mu.Unlock()
 
-	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, planned.key, payload, planned.value, bidTransform)
+	signedBid, err := s.bidCreator.CreateAndSubmitBid(ctx, planned.key, payload, planned.value,
+		bidTransform, inclusionListBits)
 
 	event := &BidSubmissionEvent{
 		Slot:      slot,

@@ -143,6 +143,9 @@ type BuildOutcome struct {
 	// Fallback marks that the local payload was wanted but the engine payload
 	// was used (local build failed or skipped).
 	Fallback bool `json:"fallback,omitempty"`
+	// InclusionList is the inclusion list view (FOCIL, Heze) the payload
+	// was built against: lists, transactions, omissions, committee bits.
+	InclusionList *payload_builder.InclusionListBuild `json:"inclusion_list,omitempty"`
 	// LocalBuild is the local build's outcome for this target when the
 	// extension was requested for the slot (ready, failed or skipped).
 	LocalBuild *LocalBuildOutcome `json:"local_build,omitempty"`

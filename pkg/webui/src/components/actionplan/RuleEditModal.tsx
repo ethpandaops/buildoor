@@ -11,6 +11,14 @@ import {
   REVEAL_CATEGORY_HINT,
   BuildForm,
   LocalBuildForm,
+  InclusionListForm,
+  CandidatesForm,
+  initCandidates,
+  candidatesFromState,
+  initInclusionListState,
+  inclusionListPlanFromState,
+  inclusionListError,
+  type InclusionListFormState,
   hiddenTransactionsError,
   initLocalBuildState,
   localBuildPlanFromState,
@@ -151,6 +159,12 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     initLocalBuildState(rule?.build?.local)
   );
   const { status: localBuildStatus } = useLocalBuildStatus();
+  const [inclusionList, setInclusionList] = useState<InclusionListFormState>(() =>
+    initInclusionListState(rule?.build?.inclusion_list)
+  );
+  const [candidates, setCandidates] = useState<Record<string, string>>(() =>
+    initCandidates(rule?.build?.candidates)
+  );
   const [transforms, setTransforms] = useState<TransformState>({
     payload: rule?.transforms?.payload ?? '',
     bid: rule?.transforms?.bid ?? '',
@@ -172,6 +186,8 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     setRevealState(initCategoryState(filled.reveal, REVEAL_FIELDS, false));
     setBuildReorg(filled.build?.reorg_parent_payload ? 'on' : 'off');
     setLocalBuild(initLocalBuildState(filled.build?.local));
+    setInclusionList(initInclusionListState(filled.build?.inclusion_list));
+    setCandidates(initCandidates(filled.build?.candidates));
     setTransforms({ payload: '', bid: '', envelope: '' });
     setFormError(null);
   };
@@ -231,9 +247,18 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       setFormError(hiddenError);
       return;
     }
+    const ilError = inclusionListError(inclusionList);
+    if (ilError) {
+      setFormError(ilError);
+      return;
+    }
+    const ilPlan = inclusionListPlanFromState(inclusionList);
+    const candidatePlan = candidatesFromState(candidates);
     const buildPlan = {
       ...(buildReorg === 'on' ? { reorg_parent_payload: true } : {}),
+      ...(candidatePlan ? { candidates: candidatePlan } : {}),
       ...(localPlan ? { local: localPlan } : {}),
+      ...(ilPlan ? { inclusion_list: ilPlan } : {}),
     };
     const hasBuildPlan = Object.keys(buildPlan).length > 0;
 
@@ -444,6 +469,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 onChange={setRevealState}
               />
               <BuildForm bulk={false} value={buildReorg} disabled={disabled} onChange={setBuildReorg} />
+              <CandidatesForm state={candidates} disabled={disabled} onChange={setCandidates} />
               <LocalBuildForm
                 bulk={false}
                 state={localBuild}
@@ -452,6 +478,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 unavailableReason={localBuildStatus?.availability.reason}
                 onChange={setLocalBuild}
               />
+              <InclusionListForm bulk={false} state={inclusionList} disabled={disabled} onChange={setInclusionList} />
               <TransformEditor
                 bulk={false}
                 value={transforms}
