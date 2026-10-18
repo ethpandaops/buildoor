@@ -273,3 +273,84 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ----------------------------------------------------- fee distribution -- */
+
+.bd-mp-feechart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.bd-mp-feechart-el {
+  fill: var(--bd-faint);
+  opacity: 0.55;
+}
+
+.bd-mp-feechart-private {
+  fill: var(--bd-accent);
+}
+
+.bd-mp-feechart-cum {
+  fill: none;
+  stroke: var(--bd-info-fg);
+  stroke-width: 1.5;
+}
+
+.bd-mp-feechart-block {
+  stroke: var(--bd-info-fg);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.7;
+}
+
+.bd-mp-feechart-base {
+  stroke: var(--bd-danger-fg);
+  stroke-width: 1.5;
+}
+
+.bd-mp-feechart-excluded {
+  fill: var(--bd-danger-bg);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.bd-mp-feechart-axis {
+  stroke: var(--bd-border-strong);
+}
+
+.bd-mp-feechart-label {
+  fill: var(--bd-muted);
+  font-size: 11px;
+}
+
+.bd-mp-feechart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 6px;
+  color: var(--bd-muted);
+}
+
+.bd-mp-feechart-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  background: var(--bd-faint);
+}
+
+.bd-mp-feechart-swatch.bd-mp-feechart-private {
+  background: var(--bd-accent);
+}
+
+.bd-mp-feechart-swatch-line {
+  display: inline-block;
+  width: 14px;
+  height: 0;
+  margin-right: 5px;
+  vertical-align: 3px;
+  border-top: 2px solid var(--bd-info-fg);
+}

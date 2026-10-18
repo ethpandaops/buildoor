@@ -1564,6 +1564,101 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/buildoor/txpool/el-mempool": {
+            "get": {
+                "description": "Returns the state of the mirror of the EL mempool's pending\ntransactions (the testing build's fill source) and a page of\nits content. Public: these are the EL's public transactions.\nReading it never starts the mirror, which runs only while\nbuilds use it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "List the EL mempool mirror",
+                "operationId": "getELMempool",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Offset",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit (max 500)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Sender address filter",
+                        "name": "sender",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "arrival | sender | tip",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ELMempoolResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool/fees": {
+            "get": {
+                "description": "Buckets the pending transactions of the EL mempool mirror by\nmax fee per gas (log scale) against the next base fee and the\nblock gas limit. buildoor's own (private) transactions are\nincluded, as their own series, only for logged-in readers.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Pending gas by max fee",
+                "operationId": "getTxPoolFees",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/txpool.FeeDistribution"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured or no head",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "EL unavailable",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/buildoor/txpool/preview": {
             "get": {
                 "description": "Runs the pool selection against the current head with the\nlive settings and returns what a local block built now would\ncontain (count, gas sum, skipped-by-reason), without building.",
@@ -3155,6 +3250,29 @@ const docTemplate = `{
                 },
                 "secret": {
                     "type": "string"
+                }
+            }
+        },
+        "api.ELMempoolResponse": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "stats": {
+                    "$ref": "#/definitions/txpool.MirrorStats"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "txs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/txpool.TxSummary"
+                    }
                 }
             }
         },
@@ -4899,6 +5017,89 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "orphaned": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.FeeBucket": {
+            "type": "object",
+            "properties": {
+                "el_gas": {
+                    "type": "integer"
+                },
+                "el_txs": {
+                    "type": "integer"
+                },
+                "max_fee": {
+                    "type": "string"
+                },
+                "min_fee": {
+                    "type": "string"
+                },
+                "private_gas": {
+                    "type": "integer"
+                },
+                "private_txs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.FeeDistribution": {
+            "type": "object",
+            "properties": {
+                "buckets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/txpool.FeeBucket"
+                    }
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "mirror_active": {
+                    "description": "MirrorActive: the EL mempool part is current (the mirror runs only\nwhile builds use it).",
+                    "type": "boolean"
+                },
+                "next_base_fee": {
+                    "type": "string"
+                },
+                "private": {
+                    "description": "Private: the pool's transactions are included (logged-in readers).",
+                    "type": "boolean"
+                }
+            }
+        },
+        "txpool.MirrorStats": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "description": "Active: the mirror runs (a build used it within the idle timeout).",
+                    "type": "boolean"
+                },
+                "arrivals": {
+                    "description": "arrivals clearing the latest base fee",
+                    "type": "integer"
+                },
+                "blob_txs": {
+                    "type": "integer"
+                },
+                "gas_sum": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "description": "Mode is how arrivals come in: websocket (live), filter (polled) or\nresync (full reads only, the EL has no filters).",
+                    "type": "string"
+                },
+                "senders": {
+                    "type": "integer"
+                },
+                "started": {
+                    "type": "string"
+                },
+                "synced_at": {
+                    "type": "string"
+                },
+                "txs": {
                     "type": "integer"
                 }
             }

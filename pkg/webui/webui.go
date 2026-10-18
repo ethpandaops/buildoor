@@ -153,6 +153,8 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.GetTxPool).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.ClearTxPool).Methods(http.MethodDelete)
 	apiRouter.HandleFunc("/buildoor/txpool/preview", apiHandler.GetTxPoolPreview).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool/el-mempool", apiHandler.GetELMempool).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool/fees", apiHandler.GetTxPoolFees).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/txpool/{hash}", apiHandler.DropTxPoolTx).Methods(http.MethodDelete)
 	apiRouter.HandleFunc("/buildoor/rpc-access", apiHandler.GetRPCAccess).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/rpc-access/keys", apiHandler.CreateRPCKey).Methods(http.MethodPost)

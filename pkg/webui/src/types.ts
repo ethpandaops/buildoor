@@ -260,6 +260,45 @@ export interface TxSelectionSummary {
   fill_skipped?: Record<string, number>;
 }
 
+// The EL mempool mirror (the testing build's fill source).
+export interface ELMempoolStats {
+  active: boolean;
+  mode?: 'websocket' | 'filter' | 'resync';
+  txs: number;
+  senders: number;
+  blob_txs: number;
+  gas_sum: number;
+  arrivals: number;
+  started?: string;
+  synced_at?: string;
+}
+
+export interface ELMempoolResponse {
+  stats: ELMempoolStats;
+  txs: TxPoolTx[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+// Pending gas by max fee (log-scale buckets, wei bounds).
+export interface FeeBucket {
+  min_fee: string;
+  max_fee: string;
+  el_gas: number;
+  el_txs: number;
+  private_gas?: number;
+  private_txs?: number;
+}
+
+export interface FeeDistribution {
+  next_base_fee: string;
+  gas_limit: number;
+  buckets: FeeBucket[];
+  private: boolean;
+  mirror_active: boolean;
+}
+
 export interface TxPoolPreviewResponse {
   selection: TxSelectionSummary;
   parent_hash: string;

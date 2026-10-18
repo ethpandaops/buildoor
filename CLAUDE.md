@@ -672,7 +672,10 @@ npm run clean
      `settings/fields.tsx` (one entry per backend setting key: label, kind,
      unit/scale, options, validation, help text) and are written through
      `settings/write.ts` (generic settings endpoint, service toggle, key target)
-   - Mempool page (tabs Queue / Next block / Access / Settings) and one tabbed
+   - Mempool page (tabs Queue / Next block / EL mempool / Access / Settings;
+     EL mempool = the mirror's state, a pending-gas-by-max-fee chart against
+     the next base fee and one block of gas, buildoor's private txs
+     highlighted for logged-in readers, and the mirrored txs) and one tabbed
      Registrations page (Builder API registrations, proposer preferences,
      payment caps; old /validators, /proposer-preferences,
      /builder-preferences paths redirect)
@@ -1080,7 +1083,11 @@ To make frontend changes:
   senders, gas sum, value, blobs, lifetime counters) + a page of queued txs;
   `GET /api/buildoor/txpool/preview` dry-runs the selection on the current head;
   `DELETE /api/buildoor/txpool` / `DELETE /api/buildoor/txpool/{hash}` drop
-  (auth + audit)
+  (auth + audit); `GET /api/buildoor/txpool/el-mempool?offset=&limit=&sender=&sort=`
+  the EL mempool mirror's stats + a page of it (public: the EL's public txs;
+  reading never starts the mirror); `GET /api/buildoor/txpool/fees` pending
+  gas by max fee in log buckets (8/decade) + next base fee + gas limit, the
+  pool's private txs as their own series only with a login
 - `POST /rpc` - Transaction pool JSON-RPC ingress (NOT under `/api`; see 0d)
 - `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
   arrival heatmap: raw single-attestation arrivals grouped by validator-ranges

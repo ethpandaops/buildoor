@@ -11,6 +11,8 @@ import { MempoolStats } from './mempool/MempoolStats';
 import { QueueTab } from './mempool/QueueTab';
 import { NextBlockTab } from './mempool/NextBlockTab';
 import { AccessTab } from './mempool/AccessTab';
+import { ELMempoolTab } from './mempool/ELMempoolTab';
+import { useELMempool } from '../hooks/useELMempool';
 import { usePageVisible } from './mempool/usePageVisible';
 import type { TxPoolStats } from '../types';
 import '../styles/mempool.css';
@@ -19,9 +21,9 @@ const PAGE_LIMIT = 50;
 const PREVIEW_POLL_MS = 10000;
 const BASE_PATH = '/mempool';
 
-type MempoolTab = 'queue' | 'next-block' | 'access' | 'settings';
+type MempoolTab = 'queue' | 'next-block' | 'el-mempool' | 'access' | 'settings';
 
-const TAB_IDS: MempoolTab[] = ['queue', 'next-block', 'access', 'settings'];
+const TAB_IDS: MempoolTab[] = ['queue', 'next-block', 'el-mempool', 'access', 'settings'];
 
 // Each tab owns a sub path of /mempool (the queue is the bare path), so tabs
 // are linkable and survive a reload.
@@ -52,6 +54,16 @@ export const MempoolView: React.FC = () => {
   const [sort, setSort] = useState('arrival');
 
   const query = useMemo(() => ({ offset, limit: PAGE_LIMIT, sender: sender.trim(), sort }), [offset, sender, sort]);
+
+  // The EL mempool tab keeps its own listing state.
+  const [elOffset, setElOffset] = useState(0);
+  const [elSender, setElSender] = useState('');
+  const [elSort, setElSort] = useState('tip');
+  const elQuery = useMemo(
+    () => ({ offset: elOffset, limit: PAGE_LIMIT, sender: elSender.trim(), sort: elSort }),
+    [elOffset, elSender, elSort],
+  );
+  const elMempool = useELMempool(elQuery, tab === 'el-mempool' && visible);
   const {
     data,
     loading,
@@ -84,6 +96,13 @@ export const MempoolView: React.FC = () => {
   const tabs: TabItem<MempoolTab>[] = [
     { id: 'queue', label: 'Queue', extra: <span className="bd-mp-tab-count">{pending.toLocaleString()}</span> },
     { id: 'next-block', label: 'Next block' },
+    {
+      id: 'el-mempool',
+      label: 'EL mempool',
+      extra: elMempool.data?.stats.active
+        ? <span className="bd-mp-tab-count">{elMempool.data.stats.txs.toLocaleString()}</span>
+        : undefined,
+    },
     { id: 'access', label: 'Access' },
     { id: 'settings', label: 'Settings' },
   ];
@@ -128,6 +147,22 @@ export const MempoolView: React.FC = () => {
             error={previewError}
             locked={!isLoggedIn || previewUnauthorized}
             onRefresh={fetchPreview}
+          />
+        )}
+        {tab === 'el-mempool' && (
+          <ELMempoolTab
+            data={elMempool.data}
+            fees={elMempool.fees}
+            error={elMempool.error}
+            loading={elMempool.loading}
+            isLoggedIn={isLoggedIn}
+            pageLimit={PAGE_LIMIT}
+            offset={elOffset}
+            onOffsetChange={setElOffset}
+            sender={elSender}
+            onSenderChange={setElSender}
+            sort={elSort}
+            onSortChange={setElSort}
           />
         )}
         {tab === 'access' && <AccessTab />}

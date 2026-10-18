@@ -179,6 +179,12 @@ func (p *Pool) List(opts ListOptions) ([]*PooledTx, int) {
 
 	p.mu.RUnlock()
 
+	return pageTxs(matches, opts)
+}
+
+// pageTxs orders a listing per the options and cuts the requested page; it
+// returns the page and the total match count.
+func pageTxs(matches []*PooledTx, opts ListOptions) ([]*PooledTx, int) {
 	switch strings.ToLower(opts.Sort) {
 	case "sender", "nonce":
 		sort.Slice(matches, func(i, j int) bool {

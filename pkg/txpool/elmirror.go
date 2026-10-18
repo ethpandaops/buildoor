@@ -72,9 +72,10 @@ type elMirror struct {
 	baseFeeHint atomic.Uint64 // wei; 0 = unknown, every arrival counts
 
 	// syncMu serializes the EL-facing work (activation, polls, resyncs).
-	syncMu   sync.Mutex
-	filterID string
-	syncedAt time.Time
+	syncMu    sync.Mutex
+	filterID  string
+	syncedAt  time.Time
+	startedAt time.Time
 
 	mu       sync.Mutex
 	active   bool
@@ -180,6 +181,7 @@ func (m *elMirror) activate(ctx context.Context) error {
 	m.active = true
 	m.mu.Unlock()
 
+	m.startedAt = time.Now()
 	m.log.WithField("txs", m.size()).Info("EL mempool mirror started")
 
 	return nil
@@ -455,11 +457,13 @@ func (m *elMirror) insert(tx *types.Transaction, now time.Time) {
 	m.seq++
 	entry := &mirrorEntry{
 		tx: &PooledTx{
-			Hash:   tx.Hash(),
-			Tx:     tx,
-			Sender: sender,
-			Size:   tx.Size(),
-			Seq:    m.seq,
+			Hash:        tx.Hash(),
+			Tx:          tx,
+			Sender:      sender,
+			Size:        tx.Size(),
+			Arrived:     now,
+			ArrivedSlot: m.pool.currentSlot(),
+			Seq:         m.seq,
 		},
 		seenAt: now,
 	}
@@ -583,4 +587,75 @@ func (m *elMirror) size() int {
 	defer m.mu.Unlock()
 
 	return len(m.byHash)
+}
+
+// MirrorStats describes the EL mempool mirror for the WebUI.
+type MirrorStats struct {
+	// Active: the mirror runs (a build used it within the idle timeout).
+	Active bool `json:"active"`
+	// Mode is how arrivals come in: websocket (live), filter (polled) or
+	// resync (full reads only, the EL has no filters).
+	Mode     string    `json:"mode,omitempty"`
+	Txs      int       `json:"txs"`
+	Senders  int       `json:"senders"`
+	BlobTxs  int       `json:"blob_txs"`
+	GasSum   uint64    `json:"gas_sum"`
+	Arrivals uint64    `json:"arrivals"` // arrivals clearing the latest base fee
+	Started  time.Time `json:"started,omitempty"`
+	SyncedAt time.Time `json:"synced_at,omitempty"`
+}
+
+// Stats summarizes the mirror.
+func (m *elMirror) Stats() MirrorStats {
+	m.syncMu.Lock()
+	filter, startedAt, syncedAt := m.filterID != "", m.startedAt, m.syncedAt
+	m.syncMu.Unlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stats := MirrorStats{
+		Active:   m.active,
+		Txs:      len(m.byHash),
+		Senders:  len(m.bySender),
+		Arrivals: m.arrivals.Load(),
+	}
+
+	if !m.active {
+		return stats
+	}
+
+	stats.Started, stats.SyncedAt = startedAt, syncedAt
+
+	switch {
+	case m.streamLive.Load():
+		stats.Mode = "websocket"
+	case filter:
+		stats.Mode = "filter"
+	default:
+		stats.Mode = "resync"
+	}
+
+	for _, entry := range m.byHash {
+		stats.GasSum += entry.tx.Tx.Gas()
+
+		if entry.tx.Tx.Type() == types.BlobTxType {
+			stats.BlobTxs++
+		}
+	}
+
+	return stats
+}
+
+// snapshot returns the mirrored transactions (any order).
+func (m *elMirror) snapshot() []*PooledTx {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := make([]*PooledTx, 0, len(m.byHash))
+	for _, entry := range m.byHash {
+		out = append(out, entry.tx)
+	}
+
+	return out
 }
