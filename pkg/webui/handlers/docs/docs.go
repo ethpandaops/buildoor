@@ -2475,6 +2475,10 @@ const docTemplate = `{
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 },
+                "respond_at_ms": {
+                    "description": "RespondAtMs overrides the global response gate (ms after the slot\nstart; 0 = respond immediately), see config.BuilderAPIConfig.",
+                    "type": "integer"
+                },
                 "response_delay_ms": {
                     "description": "ResponseDelayMs delays the bid response by this many milliseconds\n(context-cancellable, capped at one slot).",
                     "type": "integer"
@@ -2788,6 +2792,10 @@ const docTemplate = `{
                 "key_strategy": {
                     "description": "KeyStrategy is the effective builder key selection strategy for the\nslot's served bids.",
                     "type": "string"
+                },
+                "respond_at_ms": {
+                    "description": "RespondAtMs is the slot's response gate in ms after the slot start (0\n= respond immediately): bid responses wait for it and then serve the\nbest payload built by then.",
+                    "type": "integer"
                 },
                 "serve_candidates": {
                     "description": "ServeCandidates is the effective serve-candidates policy for the slot\n(all, canonical_only, or a comma-separated candidate key list).",

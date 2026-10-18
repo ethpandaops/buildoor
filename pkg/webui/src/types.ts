@@ -56,6 +56,7 @@ export interface BuilderAPIConfig {
   serve_candidates?: string;
   on_demand_build?: boolean;
   key_strategy?: string;
+  respond_at_ms?: number; // response gate, ms after the slot start (0 = immediately)
 }
 
 // Build-candidate policy: which parent candidates a slot builds payloads for
@@ -1021,6 +1022,7 @@ export interface BuilderAPIPlan {
   execution_payment_percent?: number; // 0-100, portion of the served total value
   ignore_preference_limit?: boolean; // serve beyond the proposer's max_execution_payment
   response_delay_ms?: number;
+  respond_at_ms?: number;
   serve_candidates?: string; // all | canonical_only | key list
 }
 

@@ -1,6 +1,7 @@
 package action_plan
 
 import (
+	"context"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -216,6 +217,11 @@ type ResolvedBuilderAPISettings struct {
 	IgnorePreferenceLimit   bool   `json:"ignore_preference_limit,omitempty"`
 
 	DelayMs int64 `json:"delay_ms,omitempty"`
+
+	// RespondAtMs is the slot's response gate in ms after the slot start (0
+	// = respond immediately): bid responses wait for it and then serve the
+	// best payload built by then.
+	RespondAtMs int64 `json:"respond_at_ms,omitempty"`
 
 	// ServeCandidates is the effective serve-candidates policy for the slot
 	// (all, canonical_only, or a comma-separated candidate key list).
@@ -627,6 +633,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		ExecutionPaymentPercent: cfg.BuilderAPI.ExecutionPaymentPercent,
 		IgnorePreferenceLimit:   cfg.BuilderAPI.IgnorePreferenceLimit,
 		ServeCandidates:         cfg.BuilderAPI.ServeCandidates,
+		RespondAtMs:             cfg.BuilderAPI.RespondAtMs,
 		KeyStrategy:             builderAPIKeyStrategy(cfg),
 		Forced:                  forced,
 	}
@@ -643,6 +650,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		applyOverride(&resolved.ExecutionPaymentPercent, api.ExecutionPaymentPercent)
 		applyOverride(&resolved.IgnorePreferenceLimit, api.IgnorePreferenceLimit)
 		applyOverride(&resolved.DelayMs, api.ResponseDelayMs)
+		applyOverride(&resolved.RespondAtMs, api.RespondAtMs)
 
 		if api.TotalValueOverrideGwei != nil {
 			resolved.TotalValueGwei = cloneScalar(api.TotalValueOverrideGwei)
@@ -706,5 +714,40 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 func applyOverride[T any](target *T, override *T) {
 	if override != nil {
 		*target = *override
+	}
+}
+
+// RespondGate returns when the slot's bid responses may go out (zero = at
+// once), given the proposal slot's start.
+func (s *ResolvedBuilderAPISettings) RespondGate(slotStart time.Time) time.Time {
+	if s == nil || s.RespondAtMs == 0 {
+		return time.Time{}
+	}
+
+	return slotStart.Add(time.Duration(s.RespondAtMs) * time.Millisecond)
+}
+
+// AwaitRespondGate holds a bid response until the slot's response gate; false
+// when ctx (the proposer's request) ended first. Without a gate, or once it
+// passed, it returns at once.
+func (s *ResolvedBuilderAPISettings) AwaitRespondGate(ctx context.Context, slotStart time.Time) bool {
+	gate := s.RespondGate(slotStart)
+	if gate.IsZero() {
+		return true
+	}
+
+	wait := time.Until(gate)
+	if wait <= 0 {
+		return true
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

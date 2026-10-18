@@ -442,6 +442,9 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   // Bid window and reveal marker
   const bidStartX = epbsConfig ? calculatePosition(epbsConfig.bid_start_time, rangeStart, totalRange) : 0;
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
+  // Builder API response gate (timing game): bid responses are held until it.
+  const respondAtMs = config?.builder_api?.respond_at_ms ?? 0;
+  const respondGateX = respondAtMs !== 0 ? calculatePosition(respondAtMs, rangeStart, totalRange) : -1;
   // The reveal marker shows the time gate; a pure vote-gated reveal has no
   // fixed time to mark.
   const revealConfig = config?.reveal;
@@ -506,6 +509,37 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
         style={{ left: `${clampedX}%` }}
         onClick={(e) => showPopover(e, data, extra)}
       />
+    );
+  };
+
+  // A bid request (getHeader / getExecutionPayloadBid): a line from the
+  // request to our response (growing live while the response is held, e.g.
+  // by the response gate), the green dot where we responded; an unanswered
+  // request keeps its amber dot at the request.
+  const renderHeldCall = (receivedAt: number, deliveredAt: number | undefined, data: PopoverData, key: string) => {
+    const startX = calculatePosition(receivedAt - slotStartTime, rangeStart, totalRange);
+    const heldMs = deliveredAt ? deliveredAt - receivedAt : undefined;
+    const holdCap = respondAtMs !== 0 ? slotStartTime + respondAtMs + 500 : receivedAt + 2000;
+
+    return (
+      <React.Fragment key={key}>
+        {startX < 100 && (heldMs === undefined || heldMs > 0) && (
+          <BuildDelayLine
+            className="builder-api-call-line"
+            leftPct={startX}
+            slotStartTime={slotStartTime}
+            rangeStart={rangeStart}
+            totalRange={totalRange}
+            endAt={deliveredAt}
+            endGapPx={6}
+            expectedEndAt={Math.max(holdCap, receivedAt + 200)}
+            onClick={(e) => showPopover(e, data)}
+          />
+        )}
+        {deliveredAt
+          ? renderEventDot('builder-api-call delivered', deliveredAt - slotStartTime, data, `${key}-delivered`)
+          : renderEventDot('builder-api-call pending', receivedAt - slotStartTime, data, `${key}-pending`)}
+      </React.Fragment>
     );
   };
 
@@ -577,6 +611,16 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               }}
             >
               <span className="duty-label bid-label" title={`Bid window: ${epbsConfig.bid_start_time} – ${epbsConfig.bid_end_time} ms`}>bid</span>
+            </div>
+          )}
+
+          {/* Builder API response gate - spans the Builder API row only */}
+          {builderApiActive && builderApiRowBottom >= 0 && respondGateX >= 0 && respondGateX <= 100 && (
+            <div
+              className="respond-gate-marker"
+              style={{ bottom: `${builderApiRowBottom}px`, height: `${ROW_HEIGHT}px`, left: `${respondGateX}%` }}
+            >
+              <span className="duty-label respond-gate-label" title={`Builder API responses held until ${respondAtMs} ms`}>respond</span>
             </div>
           )}
 
@@ -1518,16 +1562,19 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                 the popover names the call and carries both timestamps. */}
 
             {/* getHeader (Fulu) */}
-            {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getHeaderDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getHeaderReceivedAt - slotStartTime,
+            {state.getHeaderReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getHeaderReceivedAt,
+              state.getHeaderDeliveredAt,
               {
                 title: 'getHeader (Fulu)',
                 items: [
                   { label: 'Received', value: `${state.getHeaderReceivedAt - slotStartTime}ms` },
-                  state.getHeaderDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getHeaderDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getHeaderDeliveredAt - state.getHeaderReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getHeaderBlockValue ? [{
                     label: 'Block Value',
                     value: state.getHeaderBlockValue + ' wei'
@@ -1565,16 +1612,19 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             )}
 
             {/* getExecutionPayloadBid (Gloas) */}
-            {state.getBidReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getBidDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getBidReceivedAt - slotStartTime,
+            {state.getBidReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getBidReceivedAt,
+              state.getBidDeliveredAt,
               {
                 title: 'getExecutionPayloadBid (Gloas)',
                 items: [
                   { label: 'Received', value: `${state.getBidReceivedAt - slotStartTime}ms` },
-                  state.getBidDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getBidDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getBidDeliveredAt - state.getBidReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getBidBlockValue ? [{
                     label: 'Bid Value',
                     value: state.getBidBlockValue + ' gwei'

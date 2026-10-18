@@ -188,6 +188,15 @@ type BuilderAPIConfig struct {
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
 
+	// RespondAtMs holds bid responses until this many ms after the proposal
+	// slot start (negative = before it), then serves the best payload built
+	// by then: a timing game, the builder keeps collecting transactions while
+	// the proposer waits. 0 = respond immediately. A request arriving after
+	// the gate is answered at once. The proposer's client stops waiting after
+	// its own getHeader timeout, so a gate too far past its request loses the
+	// slot.
+	RespondAtMs int64 `yaml:"respond_at_ms" json:"respond_at_ms"`
+
 	// ExecutionPaymentGwei, when non-zero, claims this absolute portion of a
 	// served Gloas bid's total value as execution_payment (the trusted
 	// execution-layer payment); the remainder is paid trustlessly on-chain via

@@ -190,6 +190,10 @@ type BuilderAPIPlan struct {
 	// (context-cancellable, capped at one slot).
 	ResponseDelayMs *int64 `json:"response_delay_ms,omitempty"`
 
+	// RespondAtMs overrides the global response gate (ms after the slot
+	// start; 0 = respond immediately), see config.BuilderAPIConfig.
+	RespondAtMs *int64 `json:"respond_at_ms,omitempty"`
+
 	// KeyStrategy overrides which managed builder key signs this slot's served
 	// bids: round_robin, single, random or least_used.
 	KeyStrategy *string `json:"key_strategy,omitempty"`
@@ -212,6 +216,7 @@ func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
 	c.ExecutionPaymentPercent = cloneScalar(p.ExecutionPaymentPercent)
 	c.IgnorePreferenceLimit = cloneScalar(p.IgnorePreferenceLimit)
 	c.ResponseDelayMs = cloneScalar(p.ResponseDelayMs)
+	c.RespondAtMs = cloneScalar(p.RespondAtMs)
 
 	return &c
 }
@@ -219,7 +224,7 @@ func (p *BuilderAPIPlan) clone() *BuilderAPIPlan {
 func (p *BuilderAPIPlan) hasOverrides() bool {
 	return p.ValueSubsidyGwei != nil || p.TotalValueOverrideGwei != nil ||
 		p.ExecutionPaymentGwei != nil || p.ExecutionPaymentPercent != nil ||
-		p.IgnorePreferenceLimit != nil || p.ResponseDelayMs != nil ||
+		p.IgnorePreferenceLimit != nil || p.ResponseDelayMs != nil || p.RespondAtMs != nil ||
 		p.ServeCandidates != nil || p.KeyStrategy != nil
 }
 
@@ -235,6 +240,10 @@ func (p *BuilderAPIPlan) validate(slotMs int64) error {
 	if p.ResponseDelayMs != nil && (*p.ResponseDelayMs < 0 || *p.ResponseDelayMs > slotMs) {
 		return fmt.Errorf("builder_api: response_delay_ms must be within [0, %d], got %d",
 			slotMs, *p.ResponseDelayMs)
+	}
+
+	if err := validateTimeBound("builder_api.respond_at_ms", p.RespondAtMs, -slotMs, slotMs); err != nil {
+		return err
 	}
 
 	if p.ExecutionPaymentPercent != nil && *p.ExecutionPaymentPercent > 100 {

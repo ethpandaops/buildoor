@@ -180,6 +180,16 @@ export const BUILDER_API_FIELDS: FieldDef[] = [
     ),
   },
   {
+    key: 'respond_at_ms', label: 'Respond At', unit: 'ms',
+    hint: (
+      <>
+        Holds the bid response until this many ms after the slot start, then serves the best payload
+        built by then (a timing game). <code>0</code> = respond immediately. Replaces the global
+        setting for this slot.
+      </>
+    ),
+  },
+  {
     key: 'response_delay_ms', label: 'Response Delay', unit: 'ms',
     hint: (
       <>

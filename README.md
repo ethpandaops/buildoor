@@ -125,6 +125,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 |------|---------|-------------|
 | `--builder-api-enabled` | `false` | Enable the Builder API at startup |
 | `--builder-api-subsidy` | `100000` | Block value subsidy added to served bids (Gwei; negative = the builder's margin on Gloas bids, ignored before Gloas) |
+| `--builder-api-respond-at` | `0` | Timing game: hold Builder API bid responses until this many ms after the slot start, then serve the best payload built by then (0 = respond immediately; keep it within the proposer's getHeader timeout) |
 
 ### ePBS Flags
 

@@ -167,6 +167,21 @@
   color: rgba(13, 202, 240, 0.95);
 }
 
+/* Builder API response gate (timing game) - positioned dynamically */
+.respond-gate-marker {
+  position: absolute;
+  width: 2px;
+  background: #ffc107;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.respond-gate-label {
+  left: 4px;
+  color: rgba(255, 193, 7, 0.95);
+  pointer-events: auto;
+}
+
 /* Reveal marker - positioned dynamically */
 .reveal-marker {
   position: absolute;
@@ -538,6 +553,24 @@
 }
 
 /* Builder API call dots — one per call, colored by outcome (Fulu + Gloas) */
+/* A held bid request: from the request to our response. */
+.builder-api-call-line {
+  position: absolute;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(40, 167, 69, 0.35), rgba(40, 167, 69, 0.85));
+  border-radius: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* Still held: amber, pulsing. */
+.builder-api-call-line-active {
+  background: linear-gradient(90deg, rgba(255, 193, 7, 0.35), rgba(255, 193, 7, 0.9));
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
 .builder-api-call.delivered {
   background: #28a745;
   border: 2px solid #1c7430;

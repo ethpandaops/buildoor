@@ -108,6 +108,11 @@ definitions:
         type: string
       mode:
         $ref: '#/definitions/action_plan.Mode'
+      respond_at_ms:
+        description: |-
+          RespondAtMs overrides the global response gate (ms after the slot
+          start; 0 = respond immediately), see config.BuilderAPIConfig.
+        type: integer
       response_delay_ms:
         description: |-
           ResponseDelayMs delays the bid response by this many milliseconds
@@ -391,6 +396,12 @@ definitions:
           KeyStrategy is the effective builder key selection strategy for the
           slot's served bids.
         type: string
+      respond_at_ms:
+        description: |-
+          RespondAtMs is the slot's response gate in ms after the slot start (0
+          = respond immediately): bid responses wait for it and then serve the
+          best payload built by then.
+        type: integer
       serve_candidates:
         description: |-
           ServeCandidates is the effective serve-candidates policy for the slot

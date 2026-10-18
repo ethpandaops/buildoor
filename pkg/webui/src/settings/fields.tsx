@@ -928,6 +928,23 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'builder_api.respond_at_ms': {
+    label: 'Respond at',
+    kind: 'number',
+    unit: 'ms',
+    zeroLabel: 'immediately',
+    hint: 'Hold bid responses until this many ms after the slot start, then serve the best payload built by then. 0 = respond immediately.',
+    help: (
+      <>
+        A timing game (<code>builder_api.respond_at_ms</code>, ms relative to the proposal slot&apos;s
+        start): a getHeader / getExecutionPayloadBid request is held until the gate and only then
+        answered with the best payload built so far, so the builder keeps collecting transactions
+        while the proposer waits. A request arriving after the gate is answered at once. 0 = respond
+        immediately. The proposer&apos;s client gives up after its own getHeader timeout, so a gate
+        too far past its request loses the slot. Per-slot action plans can override it.
+      </>
+    ),
+  },
   'builder_api.execution_payment_gwei': {
     label: 'Execution payment',
     kind: 'number',

@@ -150,6 +150,7 @@ func Fields() []Field {
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
 		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *int64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
+		newField(KeyBuilderAPIRespondAtMs, "builder-api-respond-at", func(c *Config) *int64 { return &c.BuilderAPI.RespondAtMs }),
 		newField(KeyBuilderAPIExecutionPayment, "builder-api-execution-payment", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentGwei }),
 		newField(KeyBuilderAPIExecutionPaymentPct, "builder-api-execution-payment-percent", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentPercent }),
 		newField(KeyBuilderAPIIgnorePrefLimit, "builder-api-ignore-preference-limit", func(c *Config) *bool { return &c.BuilderAPI.IgnorePreferenceLimit }),

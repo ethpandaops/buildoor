@@ -73,6 +73,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
 	rootCmd.PersistentFlags().Int64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the block value of served Builder API bids; negative = the builder's margin (Gloas only)")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
+	rootCmd.PersistentFlags().Int64("builder-api-respond-at", defaults.BuilderAPI.RespondAtMs, "Hold Builder API bid responses until this many ms after the slot start, then serve the best payload built by then (0 = respond immediately; keep it within the proposer's getHeader timeout)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment", defaults.BuilderAPI.ExecutionPaymentGwei, "Absolute portion in gwei of a served Gloas bid's total value claimed as execution_payment; the claim is unbacked and capped by the proposer's advertised max_execution_payment (0 = disabled, wins over the percent)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment-percent", defaults.BuilderAPI.ExecutionPaymentPercent, "Percentage (0-100) of a served Gloas bid's total value claimed as execution_payment (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("builder-api-ignore-preference-limit", defaults.BuilderAPI.IgnorePreferenceLimit, "Serve the configured execution_payment portion even beyond the proposer's advertised max_execution_payment (deliberately spec-violating, for client-side rejection testing)")
@@ -296,6 +297,7 @@ func initConfig(root *cobra.Command) error {
 			RequireRequestAuth:      v.GetBool("builder-api-require-auth"),
 			BlockValueSubsidyGwei:   v.GetInt64("builder-api-subsidy"),
 			ValueOverrideGwei:       v.GetUint64("builder-api-value-override"),
+			RespondAtMs:             v.GetInt64("builder-api-respond-at"),
 			ExecutionPaymentGwei:    v.GetUint64("builder-api-execution-payment"),
 			ExecutionPaymentPercent: v.GetUint64("builder-api-execution-payment-percent"),
 			IgnorePreferenceLimit:   v.GetBool("builder-api-ignore-preference-limit"),

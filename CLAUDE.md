@@ -624,7 +624,16 @@ npm run clean
      `payload_bidder.RevealService` — no inline envelope publish), submitBuilderPreferences
    - **Bid serving is decided exclusively by the slot's frozen plan** (resolved at
      request time): suppressed slots 204; plan-activated slots serve even when the
-     module is globally disabled. The `enabled` flag keeps gating only the
+     module is globally disabled.
+   - **Response gate** (timing game, `builder_api.respond_at_ms`, slot-relative
+     ms, 0 = respond immediately, per-slot plan override `respond_at_ms`): both
+     dialects hold a validated request until the gate
+     (`ResolvedBuilderAPISettings.AwaitRespondGate`) and only then pick the
+     payload, so the response carries the best payload built by then
+     (testing-build upgrades included); a hang-up during the hold records
+     `cancelled`. Distinct from the plan's `response_delay_ms`, a testing knob
+     applied after the bid is built. Drawn as the "respond" gate in the slot
+     graph's Builder API row The `enabled` flag keeps gating only the
      non-slot-scoped endpoints (registrations, preferences, block submission).
      Frozen per-slot values drive subsidy, absolute total bid value (uint256 wei
      math), the execution-payment split and a context-cancellable response delay.

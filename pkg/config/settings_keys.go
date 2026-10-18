@@ -73,6 +73,7 @@ const (
 	KeyExtraData                     = "extra_data"
 	KeyBuilderAPISubsidy             = "builder_api.block_value_subsidy_gwei"
 	KeyBuilderAPIValueOverride       = "builder_api.value_override_gwei"
+	KeyBuilderAPIRespondAtMs         = "builder_api.respond_at_ms"
 	KeyBuilderAPIExecutionPayment    = "builder_api.execution_payment_gwei"
 	KeyBuilderAPIExecutionPaymentPct = "builder_api.execution_payment_percent"
 	KeyBuilderAPIIgnorePrefLimit     = "builder_api.ignore_preference_limit"

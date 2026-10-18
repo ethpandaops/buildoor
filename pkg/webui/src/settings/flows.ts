@@ -471,7 +471,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         id: 'serving',
         label: 'Serving',
         sections: [
-          { keys: ['builder_api.serve_candidates', 'builder_api.on_demand_build', 'builder_api.require_request_auth'] },
+          { keys: ['builder_api.respond_at_ms', 'builder_api.serve_candidates', 'builder_api.on_demand_build', 'builder_api.require_request_auth'] },
         ],
       },
     ],
@@ -483,6 +483,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Subsidy', keys: ['builder_api.block_value_subsidy_gwei'] },
       { label: 'Absolute value', keys: ['builder_api.value_override_gwei'] },
+      { label: 'Respond at', keys: ['builder_api.respond_at_ms'] },
       {
         label: 'Execution payment',
         keys: ['builder_api.execution_payment_gwei', 'builder_api.execution_payment_percent'],
