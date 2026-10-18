@@ -1,6 +1,7 @@
 package payload_builder
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 
@@ -10,9 +11,12 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
+	"github.com/ethpandaops/go-eth-engine-client/spec/amsterdam"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	"github.com/ethpandaops/go-eth-engine-client/spec/shanghai"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 )
 
 const maxExtraDataSize = 32
@@ -129,16 +133,11 @@ func buildHeaderFromPayload(
 		baseFee = p.BaseFeePerGas.ToBig()
 	}
 
-	// Decode transactions and compute Merkle root.
-	txs := make(types.Transactions, 0, len(p.Transactions))
-	for i, txBytes := range p.Transactions {
-		tx := new(types.Transaction)
-		if err := tx.UnmarshalBinary(txBytes); err != nil {
-			return nil, fmt.Errorf("failed to decode transaction %d: %w", i, err)
-		}
-
-		txs = append(txs, tx)
-	}
+	// The transactions root commits to the encoded transactions as they are,
+	// so it is computed from the raw bytes: a payload transform may insert
+	// undecodable transactions on purpose, and the hash must still match
+	// what an EL derives from the same bytes.
+	txs := rawTransactions(p.Transactions)
 
 	var bloom types.Bloom
 	copy(bloom[:], p.LogsBloom[:])
@@ -209,3 +208,62 @@ func buildHeaderFromPayload(
 
 	return header, nil
 }
+
+func RehashBeaconPayload(
+	p *eth2all.ExecutionPayload,
+	engineVersion enginev.DataVersion,
+	executionRequests []prague.ExecutionRequest,
+	parentBeaconBlockRoot common.Hash,
+) (common.Hash, error) {
+	ep := &engineall.ExecutionPayload{
+		Version:         engineVersion,
+		ParentHash:      paris.Hash32(p.ParentHash),
+		FeeRecipient:    paris.Address(p.FeeRecipient),
+		StateRoot:       paris.Hash32(p.StateRoot),
+		ReceiptsRoot:    paris.Hash32(p.ReceiptsRoot),
+		LogsBloom:       paris.Bloom(p.LogsBloom),
+		PrevRandao:      paris.Hash32(p.PrevRandao),
+		BlockNumber:     p.BlockNumber,
+		GasLimit:        p.GasLimit,
+		GasUsed:         p.GasUsed,
+		Timestamp:       p.Timestamp,
+		ExtraData:       p.ExtraData,
+		BaseFeePerGas:   p.BaseFeePerGas,
+		BlobGasUsed:     p.BlobGasUsed,
+		ExcessBlobGas:   p.ExcessBlobGas,
+		BlockAccessList: amsterdam.BlockAccessList(p.BlockAccessList),
+		SlotNumber:      p.SlotNumber,
+	}
+
+	ep.Transactions = make([]paris.Transaction, len(p.Transactions))
+	for i, tx := range p.Transactions {
+		ep.Transactions[i] = paris.Transaction(tx)
+	}
+
+	ep.Withdrawals = make([]*shanghai.Withdrawal, len(p.Withdrawals))
+	for i, w := range p.Withdrawals {
+		ep.Withdrawals[i] = &shanghai.Withdrawal{
+			Index:          uint64(w.Index),
+			ValidatorIndex: uint64(w.ValidatorIndex),
+			Address:        paris.Address(w.Address),
+			Amount:         uint64(w.Amount),
+		}
+	}
+
+	header, err := buildHeaderFromPayload(ep, parentBeaconBlockRoot, executionRequests)
+	if err != nil {
+		return common.Hash{}, err
+	}
+
+	return header.Hash(), nil
+}
+
+// rawTransactions is a types.DerivableList over encoded transactions: the
+// transactions trie maps each index to the transaction's encoding (the typed
+// envelope, or the RLP list of a legacy transaction), which is exactly the
+// bytes a payload carries.
+type rawTransactions []paris.Transaction
+
+func (r rawTransactions) Len() int { return len(r) }
+
+func (r rawTransactions) EncodeIndex(i int, w *bytes.Buffer) { w.Write(r[i]) }
