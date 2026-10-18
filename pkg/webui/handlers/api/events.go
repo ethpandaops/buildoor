@@ -165,10 +165,21 @@ type PayloadBuildFailedStreamEvent struct {
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
+// EngineCallsStream times the engine build's two calls (unix ms): the build
+// line draws them solid and the wait in between dashed.
+type EngineCallsStream struct {
+	ForkchoiceStart int64 `json:"fcu_start"`
+	ForkchoiceEnd   int64 `json:"fcu_end"`
+	GetPayloadStart int64 `json:"get_payload_start"`
+	GetPayloadEnd   int64 `json:"get_payload_end"`
+}
+
 type PayloadReadyStreamEvent struct {
-	Slot      uint64 `json:"slot"`
-	Candidate string `json:"candidate,omitempty"`
-	BlockHash string `json:"block_hash"`
+	Slot uint64 `json:"slot"`
+	// EngineCalls times the engine build's calls (absent without one).
+	EngineCalls *EngineCallsStream `json:"engine_calls,omitempty"`
+	Candidate   string             `json:"candidate,omitempty"`
+	BlockHash   string             `json:"block_hash"`
 	// Parent tuple this payload was built on: the execution parent (hash and,
 	// where known, its block number) and the beacon parent (root and its
 	// slot), so the UI can show what the payload actually extends.
@@ -1354,6 +1365,15 @@ func (m *EventStreamManager) payloadReadyStreamEvent(
 		BlockValue:        event.BlockValue.String(),
 		ReadyAt:           event.ReadyAt.UnixMilli(),
 		FeeRecipient:      event.FeeRecipient.Hex(),
+	}
+
+	if calls := event.EngineCalls; calls != nil {
+		data.EngineCalls = &EngineCallsStream{
+			ForkchoiceStart: calls.ForkchoiceStart.UnixMilli(),
+			ForkchoiceEnd:   calls.ForkchoiceEnd.UnixMilli(),
+			GetPayloadStart: calls.GetPayloadStart.UnixMilli(),
+			GetPayloadEnd:   calls.GetPayloadEnd.UnixMilli(),
+		}
 	}
 
 	// The beacon parent's slot makes the payload's position in the chain

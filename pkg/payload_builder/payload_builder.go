@@ -217,10 +217,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		payloadAttrs = prelude.payloadAttrs
 	}
 
+	fcuStart := time.Now()
+
 	payloadID, err := b.forkchoiceUpdated(buildCtx, attrs, prelude, payloadAttrs)
 	if err != nil {
 		return nil, err
 	}
+
+	fcuEnd := time.Now()
 
 	if runEL {
 		b.mu.Lock()
@@ -255,6 +259,10 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	if runEL {
 		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, deadline)
+
+		if result.EL != nil {
+			result.EL.EngineCalls.ForkchoiceStart, result.EL.EngineCalls.ForkchoiceEnd = fcuStart, fcuEnd
+		}
 	}
 
 	if local != nil {
@@ -269,6 +277,11 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// build's own completion stays on Local.BuiltAt.
 	if err == nil && result.Source == SourceLocal && result.Payload != nil {
 		result.Payload.ReadyAt = time.Now()
+
+		// The build line describes the engine build either way.
+		if result.EL != nil {
+			result.Payload.EngineCalls = result.EL.EngineCalls
+		}
 	}
 
 	if local != nil && localCtx.Err() == nil {
@@ -712,10 +725,14 @@ func (b *PayloadBuilder) buildEngine(
 	}
 
 	// Retrieve the built payload as the fork-agnostic union.
+	getPayloadStart := time.Now()
+
 	resp, err := b.engineClient.GetPayloadAgnostic(ctx, prelude.engineVersion, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
+
+	getPayloadEnd := time.Now()
 
 	payload, err := b.finalizePayload(ctx, attrs, prelude, resp)
 	if err != nil {
@@ -723,6 +740,7 @@ func (b *PayloadBuilder) buildEngine(
 	}
 
 	payload.Source = SourceEL
+	payload.EngineCalls = &EngineCallTimes{GetPayloadStart: getPayloadStart, GetPayloadEnd: getPayloadEnd}
 
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 

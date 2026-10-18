@@ -205,7 +205,13 @@ func TestFollowLocalUpgradesOnlyBetterPicks(t *testing.T) {
 
 	close(done)
 
-	_, open := <-upgrades
+	// A final report with every run follows, re-sending the published pick.
+	report, open := <-upgrades
+	require.True(t, open)
+	require.Same(t, better, report.Payload)
+	require.Len(t, report.LocalInfo.Runs, 2)
+
+	_, open = <-upgrades
 	require.False(t, open, "the upgrades end with the builds")
 }
 

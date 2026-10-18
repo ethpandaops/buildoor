@@ -370,8 +370,9 @@ func (b *PayloadBuilder) observeLocalTiming(outcome localOutcome) {
 // whenever a new best build makes the payload source's pick (selectPayload)
 // a different payload than the one published last, the new pick goes out on
 // upgrades, so the next bid or getHeader uses it. The picks only improve: the
-// best testing build is the highest-valued one so far. upgrades closes when
-// the builds are done.
+// best testing build is the highest-valued one so far. When the builds are
+// done a final report follows (Payload = the pick already published, Local
+// and LocalInfo = the outcome with every run), then upgrades closes.
 func (b *PayloadBuilder) followLocal(
 	ctx context.Context,
 	handedOver BuildResult,
@@ -401,6 +402,10 @@ func (b *PayloadBuilder) followLocal(
 
 		if picked.Source == SourceLocal {
 			picked.Payload.ReadyAt = time.Now()
+
+			if handedOver.EL != nil {
+				picked.Payload.EngineCalls = handedOver.EL.EngineCalls
+			}
 		}
 
 		// Not bound to ctx: it ends with the last build, whose pick must still
@@ -411,6 +416,24 @@ func (b *PayloadBuilder) followLocal(
 		select {
 		case upgrades <- picked:
 			current = picked.Payload
+		case <-timer.C:
+		}
+	}
+
+	report := func() {
+		final := handedOver
+		final.Payload = current
+
+		if outcome, ok := results.result(); ok {
+			final.Local, final.LocalInfo, final.LocalErr, final.LocalSkipReason =
+				outcome.payload, outcome.info, outcome.err, outcome.skipReason
+		}
+
+		timer := time.NewTimer(lateBuildTimeout)
+		defer timer.Stop()
+
+		select {
+		case upgrades <- &final:
 		case <-timer.C:
 		}
 	}
@@ -427,8 +450,12 @@ func (b *PayloadBuilder) followLocal(
 			default:
 			}
 
+			report()
+
 			return
 		case <-ctx.Done():
+			report()
+
 			return
 		}
 	}

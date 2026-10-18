@@ -916,7 +916,9 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		}()
 	}
 
-	if localReq != nil || localSkip != "" {
+	// With testing builds still running the follower reports their outcome
+	// at the window end; a build merely not done yet is no failure.
+	if (localReq != nil || localSkip != "") && (result == nil || result.Upgrades == nil) {
 		s.emitLocalBuild(slot, target, result, localReq, localSkip, err)
 	}
 
@@ -1014,7 +1016,18 @@ func (s *Service) followUpgrades(
 	upgrades <-chan *BuildResult,
 ) {
 	for upgrade := range upgrades {
-		if s.buildAborted(build) || upgrade.Payload == nil {
+		if s.buildAborted(build) {
+			continue
+		}
+
+		// The final report re-sends the payload already published.
+		s.scheduledBuildMu.Lock()
+		published := build.payload
+		s.scheduledBuildMu.Unlock()
+
+		if upgrade.Payload == nil || upgrade.Payload == published {
+			s.emitLocalBuild(slot, target, upgrade, localReq, "", nil)
+
 			continue
 		}
 

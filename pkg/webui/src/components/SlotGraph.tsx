@@ -198,10 +198,14 @@ const buildHeadVotesPaths = (
 };
 
 
+// Height of the build and bid window strips: as tall as their lines' dots.
+const WINDOW_STRIP_HEIGHT = 12;
+
 // One fixed color per build-parent candidate key, consistent across the UI
-// (parent_full keeps the classic build color).
+// (parent_full is the engine build's blue, apart from the testing builds'
+// cyan).
 const CANDIDATE_COLORS: Record<string, string> = {
-  parent_full: '#61e392',
+  parent_full: '#4d8dff',
   parent_empty: '#e6a23c',
   grandparent_full: '#a78bfa',
   grandparent_empty: '#8a8f98'
@@ -541,15 +545,23 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             <span className="marker-label">100%</span>
           </div>
 
-          {/* Build windows - span the whole graph behind the build lines */}
+          {/* Build windows - a strip around each build line in the chain row,
+              tall enough for the line's dot: the engine line runs through the
+              row's middle, the testing builds' line below it. */}
           {engineBand && engineWindowMs && (
-            <div className="build-window-bg build-window-engine" style={{ left: `${engineBand.left}%`, width: `${engineBand.width}%` }}>
-              <span className="duty-label build-window-label">Engine build: {engineWindowMs[0]} - {engineWindowMs[1]}ms</span>
+            <div
+              className="build-window-bg build-window-engine"
+              style={{ left: `${engineBand.left}%`, width: `${engineBand.width}%`, bottom: `${chainRowBottom + 8}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Engine build: ${engineWindowMs[0]} – ${engineWindowMs[1]} ms`}>engine</span>
             </div>
           )}
           {testingBand && testingWindowMs && (
-            <div className="build-window-bg build-window-testing" style={{ left: `${testingBand.left}%`, width: `${testingBand.width}%` }}>
-              <span className="duty-label build-window-label">Testing builds: {testingWindowMs[0]} - {testingWindowMs[1]}ms</span>
+            <div
+              className="build-window-bg build-window-testing"
+              style={{ left: `${testingBand.left}%`, width: `${testingBand.width}%`, bottom: `${chainRowBottom - 4}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Testing builds: ${testingWindowMs[0]} – ${testingWindowMs[1]} ms`}>testing</span>
             </div>
           )}
 
@@ -558,15 +570,13 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
-                bottom: `${epbsRowBottom}px`,
-                height: `${ROW_HEIGHT}px`,
+                bottom: `${epbsRowBottom + (ROW_HEIGHT - WINDOW_STRIP_HEIGHT) / 2}px`,
+                height: `${WINDOW_STRIP_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
               }}
             >
-              <span className="duty-label bid-label">
-                Bid: {epbsConfig.bid_start_time} - {epbsConfig.bid_end_time}ms
-              </span>
+              <span className="duty-label bid-label" title={`Bid window: ${epbsConfig.bid_start_time} – ${epbsConfig.bid_end_time} ms`}>bid</span>
             </div>
           )}
 
@@ -737,13 +747,31 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               rangeStart={rangeStart}
               totalRange={totalRange}
               endAt={buildEndAt}
+              endGapPx={6}
               expectedEndAt={expectedBuildEndAt}
               lineColor={candidateColor(primaryCandidate)}
+              dashed
+              calls={state.payloadEngineCalls
+                ? [
+                    { start: state.payloadEngineCalls.fcu_start, end: state.payloadEngineCalls.fcu_end },
+                    { start: state.payloadEngineCalls.get_payload_start, end: state.payloadEngineCalls.get_payload_end }
+                  ]
+                : undefined}
               onClick={(e) => showPopover(e, {
-                title: `Build Delay${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
+                title: `Engine Build${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
                 items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
+                      ...(state.payloadEngineCalls
+                        ? (() => {
+                            const calls = state.payloadEngineCalls;
+                            return [
+                              { label: 'forkchoiceUpdated', value: `${calls.fcu_start - slotStartTime}ms, took ${calls.fcu_end - calls.fcu_start}ms` },
+                              { label: 'EL building', value: `${calls.get_payload_start - calls.fcu_end}ms (waiting for getPayload)` },
+                              { label: 'getPayload', value: `${calls.get_payload_start - slotStartTime}ms, took ${calls.get_payload_end - calls.get_payload_start}ms` }
+                            ];
+                          })()
+                        : []),
                       { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
                       ...(state.payloadUpgrades && state.payloadUpgradedAt
                         ? [{ label: 'Upgraded', value: `${state.payloadUpgrades}× by testing builds, latest at ${state.payloadUpgradedAt - slotStartTime}ms` }]
@@ -806,6 +834,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                         slotStartTime={slotStartTime}
                         rangeStart={rangeStart}
                         totalRange={totalRange}
+                        endGapPx={4}
                         endAt={live.phase === 'building' ? undefined : live.at}
                         className="local-build-line"
                         onClick={(e) => showPopover(e, data)}
@@ -856,6 +885,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                         slotStartTime={slotStartTime}
                         rangeStart={rangeStart}
                         totalRange={totalRange}
+                        endGapPx={4}
                         endAt={Date.parse(run.at)}
                         className="local-build-line local-build-run-other"
                         onClick={(e) => showPopover(e, data)}
@@ -942,6 +972,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                     slotStartTime={slotStartTime}
                     rangeStart={rangeStart}
                     totalRange={totalRange}
+                    endGapPx={4}
                     endAt={endAt}
                     className="local-build-line"
                     onClick={(e) => showPopover(e, data)}

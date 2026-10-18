@@ -256,7 +256,9 @@ type BuildResult struct {
 
 	// Upgrades delivers the picks of testing builds that finish after the
 	// hand-over and beat the payload published last (nil without testing
-	// builds still running). It closes when the testing window ends.
+	// builds still running), then a final report whose Payload is the pick
+	// already published and whose local fields carry every run. It closes
+	// when the testing window ends.
 	Upgrades <-chan *BuildResult
 }
 

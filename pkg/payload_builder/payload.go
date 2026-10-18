@@ -49,14 +49,26 @@ type Payload struct {
 	// bid.fee_recipient a Gloas bid pays its value to. Before Gloas it equals
 	// FeeRecipient (the block value itself is the proposer's payment).
 	ProposerFeeRecipient common.Address
-	BlockValue           *big.Int  // EL-reported block value (wei)
-	ReadyAt              time.Time // when the payload became ready
-	BuildSeq             uint64    // see PayloadBuildStartedEvent.BuildSeq
+	BlockValue           *big.Int // EL-reported block value (wei)
+	// EngineCalls times the engine build's two calls (nil without an engine
+	// build): the build itself is the wait in between.
+	EngineCalls *EngineCallTimes
+	ReadyAt     time.Time // when the payload became ready
+	BuildSeq    uint64    // see PayloadBuildStartedEvent.BuildSeq
 
 	// activity is the bid/reveal log, appended by the payload_bidder and read by
 	// the WebUI. The mutex also makes Payload copy-unsafe, enforcing the
 	// pass-by-pointer rule.
 	activity payloadActivity
+}
+
+// EngineCallTimes are the engine build's calls: forkchoiceUpdated starts the
+// EL's payload construction, getPayload fetches the result.
+type EngineCallTimes struct {
+	ForkchoiceStart time.Time
+	ForkchoiceEnd   time.Time
+	GetPayloadStart time.Time
+	GetPayloadEnd   time.Time
 }
 
 // BidTransport identifies which submitter produced a bid or reveal.

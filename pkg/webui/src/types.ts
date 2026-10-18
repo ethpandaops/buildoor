@@ -334,6 +334,14 @@ export interface LocalBuildInfo {
   fill_blobs_dropped?: boolean;
 }
 
+// The engine build's two calls, unix ms.
+export interface EngineCalls {
+  fcu_start: number;
+  fcu_end: number;
+  get_payload_start: number;
+  get_payload_end: number;
+}
+
 // One testing build of a target (rebuilds run when new transactions arrived).
 export interface LocalBuildRun {
   run: number;
@@ -778,6 +786,9 @@ export interface SlotState {
   payloadBuildError?: string;
   payloadReady?: boolean;
   payloadCreatedAt?: number;
+  // The engine build's calls (unix ms): forkchoiceUpdated and getPayload;
+  // the build itself is the wait in between.
+  payloadEngineCalls?: EngineCalls;
   // Testing builds that replaced the handed-over payload after it (count and
   // the latest replacement's time); payloadCreatedAt stays the hand-over.
   payloadUpgrades?: number;

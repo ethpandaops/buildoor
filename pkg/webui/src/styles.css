@@ -125,13 +125,12 @@
   border-right: 2px solid rgba(128, 128, 128, 0.3);
 }
 
-/* Payload build windows (engine and testing builds): bluish bands across the
-   whole graph, behind the build lines. They overlap, so the labels sit at the
-   top (engine) and bottom (testing). */
+/* Payload build windows (engine and testing builds): bluish strips around
+   their build lines in the chain row, as tall as the line's dot (vertical
+   position and height set inline). */
 .build-window-bg {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  border-radius: 2px;
   pointer-events: none;
 }
 
@@ -148,13 +147,23 @@
 }
 
 .build-window-label {
+  top: 50%;
   left: 4px;
+  transform: translateY(-50%);
+  font-size: 7px;
+  line-height: 1;
   color: rgba(13, 110, 253, 0.85);
 }
 
+.build-window-engine .build-window-label {
+  transform: translateY(calc(-50% - 1px));
+}
+
+/* The windows overlap: the testing label sits at its window's start too,
+   just below its strip, clear of the lines. */
 .build-window-testing .build-window-label {
-  top: auto;
-  bottom: 2px;
+  top: 100%;
+  transform: translateY(1px);
   color: rgba(13, 202, 240, 0.95);
 }
 
@@ -182,7 +191,11 @@
 }
 
 .bid-label {
+  top: 50%;
   left: 4px;
+  transform: translateY(-50%);
+  font-size: 7px;
+  line-height: 1;
   color: rgba(25, 135, 84, 0.9);
 }
 
@@ -303,6 +316,7 @@
 .payload-created {
   background: #17a2b8;
   border: 2px solid #138496;
+  top: 3px; /* centred on the engine build line */
 }
 
 .bid-submitted {
@@ -336,6 +350,7 @@
 .build-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
+  top: 3px; /* centred on the engine build line */
 }
 
 .event-dot-crown {
@@ -361,13 +376,14 @@
      0.5px  0.5px 0 #fff;
 }
 
-/* Build delay line - horizontal line from FCU to payload ready */
+/* Build delay line - horizontal line from FCU to payload ready, in the upper
+   half of its window strip */
 .build-delay-line {
   position: absolute;
   height: 3px;
   background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8));
   border-radius: 2px;
-  top: 50%;
+  top: calc(50% - 2px);
   transform: translateY(-50%);
   cursor: pointer;
   z-index: 1;
@@ -484,6 +500,29 @@
 .build-delay-line:hover {
   background: linear-gradient(90deg, rgba(23, 162, 184, 0.6), rgba(23, 162, 184, 1));
   height: 5px;
+}
+
+/* Finalized engine build with known calls: the wait between forkchoiceUpdated
+   and getPayload dashed (in the line color), the calls themselves solid. */
+.build-delay-line-split,
+.build-delay-line-split:hover {
+  height: 1px;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 10px);
+  opacity: 0.9;
+}
+
+/* In-progress dashed line: pulses while the payload is still building. */
+.build-delay-line-pulse {
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
+/* The calls keep the full line weight on the thin dashed wait. */
+.build-delay-line-call {
+  position: absolute;
+  top: -1px;
+  height: 3px;
+  border-radius: 2px;
 }
 
 /* In-progress build: pulsing leading edge while the payload is still building */

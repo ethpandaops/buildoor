@@ -479,6 +479,7 @@ function useEventStreamConnection(): UseEventStreamResult {
             block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
+            engine_calls?: import('../types').EngineCalls;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           const detail = {
@@ -536,6 +537,7 @@ function useEventStreamConnection(): UseEventStreamResult {
             payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
             payloadBuildStartedAt: own?.startedAt ?? state.payloadBuildStartedAt,
             payloadCreatedAt: data.ready_at,
+            payloadEngineCalls: data.engine_calls,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
             payloadDetail: detail
