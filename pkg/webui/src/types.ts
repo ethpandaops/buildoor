@@ -201,6 +201,8 @@ export interface TxPoolStats {
   bytes: number;
   gas_sum: number;
   value_wei: string;
+  // Far below the base fee: bodies wait in the store, not in memory.
+  cold?: number;
   admitted: number;
   replaced: number;
   removed: number;
@@ -232,6 +234,7 @@ export interface TxPoolTx {
   arrived_slot: number;
   seq: number;
   strikes?: number;
+  cold?: boolean; // far below the base fee, body not in memory
 }
 
 export interface TxPoolResponse {
@@ -271,6 +274,9 @@ export interface ELMempoolStats {
   txs: number;
   senders: number;
   blob_txs: number;
+  // Far below the base fee: only their fees and nonces are kept, the body
+  // is refetched from the EL once the base fee comes close.
+  cold_txs?: number;
   gas_sum: number;
   arrivals: number;
   started?: string;

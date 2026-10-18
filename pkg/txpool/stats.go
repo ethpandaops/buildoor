@@ -37,6 +37,9 @@ type Stats struct {
 	Bytes    uint64 `json:"bytes"`
 	GasSum   uint64 `json:"gas_sum"`
 	ValueWei string `json:"value_wei"`
+	// Cold counts the transactions far below the base fee whose bodies wait
+	// in the store instead of memory.
+	Cold int `json:"cold"`
 
 	Admitted               uint64            `json:"admitted"`
 	Replaced               uint64            `json:"replaced"`
@@ -88,12 +91,16 @@ func (p *Pool) Stats() Stats {
 
 	for _, tx := range p.byHash {
 		stats.Bytes += tx.Size
-		stats.GasSum += tx.Tx.Gas()
-		value.Add(value, tx.Tx.Value())
+		stats.GasSum += tx.Gas()
+		value.Add(value, tx.Value())
 
-		if tx.Tx.Type() == types.BlobTxType {
+		if tx.Cold() {
+			stats.Cold++
+		}
+
+		if tx.Type() == types.BlobTxType {
 			stats.BlobTxs++
-			stats.Blobs += len(tx.Tx.BlobHashes())
+			stats.Blobs += tx.Blobs()
 		}
 	}
 
@@ -120,6 +127,7 @@ type TxSummary struct {
 	ArrivedSlot    uint64    `json:"arrived_slot"`
 	Seq            uint64    `json:"seq"`
 	Strikes        int       `json:"strikes,omitempty"`
+	Cold           bool      `json:"cold,omitempty"`
 }
 
 // Summary renders the queued transaction for the API.
@@ -127,27 +135,28 @@ func (t *PooledTx) Summary() TxSummary {
 	s := TxSummary{
 		Hash:           t.Hash.Hex(),
 		Sender:         t.Sender.Hex(),
-		Nonce:          t.Tx.Nonce(),
-		Type:           t.Tx.Type(),
-		Gas:            t.Tx.Gas(),
-		MaxFeePerGas:   t.Tx.GasFeeCap().String(),
-		MaxPriorityFee: t.Tx.GasTipCap().String(),
-		ValueWei:       t.Tx.Value().String(),
+		Nonce:          t.Nonce(),
+		Type:           t.Type(),
+		Gas:            t.Gas(),
+		MaxFeePerGas:   t.GasFeeCap().String(),
+		MaxPriorityFee: t.GasTipCap().String(),
+		ValueWei:       t.Value().String(),
 		Size:           t.Size,
 		Arrived:        t.Arrived,
 		ArrivedSlot:    uint64(t.ArrivedSlot),
 		Seq:            t.Seq,
 		Strikes:        t.Strikes(),
+		Cold:           t.Cold(),
 	}
 
-	if to := t.Tx.To(); to != nil {
+	if to := t.To(); to != nil {
 		s.To = to.Hex()
 	}
 
-	if t.Tx.Type() == types.BlobTxType {
-		s.Blobs = len(t.Tx.BlobHashes())
+	if t.Type() == types.BlobTxType {
+		s.Blobs = t.Blobs()
 
-		if fee := t.Tx.BlobGasFeeCap(); fee != nil {
+		if fee := t.BlobGasFeeCap(); fee != nil {
 			s.MaxBlobFee = fee.String()
 		}
 	}
@@ -192,11 +201,11 @@ func pageTxs(matches []*PooledTx, opts ListOptions) ([]*PooledTx, int) {
 				return matches[i].Sender.Cmp(matches[j].Sender) < 0
 			}
 
-			return matches[i].Tx.Nonce() < matches[j].Tx.Nonce()
+			return matches[i].Nonce() < matches[j].Nonce()
 		})
 	case "tip":
 		sort.Slice(matches, func(i, j int) bool {
-			if c := matches[i].Tx.GasTipCap().Cmp(matches[j].Tx.GasTipCap()); c != 0 {
+			if c := matches[i].GasTipCap().Cmp(matches[j].GasTipCap()); c != 0 {
 				return c > 0
 			}
 

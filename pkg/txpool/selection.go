@@ -538,7 +538,7 @@ func (p *Pool) readyRun(
 	run := make([]*PooledTx, 0, len(queue))
 
 	for i, tx := range queue {
-		txNonce := tx.Tx.Nonce()
+		txNonce := tx.Nonce()
 
 		if txNonce < nonce {
 			sel.Skipped[SkipNonceTooLow]++
@@ -552,7 +552,8 @@ func (p *Pool) readyRun(
 		switch {
 		case txNonce > nonce:
 			reason = SkipNonceGap
-		case tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0:
+		case tx.Cold() || tx.GasFeeCap().Cmp(sel.BaseFee) < 0:
+			// A cold transaction is far below the base fee by definition.
 			reason = SkipFeeBelowBase
 		case tx.Tx.Type() == types.BlobTxType && !params.IncludeBlobTxs:
 			reason = SkipBlobUnsupported
@@ -998,7 +999,7 @@ func (p *Pool) prependInclusionList(sel *Selection, selected [][]byte, inclusion
 func (p *Pool) hasBlobTxs(queues map[common.Address][]*PooledTx) bool {
 	for _, txs := range queues {
 		for _, tx := range txs {
-			if tx.Tx.Type() == types.BlobTxType {
+			if tx.Type() == types.BlobTxType {
 				return true
 			}
 		}

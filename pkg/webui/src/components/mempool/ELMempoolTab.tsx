@@ -70,7 +70,12 @@ export const ELMempoolTab: React.FC<ELMempoolTabProps> = ({
             </div>
           </div>
           <div className="bd-mp-preview-grid">
-            <StatTile label="Transactions" value={(stats?.txs ?? 0).toLocaleString()} note={`${(stats?.senders ?? 0).toLocaleString()} senders`} />
+            <StatTile
+              label="Transactions"
+              value={(stats?.txs ?? 0).toLocaleString()}
+              note={`${(stats?.senders ?? 0).toLocaleString()} senders, ${(stats?.cold_txs ?? 0).toLocaleString()} cold`}
+              title="Cold: far below the base fee, kept without their bodies (refetched from the EL once the base fee comes close)"
+            />
             <StatTile label="Gas" value={(stats?.gas_sum ?? 0).toLocaleString()} note="sum of gas limits" />
             <StatTile label="Blob txs" value={(stats?.blob_txs ?? 0).toLocaleString()} />
             <StatTile
@@ -152,7 +157,7 @@ export const ELMempoolTab: React.FC<ELMempoolTabProps> = ({
                       <td className="text-end">{tx.nonce}</td>
                       <td>{TX_TYPES[tx.type] ?? tx.type}</td>
                       <td className="text-end">{tx.gas.toLocaleString()}</td>
-                      <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}</td>
+                      <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}{tx.cold && <> <Tag title="Far below the base fee: the body waits outside memory until the base fee comes close">cold</Tag></>}</td>
                       <td className="text-end">{tx.blobs ?? 0}</td>
                       <td title={tx.arrived}>{relativeTime(tx.arrived)}</td>
                     </tr>

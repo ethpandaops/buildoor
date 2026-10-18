@@ -93,9 +93,12 @@ var _ ELClient = (*execution.Client)(nil)
 
 // PooledTx is one queued transaction with its admission metadata.
 type PooledTx struct {
-	Hash        common.Hash
-	Sender      common.Address
-	Tx          *types.Transaction // sidecar retained for blob transactions
+	Hash   common.Hash
+	Sender common.Address
+	// Tx is the transaction (sidecar retained for blob transactions); nil
+	// while it is cold (see tier.go), facts then carry its properties.
+	Tx          *types.Transaction
+	facts       *txFacts
 	Size        uint64             // encoded size as received
 	Arrived     time.Time
 	ArrivedSlot phase0.Slot
@@ -119,13 +122,13 @@ type senderQueue struct {
 }
 
 func (q *senderQueue) find(nonce uint64) (int, bool) {
-	i := sort.Search(len(q.txs), func(i int) bool { return q.txs[i].Tx.Nonce() >= nonce })
+	i := sort.Search(len(q.txs), func(i int) bool { return q.txs[i].Nonce() >= nonce })
 
-	return i, i < len(q.txs) && q.txs[i].Tx.Nonce() == nonce
+	return i, i < len(q.txs) && q.txs[i].Nonce() == nonce
 }
 
 func (q *senderQueue) insert(tx *PooledTx) {
-	i, _ := q.find(tx.Tx.Nonce())
+	i, _ := q.find(tx.Nonce())
 	q.txs = append(q.txs, nil)
 	copy(q.txs[i+1:], q.txs[i:])
 	q.txs[i] = tx
@@ -167,6 +170,9 @@ type Pool struct {
 
 	mirror *elMirror // the EL mempool's pending transactions, for the fill
 	store  Store     // persists the queued transactions; nil = memory only
+	// floors are the cold tier's fee floors for the latest head's next base
+	// fee (nil until the first head).
+	floors atomic.Pointer[tierFloors]
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -565,18 +571,18 @@ func (p *Pool) validateLocked(tx *types.Transaction, size uint64) (*PooledTx, er
 // replaceLocked swaps a same-nonce transaction when the replacement bumps the
 // fee cap and the tip (and blob fee cap) by at least replacementBumpPercent.
 func (p *Pool) replaceLocked(queue *senderQueue, replacement *PooledTx) error {
-	i, _ := queue.find(replacement.Tx.Nonce())
+	i, _ := queue.find(replacement.Nonce())
 	old := queue.txs[i]
 
-	if !bumpsFee(old.Tx.GasFeeCap(), replacement.Tx.GasFeeCap()) ||
-		!bumpsFee(old.Tx.GasTipCap(), replacement.Tx.GasTipCap()) {
+	if !bumpsFee(old.GasFeeCap(), replacement.GasFeeCap()) ||
+		!bumpsFee(old.GasTipCap(), replacement.GasTipCap()) {
 		p.rejectLocked("replacement_underpriced")
 
 		return ErrReplaceUnderpriced
 	}
 
-	if old.Tx.Type() == types.BlobTxType && replacement.Tx.Type() == types.BlobTxType &&
-		!bumpsFee(old.Tx.BlobGasFeeCap(), replacement.Tx.BlobGasFeeCap()) {
+	if old.Type() == types.BlobTxType && replacement.Type() == types.BlobTxType &&
+		!bumpsFee(old.BlobGasFeeCap(), replacement.BlobGasFeeCap()) {
 		p.rejectLocked("replacement_underpriced")
 
 		return ErrReplaceUnderpriced
@@ -639,12 +645,14 @@ func (p *Pool) forwardToEL(raw []byte, hash common.Hash) {
 	}
 }
 
-// Get returns the queued transaction with the given hash, or nil.
+// Get returns the queued transaction with the given hash, or nil. A cold
+// transaction comes with its body loaded from the store.
 func (p *Pool) Get(hash common.Hash) *PooledTx {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	tx := p.byHash[hash]
+	p.mu.RUnlock()
 
-	return p.byHash[hash]
+	return p.Hydrated(tx)
 }
 
 // Remove drops one transaction by hash.
@@ -677,7 +685,7 @@ func (p *Pool) removeLocked(hash common.Hash) bool {
 	}
 
 	if queue := p.bySender[tx.Sender]; queue != nil {
-		queue.remove(tx.Tx.Nonce())
+		queue.remove(tx.Nonce())
 
 		if len(queue.txs) == 0 {
 			delete(p.bySender, tx.Sender)
@@ -748,11 +756,11 @@ func (p *Pool) PendingNonce(sender common.Address, chainNonce uint64) uint64 {
 	next := chainNonce
 
 	for _, tx := range queue.txs {
-		if tx.Tx.Nonce() < next {
+		if tx.Nonce() < next {
 			continue
 		}
 
-		if tx.Tx.Nonce() != next {
+		if tx.Nonce() != next {
 			break
 		}
 

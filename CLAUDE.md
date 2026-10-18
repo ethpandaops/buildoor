@@ -343,7 +343,17 @@ npm run clean
      `blob_unsupported` unless `local_build.allow_blobs_without_bundle`).
    - **Transaction pool** (`pkg/txpool/`): owned mempool, runtime-toggleable
      (`txpool.enabled`, content kept while off; persisted across restarts with
-     `--txpool-store`, see the state-db section). Admission is STATELESS (decode,
+     `--txpool-store`, see the state-db section). **Cold tier**
+     (`txpool/tier.go`): a transaction whose fee cap is below the next base
+     fee · (7/8)^16 (≈ 12%, at least 16 blocks from includable) keeps only its
+     facts (nonce, fees, gas, value, to, blobs) in memory — `PooledTx.Tx` is
+     nil, read through the `PooledTx` accessors — and its body waits in the
+     pool store (pool) or the EL (mirror; cold arrivals are never held in
+     full); at ≥ (7/8)^12 (≈ 20%) it is loaded back (`Pool.Get`/`Hydrated`
+     load a cold body on demand). Re-tiered on every head from the head's
+     next base fee; entries are swapped, never mutated. Without
+     `--txpool-store` the pool keeps every body in memory. The selection
+     treats a cold transaction as below the base fee. Admission is STATELESS (decode,
      chain id, signature, sidecar required for blob txs and checked against the
      versioned hashes, converted to cell proofs once from Osaka on, size, caps, same-nonce
      replacement needs a 10% fee bump; duplicates answer `already known` — the

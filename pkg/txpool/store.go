@@ -22,6 +22,9 @@ type Store interface {
 	Put(tx *PooledTx)
 	Delete(hash common.Hash)
 	Clear()
+	// Get reads one stored transaction (nil when absent), pending writes
+	// included.
+	Get(hash common.Hash) (*StoredTx, error)
 	// Load hands every stored transaction to fn (startup).
 	Load(fn func(*StoredTx)) error
 	Close() error
@@ -108,6 +111,50 @@ func (s *PebbleStore) Clear() {
 	s.clearAll = true
 	s.pending = make(map[common.Hash]*PooledTx, 256)
 	s.mu.Unlock()
+}
+
+func (s *PebbleStore) Get(hash common.Hash) (*StoredTx, error) {
+	s.mu.Lock()
+	tx, pending := s.pending[hash]
+	cleared := s.clearAll
+	s.mu.Unlock()
+
+	switch {
+	case pending && tx == nil:
+		return nil, nil
+	case pending:
+		return storedOf(tx), nil
+	case cleared:
+		return nil, nil
+	}
+
+	value, closer, err := s.db.Get(storeKey(hash))
+	if errors.Is(err, pebble.ErrNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("read transaction pool store: %w", err)
+	}
+
+	defer closer.Close()
+
+	return decodeStoreRecord(value)
+}
+
+// storedOf is the record of a pending (not yet flushed) hot transaction.
+func storedOf(tx *PooledTx) *StoredTx {
+	if tx.Tx == nil {
+		return nil
+	}
+
+	return &StoredTx{
+		Tx:          tx.Tx,
+		Submitter:   tx.Submitter,
+		Arrived:     tx.Arrived,
+		ArrivedSlot: tx.ArrivedSlot,
+		Seq:         tx.Seq,
+	}
 }
 
 // Load decodes every stored transaction; undecodable records are dropped.

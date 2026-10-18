@@ -42,6 +42,7 @@ func (p *Pool) run() {
 			if hash, ok := p.executionHashOf(event.Block); ok {
 				pending[hash] = event.Slot
 				p.mirror.noteBlock(p.ctx, hash)
+				p.retierAfter(hash)
 			}
 
 			p.processPending(pending, event.Slot)
@@ -51,11 +52,27 @@ func (p *Pool) run() {
 			if hash, ok := p.executionHashOf(event.BlockRoot); ok {
 				pending[hash] = event.Slot
 				p.mirror.noteBlock(p.ctx, hash)
+				p.retierAfter(hash)
 			}
 
 			p.processPending(pending, event.Slot)
 		}
 	}
+}
+
+// retierAfter moves transactions between the memory and cold tiers for the
+// base fee of the block after the given execution block (skipped while the
+// EL does not know it yet, e.g. an unrevealed Gloas payload).
+func (p *Pool) retierAfter(blockHash common.Hash) {
+	ctx, cancel := context.WithTimeout(p.ctx, evictionCallTimeout)
+	defer cancel()
+
+	header, err := p.elClient.HeaderByHash(ctx, blockHash)
+	if err != nil || header == nil {
+		return
+	}
+
+	p.retier(ctx, calcNextBaseFee(header))
 }
 
 // executionHashOf resolves the execution block hash a beacon block commits to.
@@ -184,7 +201,7 @@ func (p *Pool) pruneNonces(ctx context.Context, senders map[common.Address]struc
 		}
 
 		for _, tx := range append([]*PooledTx(nil), queue.txs...) {
-			if tx.Tx.Nonce() < state.Nonce {
+			if tx.Nonce() < state.Nonce {
 				p.removeLocked(tx.Hash)
 				p.stats.EvictedNonceTooLow++
 				p.evictedLocked("nonce_too_low")

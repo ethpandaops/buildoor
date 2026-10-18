@@ -101,7 +101,8 @@ func newELMirror(pool *Pool) *elMirror {
 }
 
 // Pending returns the mirrored pending transactions, each sender's in nonce
-// order. The first call after an idle period reads the full EL mempool
+// order, without the cold ones (far below the base fee, see tier.go). The
+// first call after an idle period reads the full EL mempool
 // (started reports it); later calls are served from memory while the
 // background loop keeps it current.
 func (m *elMirror) Pending(ctx context.Context) (txs []*PooledTx, started bool, err error) {
@@ -141,7 +142,9 @@ func (m *elMirror) Pending(ctx context.Context) (txs []*PooledTx, started bool, 
 		sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })
 
 		for _, nonce := range nonces {
-			out = append(out, byNonce[nonce].tx)
+			if tx := byNonce[nonce].tx; !tx.Cold() {
+				out = append(out, tx)
+			}
 		}
 	}
 
@@ -398,7 +401,7 @@ func (m *elMirror) resync(ctx context.Context) error {
 			continue
 		}
 
-		blob := entry.tx.Tx.Type() == types.BlobTxType
+		blob := entry.tx.Type() == types.BlobTxType
 		if (!blob && entry.seenAt.Before(started)) || (blob && started.Sub(entry.seenAt) > mirrorBlobMaxAge) {
 			m.removeLocked(entry.tx)
 		}
@@ -455,18 +458,22 @@ func (m *elMirror) insert(tx *types.Transaction, now time.Time) {
 	}
 
 	m.seq++
-	entry := &mirrorEntry{
-		tx: &PooledTx{
-			Hash:        tx.Hash(),
-			Tx:          tx,
-			Sender:      sender,
-			Size:        tx.Size(),
-			Arrived:     now,
-			ArrivedSlot: m.pool.currentSlot(),
-			Seq:         m.seq,
-		},
-		seenAt: now,
+	pooled := &PooledTx{
+		Hash:        tx.Hash(),
+		Tx:          tx,
+		Sender:      sender,
+		Size:        tx.Size(),
+		Arrived:     now,
+		ArrivedSlot: m.pool.currentSlot(),
+		Seq:         m.seq,
 	}
+
+	// Far below the base fee: only the facts stay, the EL keeps the body.
+	if m.pool.floors.Load().coldFee(tx.GasFeeCap()) {
+		pooled = pooled.cold()
+	}
+
+	entry := &mirrorEntry{tx: pooled, seenAt: now}
 
 	byNonce[tx.Nonce()] = entry
 	m.byHash[entry.tx.Hash] = entry
@@ -504,7 +511,7 @@ func (m *elMirror) noteBlock(ctx context.Context, blockHash common.Hash) {
 			continue
 		}
 
-		included := entry.tx.Tx.Nonce()
+		included := entry.tx.Nonce()
 
 		for nonce, other := range m.bySender[entry.tx.Sender] {
 			if nonce <= included {
@@ -539,8 +546,8 @@ func (m *elMirror) removeLocked(tx *PooledTx) {
 		return
 	}
 
-	if entry := byNonce[tx.Tx.Nonce()]; entry != nil && entry.tx.Hash == tx.Hash {
-		delete(byNonce, tx.Tx.Nonce())
+	if entry := byNonce[tx.Nonce()]; entry != nil && entry.tx.Hash == tx.Hash {
+		delete(byNonce, tx.Nonce())
 	}
 
 	if len(byNonce) == 0 {
@@ -595,10 +602,13 @@ type MirrorStats struct {
 	Active bool `json:"active"`
 	// Mode is how arrivals come in: websocket (live), filter (polled) or
 	// resync (full reads only, the EL has no filters).
-	Mode     string    `json:"mode,omitempty"`
-	Txs      int       `json:"txs"`
-	Senders  int       `json:"senders"`
-	BlobTxs  int       `json:"blob_txs"`
+	Mode    string `json:"mode,omitempty"`
+	Txs     int    `json:"txs"`
+	Senders int    `json:"senders"`
+	BlobTxs int    `json:"blob_txs"`
+	// ColdTxs are far below the base fee: only their facts are kept, the
+	// body is refetched from the EL once the base fee comes close.
+	ColdTxs  int       `json:"cold_txs"`
 	GasSum   uint64    `json:"gas_sum"`
 	Arrivals uint64    `json:"arrivals"` // arrivals clearing the latest base fee
 	Started  time.Time `json:"started,omitempty"`
@@ -637,9 +647,13 @@ func (m *elMirror) Stats() MirrorStats {
 	}
 
 	for _, entry := range m.byHash {
-		stats.GasSum += entry.tx.Tx.Gas()
+		stats.GasSum += entry.tx.Gas()
 
-		if entry.tx.Tx.Type() == types.BlobTxType {
+		if entry.tx.Cold() {
+			stats.ColdTxs++
+		}
+
+		if entry.tx.Type() == types.BlobTxType {
 			stats.BlobTxs++
 		}
 	}

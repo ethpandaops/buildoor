@@ -61,14 +61,14 @@ func (p *Pool) FeeDistribution(ctx context.Context, parentHash common.Hash, incl
 		p.mu.RLock()
 		for hash, tx := range p.byHash {
 			private[hash] = struct{}{}
-			points = append(points, point{fee: tx.Tx.GasFeeCap(), gas: tx.Tx.Gas(), private: true})
+			points = append(points, point{fee: tx.GasFeeCap(), gas: tx.Gas(), private: true})
 		}
 		p.mu.RUnlock()
 	}
 
 	for _, tx := range p.mirror.snapshot() {
 		if _, ok := private[tx.Hash]; !ok {
-			points = append(points, point{fee: tx.Tx.GasFeeCap(), gas: tx.Tx.Gas()})
+			points = append(points, point{fee: tx.GasFeeCap(), gas: tx.Gas()})
 		}
 	}
 
