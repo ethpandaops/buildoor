@@ -715,6 +715,11 @@ type TxPoolConfig struct {
 	// never serialized.
 	AuthToken string `yaml:"auth_token" json:"-"`
 
+	// StoreDir is where the queued transactions persist across restarts (a
+	// pebble database of its own; empty = memory only). Startup-only: pool
+	// transactions never go into the state-db.
+	StoreDir string `yaml:"store_dir" json:"store_dir,omitempty"`
+
 	// RPCAnonRate limits anonymous /rpc calls per second (0 = unlimited), per
 	// client IP or shared by all anonymous callers (RPCAnonScope).
 	RPCAnonRate uint64 `yaml:"rpc_anon_rate" json:"rpc_anon_rate"`

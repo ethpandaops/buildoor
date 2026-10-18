@@ -192,6 +192,7 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
 | `--txpool-auth` | `open` | Who may call `/rpc`: `open` (anonymous callers too, rate-limited) or `api_key` (an API key, `--txpool-auth-token` or a WebUI login is required) |
 | `--txpool-auth-token` | | Static API key, accepted next to the keys managed in the WebUI |
+| `--txpool-store` | | Directory persisting the transaction pool across restarts (its own pebble database, never the state-db; empty = memory only) |
 | `--txpool-rpc-anon-rate` | `20` | Anonymous `/rpc` calls per second (0 = unlimited) |
 | `--txpool-rpc-anon-scope` | `per_ip` | Anonymous rate-limit scope: `per_ip` or `shared` |
 | `--txpool-rpc-key-rate` | `0` | Default `/rpc` calls per second per API key (0 = unlimited) |

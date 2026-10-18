@@ -140,6 +140,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
 	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Static API key for the /rpc ingress, accepted next to the keys managed in the WebUI")
+	rootCmd.PersistentFlags().String("txpool-store", defaults.TxPool.StoreDir, "Directory persisting the transaction pool across restarts (its own pebble database, never the state-db; empty = memory only)")
 	rootCmd.PersistentFlags().Uint64("txpool-rpc-anon-rate", defaults.TxPool.RPCAnonRate, "Anonymous /rpc calls per second (0 = unlimited), per client IP or shared (--txpool-rpc-anon-scope)")
 	rootCmd.PersistentFlags().String("txpool-rpc-anon-scope", defaults.TxPool.RPCAnonScope, "Anonymous /rpc rate-limit scope: per_ip or shared")
 	rootCmd.PersistentFlags().Uint64("txpool-rpc-key-rate", defaults.TxPool.RPCKeyRate, "Default /rpc calls per second per API key (0 = unlimited); keys may override it")
@@ -348,6 +349,7 @@ func initConfig(root *cobra.Command) error {
 			Enabled:            v.GetBool("txpool-enabled"),
 			Auth:               v.GetString("txpool-auth"),
 			AuthToken:          v.GetString("txpool-auth-token"),
+			StoreDir:           v.GetString("txpool-store"),
 			RPCAnonRate:        v.GetUint64("txpool-rpc-anon-rate"),
 			RPCAnonScope:       v.GetString("txpool-rpc-anon-scope"),
 			RPCKeyRate:         v.GetUint64("txpool-rpc-key-rate"),

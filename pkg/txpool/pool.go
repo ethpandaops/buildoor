@@ -166,6 +166,7 @@ type Pool struct {
 	builtBlocks map[common.Hash]phase0.Slot // block hashes of payloads we built
 
 	mirror *elMirror // the EL mempool's pending transactions, for the fill
+	store  Store     // persists the queued transactions; nil = memory only
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -199,6 +200,13 @@ func NewPool(
 	return p
 }
 
+// UseStore persists the queued transactions in store: Start re-admits what
+// it holds, and every change is written through. Call before Start; Stop
+// closes it.
+func (p *Pool) UseStore(store Store) {
+	p.store = store
+}
+
 // Start resolves the chain id (retrying until the EL answers) and starts the
 // eviction loop.
 func (p *Pool) Start(ctx context.Context) error {
@@ -215,6 +223,10 @@ func (p *Pool) Start(ctx context.Context) error {
 	p.chainID = chainID
 	p.signer = types.LatestSignerForChainID(chainID)
 	p.mu.Unlock()
+
+	if err := p.restore(); err != nil {
+		p.log.WithError(err).Warn("Cannot restore the transaction pool from its store")
+	}
 
 	p.wg.Add(1)
 
@@ -271,7 +283,87 @@ func (p *Pool) Stop() error {
 
 	p.wg.Wait()
 
+	if p.store != nil {
+		return p.store.Close()
+	}
+
 	return nil
+}
+
+// restore re-admits the stored transactions with their original metadata.
+// Their age still counts against the TTL, and stale nonces leave at the next
+// selection, as for any queued transaction.
+func (p *Pool) restore() error {
+	if p.store == nil {
+		return nil
+	}
+
+	restored := 0
+
+	err := p.store.Load(func(stored *StoredTx) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		hash := stored.Tx.Hash()
+
+		sender, err := types.Sender(p.signer, stored.Tx)
+		if err != nil {
+			p.store.Delete(hash)
+
+			return
+		}
+
+		if p.byHash[hash] != nil {
+			return
+		}
+
+		queue := p.bySender[sender]
+		if queue == nil {
+			queue = &senderQueue{txs: make([]*PooledTx, 0, 8)}
+			p.bySender[sender] = queue
+		}
+
+		// Two records at one nonce: the later admission replaced the other.
+		if i, ok := queue.find(stored.Tx.Nonce()); ok {
+			if queue.txs[i].Seq >= stored.Seq {
+				p.store.Delete(hash)
+
+				return
+			}
+
+			p.removeLocked(queue.txs[i].Hash) // deletes its record too
+
+			if p.bySender[sender] == nil {
+				p.bySender[sender] = queue
+			}
+		}
+
+		pooled := &PooledTx{
+			Hash:        hash,
+			Sender:      sender,
+			Tx:          stored.Tx,
+			Size:        stored.Tx.Size(),
+			Arrived:     stored.Arrived,
+			ArrivedSlot: stored.ArrivedSlot,
+			Seq:         stored.Seq,
+			Submitter:   stored.Submitter,
+		}
+
+		queue.insert(pooled)
+		p.byHash[hash] = pooled
+		p.seq = max(p.seq, stored.Seq)
+		restored++
+	})
+
+	p.mu.RLock()
+	pending := len(p.byHash)
+	p.mu.RUnlock()
+
+	p.version.Add(1)
+	metrics.TxPoolPending.Set(float64(pending))
+	p.log.WithField("txs", restored).Info("Transaction pool restored from its store")
+
+	return err
 }
 
 // ELMempool returns the EL mempool's pending transactions (senders
@@ -392,6 +484,11 @@ func (p *Pool) AddFrom(raw []byte, submitter string) (common.Hash, error) {
 
 	p.byHash[pooled.Hash] = pooled
 	p.stats.Admitted++
+
+	if p.store != nil {
+		p.store.Put(pooled)
+	}
+
 	p.stats.LastAdmittedAt = pooled.Arrived
 	p.version.Add(1)
 	metrics.TxPoolAdmitted.Inc()
@@ -472,6 +569,11 @@ func (p *Pool) replaceLocked(queue *senderQueue, replacement *PooledTx) error {
 	}
 
 	delete(p.byHash, old.Hash)
+
+	if p.store != nil {
+		p.store.Delete(old.Hash)
+	}
+
 	queue.txs[i] = replacement
 	replacement.Seq = old.Seq // keeps the sender's fifo position
 	p.stats.Replaced++
@@ -556,6 +658,10 @@ func (p *Pool) removeLocked(hash common.Hash) bool {
 
 	delete(p.byHash, hash)
 
+	if p.store != nil {
+		p.store.Delete(hash)
+	}
+
 	if queue := p.bySender[tx.Sender]; queue != nil {
 		queue.remove(tx.Tx.Nonce())
 
@@ -600,6 +706,11 @@ func (p *Pool) Clear() int {
 	n := len(p.byHash)
 	p.byHash = make(map[common.Hash]*PooledTx, 1024)
 	p.bySender = make(map[common.Address]*senderQueue, 64)
+
+	if p.store != nil {
+		p.store.Clear()
+	}
+
 	p.stats.Cleared += uint64(n)
 	metrics.TxPoolEvicted.WithLabelValues("cleared").Add(float64(n))
 	metrics.TxPoolPending.Set(0)

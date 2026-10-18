@@ -318,8 +318,10 @@ npm run clean
      reth/ethrex, whose testing path returns NO blobs bundle → blob txs skipped as
      `blob_unsupported` unless `local_build.allow_blobs_without_bundle`).
    - **Transaction pool** (`pkg/txpool/`): owned mempool, runtime-toggleable
-     (`txpool.enabled`, content kept while off). Admission is STATELESS (decode,
-     chain id, signature, sidecar required for blob txs, size, caps, same-nonce
+     (`txpool.enabled`, content kept while off; persisted across restarts with
+     `--txpool-store`, see the state-db section). Admission is STATELESS (decode,
+     chain id, signature, sidecar required for blob txs and checked against the
+     versioned hashes, converted to cell proofs once from Osaka on, size, caps, same-nonce
      replacement needs a 10% fee bump; duplicates answer `already known` — the
      substring spamoor treats as success). Nonce/balance/fee floors are checked at
      SELECTION time against the parent state (`Select`: batched
@@ -801,6 +803,7 @@ Key config sections:
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
+  `--txpool-store` (pool persistence directory, startup-only, empty = memory),
   `--txpool-rpc-anon-rate`, `--txpool-rpc-anon-scope`, `--txpool-rpc-key-rate`,
   `--txpool-rpc-proxy-hops`, `--txpool-rpc-upstreams`, `--txpool-ordering`, `--txpool-block-max-txs`,
   `--txpool-gas-fill-pct`, `--txpool-max-txs`, `--txpool-max-txs-per-sender`,
@@ -864,6 +867,13 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
   slot column) holding raw SSZ artifacts per slot (payload/bid/envelope), fed by
   the tracker's async batching writer. SQLite does not shrink the file on delete
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
+
+Pool transactions are deliberately NOT in the state-db: `--txpool-store` gives
+the owned pool its own pebble database (`txpool/store.go`, go-ethereum's
+engine, LSM for the per-slot churn; RLP records keyed by tx hash with
+submitter/arrival/seq; puts and deletes coalesced in memory and flushed
+every 100 ms without fsync, synced on Stop; `Start` re-admits the records,
+TTL and stale-nonce checks apply as usual).
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
 is in-memory-only as before. Repository methods early-return; never nil-check the

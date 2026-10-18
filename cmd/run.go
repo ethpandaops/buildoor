@@ -307,6 +307,16 @@ and begins building blocks according to configuration.`,
 			builderSvc.SetLocalBuildClient(rpcClient)
 
 			txPool = txpool.NewPool(cfg, rpcClient, chainSvc, clClient, logger)
+
+			if dir := cfg.TxPool.StoreDir; dir != "" {
+				store, err := txpool.OpenPebbleStore(dir, logger)
+				if err != nil {
+					return err
+				}
+
+				txPool.UseStore(store)
+			}
+
 			if err := txPool.Start(ctx); err != nil {
 				return fmt.Errorf("failed to start transaction pool: %w", err)
 			}
