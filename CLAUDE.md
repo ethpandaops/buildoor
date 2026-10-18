@@ -708,9 +708,15 @@ npm run clean
    - Design tokens + shared primitives in `src/styles/tokens.css` and
      `components/ui/` (light and dark theme); self-hosted IBM Plex fonts
    - **Action Plan View**: epoch × slot timetable (rows = epochs, columns =
-     slots) rendering plan chips + result status per cell; click-to-edit modal
-     for future slots, full outcome detail + SSZ/JSON artifact downloads for
-     past slots; multi-slot/range bulk editing; a Recurring Rules panel
+     slots) rendering plan chips + result status per cell (from the compact
+     `view=summary` results; a slot opened in detail loads its full record);
+     a side drawer (`actionplan/SlotEditDrawer.tsx`, tabbed like the
+     dashboard flows: Engine builder, Testing builder, ePBS bidder, Builder
+     API, Payload reveal, Advanced) edits future slots and shows the full
+     outcome + SSZ/JSON artifact downloads of past slots. Selection: click
+     selects + opens, shift-click selects the range from the anchor,
+     Ctrl/Cmd-click toggles; unsaved edits ask before the drawer retargets.
+     A Recurring Rules panel
      (list/toggle/edit/delete + scenario presets like "win the last slot of
      every epoch and withhold the payload"); rule-derived cells render dashed
      chips; live via the `action_plan_updated`/`action_plan_rules_updated`/
@@ -1095,8 +1101,10 @@ To make frontend changes:
   (auth + audit). Body `{rules: [...]}`; each rule has an id slug, `enabled`,
   `slots_in_epoch`, optional `from_epoch`/`to_epoch` and the same categories as a
   slot plan. All-or-nothing validation (400 on any bad rule); max 32 rules
-- `GET /api/buildoor/slot-results?min_slot=&max_slot=` - Attempt-level outcome
-  history per slot (build, bids, submissions, reveals, inclusion, applied plan)
+- `GET /api/buildoor/slot-results?min_slot=&max_slot=&view=` - Attempt-level outcome
+  history per slot (build, bids, submissions, reveals, inclusion, applied plan);
+  `view=summary` trims each record to what overview grids need (no applied
+  plan, attributes, testing build runs or per-candidate builds)
 - `GET /api/buildoor/slot-results/{slot}/payload|envelope|bids|bids/{index}` - Raw
   SSZ artifacts with beacon-API content negotiation: `Accept:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
@@ -1141,6 +1149,9 @@ To make frontend changes:
   `action_plan_updated`/`slot_result_updated` (REST is the source of truth;
   views refetch via `connectionGeneration`). `lifecycle` events are tagged with
   the current slot so they replay too
+- **Compression**: the whole router (REST and this stream alike) is gzipped
+  by `klauspost/compress/gzhttp` above 1 KB; it flushes with the SSE writer,
+  so events still arrive live
 - **Cost per viewer** (the UI is public): every event is JSON-encoded once at
   fan-out, not per client; head-vote updates are coalesced to one per curve per
   250 ms (threshold crossings immediate) with percentages rounded to 2
@@ -1307,9 +1318,9 @@ SSZ/JSON content negotiation. Blobs bundles are not captured (documented future
 artifact kind).
 
 **WebUI**: the Action Plan tab renders an epoch × slot timetable (rows = epochs,
-columns = slots) with plan chips + result status per cell, click-to-edit modal
-(future slots) / full outcome detail with artifact downloads (past slots),
-multi-slot/range bulk editing, and a Recurring Rules panel with scenario presets.
+columns = slots) with plan chips + result status per cell, a side drawer that
+edits the selected future slots / shows a past slot's full outcome with
+artifact downloads, multi-slot/range selection (shift, Ctrl/Cmd) and bulk editing, and a Recurring Rules panel with scenario presets.
 Rule-derived cells draw dashed chips; opening one pre-fills the rule's values and
 saving detaches that slot into an explicit plan.
 

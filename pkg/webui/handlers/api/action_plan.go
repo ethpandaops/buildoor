@@ -304,6 +304,7 @@ func (h *APIHandler) UpdateActionPlanRules(w http.ResponseWriter, r *http.Reques
 // @Produce json
 // @Param min_slot query int true "Range start slot (inclusive)"
 // @Param max_slot query int true "Range end slot (inclusive)"
+// @Param view query string false "summary = a compact record per slot (build status and headline fields, attempts, inclusion, tx plan) for overview grids"
 // @Success 200 {object} SlotResultsResponse
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 503 {object} map[string]string "Results tracker unavailable"
@@ -326,6 +327,12 @@ func (h *APIHandler) GetSlotResults(w http.ResponseWriter, r *http.Request) {
 
 	if !h.isLoggedIn(r) {
 		results = slot_results.RedactedResults(results)
+	}
+
+	// The grid needs a few fields per slot; the full records of a wide range
+	// run to megabytes.
+	if r.URL.Query().Get("view") == "summary" {
+		results = slot_results.SummaryResults(results)
 	}
 
 	writeJSON(w, http.StatusOK, &SlotResultsResponse{

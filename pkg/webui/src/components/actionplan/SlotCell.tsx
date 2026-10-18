@@ -1,6 +1,12 @@
 import React from 'react';
 import type { SlotPlan, SlotResult } from '../../types';
 
+// Modifier keys of a cell click: shift extends a range, ctrl/cmd toggles.
+export interface CellClickModifiers {
+  shift: boolean;
+  toggle: boolean;
+}
+
 // Left dot: bid outcome, ordered by display priority.
 export type BidDotStatus =
   | 'included' // green: our bid won (block committed to our payload)
@@ -82,7 +88,7 @@ interface SlotCellProps {
   result?: SlotResult;
   isCurrent: boolean;
   selected: boolean;
-  onCellClick: (slot: number, shiftKey: boolean) => void;
+  onCellClick: (slot: number, modifiers: CellClickModifiers) => void;
 }
 
 // Rule-derived plans are drawn dashed: they are not stored for the slot and a
@@ -132,7 +138,11 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
         type="button"
         className={`ap-cell ${isCurrent ? 'ap-current' : ''} ${selected ? 'ap-selected' : ''}`}
         title={titleParts.join(' | ')}
-        onClick={(e) => onCellClick(slot, e.shiftKey)}
+        onMouseDown={(e) => {
+          // Shift-click extends the selection; keep it from selecting text too.
+          if (e.shiftKey) e.preventDefault();
+        }}
+        onClick={(e) => onCellClick(slot, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey })}
       >
         <span className="ap-chips">
           {plan?.bid && <span className={chipClass(plan.bid.mode, fromRule)}>B</span>}

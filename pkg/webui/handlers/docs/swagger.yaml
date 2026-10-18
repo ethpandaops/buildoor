@@ -3051,6 +3051,11 @@ paths:
         name: max_slot
         required: true
         type: integer
+      - description: summary = a compact record per slot (build status and headline
+          fields, attempts, inclusion, tx plan) for overview grids
+        in: query
+        name: view
+        type: string
       produces:
       - application/json
       responses:

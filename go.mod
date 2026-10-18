@@ -17,6 +17,7 @@ require (
 	github.com/holiman/uint256 v1.3.2
 	github.com/itchyny/gojq v0.12.19
 	github.com/jmoiron/sqlx v1.4.0
+	github.com/klauspost/compress v1.20.1
 	github.com/pk910/dynamic-ssz v1.4.0
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.28.0
@@ -82,7 +83,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect

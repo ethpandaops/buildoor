@@ -1125,6 +1125,12 @@ const docTemplate = `{
                         "name": "max_slot",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "summary = a compact record per slot (build status and headline fields, attempts, inclusion, tx plan) for overview grids",
+                        "name": "view",
+                        "in": "query"
                     }
                 ],
                 "responses": {

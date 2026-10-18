@@ -37,6 +37,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/urfave/negroni"
 
 	_ "net/http/pprof"
@@ -218,10 +219,18 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}
 	router.PathPrefix("/").Handler(spaHandler)
 
+	// Responses are gzipped for clients that accept it: the slot results and
+	// the event stream are repetitive JSON (about 10:1). The event stream
+	// stays live: every flush ends a gzip block, so each event reaches the
+	// browser at once.
+	compressed, err := gzhttp.NewWrapper(gzhttp.MinSize(1024))
+	if err != nil {
+		logrus.Fatalf("error initializing the compression middleware: %v", err)
+	}
+
 	n := negroni.New()
 	n.Use(negroni.NewRecovery())
-	//n.Use(gzip.Gzip(gzip.DefaultCompression))
-	n.UseHandler(router)
+	n.UseHandler(compressed(router))
 
 	if frontendConfig.Host == "" {
 		frontendConfig.Host = "0.0.0.0"

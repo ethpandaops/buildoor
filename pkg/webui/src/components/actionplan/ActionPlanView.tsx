@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useActionPlan } from '../../hooks/useActionPlan';
 import { useActionPlanRules } from '../../hooks/useActionPlanRules';
@@ -6,7 +6,8 @@ import { useAuthContext } from '../../context/AuthContext';
 import { ActionPlanGrid } from './ActionPlanGrid';
 import { BulkEditBar } from './BulkEditBar';
 import { RulesPanel } from './RulesPanel';
-import { SlotEditModal, type ModalTarget } from './SlotEditModal';
+import { SlotEditDrawer, type ModalTarget } from './SlotEditDrawer';
+import type { CellClickModifiers } from './SlotCell';
 import { InfoHint } from '../InfoHint';
 
 // Default epoch window around the current epoch.
@@ -45,7 +46,7 @@ export const ActionPlanView: React.FC = () => {
   const minSlot = window ? window.start * slotsPerEpoch : 0;
   const maxSlot = window ? (window.end + 1) * slotsPerEpoch - 1 : -1;
 
-  const { plans, results, loading, error, refetch, applyUpdates } = useActionPlan(minSlot, maxSlot);
+  const { plans, results, details, loadDetail, loading, error, refetch, applyUpdates } = useActionPlan(minSlot, maxSlot);
   const {
     rules,
     loading: rulesLoading,
@@ -57,40 +58,84 @@ export const ActionPlanView: React.FC = () => {
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const lastClickedRef = useRef<number | null>(null);
 
-  const [modalTarget, setModalTarget] = useState<ModalTarget | null>(null);
+  const [drawerTarget, setDrawerTarget] = useState<ModalTarget | null>(null);
+  const drawerDirtyRef = useRef(false);
+  const handleDirtyChange = useCallback((dirty: boolean) => {
+    drawerDirtyRef.current = dirty;
+  }, []);
 
+  // Every selection change retargets the open drawer; unsaved edits are only
+  // discarded after a confirmation.
+  const retarget = useCallback((target: ModalTarget | null): boolean => {
+    if (drawerDirtyRef.current && !globalThis.confirm('Discard the unsaved plan changes?')) return false;
+    drawerDirtyRef.current = false;
+    setDrawerTarget(target);
+    return true;
+  }, []);
+
+  const selectSlots = useCallback(
+    (next: Set<number>) => {
+      const slots = [...next].sort((a, b) => a - b);
+      if (!retarget(slots.length > 0 ? { slots } : null)) return;
+      setSelection(next);
+    },
+    [retarget]
+  );
+
+  // Click selects the slot and opens it, shift-click selects the range from
+  // the anchor (the last plain or toggle click), ctrl/cmd-click toggles one
+  // slot. Only future slots are selectable; a past slot opens its outcome.
   const handleCellClick = useCallback(
-    (slot: number, shiftKey: boolean) => {
-      if (shiftKey && lastClickedRef.current !== null) {
-        // Extend a range selection from the last clicked slot; only future
-        // slots are selectable (past/frozen slots reject edits anyway).
-        const from = Math.min(lastClickedRef.current, slot);
-        const to = Math.max(lastClickedRef.current, slot);
-        setSelection((prev) => {
-          const next = new Set(prev);
-          for (let s = from; s <= to; s++) {
-            if (s > currentSlot) next.add(s);
-          }
-          return next;
-        });
-        lastClickedRef.current = slot;
+    (slot: number, { shift, toggle }: CellClickModifiers) => {
+      const anchor = lastClickedRef.current;
+      if (shift && anchor !== null) {
+        const next = new Set<number>();
+        for (let s = Math.min(anchor, slot); s <= Math.max(anchor, slot); s++) {
+          if (s > currentSlot) next.add(s);
+        }
+        selectSlots(next);
         return;
       }
-
       lastClickedRef.current = slot;
-      setModalTarget({ slots: [slot] });
+      if (toggle && slot > currentSlot) {
+        const next = new Set([...selection].filter((s) => s > currentSlot));
+        if (next.has(slot)) next.delete(slot);
+        else next.add(slot);
+        selectSlots(next);
+        return;
+      }
+      if (slot > currentSlot) {
+        selectSlots(new Set([slot]));
+        return;
+      }
+      if (retarget({ slots: [slot] })) setSelection(new Set());
     },
-    [currentSlot]
+    [currentSlot, selection, selectSlots, retarget]
   );
 
   const handleEditSelected = useCallback(() => {
     if (selection.size === 0) return;
-    setModalTarget({ slots: [...selection].sort((a, b) => a - b) });
-  }, [selection]);
+    retarget({ slots: [...selection].sort((a, b) => a - b) });
+  }, [selection, retarget]);
 
-  const handleEditRange = useCallback((fromSlot: number, toSlot: number) => {
-    setModalTarget({ fromSlot, toSlot });
-  }, []);
+  const handleEditRange = useCallback(
+    (fromSlot: number, toSlot: number) => {
+      retarget({ fromSlot, toSlot });
+    },
+    [retarget]
+  );
+
+  const closeDrawer = useCallback(() => {
+    if (retarget(null)) setSelection(new Set());
+  }, [retarget]);
+
+  // A past slot opens its full outcome record; the grid only holds summaries.
+  const detailSlot =
+    drawerTarget?.slots?.length === 1 && drawerTarget.slots[0] <= currentSlot ? drawerTarget.slots[0] : null;
+  useEffect(() => {
+    if (detailSlot !== null) loadDetail(detailSlot);
+  }, [detailSlot, loadDetail]);
+  const drawerResults = useMemo(() => ({ ...results, ...details }), [results, details]);
 
   // Shifting pins the window (stops following) so the manual position sticks.
   const shiftWindow = (epochs: number) => {
@@ -123,7 +168,7 @@ export const ActionPlanView: React.FC = () => {
   }
 
   return (
-    <div className="container-fluid mt-2">
+    <div className={`container-fluid mt-2${drawerTarget ? ' ap-drawer-open' : ''}`}>
       <div className="card">
         <div className="card-header d-flex flex-wrap align-items-center gap-2">
           <h5 className="mb-0">
@@ -192,7 +237,7 @@ export const ActionPlanView: React.FC = () => {
             selectionCount={selection.size}
             canEdit={canEdit}
             currentSlot={currentSlot}
-            onClearSelection={() => setSelection(new Set())}
+            onClearSelection={closeDrawer}
             onEditSelected={handleEditSelected}
             onEditRange={handleEditRange}
           />
@@ -254,21 +299,22 @@ export const ActionPlanView: React.FC = () => {
             <span><span className="ap-dot ap-dot-payload-missed d-inline-block"></span> missed</span>
             <span><span className="ap-dot ap-dot-payload-orphaned d-inline-block"></span> reorged out</span>
             <span><span className="ap-dot ap-dot-payload-pending d-inline-block"></span> pending</span>
-            <span className="text-muted">Click a slot for details; shift-click selects a range.</span>
+            <span className="text-muted">Click a slot to open it; shift-click selects a range, Ctrl/Cmd-click adds or removes a slot.</span>
           </div>
         </div>
       </div>
 
-      {modalTarget && (
-        <SlotEditModal
-          key={`${modalTarget.slots?.join(',') ?? ''}:${modalTarget.fromSlot ?? ''}:${modalTarget.toSlot ?? ''}`}
-          target={modalTarget}
+      {drawerTarget && (
+        <SlotEditDrawer
+          key={`${drawerTarget.slots?.join(',') ?? ''}:${drawerTarget.fromSlot ?? ''}:${drawerTarget.toSlot ?? ''}`}
+          target={drawerTarget}
           plans={plans}
-          results={results}
+          results={drawerResults}
           currentSlot={currentSlot}
           canEdit={canEdit}
           applyUpdates={applyUpdates}
-          onClose={() => setModalTarget(null)}
+          onClose={closeDrawer}
+          onDirtyChange={handleDirtyChange}
         />
       )}
     </div>

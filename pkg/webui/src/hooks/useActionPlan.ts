@@ -32,7 +32,11 @@ export interface ApplyUpdatesResult {
 
 interface UseActionPlanResult {
   plans: Record<number, SlotPlan>;
+  // Compact per-slot records for the grid (view=summary).
   results: Record<number, SlotResult>;
+  // Full records of the slots opened in detail (loadDetail), kept live.
+  details: Record<number, SlotResult>;
+  loadDetail: (slot: number) => void;
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -47,6 +51,8 @@ interface UseActionPlanResult {
 export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanResult {
   const [plans, setPlans] = useState<Record<number, SlotPlan>>({});
   const [results, setResults] = useState<Record<number, SlotResult>>({});
+  const [details, setDetails] = useState<Record<number, SlotResult>>({});
+  const detailSlotsRef = useRef(new Set<number>());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,7 +77,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       const headers = await authHeaders();
       const [planResp, resultResp] = await Promise.all([
         fetch(`/api/buildoor/action-plan?${query}`, { headers }),
-        fetch(`/api/buildoor/slot-results?${query}`, { headers }),
+        fetch(`/api/buildoor/slot-results?${query}&view=summary`, { headers }),
       ]);
 
       if (!planResp.ok) {
@@ -159,14 +165,19 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     }
     resultRefetchRef.current.add(slot);
     try {
-      const response = await fetch(`/api/buildoor/slot-results?min_slot=${slot}&max_slot=${slot}`, {
-        headers: await authHeaders(),
-      });
+      // An opened slot needs its full record; the grid needs the summary,
+      // which the full record covers too.
+      const full = detailSlotsRef.current.has(slot);
+      const response = await fetch(
+        `/api/buildoor/slot-results?min_slot=${slot}&max_slot=${slot}${full ? '' : '&view=summary'}`,
+        { headers: await authHeaders() },
+      );
       if (!response.ok) return;
       const data: SlotResultsResponse = await response.json();
       const fresh = (data.results || []).find((r) => toSlotNumber(r.slot) === slot);
       if (!fresh) return;
       setResults((prev) => ({ ...prev, [slot]: fresh }));
+      if (full) setDetails((prev) => ({ ...prev, [slot]: fresh }));
     } catch {
       // The held record stays; the next range fetch heals it.
     } finally {
@@ -178,6 +189,13 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
   }, []);
   const refetchResultRef = useRef(refetchResult);
   refetchResultRef.current = refetchResult;
+
+  // Opening a slot loads its full record; it then follows the live updates
+  // like the grid's summaries.
+  const loadDetail = useCallback((slot: number) => {
+    detailSlotsRef.current.add(slot);
+    void refetchResultRef.current(slot);
+  }, []);
 
   // Live updates through the shared SSE connection.
   useEffect(() => {
@@ -264,5 +282,5 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     [applyPlanChange]
   );
 
-  return { plans, results, loading, error, refetch: fetchAll, applyUpdates };
+  return { plans, results, details, loadDetail, loading, error, refetch: fetchAll, applyUpdates };
 }
