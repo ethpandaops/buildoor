@@ -51,6 +51,10 @@ type PayloadBuilder struct {
 	// localProgress reports each custom build live, ahead of the final
 	// LocalBuildEvent that waits for the engine build and the selection.
 	localProgress *utils.Dispatcher[*LocalBuildProgressEvent]
+
+	// localTiming learns how long a testing build takes, to time the final
+	// one against the hand-over.
+	localTiming buildTimingModel
 }
 
 // activeBuildKey identifies one in-progress build by the full parent tuple:
@@ -214,54 +218,37 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		b.mu.Unlock()
 	}
 
-	var localCh chan localOutcome
+	// The hand-over: the engine build's getPayload, payload_build_time after
+	// the forkchoice update. The testing builds are timed to finish before it.
+	deadline := time.Now().Add(b.payloadBuildTime(buildTimeMs))
+
+	// The testing builds stop at the hand-over.
+	localCtx, localCancel := context.WithCancel(buildCtx)
+	defer localCancel()
+
+	var (
+		localResultsSet *localResults
+		localDone       chan struct{}
+	)
 
 	if local != nil {
-		localCh = make(chan localOutcome, 1)
+		localResultsSet = &localResults{}
+		localDone = make(chan struct{})
 
 		go func() {
-			// The engine build collects transactions until its getPayload;
-			// a start delay lets the testing call see the late arrivals too.
-			if local.StartDelay > 0 {
-				delay := time.NewTimer(local.StartDelay)
-				select {
-				case <-buildCtx.Done():
-					delay.Stop()
-					localCh <- localOutcome{err: fmt.Errorf("local build aborted: %w", buildCtx.Err())}
+			defer close(localDone)
 
-					return
-				case <-delay.C:
-				}
-			}
-
-			started := time.Now()
-			b.fireLocalProgress(attrs, local, started, nil)
-
-			outcome := b.buildLocal(buildCtx, attrs, prelude, local)
-			if outcome.info != nil {
-				outcome.info.StartedAt = started
-			}
-
-			b.fireLocalProgress(attrs, local, started, &outcome)
-
-			localCh <- outcome
+			b.runLocalBuilds(localCtx, attrs, prelude, local, deadline, localResultsSet)
 		}()
 	}
 
 	if runEL {
-		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, buildTimeMs)
+		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, deadline)
 	}
 
-	if localCh != nil {
-		select {
-		case <-buildCtx.Done():
-			result.LocalErr = fmt.Errorf("local build aborted: %w", buildCtx.Err())
-		case outcome := <-localCh:
-			result.Local = outcome.payload
-			result.LocalInfo = outcome.info
-			result.LocalSkipReason = outcome.skipReason
-			result.LocalErr = outcome.err
-		}
+	if local != nil {
+		b.collectLocal(buildCtx, result, localResultsSet, localDone, deadline)
+		localCancel()
 	}
 
 	result, err = b.selectPayload(result, local)
@@ -275,6 +262,54 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	return result, err
+}
+
+// collectLocal hands the best testing build over once the builds are done or
+// the deadline (plus a short grace for a final build in flight) has passed.
+// A final build still running then is abandoned: the EL finishes it anyway,
+// but no consumer waits for it.
+func (b *PayloadBuilder) collectLocal(
+	ctx context.Context,
+	result *BuildResult,
+	results *localResults,
+	done <-chan struct{},
+	deadline time.Time,
+) {
+	timer := time.NewTimer(max(time.Until(deadline.Add(handoverGrace)), 0))
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+		result.LocalErr = fmt.Errorf("local build aborted: %w", ctx.Err())
+
+		return
+	}
+
+	outcome, ok := results.result()
+	if !ok {
+		result.LocalErr = errors.New("local build not ready at the hand-over")
+
+		return
+	}
+
+	result.Local = outcome.payload
+	result.LocalInfo = outcome.info
+	result.LocalSkipReason = outcome.skipReason
+	result.LocalErr = outcome.err
+}
+
+// payloadBuildTime is how long the engine build collects transactions before
+// its getPayload: the live setting, or an explicit per-build time
+// (speculative candidates).
+func (b *PayloadBuilder) payloadBuildTime(buildTimeMs uint64) time.Duration {
+	ms := b.cfg.PayloadBuildTime
+	if buildTimeMs != 0 {
+		ms = buildTimeMs
+	}
+
+	return time.Duration(ms) * time.Millisecond
 }
 
 // fireLocalProgress reports a custom build's live state: building (outcome
@@ -592,21 +627,14 @@ func (b *PayloadBuilder) buildEngine(
 	attrs *beacon.PayloadAttributesEvent,
 	prelude *buildPrelude,
 	payloadID paris.PayloadID,
-	buildTimeMs uint64,
+	deadline time.Time,
 ) (*Payload, error) {
-	// Read the build time live from config so UI overrides take effect
-	// immediately; an explicit per-build time (speculative candidates) wins.
-	payloadBuildTime := b.cfg.PayloadBuildTime
-	if buildTimeMs != 0 {
-		payloadBuildTime = buildTimeMs
-	}
-
-	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
+	b.log.Infof("Allowing payload to build for: %dms", time.Until(deadline).Milliseconds())
 
 	// Wait for the EL to accumulate transactions, but abort early (with an error)
 	// if the build is cancelled by a newer slot or the context deadline is hit,
 	// rather than sleeping into a doomed getPayload call.
-	buildTimer := time.NewTimer(time.Duration(payloadBuildTime) * time.Millisecond)
+	buildTimer := time.NewTimer(max(time.Until(deadline), 0))
 	defer buildTimer.Stop()
 
 	select {
@@ -787,6 +815,7 @@ func (b *PayloadBuilder) buildLocal(
 		info.ExpectedHashes = txHashes(txs)
 	}
 
+	info.SelectedAt = time.Now()
 	parentHash := common.Hash(attrs.ParentBlockHash)
 
 	// The EL refuses the whole call on one bad transaction (geth, ethrex) or

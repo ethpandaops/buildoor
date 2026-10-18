@@ -130,9 +130,10 @@ type ResolvedLocalBuildSettings struct {
 	// (global-only).
 	MaxAttempts uint64 `json:"max_attempts,omitempty"`
 	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
-	// StartDelayMs delays the testing call after the engine build started
-	// (global-only, 0 = at once).
-	StartDelayMs uint64 `json:"start_delay_ms,omitempty"`
+	// RebuildIntervalMs / ReadyMarginMs time the testing builds against the
+	// hand-over (global-only; see config.LocalBuildConfig).
+	RebuildIntervalMs uint64 `json:"rebuild_interval_ms,omitempty"`
+	ReadyMarginMs     uint64 `json:"ready_margin_ms,omitempty"`
 	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
 	// 0 = off; exact lists are never reduced).
 	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
@@ -437,7 +438,8 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
 		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
 		MaxStrikes:              cfg.TxPool.MaxStrikes,
-		StartDelayMs:            cfg.LocalBuild.StartDelayMs,
+		RebuildIntervalMs:       cfg.LocalBuild.RebuildIntervalMs,
+		ReadyMarginMs:           cfg.LocalBuild.ReadyMarginMs,
 		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
 	}
 

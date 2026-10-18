@@ -281,9 +281,12 @@ export interface LocalBuildInfo {
   attempts?: number;
   dropped?: { hash?: string; reason: string }[];
   built_at?: string;
+  selected_at?: string;
+  builds?: number; // testing builds the target ran; this record is the handed-over one
   fill_txs?: number;
   fill_error?: string;
   fill_dropped?: boolean;
+  fill_blobs_dropped?: boolean;
 }
 
 // SSE local_build_progress event: the live state of one testing build
@@ -316,7 +319,7 @@ export interface LocalBuildStreamEvent {
   local?: StreamPayloadSummary;
   el?: StreamPayloadSummary;
   info?: LocalBuildInfo;
-  started_at?: number; // unix ms, when the testing build began (after its start delay)
+  started_at?: number; // unix ms, when the handed-over testing build began
   built_at?: number; // unix ms, when testing_buildBlockV1 returned (ready only)
   el_ready_at?: number; // unix ms, when the engine payload of the target was ready
   at: number;

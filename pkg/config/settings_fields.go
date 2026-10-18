@@ -125,7 +125,8 @@ func Fields() []Field {
 		newField(KeyLocalBuildBuildELPayload, "local-build-el-payload", func(c *Config) *bool { return &c.LocalBuild.BuildELPayload }),
 		newField(KeyLocalBuildAllowBlobsNoBundle, "local-build-allow-blobs-without-bundle", func(c *Config) *bool { return &c.LocalBuild.AllowBlobsWithoutBundle }),
 		newField(KeyLocalBuildMaxAttempts, "local-build-max-attempts", func(c *Config) *uint64 { return &c.LocalBuild.MaxAttempts }),
-		newField(KeyLocalBuildStartDelayMs, "local-build-start-delay", func(c *Config) *uint64 { return &c.LocalBuild.StartDelayMs }),
+		newField(KeyLocalBuildRebuildIntervalMs, "local-build-rebuild-interval", func(c *Config) *uint64 { return &c.LocalBuild.RebuildIntervalMs }),
+		newField(KeyLocalBuildReadyMarginMs, "local-build-ready-margin", func(c *Config) *uint64 { return &c.LocalBuild.ReadyMarginMs }),
 
 		newField(KeyTxPoolEnabled, "txpool-enabled", func(c *Config) *bool { return &c.TxPool.Enabled }),
 		newField(KeyTxPoolOrdering, "txpool-ordering", func(c *Config) *string { return &c.TxPool.Ordering }),

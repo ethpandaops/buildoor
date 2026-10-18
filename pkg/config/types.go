@@ -635,14 +635,21 @@ type LocalBuildConfig struct {
 	// Exact sources (explicit, queued) never retry: a refusal fails them.
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
 
-	// StartDelayMs delays the testing_buildBlockV1 call after the engine
-	// build started (its forkchoiceUpdated), in ms; 0 = at once. The testing
-	// call builds from the transactions known at that moment, while the
-	// engine build keeps adding arrivals until its getPayload, so a delay
-	// lets the testing block see the same late transactions. It should leave
-	// the call time to finish before the engine payload is due
-	// (payload_build_time): the target waits for both.
-	StartDelayMs uint64 `yaml:"start_delay_ms" json:"start_delay_ms"`
+	// The testing_buildBlockV1 call builds once from the transactions known
+	// when it starts, so it starts as late as it can: its final build is
+	// timed to finish ReadyMarginMs before the payload is handed over (the
+	// engine build's getPayload, payload_build_time after its
+	// forkchoiceUpdated), estimated from the observed selection time and
+	// call cost per gas.
+	//
+	// RebuildIntervalMs adds earlier builds every this many ms before the
+	// final one (0 = the final build only): the best of them is handed over,
+	// so a late or failed final build still has a block behind it. Each
+	// build costs the EL a full block execution.
+	RebuildIntervalMs uint64 `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
+	// ReadyMarginMs is the safety margin between the final build's estimated
+	// end and the hand-over, on top of the estimate's own spread.
+	ReadyMarginMs uint64 `yaml:"ready_margin_ms" json:"ready_margin_ms"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the

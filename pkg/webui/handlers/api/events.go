@@ -508,8 +508,8 @@ type LocalBuildStreamEvent struct {
 	Local         *StreamPayloadSummary           `json:"local,omitempty"`
 	EL            *StreamPayloadSummary           `json:"el,omitempty"`
 	Info          *payload_builder.LocalBuildInfo `json:"info,omitempty"`
-	// StartedAt is when the testing build began, after the configured start
-	// delay (unix ms, 0 when it never started).
+	// StartedAt is when the handed-over testing build began (unix ms, 0 when
+	// it never started).
 	StartedAt int64 `json:"started_at,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned (unix ms, 0 unless ready);
 	// ELReadyAt is when the engine payload of the same target was ready.

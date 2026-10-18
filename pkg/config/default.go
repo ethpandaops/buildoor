@@ -59,6 +59,7 @@ func DefaultConfig() *Config {
 			BuildELPayload: true,
 			BlobEncoding:   BlobEncodingAuto,
 			MaxAttempts:    3,
+			ReadyMarginMs:  100,
 		},
 		TxPool: TxPoolConfig{
 			Auth:            TxPoolAuthOpen,

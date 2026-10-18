@@ -788,13 +788,21 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             if (lb.status === 'ready' && !lb.el) return null;
 
             const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
-            // The testing build may start after the engine build (start delay).
+            // The final testing build is timed to finish just before the
+            // hand-over, so it usually starts after the engine build.
             const localStartMs = lb.started_at ? lb.started_at - slotStartTime : buildStartMs;
+            const selectionMs = lb.info?.selected_at && lb.started_at
+              ? Date.parse(lb.info.selected_at) - lb.started_at
+              : null;
             const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
             const items = [
               { label: 'Build Start', value: `${localStartMs}ms` },
               ...(localStartMs !== buildStartMs
-                ? [{ label: 'Start Delay', value: `${localStartMs - buildStartMs}ms after the engine build` }]
+                ? [{ label: 'Started', value: `${localStartMs - buildStartMs}ms after the engine build` }]
+                : []),
+              ...(selectionMs !== null ? [{ label: 'Selection', value: `${selectionMs}ms` }] : []),
+              ...(lb.info?.builds && lb.info.builds > 1
+                ? [{ label: 'Builds', value: `${lb.info.builds} (the most valuable one is shown)` }]
                 : []),
               ...(lb.status === 'ready' && lb.built_at
                 ? [
@@ -820,7 +828,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               ...(lb.info?.selection ? [
                 { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
                 ...(lb.info.selection.fill_candidates
-                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
+                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : lb.info.fill_blobs_dropped ? ', blob transactions dropped after an EL refusal' : ''}` }]
                   : []),
                 ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
                   ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]

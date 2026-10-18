@@ -202,7 +202,8 @@ export const FLOWS: Record<FlowId, FlowDef> = {
               'local_build.tx_source',
               'local_build.build_el_payload',
               'local_build.allow_blobs_without_bundle',
-              'local_build.start_delay_ms',
+              'local_build.rebuild_interval_ms',
+              'local_build.ready_margin_ms',
               'local_build.max_attempts',
             ],
           },
@@ -232,9 +233,10 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Blobs without bundle', keys: ['local_build.allow_blobs_without_bundle'] },
       {
-        label: 'Start · attempts',
-        keys: ['local_build.start_delay_ms', 'local_build.max_attempts'],
-        value: (ctx) => `${fmt('local_build.start_delay_ms', ctx)} · ${fmt('local_build.max_attempts', ctx)}`,
+        label: 'Rebuilds · margin · attempts',
+        keys: ['local_build.rebuild_interval_ms', 'local_build.ready_margin_ms', 'local_build.max_attempts'],
+        value: (ctx) =>
+          `${fmt('local_build.rebuild_interval_ms', ctx)} · ${fmt('local_build.ready_margin_ms', ctx)} · ${fmt('local_build.max_attempts', ctx)}`,
       },
       {
         label: 'Plan checks',

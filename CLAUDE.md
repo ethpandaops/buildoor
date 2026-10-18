@@ -275,7 +275,18 @@ npm run clean
      blobsidecars.go`), an incomplete one is dropped with its sender's later
      fill txs (`blob_unavailable`); a refusal
      retries without the fill's blob txs first (`fill_blobs_dropped`), then
-     without the fill, an unreadable EL mempool builds from the pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     without the fill, an unreadable EL mempool builds from the pool alone)
+     **Testing build timing** (`payload_builder/localtiming.go`): the call is
+     not incremental, so the FINAL build starts at hand-over −
+     `ready_margin_ms` − estimate, where the hand-over is the engine build's
+     getPayload (`payload_build_time` after its forkchoiceUpdated) and the
+     estimate an exponentially weighted fit of selection ms + call ms over
+     gas (+2σ of its residuals; seeds until 3 builds). With
+     `rebuild_interval_ms` earlier builds run on a grid aligned to the final
+     one; the highest-value build (later wins a tie) is handed over
+     (`LocalBuildInfo.builds`). The hand-over waits for the builds until the
+     deadline + 50 ms, never longer; a build still running is not cut off
+     (the EL finishes it anyway) so its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
      (flagged `inclusion_list_dropped`). Consumers still receive exactly one
@@ -780,10 +791,12 @@ Key config sections:
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
-- **Local build / tx pool**: `--local-build-enabled`, `--local-build-start-delay`
-  (ms after the engine build started before the testing call, 0 = at once: the
-  engine build keeps collecting arrivals until its getPayload, an immediate
-  testing call does not), `--local-build-payload-source`
+- **Local build / tx pool**: `--local-build-enabled`,
+  `--local-build-rebuild-interval` (earlier testing builds every N ms before
+  the final one, best value handed over, 0 = final only),
+  `--local-build-ready-margin` (ms kept free before the hand-over; the final
+  build is timed by a learned model, see "Testing build timing" in 0d),
+  `--local-build-payload-source`
   (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,

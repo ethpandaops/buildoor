@@ -48,7 +48,8 @@ const (
 	KeyLocalBuildBuildELPayload     = "local_build.build_el_payload"
 	KeyLocalBuildAllowBlobsNoBundle = "local_build.allow_blobs_without_bundle"
 	KeyLocalBuildMaxAttempts        = "local_build.max_attempts"
-	KeyLocalBuildStartDelayMs       = "local_build.start_delay_ms"
+	KeyLocalBuildRebuildIntervalMs  = "local_build.rebuild_interval_ms"
+	KeyLocalBuildReadyMarginMs      = "local_build.ready_margin_ms"
 
 	KeyTxPoolEnabled         = "txpool.enabled"
 	KeyTxPoolOrdering        = "txpool.ordering"

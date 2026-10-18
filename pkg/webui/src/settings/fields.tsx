@@ -1170,29 +1170,40 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
-  'local_build.start_delay_ms': {
-    label: 'Start delay',
+  'local_build.rebuild_interval_ms': {
+    label: 'Rebuild interval',
     kind: 'number',
     unit: 'ms',
     min: 0,
     max: 12000,
-    zeroLabel: 'at once',
-    hint: 'Wait after the engine build started before calling testing_buildBlockV1.',
-    validate: (value, draft) => {
-      const buildTime = num(draft, 'payload_build_time');
-      return buildTime > 0 && Number(value) >= buildTime
-        ? `Must be below the build time (${buildTime} ms): the testing block would miss its bids.`
-        : null;
-    },
+    zeroLabel: 'final build only',
+    hint: 'Earlier testing builds every this many ms before the final one; the best block is used.',
     help: (
       <>
-        Delay of the testing build after the engine build started
-        (<code>local_build.start_delay_ms</code>, 0 = at once). testing_buildBlockV1 builds from
-        the transactions known at the moment of the call, while the engine build keeps adding
-        arrivals until its payload is fetched (<code>payload_build_time</code> later), so an early
-        testing block misses the late ones and is often worth less. A delay of about half the build
-        time catches most of them. Leave the call time to finish before the engine payload is due:
-        the slot&apos;s bids wait for both builds.
+        testing_buildBlockV1 builds once from the transactions known when it is called, so the
+        final testing build is timed to finish just before the payload is due (the engine
+        build&apos;s getPayload, <code>payload_build_time</code> after its start), estimated from the
+        observed selection time and EL cost per gas. With an interval
+        (<code>local_build.rebuild_interval_ms</code>) earlier builds run every this many ms before
+        it, and the most valuable block is handed over: a fallback when the final build fails or
+        overruns. Each build costs the EL a full block execution, which matters on an EL shared with
+        validators. 0 = the final build only.
+      </>
+    ),
+  },
+  'local_build.ready_margin_ms': {
+    label: 'Ready margin',
+    kind: 'number',
+    unit: 'ms',
+    min: 0,
+    max: 2000,
+    hint: "Safety margin between the final testing build's estimated end and the payload hand-over.",
+    help: (
+      <>
+        Kept free between the final testing build&apos;s estimated end and the hand-over
+        (<code>local_build.ready_margin_ms</code>), on top of the estimate&apos;s own spread. A build
+        that is still running at the hand-over is not used for that slot; a larger margin trades
+        fresher transactions for fewer misses.
       </>
     ),
   },

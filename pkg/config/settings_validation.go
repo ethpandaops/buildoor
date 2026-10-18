@@ -43,9 +43,12 @@ func ValidateSetting(key string, v any) error {
 	case KeyEarlyDepositTip:
 		return requireAtMost(key, v, maxEarlyDepositTipGwei)
 
-	case KeyLocalBuildStartDelayMs:
-		// Beyond a slot the testing block could never feed its target.
-		return requireAtMost(key, v, maxLocalBuildStartDelayMs)
+	case KeyLocalBuildRebuildIntervalMs:
+		// Beyond a slot there is never a second build to time.
+		return requireAtMost(key, v, maxLocalBuildRebuildIntervalMs)
+
+	case KeyLocalBuildReadyMarginMs:
+		return requireAtMost(key, v, maxLocalBuildReadyMarginMs)
 
 	case KeyRevealGateMode:
 		return requireOneOf(key, v,
@@ -153,10 +156,14 @@ func ValidateServeCandidates(policy string) error {
 // tip of 10000 gwei already costs about 1 ETH per transaction.
 const maxEarlyDepositTipGwei = 10000
 
-// maxLocalBuildStartDelayMs bounds local_build.start_delay_ms (one 12 s slot;
-// shorter slots need a shorter delay to be useful, which is left to the
-// operator).
-const maxLocalBuildStartDelayMs = 12000
+// maxLocalBuildRebuildIntervalMs bounds local_build.rebuild_interval_ms (one
+// 12 s slot) and maxLocalBuildReadyMarginMs local_build.ready_margin_ms (a
+// margin beyond it would start the final build before most build windows
+// open).
+const (
+	maxLocalBuildRebuildIntervalMs = 12000
+	maxLocalBuildReadyMarginMs     = 2000
+)
 
 func requireAtMost(key string, v any, limit uint64) error {
 	if n, _ := v.(uint64); n > limit {

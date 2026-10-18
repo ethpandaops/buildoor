@@ -2747,8 +2747,11 @@
                         "type": "string"
                     }
                 },
-                "start_delay_ms": {
-                    "description": "StartDelayMs delays the testing call after the engine build started\n(global-only, 0 = at once).",
+                "ready_margin_ms": {
+                    "type": "integer"
+                },
+                "rebuild_interval_ms": {
+                    "description": "RebuildIntervalMs / ReadyMarginMs time the testing builds against the\nhand-over (global-only; see config.LocalBuildConfig).",
                     "type": "integer"
                 },
                 "transactions": {
@@ -4114,8 +4117,12 @@
                     "description": "Attempts is how many testing_buildBlockV1 calls the build took.",
                     "type": "integer"
                 },
+                "builds": {
+                    "description": "Builds is how many testing builds the target ran (rebuilds); this\nrecord describes the one handed over.",
+                    "type": "integer"
+                },
                 "built_at": {
-                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually well\nbefore the payload's ReadyAt (the hand-over to the consumers).",
+                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually before\nthe payload's ReadyAt (the hand-over to the consumers).",
                     "type": "string"
                 },
                 "dropped": {
@@ -4140,6 +4147,9 @@
                     "description": "ExplicitTxs is the explicit list length (tx source explicit / queued).",
                     "type": "integer"
                 },
+                "fill_blobs_dropped": {
+                    "type": "boolean"
+                },
                 "fill_dropped": {
                     "type": "boolean"
                 },
@@ -4147,16 +4157,19 @@
                     "type": "string"
                 },
                 "fill_txs": {
-                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill.",
+                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
                     "type": "integer"
                 },
                 "inclusion_list_dropped": {
-                    "description": "InclusionListDropped marks that the build only succeeded after the\ninclusion list was dropped (a spec-violating payload, for testing).",
+                    "description": "InclusionListDropped marks a payload without the slot's inclusion list\n(a spec-violating payload): the build only succeeded after dropping it,\nor the el_mempool source never carried it.",
                     "type": "boolean"
                 },
                 "inclusion_list_txs": {
-                    "description": "InclusionListTxs is how many inclusion-list transactions were prepended.",
+                    "description": "InclusionListTxs is how many inclusion-list transactions the slot had\n(prepended to the list, or ignored by the el_mempool source).",
                     "type": "integer"
+                },
+                "selected_at": {
+                    "type": "string"
                 },
                 "selection": {
                     "description": "Selection is the pool selection summary (tx source txpool).",
@@ -4167,7 +4180,7 @@
                     ]
                 },
                 "started_at": {
-                    "description": "StartedAt is when the testing build began (after the start delay).",
+                    "description": "StartedAt is when the testing build began (its selection);\nSelectedAt when the list was assembled and the testing call started.",
                     "type": "string"
                 },
                 "submitted_txs": {

@@ -107,9 +107,11 @@ type LocalBuildRequest struct {
 	MaxStrikes  uint64
 	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
 	BaseFeeCeilingGwei uint64
-	// StartDelay holds the testing call back after the engine build started,
-	// so transactions arriving meanwhile make it into the block.
-	StartDelay time.Duration
+	// RebuildInterval adds earlier builds every interval before the final
+	// one (0 = final build only); ReadyMargin is the final build's safety
+	// margin before the hand-over (see runLocalBuilds).
+	RebuildInterval time.Duration
+	ReadyMargin     time.Duration
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -163,12 +165,17 @@ type LocalBuildInfo struct {
 	// Dropped lists the pool transactions removed from the attempt after an
 	// attributed EL refusal (txpool source only), with the failure class.
 	Dropped []DroppedTx `json:"dropped,omitempty"`
-	// StartedAt is when the testing build began (after the start delay).
-	StartedAt time.Time `json:"started_at"`
+	// StartedAt is when the testing build began (its selection);
+	// SelectedAt when the list was assembled and the testing call started.
+	StartedAt  time.Time `json:"started_at"`
+	SelectedAt time.Time `json:"selected_at,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
-	// build runs during the engine build's wait, so this is usually well
-	// before the payload's ReadyAt (the hand-over to the consumers).
+	// build runs during the engine build's wait, so this is usually before
+	// the payload's ReadyAt (the hand-over to the consumers).
 	BuiltAt time.Time `json:"built_at"`
+	// Builds is how many testing builds the target ran (rebuilds); this
+	// record describes the one handed over.
+	Builds int `json:"builds,omitempty"`
 }
 
 // DroppedTx is a pool transaction removed from a build attempt after the EL
@@ -531,7 +538,8 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		BlobEncoding:       availability.BlobEncoding,
 		MaxAttempts:        settings.MaxAttempts,
 		MaxStrikes:         settings.MaxStrikes,
-		StartDelay:         time.Duration(settings.StartDelayMs) * time.Millisecond,
+		RebuildInterval:    time.Duration(settings.RebuildIntervalMs) * time.Millisecond,
+		ReadyMargin:        time.Duration(settings.ReadyMarginMs) * time.Millisecond,
 		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 
