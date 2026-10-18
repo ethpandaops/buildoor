@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	mathbits "math/bits"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
@@ -23,6 +25,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -64,6 +67,7 @@ const (
 	EventTypeLocalBuild                  EventType = "local_build"
 	EventTypeLocalBuildProgress          EventType = "local_build_progress"
 	EventTypeTxPoolStats                 EventType = "txpool_stats"
+	EventTypeLocalBuildStatus            EventType = "local_build_status"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
 	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
 	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
@@ -690,6 +694,12 @@ type EventStreamManager struct {
 	// Track the last broadcast pool version to avoid spam
 	lastTxPoolVersion   uint64
 	lastTxPoolVersionMu sync.Mutex
+
+	// The local build status is re-sent when its encoding changed (a probe,
+	// a setting, a plan check verdict).
+	planVerifier           atomic.Pointer[tx_plan_verifier.Verifier]
+	lastLocalBuildStatus   []byte
+	lastLocalBuildStatusMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
@@ -1130,6 +1140,7 @@ func (m *EventStreamManager) Start() {
 				m.sendBuilderInfo()
 				m.sendServiceStatus()
 				m.sendTxPoolStats(false)
+				m.sendLocalBuildStatus(false)
 			}
 		}
 	}()
@@ -2033,6 +2044,32 @@ func (m *EventStreamManager) sendTxPoolStats(force bool) {
 	})
 }
 
+// sendLocalBuildStatus broadcasts the local build status when it changed
+// since the last broadcast (or unconditionally when force is set).
+func (m *EventStreamManager) sendLocalBuildStatus(force bool) {
+	status := localBuildStatus(m.builderSvc, m.planVerifier.Load())
+
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		return
+	}
+
+	m.lastLocalBuildStatusMu.Lock()
+	changed := force || !bytes.Equal(encoded, m.lastLocalBuildStatus)
+	m.lastLocalBuildStatus = encoded
+	m.lastLocalBuildStatusMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLocalBuildStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      status,
+	})
+}
+
 // BroadcastTxPoolStats pushes the pool stats to every client now.
 func (m *EventStreamManager) BroadcastTxPoolStats() {
 	m.sendTxPoolStats(true)
@@ -2157,6 +2194,15 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		Type:      EventTypeSlotOutlook,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      m.buildSlotOutlook(m.builderSvc.GetCurrentSlot() + 1),
+	}) {
+		return
+	}
+
+	// Send the local build status
+	if !send(&StreamEvent{
+		Type:      EventTypeLocalBuildStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      localBuildStatus(m.builderSvc, m.planVerifier.Load()),
 	}) {
 		return
 	}

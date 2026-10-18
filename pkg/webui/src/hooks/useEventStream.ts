@@ -1,5 +1,5 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -83,6 +83,10 @@ export interface UseEventStreamResult {
   voteCoverage: VoteCoverage | null;
   slotOutlook: SlotOutlook | null;
   txPoolStats: TxPoolStats | null;
+  // The local build (testing_buildBlockV1) status: probed EL availability,
+  // effective settings, pool state, plan checks. Pushed at connect and on
+  // every change.
+  localBuildStatus: LocalBuildStatus | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -105,6 +109,7 @@ function useEventStreamConnection(): UseEventStreamResult {
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
   const [slotOutlook, setSlotOutlook] = useState<SlotOutlook | null>(null);
   const [txPoolStats, setTxPoolStats] = useState<TxPoolStats | null>(null);
+  const [localBuildStatus, setLocalBuildStatus] = useState<LocalBuildStatus | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -292,6 +297,10 @@ function useEventStreamConnection(): UseEventStreamResult {
 
         case 'slot_outlook':
           setSlotOutlook(event.data as SlotOutlook);
+          break;
+
+        case 'local_build_status':
+          setLocalBuildStatus(event.data as LocalBuildStatus);
           break;
 
         case 'txpool_stats':
@@ -912,6 +921,7 @@ function useEventStreamConnection(): UseEventStreamResult {
     voteCoverage,
     slotOutlook,
     txPoolStats,
+    localBuildStatus,
     currentSlot,
     slotStates,
     slotConfigs,

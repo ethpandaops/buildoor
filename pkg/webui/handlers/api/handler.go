@@ -55,6 +55,10 @@ type APIHandler struct {
 // build status serves.
 func (h *APIHandler) SetPlanVerifier(v *tx_plan_verifier.Verifier) {
 	h.planVerifier = v
+
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.planVerifier.Store(v)
+	}
 }
 
 // NewAPIHandler creates a new API handler.

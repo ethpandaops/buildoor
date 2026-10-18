@@ -85,23 +85,33 @@ func fillLocalBuildStatus(status *ServiceStatusEvent, builderSvc *payload_builde
 // @Success 200 {object} LocalBuildStatusResponse
 // @Router /api/buildoor/local-build/status [get]
 func (h *APIHandler) GetLocalBuildStatus(w http.ResponseWriter, _ *http.Request) {
-	cfg := h.builderSvc.GetConfig()
+	writeJSON(w, http.StatusOK, localBuildStatus(h.builderSvc, h.planVerifier))
+}
 
-	resp := LocalBuildStatusResponse{
-		Availability:  h.builderSvc.LocalBuildAvailability(),
+// localBuildStatus assembles the local build status (REST and the SSE
+// local_build_status event).
+func localBuildStatus(builderSvc *payload_builder.Service, verifier *tx_plan_verifier.Verifier) *LocalBuildStatusResponse {
+	if builderSvc == nil {
+		return &LocalBuildStatusResponse{TxPool: txPoolStatus(nil)}
+	}
+
+	cfg := builderSvc.GetConfig()
+
+	resp := &LocalBuildStatusResponse{
+		Availability:  builderSvc.LocalBuildAvailability(),
 		Enabled:       cfg.LocalBuild.Enabled,
 		PayloadSource: cfg.LocalBuild.NormalizedPayloadSource(),
 		TxSource:      cfg.LocalBuild.NormalizedTxSource(),
 		EngineEnabled: cfg.Build.EngineEnabled,
-		TxPool:        txPoolStatus(h.builderSvc),
+		TxPool:        txPoolStatus(builderSvc),
 	}
 
-	if h.planVerifier != nil {
-		counters := h.planVerifier.Counters()
+	if verifier != nil {
+		counters := verifier.Counters()
 		resp.PlanChecks = &counters
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // ProbeLocalBuild godoc
@@ -128,6 +138,7 @@ func (h *APIHandler) ProbeLocalBuild(w http.ResponseWriter, r *http.Request) {
 
 	if h.eventStreamMgr != nil {
 		h.eventStreamMgr.BroadcastServiceStatus()
+		h.eventStreamMgr.sendLocalBuildStatus(true)
 	}
 
 	writeJSON(w, http.StatusOK, availability)

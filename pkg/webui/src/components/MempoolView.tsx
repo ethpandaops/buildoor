@@ -45,7 +45,7 @@ function tabPath(tab: MempoolTab): string {
 export const MempoolView: React.FC = () => {
   const { txPoolStats, serviceStatus } = useEventStream();
   const { isLoggedIn } = useAuthContext();
-  const { status: localStatus } = useLocalBuildStatus(serviceStatus?.txpool_enabled);
+  const { status: localStatus } = useLocalBuildStatus();
   const visible = usePageVisible();
   const tab = tabFromPath(usePath());
 

@@ -1203,6 +1203,11 @@ To make frontend changes:
   status/skip reason/error, tx + payload source, whether it fed the bids or was
   a fallback, headline properties of the local and the EL payload, the
   selection summary
+- `local_build_status` - The local build status (the `GET
+  /api/buildoor/local-build/status` body: probed EL availability, effective
+  settings, pool state, plan check counters), sent at connect and whenever
+  its encoding changed (checked once per second, forced after a probe). The
+  UI reads it from the stream only, never polls the REST endpoint
 - `txpool_stats` - Pool aggregates + counters, sent at connect and whenever the
   pool's version changed (checked once per second)
 - `slot_result_updated` - Fired when a slot's result record changes (coalesced to
