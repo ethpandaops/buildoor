@@ -518,6 +518,14 @@ npm run clean
 
 3. **Chain Service** (`pkg/chain/`)
    - Manages epoch-level beacon state
+   - Reads the epoch state STREAMED (`beacon.GetStateSnapshot`,
+     `rpc/beacon/statesnapshot.go`): the SSZ body is walked with each fork's
+     layout from dynamic-ssz and only the fields the chain view reads are
+     decoded (validators reduced record by record to pubkey, effective
+     balance, activation/exit epochs; RANDAO mixes, proposer lookahead,
+     pending deposits, builders, pending payments); the rest is skipped
+     unread — never `AgnosticBeaconState` (a large network's state is
+     hundreds of MB, held twice while decoding)
    - Caches last 2 epochs of state
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
@@ -619,6 +627,11 @@ npm run clean
      reveal attempts, inclusion — plus the frozen `applied_plan` snapshotted at record
      creation. Copy-on-write records; attempts cap at 256/kind with a dropped counter;
      SSE updates coalesce per slot
+   - Records older than two epochs keep only their summary in memory
+     (`resident.go`); the full record is read back from the state-db for
+     `Get`/`GetRange` and late updates, `GetSummaries` serves the grid's
+     `view=summary` from memory. Swapped only once persisted
+     (`memstore.ReplaceResident`); without a state-db records stay full
    - Consumes the services' BLOCKING subscriptions (loss-free history) and implements
      the `builderapi.SlotResultRecorder` interface for request-scoped recording
    - `ArtifactStore`: raw SSZ artifacts per slot — built payload, every signed bid
