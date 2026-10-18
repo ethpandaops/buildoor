@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
@@ -29,19 +30,24 @@ type bidSubmitter interface {
 type BidCreator struct {
 	clClient bidSubmitter
 	chainSvc chain.Service
-	log      logrus.FieldLogger
+	// inclusionLists supplies the bids' inclusion list bits (nil claims
+	// none in view mode).
+	inclusionLists *inclusionlist.Store
+	log            logrus.FieldLogger
 }
 
 // NewBidCreator creates a new bid creator.
 func NewBidCreator(
 	clClient bidSubmitter,
 	chainSvc chain.Service,
+	inclusionLists *inclusionlist.Store,
 	log logrus.FieldLogger,
 ) *BidCreator {
 	return &BidCreator{
-		clClient: clClient,
-		chainSvc: chainSvc,
-		log:      log.WithField("component", "bid-creator"),
+		inclusionLists: inclusionLists,
+		clClient:       clClient,
+		chainSvc:       chainSvc,
+		log:            log.WithField("component", "bid-creator"),
 	}
 }
 
@@ -57,6 +63,7 @@ func (c *BidCreator) CreateAndSubmitBid(
 	payload *payload_builder.Payload,
 	bidValue uint64,
 	bidTransform string,
+	inclusionListBitsMode string,
 ) (*eth2all.SignedExecutionPayloadBid, error) {
 	builderIndex, registered := key.BuilderIndex()
 	if !registered {
@@ -86,6 +93,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 		Value:            phase0.Gwei(bidValue),
 		ExecutionPayment: 0,
 		Transform:        bidTransform,
+		InclusionListBits: payload_bidder.InclusionListBits(ctx, c.inclusionLists, payload,
+			inclusionListBitsMode),
 	}, payload_bidder.NewSigner(key.BLSSigner()), forkVersion,
 		c.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {

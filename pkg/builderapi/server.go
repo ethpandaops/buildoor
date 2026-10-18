@@ -30,6 +30,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/builderapi/legacy"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
@@ -106,7 +107,8 @@ type Server struct {
 func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.Service,
 	planSvc *action_plan.PlanService, payloadCache *payload_builder.PayloadCache,
 	registry *builder_keys.Registry,
-	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]) *Server {
+	validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration],
+	inclusionLists *inclusionlist.Store) *Server {
 	store := validatorStore
 	if store == nil {
 		store = memstore.New[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]()
@@ -119,7 +121,7 @@ func NewServer(cfg *config.BuilderAPIConfig, log *logrus.Logger, chainSvc chain.
 		payloadCache:    payloadCache,
 		validatorsStore: store,
 		legacy:          legacy.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, store, registry),
-		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, registry),
+		epbs:            epbsapi.NewHandler(cfg, log, chainSvc, planSvc, payloadCache, registry, inclusionLists),
 	}
 }
 

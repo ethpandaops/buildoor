@@ -227,7 +227,7 @@ func (b *PayloadBuilder) runLocalBuilds(
 	for run := 1; ; run++ {
 		var version uint64
 		if rebuild {
-			version = b.txPool.ContentVersion()
+			version = b.contentVersion()
 		}
 
 		outcome, summary := b.runLocalBuild(ctx, attrs, prelude, req, windowEnd, run)
@@ -260,7 +260,7 @@ func (b *PayloadBuilder) awaitRebuild(
 			return false
 		}
 
-		if b.txPool.ContentVersion() != version {
+		if b.contentVersion() != version {
 			return true
 		}
 
@@ -459,4 +459,16 @@ func (b *PayloadBuilder) followLocal(
 			return
 		}
 	}
+}
+
+// contentVersion changes whenever a testing rebuild could carry something
+// new: the pool's content and EL mempool arrivals (Pool.ContentVersion), or a
+// new inclusion list.
+func (b *PayloadBuilder) contentVersion() uint64 {
+	version := b.txPool.ContentVersion()
+	if b.ilStore != nil {
+		version += b.ilStore.Version()
+	}
+
+	return version
 }

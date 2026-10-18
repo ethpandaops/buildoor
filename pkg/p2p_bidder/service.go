@@ -207,6 +207,7 @@ func (s *Service) Start(ctx context.Context, builderSvc *payload_builder.Service
 	s.bidCreator = NewBidCreator(
 		s.clClient,
 		s.chainSvc,
+		builderSvc.InclusionLists(),
 		s.log,
 	)
 	// The scheduler skips bidding for slots without cached proposer preferences:

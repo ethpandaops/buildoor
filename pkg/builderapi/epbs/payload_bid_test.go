@@ -159,7 +159,7 @@ func newPayloadBidTestEnv(t *testing.T, enabled bool) *payloadBidTestEnv {
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
-		payload_builder.NewPayloadCache(10), registry)
+		payload_builder.NewPayloadCache(10), registry, nil)
 
 	recorder := &stubSlotResultRecorder{}
 	h.SetResultRecorder(recorder)

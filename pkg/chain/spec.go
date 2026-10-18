@@ -63,6 +63,12 @@ type ChainSpec struct {
 
 	// ePBS parameters
 	PtcSize uint64
+
+	// FOCIL (EIP-7805, Heze): the inclusion list committee size and the
+	// inclusion list deadline as basis points of the slot duration (lists
+	// arriving later in their slot are not timely).
+	InclusionListCommitteeSize uint64
+	InclusionListDueBps        uint64
 	// PAYLOAD_DUE_BPS: the builder payload reveal deadline as basis points of
 	// the slot duration (Gloas). A block whose payload has not been seen by
 	// this offset is treated as empty by payload timeliness voting.
@@ -292,6 +298,18 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 	// Parse ePBS parameters
 	if v, err := parseSpecUint64(specData, "PTC_SIZE"); err == nil {
 		s.PtcSize = v
+	}
+
+	if v, err := parseSpecUint64(specData, "INCLUSION_LIST_COMMITTEE_SIZE"); err == nil {
+		s.InclusionListCommitteeSize = v
+	} else {
+		s.InclusionListCommitteeSize = 16
+	}
+
+	if v, err := parseSpecUint64(specData, "INCLUSION_LIST_DUE_BPS"); err == nil {
+		s.InclusionListDueBps = v
+	} else {
+		s.InclusionListDueBps = 6667
 	}
 
 	if v, err := parseSpecUint64(specData, "PAYLOAD_DUE_BPS"); err == nil {

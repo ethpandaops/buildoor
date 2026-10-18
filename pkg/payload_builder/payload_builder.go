@@ -19,6 +19,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
@@ -57,6 +58,10 @@ type PayloadBuilder struct {
 	// localTiming learns how long a testing build takes, to time the final
 	// one against the hand-over.
 	localTiming buildTimingModel
+
+	// ilStore holds the gossiped inclusion lists (FOCIL, Heze); nil = the
+	// payload attributes' list alone.
+	ilStore *inclusionlist.Store
 }
 
 // activeBuildKey identifies one in-progress build by the full parent tuple:
@@ -121,6 +126,10 @@ type buildPrelude struct {
 	targetGasLimit       uint64
 	payloadAttrs         *engineall.PayloadAttributes
 	fcState              *paris.ForkchoiceState
+	// ilReq is the slot's inclusion list instruction; inclusionList the view
+	// the engine build carries (nil before Heze).
+	ilReq         *InclusionListRequest
+	inclusionList *InclusionListBuild
 }
 
 // localOutcome is the local build goroutine's result.
@@ -156,6 +165,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	attrs *beacon.PayloadAttributesEvent,
 	buildTimeMs uint64,
 	local *LocalBuildRequest,
+	il *InclusionListRequest,
 ) (*BuildResult, error) {
 	buildKey := activeBuildKey{
 		slot:       attrs.ProposalSlot,
@@ -200,7 +210,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		cancel()
 	}()
 
-	prelude, err := b.prepareBuild(buildCtx, attrs)
+	prelude, err := b.prepareBuild(buildCtx, attrs, il)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +530,7 @@ func blockValue(payload *Payload) *big.Int {
 
 // prepareBuild resolves everything both build paths share for one target.
 func (b *PayloadBuilder) prepareBuild(
-	ctx context.Context, attrs *beacon.PayloadAttributesEvent,
+	ctx context.Context, attrs *beacon.PayloadAttributesEvent, il *InclusionListRequest,
 ) (*buildPrelude, error) {
 	// Resolve the fork active at the build epoch and the engine method version it implies.
 	buildEpoch := b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)
@@ -565,9 +575,13 @@ func (b *PayloadBuilder) prepareBuild(
 		TargetGasLimit:        targetGasLimit,
 	}
 
-	if len(attrs.InclusionListTransactions) > 0 {
-		payloadAttrs.InclusionListTransactions = make([]paris.Transaction, len(attrs.InclusionListTransactions))
-		for i, tx := range attrs.InclusionListTransactions {
+	// From Heze the attributes always carry the inclusion list (V5 requires
+	// the field, possibly empty): the builder's view, not just the beacon
+	// node's at attributes time.
+	inclusionList := b.resolveInclusionList(ctx, attrs, beaconFork, il)
+	if txs := inclusionList.listTransactions(); txs != nil {
+		payloadAttrs.InclusionListTransactions = make([]paris.Transaction, len(txs))
+		for i, tx := range txs {
 			payloadAttrs.InclusionListTransactions[i] = paris.Transaction(tx)
 		}
 	}
@@ -579,6 +593,8 @@ func (b *PayloadBuilder) prepareBuild(
 		proposerFeeRecipient: proposerFeeRecipient,
 		targetGasLimit:       targetGasLimit,
 		payloadAttrs:         payloadAttrs,
+		ilReq:                il,
+		inclusionList:        inclusionList,
 		fcState: &paris.ForkchoiceState{
 			HeadBlockHash:      paris.Hash32(attrs.ParentBlockHash),
 			SafeBlockHash:      paris.Hash32(finalityInfo.SafeExecutionBlockHash),
@@ -764,13 +780,17 @@ func (b *PayloadBuilder) buildLocal(
 
 	info := &LocalBuildInfo{TxSource: req.TxSource, SubmittedTxs: -1}
 
+	// Each testing build reads the inclusion list view afresh: lists that
+	// arrived since the engine build started are carried too.
+	inclusionList := b.resolveInclusionList(ctx, attrs, prelude.beaconFork, prelude.ilReq)
+	info.InclusionList = inclusionList
+
 	var (
 		txs [][]byte
-		// poolSelected are the pool entries behind txs (txpool source only);
-		// submitted is the list error attribution works on — the pool entries
-		// once txs holds nothing but them (no inclusion-list prefix); fill
-		// is the EL mempool part at the end of txs.
-		poolSelected, submitted, fill []*txpool.PooledTx
+		// submitted is the list error attribution works on (the pool
+		// selection's block order without the fill: inclusion list and pool
+		// entries); fill is the EL mempool part at the end of txs.
+		submitted, fill []*txpool.PooledTx
 	)
 
 	switch req.TxSource {
@@ -791,7 +811,7 @@ func (b *PayloadBuilder) buildLocal(
 			ParentHash:     common.Hash(attrs.ParentBlockHash),
 			GasLimit:       b.localGasLimit(ctx, attrs, prelude),
 			MaxBlobs:       b.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)),
-			InclusionList:  attrs.InclusionListTransactions,
+			InclusionList:  inclusionList.listTransactions(),
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
 			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
@@ -813,7 +833,7 @@ func (b *PayloadBuilder) buildLocal(
 
 		// The EL builds from its own mempool and the testing call carries no
 		// inclusion list: a slot with one gets a payload that ignores it.
-		if il := attrs.InclusionListTransactions; len(il) > 0 {
+		if il := inclusionList.listTransactions(); len(il) > 0 {
 			info.InclusionListTxs = len(il)
 			info.InclusionListDropped = true
 		}
@@ -861,7 +881,7 @@ func (b *PayloadBuilder) buildLocal(
 			BaseFeeCeiling: gweiToWei(req.BaseFeeCeilingGwei),
 			Ordering:       req.Ordering,
 			Seed:           uint64(attrs.ProposalSlot),
-			InclusionList:  attrs.InclusionListTransactions,
+			InclusionList:  inclusionList.listTransactions(),
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
 			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
@@ -878,18 +898,17 @@ func (b *PayloadBuilder) buildLocal(
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
 		txs = selection.Txs
-		poolSelected = selection.Selected
 
-		if selection.InclusionListTxs == 0 {
-			submitted = poolSelected
-		}
+		// Error attribution works on the block order without the fill (a
+		// refusal drops the fill first): inclusion list and pool alike.
+		submitted = selection.Ordered[:len(selection.Ordered)-len(selection.Fill)]
 	}
 
-	// Inclusion-list transactions (FOCIL) are mandatory for validity; the
-	// pool selection already prepends them, the other explicit sources get
-	// them here. The EL-mempool source leaves the list to the EL.
+	// The pool selection places the inclusion list itself (checked against
+	// the parent state); the exact sources carry it verbatim in front. The
+	// EL-mempool source leaves the list to the EL.
 	if req.TxSource == config.TxSourceExplicit || req.TxSource == config.TxSourceEmpty {
-		if il := attrs.InclusionListTransactions; len(il) > 0 {
+		if il := inclusionList.listTransactions(); len(il) > 0 {
 			withIL := make([][]byte, 0, len(il)+len(txs))
 			withIL = append(withIL, il...)
 			withIL = append(withIL, txs...)
@@ -971,10 +990,13 @@ func (b *PayloadBuilder) buildLocal(
 			continue
 		}
 
-		if info.InclusionListTxs > 0 && !info.InclusionListDropped && txs != nil {
-			// A failing inclusion-list transaction takes the whole call down
-			// on most ELs; retry without the list (a spec-violating payload,
-			// flagged).
+		exactSource := req.TxSource == config.TxSourceExplicit || req.TxSource == config.TxSourceEmpty
+		if exactSource && info.InclusionListTxs > 0 && !info.InclusionListDropped && txs != nil {
+			// The exact sources carry the list verbatim, unchecked against
+			// the parent state: a list transaction that cannot execute takes
+			// the whole call down on most ELs. Retry with the plan alone (a
+			// payload that may miss the list, flagged); the pool sources
+			// place only executable list transactions and attribute instead.
 			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
 				Warn("Local build failed with the inclusion list, retrying without it")
 
@@ -982,7 +1004,6 @@ func (b *PayloadBuilder) buildLocal(
 			info.InclusionListDropped = true
 			info.SubmittedTxs = len(txs)
 			info.ExpectedHashes = txHashes(txs)
-			submitted = poolSelected
 
 			continue
 		}
@@ -1038,6 +1059,7 @@ func (b *PayloadBuilder) buildLocal(
 
 	payload.Source = SourceLocal
 	payload.Local = info
+	payload.InclusionList = inclusionList
 	info.BuiltAt = payload.ReadyAt
 
 	// geth checks the parent against its head and then builds on whatever
@@ -1254,6 +1276,7 @@ func (b *PayloadBuilder) finalizePayload(
 		BlobsBundle:          beaconBlobsBundleFromEngine(resp.BlobsBundle),
 		ExecutionRequests:    execRequests,
 		BlockHash:            phase0.Hash32(newHash),
+		InclusionList:        prelude.inclusionList,
 		FeeRecipient:         prelude.feeRecipient,
 		ProposerFeeRecipient: prelude.proposerFeeRecipient,
 		BlockValue:           blockValue,

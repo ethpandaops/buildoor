@@ -450,7 +450,8 @@ and begins building blocks according to configuration.`,
 				"genesis_validators_root": fmt.Sprintf("0x%x", genesisValidatorsRoot[:]),
 			}).Info("Using genesis parameters from beacon node")
 
-			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), keyRegistry, validatorStore)
+			builderAPISrv = builderapi.NewServer(&cfg.BuilderAPI, logger, chainSvc, planSvc, builderSvc.GetPayloadCache(), keyRegistry,
+				validatorStore, builderSvc.InclusionLists())
 			builderAPISrv.SetCLClient(clClient)
 			builderAPISrv.SetEnabled(cfg.BuilderAPIEnabled)
 

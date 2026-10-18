@@ -522,9 +522,9 @@ func TestSelectTipOrderingAndInclusionList(t *testing.T) {
 	require.Len(t, sel.Selected, 2)
 	require.Equal(t, highTx.Hash(), sel.Selected[0].Hash, "highest effective tip first")
 	require.Equal(t, lowTx.Hash(), sel.Selected[1].Hash)
-	require.Len(t, sel.Txs, 3)
-	require.Equal(t, il[0], sel.Txs[0], "inclusion list is prepended")
-	require.Equal(t, 1, sel.InclusionListTxs)
+	require.Len(t, sel.Txs, 2, "an undecodable list transaction cannot go in")
+	require.Zero(t, sel.InclusionListTxs)
+	require.Equal(t, 1, sel.InclusionListSkipped[SkipUndecodable])
 }
 
 func TestSelectDisabledPool(t *testing.T) {

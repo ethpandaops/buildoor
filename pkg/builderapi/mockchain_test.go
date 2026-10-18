@@ -72,3 +72,5 @@ func (m *mockChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 }
 
 func (m *mockChainService) RefreshBuilders(context.Context) error { return nil }
+
+func (m *mockChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }

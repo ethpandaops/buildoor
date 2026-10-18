@@ -356,6 +356,50 @@ const (
 	CandidateModeNever = "never"
 )
 
+// Inclusion list (FOCIL, Heze) build modes.
+const (
+	// InclusionListInclude builds with the slot's inclusion list view: the
+	// engine build gets it in its payload attributes, the testing build
+	// carries every list transaction still valid on the parent state.
+	InclusionListInclude = "include"
+	// InclusionListOmit builds without it: a censoring payload, for testing
+	// the network's inclusion list enforcement.
+	InclusionListOmit = "omit"
+)
+
+// Inclusion list bits a bid claims (bid.inclusion_list_bits).
+const (
+	// InclusionListBitsView claims the committee lists observed (the honest
+	// builder; gossip ignores a bid missing a timely list a node saw).
+	InclusionListBitsView = "view"
+	// InclusionListBitsAll claims every committee position.
+	InclusionListBitsAll = "all"
+	// InclusionListBitsNone claims none.
+	InclusionListBitsNone = "none"
+)
+
+// NormalizedInclusionListMode returns the mode, falling back for unknown
+// values.
+func NormalizedInclusionListMode(mode, fallback string) string {
+	switch mode {
+	case InclusionListInclude, InclusionListOmit:
+		return mode
+	default:
+		return fallback
+	}
+}
+
+// NormalizedInclusionListBits returns the bits mode, falling back for
+// unknown values.
+func NormalizedInclusionListBits(bits, fallback string) string {
+	switch bits {
+	case InclusionListBitsView, InclusionListBitsAll, InclusionListBitsNone:
+		return bits
+	default:
+		return fallback
+	}
+}
+
 // NormalizedCandidateMode returns the candidate mode, falling back to the
 // given default for unknown values (UI overrides are free-form strings).
 func NormalizedCandidateMode(mode, fallback string) string {
@@ -412,6 +456,13 @@ type BuildConfig struct {
 	// the proposer's target) when the EL ignored the target. Disabled by
 	// default: the override rewrites the block header after building.
 	EnforceBidGasLimit bool `yaml:"enforce_bid_gas_limit" json:"enforce_bid_gas_limit"`
+
+	// InclusionListMode: include (default) or omit the slot's inclusion list
+	// view (FOCIL, Heze) in the builds; see InclusionListInclude.
+	InclusionListMode string `yaml:"inclusion_list_mode" json:"inclusion_list_mode"`
+	// InclusionListBits: view (default), all or none — which committee lists
+	// a bid claims; see InclusionListBitsView.
+	InclusionListBits string `yaml:"inclusion_list_bits" json:"inclusion_list_bits"`
 }
 
 // CandidateMode returns the normalized mode configured for the given

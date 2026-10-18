@@ -115,6 +115,8 @@ func Fields() []Field {
 		newField(KeyBuildCandidateGrandparentFull, "build-candidate-grandparent-full", func(c *Config) *string { return &c.Build.CandidateGrandparentFull }),
 		newField(KeyBuildCandidateGrandparentEmpty, "build-candidate-grandparent-empty", func(c *Config) *string { return &c.Build.CandidateGrandparentEmpty }),
 		newField(KeyBuildEngineEnabled, "engine-build-enabled", func(c *Config) *bool { return &c.Build.EngineEnabled }),
+		newField(KeyBuildInclusionListMode, "build-inclusion-list-mode", func(c *Config) *string { return &c.Build.InclusionListMode }),
+		newField(KeyBuildInclusionListBits, "build-inclusion-list-bits", func(c *Config) *string { return &c.Build.InclusionListBits }),
 		newField(KeyBuildParallel, "build-parallel", func(c *Config) *bool { return &c.Build.Parallel }),
 		newField(KeyBuildSpeculativeBuildTime, "build-speculative-build-time", func(c *Config) *uint64 { return &c.Build.SpeculativeBuildTimeMs }),
 		newField(KeyBuildAutoWeakHeadPct, "build-auto-weak-head-pct", func(c *Config) *uint64 { return &c.Build.AutoWeakHeadPct }),

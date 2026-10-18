@@ -16,6 +16,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 	"github.com/ethpandaops/buildoor/pkg/utils"
@@ -149,6 +150,9 @@ type LocalBuildInfo struct {
 	// payload is checked against this list before it is used, and the
 	// included block after inclusion.
 	ExpectedHashes []string `json:"expected_hashes,omitempty"`
+	// InclusionList is the inclusion list view this build carried (nil
+	// before Heze).
+	InclusionList *InclusionListBuild `json:"inclusion_list,omitempty"`
 	// InclusionListTxs is how many inclusion-list transactions the slot had
 	// (prepended to the list, or ignored by the el_mempool source).
 	InclusionListTxs int `json:"inclusion_list_txs,omitempty"`
@@ -405,6 +409,12 @@ func (s *Service) SetLocalBuildClient(client LocalBuildClient) {
 // from. Must be called before Start; nil leaves the source unavailable.
 func (s *Service) SetTxPool(pool *txpool.Pool) {
 	s.txPool = pool
+}
+
+// InclusionLists returns the inclusion list store (FOCIL, Heze) the builds
+// and bids read.
+func (s *Service) InclusionLists() *inclusionlist.Store {
+	return s.ilStore
 }
 
 // TxPool returns the wired transaction pool (nil when unconfigured).

@@ -476,6 +476,64 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     ),
   },
 
+  'build.inclusion_list_mode': {
+    label: 'Inclusion lists',
+    short: 'Lists',
+    kind: 'select',
+    options: [
+      { value: 'include', label: 'Include the observed lists', short: 'include' },
+      { value: 'omit', label: 'Omit them (censoring payload)', short: 'omit' },
+    ],
+    hint: 'FOCIL (Heze): build with the inclusion lists observed for the slot, or deliberately without them.',
+    help: (
+      <>
+        <code>build.inclusion_list_mode</code>: the inclusion lists (FOCIL, Heze) of the slot before
+        the payload come from the beacon node&apos;s <code>inclusion_list</code> events and its
+        payload attributes.
+        <dl>
+          <dt>include</dt>
+          <dd>
+            the engine build gets them in its payload attributes; the testing build places every
+            list transaction that can execute on the parent state at the front of the block (the
+            others need not be included)
+          </dd>
+          <dt>omit</dt>
+          <dd>
+            build without them: a censoring payload the network&apos;s fork choice will not extend,
+            for testing inclusion list enforcement. Per slot, the action plan can also omit single
+            transactions.
+          </dd>
+        </dl>
+      </>
+    ),
+  },
+  'build.inclusion_list_bits': {
+    label: 'Inclusion list bits',
+    short: 'Bits',
+    kind: 'select',
+    options: [
+      { value: 'view', label: 'The lists observed', short: 'view' },
+      { value: 'all', label: 'Every committee position', short: 'all' },
+      { value: 'none', label: 'None', short: 'none' },
+    ],
+    hint: 'Which committee lists a bid claims (bid.inclusion_list_bits).',
+    help: (
+      <>
+        <code>build.inclusion_list_bits</code>: the inclusion list committee positions a bid claims.
+        Gossip ignores a bid that misses a timely list a node saw, and a proposer only takes a bid
+        covering the lists it saw.
+        <dl>
+          <dt>view</dt>
+          <dd>the lists observed at bid time (the honest builder, default)</dd>
+          <dt>all</dt>
+          <dd>every position, observed or not</dd>
+          <dt>none</dt>
+          <dd>no position: such bids are ignored whenever any list was published in time</dd>
+        </dl>
+      </>
+    ),
+  },
+
   // ----- Slot history -----
   'slot_result_retention_epochs': {
     label: 'Result retention',

@@ -88,6 +88,8 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex
 
 func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
+func (m *stubChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }
+
 // stubProposalSubmitter records the last SubmitProposal call for tests.
 type stubProposalSubmitter struct {
 	lastProposal *api.VersionedSignedProposal

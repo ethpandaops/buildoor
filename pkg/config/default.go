@@ -51,6 +51,8 @@ func DefaultConfig() *Config {
 			CandidateGrandparentFull:  CandidateModeAuto,
 			CandidateGrandparentEmpty: CandidateModeNever,
 			EngineEnabled:             true,
+			InclusionListMode:         InclusionListInclude,
+			InclusionListBits:         InclusionListBitsView,
 			Parallel:                  true,
 			AutoWeakHeadPct:           40,
 		},

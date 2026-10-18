@@ -2,6 +2,7 @@ package action_plan
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -94,6 +95,11 @@ type ResolvedBuildSettings struct {
 	// build.engine_enabled, overridden by the plan's build.local
 	// build_el_payload.
 	EngineEnabled bool `json:"engine_enabled"`
+
+	// InclusionList is the effective inclusion list (FOCIL, Heze) handling:
+	// the global build.inclusion_list_mode/_bits, overridden by the plan's
+	// build.inclusion_list. Always non-nil.
+	InclusionList *ResolvedInclusionList `json:"inclusion_list,omitempty"`
 
 	// CandidateModes is the effective build-candidate policy for the slot:
 	// candidate key -> auto/always/never, merged from the global config and
@@ -344,6 +350,7 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
 	build.Local = resolveLocalBuild(frozen.Plan, cfg)
+	build.InclusionList = resolveInclusionList(frozen.Plan, cfg)
 
 	build.EngineEnabled = cfg.Build.EngineEnabled
 	if frozen.Plan != nil && frozen.Plan.Build != nil && frozen.Plan.Build.Local != nil &&
@@ -754,4 +761,54 @@ func (s *ResolvedBuilderAPISettings) AwaitRespondGate(ctx context.Context, slotS
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// ResolvedInclusionList is the slot's effective inclusion list handling.
+type ResolvedInclusionList struct {
+	// Mode: include or omit.
+	Mode string `json:"mode"`
+	// Bits: view, all or none.
+	Bits string `json:"bits"`
+	// OmitTxs are left out of the builds (0x hashes).
+	OmitTxs []string `json:"omit_txs,omitempty"`
+}
+
+// Omits reports whether the transaction with the given 0x hash is left out.
+func (r *ResolvedInclusionList) Omits(hash string) bool {
+	if r == nil {
+		return false
+	}
+
+	for _, omitted := range r.OmitTxs {
+		if strings.EqualFold(omitted, hash) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func resolveInclusionList(plan *SlotPlan, cfg *config.Config) *ResolvedInclusionList {
+	resolved := &ResolvedInclusionList{
+		Mode: config.NormalizedInclusionListMode(cfg.Build.InclusionListMode, config.InclusionListInclude),
+		Bits: config.NormalizedInclusionListBits(cfg.Build.InclusionListBits, config.InclusionListBitsView),
+	}
+
+	if plan == nil || plan.Build == nil || plan.Build.InclusionList == nil {
+		return resolved
+	}
+
+	override := plan.Build.InclusionList
+
+	if override.Mode != "" {
+		resolved.Mode = config.NormalizedInclusionListMode(override.Mode, resolved.Mode)
+	}
+
+	if override.Bits != "" {
+		resolved.Bits = config.NormalizedInclusionListBits(override.Bits, resolved.Bits)
+	}
+
+	resolved.OmitTxs = append([]string(nil), override.OmitTxs...)
+
+	return resolved
 }

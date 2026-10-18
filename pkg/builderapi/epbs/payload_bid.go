@@ -348,6 +348,8 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 		Value:            value,
 		ExecutionPayment: executionPayment,
 		Transform:        bidTransform,
+		InclusionListBits: payload_bidder.InclusionListBits(tctx, h.inclusionLists, event,
+			h.planSvc.Freeze(slot).Build.InclusionList.Bits),
 	}, payload_bidder.NewSigner(bidKey.BLSSigner()), bidForkVersion,
 		h.chainSvc.GetGenesis().GenesisValidatorsRoot)
 	if err != nil {

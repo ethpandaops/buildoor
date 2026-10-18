@@ -241,6 +241,71 @@ type proposerPreferencesEventJSON struct {
 	Data    *gloas.SignedProposerPreferences `json:"data"`
 }
 
+// InclusionListEvent is a signed inclusion list (FOCIL, Heze) the beacon node
+// received on gossip and validated. Equivocation and timeliness are judged
+// by the consumer from the arrival time.
+type InclusionListEvent struct {
+	Slot           phase0.Slot
+	ValidatorIndex phase0.ValidatorIndex
+	DependentRoot  phase0.Root
+	Transactions   [][]byte
+	ReceivedAt     time.Time
+}
+
+// inclusionListEventJSON is used for JSON unmarshaling of inclusion_list events.
+type inclusionListEventJSON struct {
+	Version string `json:"version"`
+	Data    *struct {
+		Message *struct {
+			Slot           string   `json:"slot"`
+			ValidatorIndex string   `json:"validator_index"`
+			DependentRoot  string   `json:"dependent_root"`
+			Transactions   []string `json:"transactions"`
+		} `json:"message"`
+	} `json:"data"`
+}
+
+// parseInclusionListEvent converts a raw inclusion_list event.
+func parseInclusionListEvent(raw *inclusionListEventJSON) (*InclusionListEvent, error) {
+	if raw.Data == nil || raw.Data.Message == nil {
+		return nil, fmt.Errorf("inclusion list event without a message")
+	}
+
+	msg := raw.Data.Message
+
+	slot, err := strconv.ParseUint(msg.Slot, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid slot: %w", err)
+	}
+
+	validatorIndex, err := strconv.ParseUint(msg.ValidatorIndex, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid validator_index: %w", err)
+	}
+
+	dependentRoot, err := parseRoot(msg.DependentRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid dependent_root: %w", err)
+	}
+
+	txs := make([][]byte, len(msg.Transactions))
+	for i, txHex := range msg.Transactions {
+		tx, err := hex.DecodeString(strings.TrimPrefix(txHex, "0x"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid transactions[%d]: %w", i, err)
+		}
+
+		txs[i] = tx
+	}
+
+	return &InclusionListEvent{
+		Slot:           phase0.Slot(slot),
+		ValidatorIndex: phase0.ValidatorIndex(validatorIndex),
+		DependentRoot:  dependentRoot,
+		Transactions:   txs,
+	}, nil
+}
+
 // payloadAvailableEventJSON is used for JSON unmarshaling of execution_payload_available events.
 type payloadAvailableEventJSON struct {
 	Slot      string `json:"slot"`
@@ -280,6 +345,7 @@ type EventStream struct {
 	payloadAttributesDispatcher   *utils.Dispatcher[*PayloadAttributesEvent]
 	singleAttestationDispatcher   *utils.Dispatcher[*SingleAttestationEvent]
 	proposerPreferencesDispatcher *utils.Dispatcher[*gloas.SignedProposerPreferences]
+	inclusionListDispatcher       *utils.Dispatcher[*InclusionListEvent]
 	cancelFunc                    context.CancelFunc
 	running                       bool
 	mu                            sync.Mutex
@@ -324,6 +390,7 @@ func NewEventStream(client *Client) *EventStream {
 		payloadAttributesDispatcher:   &utils.Dispatcher[*PayloadAttributesEvent]{},
 		singleAttestationDispatcher:   &utils.Dispatcher[*SingleAttestationEvent]{},
 		proposerPreferencesDispatcher: &utils.Dispatcher[*gloas.SignedProposerPreferences]{},
+		inclusionListDispatcher:       &utils.Dispatcher[*InclusionListEvent]{},
 		payloadAttrCache:              make(map[phase0.Slot]*slotAttrVariants, 4),
 	}
 }
@@ -342,7 +409,7 @@ func (e *EventStream) Start(ctx context.Context) error {
 	e.mu.Unlock()
 
 	// Start separate goroutines for each topic
-	e.wg.Add(7)
+	e.wg.Add(8)
 
 	go e.runTopicLoop(streamCtx, "head", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "chain_reorg", 30*time.Second)
@@ -351,6 +418,9 @@ func (e *EventStream) Start(ctx context.Context) error {
 	go e.runTopicLoop(streamCtx, "execution_payload_available", 30*time.Second)
 	go e.runTopicLoop(streamCtx, "single_attestation", 5*time.Second)
 	go e.runTopicLoop(streamCtx, "proposer_preferences", 5*time.Second)
+	// Inclusion lists exist from Heze on; nodes without the topic answer 400
+	// and are retried at the slow unsupported-topic pace.
+	go e.runTopicLoop(streamCtx, "inclusion_list", 5*time.Second)
 
 	return nil
 }
@@ -405,6 +475,11 @@ func (e *EventStream) SubscribeSingleAttestations() *utils.Subscription[*SingleA
 // SubscribeProposerPreferences returns a subscription for proposer_preferences events.
 func (e *EventStream) SubscribeProposerPreferences() *utils.Subscription[*gloas.SignedProposerPreferences] {
 	return e.proposerPreferencesDispatcher.Subscribe(32, false)
+}
+
+// SubscribeInclusionLists returns a subscription for inclusion_list events.
+func (e *EventStream) SubscribeInclusionLists() *utils.Subscription[*InclusionListEvent] {
+	return e.inclusionListDispatcher.Subscribe(64, false)
 }
 
 // GetLatestPayloadAttributes returns the newest cached payload_attributes
@@ -831,6 +906,22 @@ func (e *EventStream) handleEvent(eventType, data string) {
 		}).Debug("Proposer preferences event received")
 
 		e.proposerPreferencesDispatcher.Fire(raw.Data)
+
+	case "inclusion_list":
+		var raw inclusionListEventJSON
+		if err := json.Unmarshal([]byte(data), &raw); err != nil {
+			e.client.log.WithError(err).Debug("Failed to parse inclusion list event JSON")
+			return
+		}
+
+		event, err := parseInclusionListEvent(&raw)
+		if err != nil {
+			e.client.log.WithError(err).Debug("Failed to convert inclusion list event")
+			return
+		}
+
+		event.ReceivedAt = time.Now()
+		e.inclusionListDispatcher.Fire(event)
 
 	default:
 		e.client.log.WithField("event_type", eventType).Debug("Unknown event type")

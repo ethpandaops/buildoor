@@ -111,6 +111,11 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         ],
       },
       {
+        id: 'inclusion-lists',
+        label: 'Inclusion lists',
+        sections: [{ keys: ['build.inclusion_list_mode', 'build.inclusion_list_bits'] }],
+      },
+      {
         id: 'schedule',
         label: 'Schedule',
         sections: [{ keys: ['schedule.mode', 'schedule.every_nth', 'schedule.next_n', 'schedule.start_slot'] }],
@@ -150,6 +155,11 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         keys: ['build.parallel', 'build.speculative_build_time_ms'],
         value: (ctx) =>
           `${raw('build.parallel', ctx) ? 'parallel' : 'sequential'} · ${fmt('build.speculative_build_time_ms', ctx)}`,
+      },
+      {
+        label: 'Inclusion lists',
+        keys: ['build.inclusion_list_mode', 'build.inclusion_list_bits'],
+        value: (ctx) => `${fmt('build.inclusion_list_mode', ctx)} · bits ${fmt('build.inclusion_list_bits', ctx)}`,
       },
       {
         label: 'Bid gas limit',

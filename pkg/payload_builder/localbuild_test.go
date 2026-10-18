@@ -323,6 +323,7 @@ func TestBuildLocalTxSources(t *testing.T) {
 	t.Run("inclusion list is prepended and dropped on retry", func(t *testing.T) {
 		client := &fakeLocalClient{failNext: 1}
 		b, attrs, prelude := newLocalTestBuilder(client)
+		prelude.beaconFork = version.DataVersionHeze // inclusion lists exist from Heze on
 		il := signedTx(t, 5)
 		own := signedTx(t, 0)
 		attrs.InclusionListTransactions = [][]byte{il}

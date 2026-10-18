@@ -110,6 +110,8 @@ func (m *stubChainService) GetValidatorPubkeyByIndex(phase0.ValidatorIndex) *pha
 
 func (m *stubChainService) RefreshBuilders(context.Context) error { return nil }
 
+func (m *stubChainService) GetInclusionListCommittee(phase0.Slot) []phase0.ValidatorIndex { return nil }
+
 // stubBlockBroadcaster records SubmitProposal calls and can be set to fail.
 type stubBlockBroadcaster struct {
 	mu       sync.Mutex
@@ -219,7 +221,7 @@ func newBeaconBlockTestEnv(t *testing.T, slotDuration time.Duration, revealTimeM
 	broadcaster := &stubBlockBroadcaster{}
 
 	h := NewHandler(&cfg.BuilderAPI, log, chainSvc, planSvc,
-		payload_builder.NewPayloadCache(10), registry)
+		payload_builder.NewPayloadCache(10), registry, nil)
 	h.SetBlockBroadcaster(broadcaster)
 	h.SetRevealService(revealSvc)
 	h.SetEnabled(true)

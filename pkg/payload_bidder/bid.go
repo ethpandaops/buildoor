@@ -28,6 +28,10 @@ type BidParams struct {
 	// bid MESSAGE (JSON) before signing; the modified message is then signed,
 	// so the resulting bid is validly signed but customized.
 	Transform string
+
+	// InclusionListBits are the inclusion list committee bits the bid claims
+	// (Heze; see InclusionListBits). Nil claims none.
+	InclusionListBits []byte
 }
 
 // BuildSignedBid constructs and signs a fork-agnostic SignedExecutionPayloadBid
@@ -73,7 +77,7 @@ func BuildSignedBid(
 		ExecutionPayment:      params.ExecutionPayment,
 		BlobKZGCommitments:    commitments,
 		ExecutionRequestsRoot: phase0.Root(execRequestsRoot),
-		InclusionListBits:     []byte{0xff, 0xff}, // TODO: set a proper inclusion-list bitfield
+		InclusionListBits:     inclusionListBitsOrNone(params.InclusionListBits),
 	}
 
 	// Apply the operator's jq transform to the bid message before signing, so
@@ -97,4 +101,13 @@ func BuildSignedBid(
 		Message:   bid,
 		Signature: sig,
 	}, nil
+}
+
+// inclusionListBitsOrNone defaults absent bits to an empty claim.
+func inclusionListBitsOrNone(bits []byte) []byte {
+	if bits == nil {
+		return []byte{0x00, 0x00}
+	}
+
+	return bits
 }
