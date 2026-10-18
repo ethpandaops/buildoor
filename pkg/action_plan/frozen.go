@@ -148,7 +148,7 @@ type ResolvedBidSettings struct {
 	IntervalMs   int64  `json:"interval_ms"`
 	MinGwei      uint64 `json:"min_gwei"`
 	IncreaseGwei uint64 `json:"increase_gwei"`
-	SubsidyGwei  uint64 `json:"subsidy_gwei"`
+	SubsidyGwei  int64  `json:"subsidy_gwei"` // negative = margin
 
 	// ValueGwei, when set, is the absolute bid base value replacing the
 	// max(blockValue, min) + subsidy formula (IncreaseGwei still applies).
@@ -197,7 +197,7 @@ const maxKeysPerStep = 1024
 // ResolvedBuilderAPISettings are the effective Builder API bid-serving
 // parameters for the slot.
 type ResolvedBuilderAPISettings struct {
-	SubsidyGwei uint64 `json:"subsidy_gwei"`
+	SubsidyGwei int64 `json:"subsidy_gwei"` // negative = margin (Gloas only)
 
 	// TotalValueGwei, when set, is the absolute total proposer-visible bid
 	// value (before the Gloas execution-payment split).

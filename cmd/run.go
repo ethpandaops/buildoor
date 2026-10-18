@@ -262,10 +262,13 @@ and begins building blocks according to configuration.`,
 		// registration memstore and registers the pre-Gloas settings resolver.
 		logger.Info("Initializing builder service...")
 
-		// Get fee recipient from wallet or use default address
-		feeRecipient := common.HexToAddress("0x8943545177806ED17B9F23F0a21ee5948eCaa776")
+		// The builder's own fee recipient: Gloas payloads collect their block
+		// value there while the bid pays the proposer through the CL.
+		var feeRecipient common.Address
 		if w != nil {
 			feeRecipient = w.Address()
+		} else {
+			logger.Warn("No wallet configured: Gloas payloads pay their block value to the proposer on top of the bid")
 		}
 
 		// Validator registration store when Builder API is available (port > 0):

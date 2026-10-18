@@ -60,8 +60,9 @@ export const BID_FIELDS: FieldDef[] = [
     key: 'bid_min_amount', label: 'Bid Min', unit: 'gwei',
     hint: (
       <>
-        Floor of the bid base: <code>max(block value, min) + subsidy</code>. Ignored when a Bid Value
-        Override applies.
+        Floor of the bid: <code>max(block value, min) + subsidy</code>, or{' '}
+        <code>max(block value + subsidy, min)</code> with a negative subsidy. Ignored when a Bid
+        Value Override applies.
       </>
     ),
   },
@@ -83,7 +84,8 @@ export const BID_FIELDS: FieldDef[] = [
     hint: (
       <>
         Added <strong>on top of</strong> <code>max(block value, min)</code>, so it outbids competitors
-        whatever the block is worth. Ignored when a Bid Value Override applies.
+        whatever the block is worth. A negative value is the margin kept from the block value (the
+        bid never drops below Bid Min). Ignored when a Bid Value Override applies.
       </>
     ),
   },
@@ -124,7 +126,8 @@ export const BUILDER_API_FIELDS: FieldDef[] = [
     hint: (
       <>
         Added to the block value of bids served to proposers; replaces the global Builder API subsidy
-        for this slot. Ignored when a Total Value Override applies.
+        for this slot. A negative value is the margin kept from the block value (Gloas only). Ignored
+        when a Total Value Override applies.
       </>
     ),
   },

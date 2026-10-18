@@ -9,10 +9,12 @@ export function formatEventTime(timestamp: number): string {
 }
 
 export function formatGwei(gwei: number): string {
-  if (gwei >= 1000000000) {
-    return (gwei / 1000000000).toFixed(4) + ' ETH';
-  } else if (gwei >= 1000000) {
-    return (gwei / 1000000).toFixed(2) + 'M gwei';
+  const sign = gwei < 0 ? '-' : '';
+  const abs = Math.abs(gwei);
+  if (abs >= 1000000000) {
+    return sign + (abs / 1000000000).toFixed(4) + ' ETH';
+  } else if (abs >= 1000000) {
+    return sign + (abs / 1000000).toFixed(2) + 'M gwei';
   }
   return gwei + ' gwei';
 }

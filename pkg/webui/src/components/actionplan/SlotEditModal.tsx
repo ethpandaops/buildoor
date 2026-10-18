@@ -236,7 +236,7 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           <KV label="Min / Increase" hint={<>Min: floor of <code>max(block value, min) + subsidy</code>. Increase: added per earlier bid of the same payload.</>}>
             {formatGwei(frozen.bid.min_gwei)} / {formatGwei(frozen.bid.increase_gwei)}
           </KV>
-          <KV label="Subsidy" hint="Added on top of max(block value, min); unused when a value override is set.">
+          <KV label="Subsidy" hint="Added on top of max(block value, min); negative = the margin kept from the block value. Unused when a value override is set.">
             {formatGwei(frozen.bid.subsidy_gwei)}
           </KV>
           <KV label="Value Override" hint="Absolute bid base replacing max(block value, min) + subsidy; — = none, the formula applied.">{formatGwei(frozen.bid.value_gwei)}</KV>
@@ -272,7 +272,7 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
       </div>
       {frozen.builder_api ? (
         <div className="row g-2 mb-2">
-          <KV label="Subsidy" hint="Added to the block value of served bids; unused when a total value override is set.">
+          <KV label="Subsidy" hint="Added to the block value of served bids; negative = the margin kept from it (Gloas only). Unused when a total value override is set.">
             {formatGwei(frozen.builder_api.subsidy_gwei)}
           </KV>
           <KV label="Total Value Override" hint="Absolute total value served, replacing block value + subsidy; — = none.">

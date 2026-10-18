@@ -92,7 +92,7 @@ func Fields() []Field {
 		newField(KeyEPBSBidMinAmount, "epbs-bid-min", func(c *Config) *uint64 { return &c.EPBS.BidMinAmount }),
 		newField(KeyEPBSBidIncrease, "epbs-bid-increase", func(c *Config) *uint64 { return &c.EPBS.BidIncrease }),
 		newField(KeyEPBSBidInterval, "epbs-bid-interval", func(c *Config) *int64 { return &c.EPBS.BidInterval }),
-		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *uint64 { return &c.EPBS.BidSubsidy }),
+		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *int64 { return &c.EPBS.BidSubsidy }),
 		newField(KeyEPBSBidValueOverride, "epbs-bid-value-override", func(c *Config) *uint64 { return &c.EPBS.BidValueOverride }),
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
 		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
@@ -146,7 +146,7 @@ func Fields() []Field {
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
-		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
+		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *int64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
 		newField(KeyBuilderAPIExecutionPayment, "builder-api-execution-payment", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentGwei }),
 		newField(KeyBuilderAPIExecutionPaymentPct, "builder-api-execution-payment-percent", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentPercent }),

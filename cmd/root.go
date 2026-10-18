@@ -70,7 +70,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
-	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
+	rootCmd.PersistentFlags().Int64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the block value of served Builder API bids; negative = the builder's margin (Gloas only)")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment", defaults.BuilderAPI.ExecutionPaymentGwei, "Absolute portion in gwei of a served Gloas bid's total value claimed as execution_payment; the claim is unbacked and capped by the proposer's advertised max_execution_payment (0 = disabled, wins over the percent)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment-percent", defaults.BuilderAPI.ExecutionPaymentPercent, "Percentage (0-100) of a served Gloas bid's total value claimed as execution_payment (0 = disabled)")
@@ -107,7 +107,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
+	rootCmd.PersistentFlags().Int64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold; negative = the builder's margin")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
@@ -289,7 +289,7 @@ func initConfig(root *cobra.Command) error {
 		BuilderAPI: config.BuilderAPIConfig{
 			BuilderURL:              v.GetString("builder-api-url"),
 			RequireRequestAuth:      v.GetBool("builder-api-require-auth"),
-			BlockValueSubsidyGwei:   v.GetUint64("builder-api-subsidy"),
+			BlockValueSubsidyGwei:   v.GetInt64("builder-api-subsidy"),
 			ValueOverrideGwei:       v.GetUint64("builder-api-value-override"),
 			ExecutionPaymentGwei:    v.GetUint64("builder-api-execution-payment"),
 			ExecutionPaymentPercent: v.GetUint64("builder-api-execution-payment-percent"),
@@ -323,7 +323,7 @@ func initConfig(root *cobra.Command) error {
 			BidMinAmount:         v.GetUint64("epbs-bid-min"),
 			BidIncrease:          v.GetUint64("epbs-bid-increase"),
 			BidInterval:          v.GetInt64("epbs-bid-interval"),
-			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
+			BidSubsidy:           v.GetInt64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 			BidCandidate:         v.GetString("epbs-bid-candidate"),

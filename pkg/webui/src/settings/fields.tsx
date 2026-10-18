@@ -587,17 +587,18 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: 'Bid subsidy',
     kind: 'number',
     unit: 'gwei',
-    min: 0,
     zeroLabel: 'none',
-    hint: "Flat gwei added to every bid so it clears the proposer's local-EL threshold. 0 = bid the real block value.",
+    hint: "Flat gwei added to every bid so it clears the proposer's local-EL threshold; negative = the margin kept from the block value. 0 = bid the real block value.",
     inactiveWhen: (draft) =>
       num(draft, 'epbs.bid_value_override') > 0 ? 'Ignored while a bid value override is set.' : null,
     help: (
       <>
         Flat gwei added to every bid (<code>epbs.bid_subsidy</code>) so it clears the
         proposer&apos;s local-EL threshold; otherwise the beacon node self-builds when its local
-        block is worth more. 0 = bid the real block value. Ignored while a bid value override is
-        set.
+        block is worth more. 0 = bid the real block value. A negative value is the builder&apos;s
+        margin: the payload pays its block value to buildoor&apos;s wallet and the bid pays the
+        proposer the block value minus the margin, never below the minimum bid. Ignored while a
+        bid value override is set.
       </>
     ),
   },
@@ -897,16 +898,18 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     short: 'Subsidy',
     kind: 'number',
     unit: 'gwei',
-    min: 0,
     zeroLabel: 'none',
-    hint: 'Added to the block value of every served bid.',
+    hint: 'Added to the block value of every served bid; negative = the margin kept from it (Gloas only).',
     inactiveWhen: (draft) =>
       num(draft, 'builder_api.value_override_gwei') > 0 ? 'Ignored while a value override is set.' : null,
     help: (
       <>
         <code>builder_api.block_value_subsidy_gwei</code> (gwei), added on top of the block value of
         every served bid (pre-Gloas getHeader and Gloas getExecutionPayloadBid). 0 = bid the plain
-        block value. Per-slot action plans can override it.
+        block value. A negative value is the builder&apos;s margin on Gloas bids: the payload pays its
+        block value to buildoor&apos;s wallet and the bid pays the proposer the rest. Before Gloas the
+        payload pays the proposer directly, so a negative value serves the plain block value.
+        Per-slot action plans can override it.
       </>
     ),
   },

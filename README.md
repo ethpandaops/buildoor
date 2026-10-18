@@ -114,7 +114,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--el-engine-api` | *(required)* | Execution layer Engine API URL |
 | `--el-jwt-secret` | *(required)* | Path to JWT secret file |
 | `--el-rpc` | | Execution layer JSON-RPC URL (required for lifecycle) |
-| `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle) |
+| `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle); from Gloas its address is the coinbase of the built payloads |
 | `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `--config` | | Path to YAML config file |
 
@@ -123,7 +123,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--builder-api-enabled` | `false` | Enable the Builder API at startup |
-| `--builder-api-subsidy` | `100000` | Block value subsidy added to bids (Gwei) |
+| `--builder-api-subsidy` | `100000` | Block value subsidy added to served bids (Gwei; negative = the builder's margin on Gloas bids, ignored before Gloas) |
 
 ### ePBS Flags
 
@@ -136,6 +136,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--reveal-time` | `0` | Payload reveal time gate in ms relative to slot start (0 = auto: 5000 ms @12s) |
 | `--epbs-bid-min` | `1000000` | Minimum bid amount (Gwei) |
 | `--epbs-bid-increase` | `100000` | Bid increase per subsequent bid (Gwei) |
+| `--epbs-bid-subsidy` | `100000000` | Added to every bid (Gwei; negative = the builder's margin, the bid never drops below `--epbs-bid-min`) |
 | `--epbs-bid-interval` | `500` | Interval between bids in ms (0 = single bid) |
 
 ### Schedule Flags

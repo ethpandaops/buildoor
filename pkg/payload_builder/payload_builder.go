@@ -34,6 +34,8 @@ type PayloadBuilder struct {
 	localClient  LocalBuildClient // nil = local build unconfigured
 	txPool       *txpool.Pool     // nil = txpool source unavailable
 	chainSvc     chain.Service
+	// feeRecipient is the builder's own fee recipient (the wallet address,
+	// zero without a wallet).
 	feeRecipient common.Address
 
 	settingsResolvers []ProposerSettingsResolver // asked in order for proposer settings; first match wins
@@ -70,8 +72,9 @@ type activeBuild struct {
 
 // NewPayloadBuilder creates a new payload builder.
 // cfg is the shared config pointer; mutable settings (e.g. PayloadBuildTime) are read live from it.
-// settingsResolvers are asked in order for the proposer's announced fee recipient and gas
-// limit; the first match wins. localClient and txPool may be nil (local build
+// feeRecipient is the builder's own fee recipient (the wallet address, zero
+// without a wallet). settingsResolvers are asked in order for the proposer's
+// announced fee recipient and gas limit; the first match wins. localClient and txPool may be nil (local build
 // unconfigured / no pool).
 func NewPayloadBuilder(
 	clClient *beacon.Client,
@@ -102,12 +105,15 @@ func NewPayloadBuilder(
 // buildPrelude is everything both build paths share for one target: the fork,
 // the resolved proposer settings, the engine attributes and forkchoice state.
 type buildPrelude struct {
-	beaconFork     version.DataVersion
-	engineVersion  enginev.DataVersion
-	feeRecipient   common.Address
-	targetGasLimit uint64
-	payloadAttrs   *engineall.PayloadAttributes
-	fcState        *paris.ForkchoiceState
+	beaconFork    version.DataVersion
+	engineVersion enginev.DataVersion
+	// feeRecipient is the payload's coinbase; proposerFeeRecipient the
+	// proposer's resolved fee recipient (see payloadCoinbase).
+	feeRecipient         common.Address
+	proposerFeeRecipient common.Address
+	targetGasLimit       uint64
+	payloadAttrs         *engineall.PayloadAttributes
+	fcState              *paris.ForkchoiceState
 }
 
 // localOutcome is the local build goroutine's result.
@@ -427,52 +433,8 @@ func (b *PayloadBuilder) prepareBuild(
 		finalityInfo = fetched
 	}
 
-	// Resolve the fee recipient (and target gas limit) for the build. The
-	// registered resolvers are asked in order (each self-scoped to its fork /
-	// data source: gossip preferences post-Gloas, validator registrations
-	// pre-Gloas); the first match wins.
-	// Post-Gloas fallbacks: TargetGasLimit / SuggestedFeeRecipient from the
-	//                       payload_attributes event.
-	// Final fallback:       the builder's configured fee recipient.
-	proposerFeeRecipient := b.feeRecipient
-	var targetGasLimit uint64
-
-	for _, resolver := range b.settingsResolvers {
-		settings, ok := resolver.ResolveProposerSettings(attrs.ProposalSlot, attrs.ProposerIndex)
-		if !ok {
-			continue
-		}
-
-		proposerFeeRecipient = settings.FeeRecipient
-		targetGasLimit = settings.TargetGasLimit
-
-		b.log.WithFields(logrus.Fields{
-			"proposer_index":   attrs.ProposerIndex,
-			"fee_recipient":    proposerFeeRecipient.Hex(),
-			"target_gas_limit": targetGasLimit,
-		}).Debug("Using proposer settings from resolver")
-
-		break
-	}
-
-	if beaconFork >= version.DataVersionGloas {
-		if targetGasLimit == 0 {
-			targetGasLimit = attrs.TargetGasLimit
-		}
-
-		// If we still have the default fee recipient, use SuggestedFeeRecipient from
-		// payload_attributes. This ensures bids match the proposer's expected fee
-		// recipient even when preferences aren't received via SSE (e.g. same-node
-		// P2P broadcast doesn't loop back).
-		if proposerFeeRecipient == b.feeRecipient && attrs.SuggestedFeeRecipient != (common.Address{}) {
-			proposerFeeRecipient = attrs.SuggestedFeeRecipient
-			b.log.WithFields(logrus.Fields{
-				"slot":           attrs.ProposalSlot,
-				"proposer_index": attrs.ProposerIndex,
-				"fee_recipient":  proposerFeeRecipient.Hex(),
-			}).Debug("Using suggested fee recipient from payload_attributes")
-		}
-	}
+	proposerFeeRecipient, targetGasLimit := b.resolveProposerSettings(attrs, beaconFork)
+	coinbase := b.payloadCoinbase(beaconFork, proposerFeeRecipient)
 
 	// Build the fork-agnostic payload attributes and forkchoice state. The
 	// engine client dispatches to the correct engine_forkchoiceUpdated version.
@@ -480,7 +442,7 @@ func (b *PayloadBuilder) prepareBuild(
 		Version:               engineVersion,
 		Timestamp:             attrs.Timestamp,
 		PrevRandao:            paris.Hash32(attrs.PrevRandao),
-		SuggestedFeeRecipient: paris.Address(proposerFeeRecipient),
+		SuggestedFeeRecipient: paris.Address(coinbase),
 		Withdrawals:           convertWithdrawalsToEngineFormat(attrs.Withdrawals),
 		ParentBeaconBlockRoot: paris.Hash32(attrs.ParentBeaconBlockRoot),
 		SlotNumber:            uint64(attrs.ProposalSlot),
@@ -495,17 +457,83 @@ func (b *PayloadBuilder) prepareBuild(
 	}
 
 	return &buildPrelude{
-		beaconFork:     beaconFork,
-		engineVersion:  engineVersion,
-		feeRecipient:   proposerFeeRecipient,
-		targetGasLimit: targetGasLimit,
-		payloadAttrs:   payloadAttrs,
+		beaconFork:           beaconFork,
+		engineVersion:        engineVersion,
+		feeRecipient:         coinbase,
+		proposerFeeRecipient: proposerFeeRecipient,
+		targetGasLimit:       targetGasLimit,
+		payloadAttrs:         payloadAttrs,
 		fcState: &paris.ForkchoiceState{
 			HeadBlockHash:      paris.Hash32(attrs.ParentBlockHash),
 			SafeBlockHash:      paris.Hash32(finalityInfo.SafeExecutionBlockHash),
 			FinalizedBlockHash: paris.Hash32(finalityInfo.FinalizedExecutionBlockHash),
 		},
 	}, nil
+}
+
+// resolveProposerSettings resolves the proposer's fee recipient and target gas
+// limit for a build. The registered resolvers are asked in order (each
+// self-scoped to its fork / data source: gossip preferences post-Gloas,
+// validator registrations pre-Gloas); the first match wins.
+// Without a match the payload_attributes event fills in: its
+// SuggestedFeeRecipient (any fork) and, post-Gloas, its TargetGasLimit, so
+// bids match the proposer's expected fee recipient even when its preferences
+// never reached us (a same-node p2p broadcast does not loop back).
+// Final fallback: the builder's own fee recipient.
+func (b *PayloadBuilder) resolveProposerSettings(
+	attrs *beacon.PayloadAttributesEvent, beaconFork version.DataVersion,
+) (common.Address, uint64) {
+	for _, resolver := range b.settingsResolvers {
+		settings, ok := resolver.ResolveProposerSettings(attrs.ProposalSlot, attrs.ProposerIndex)
+		if !ok {
+			continue
+		}
+
+		b.log.WithFields(logrus.Fields{
+			"proposer_index":   attrs.ProposerIndex,
+			"fee_recipient":    settings.FeeRecipient.Hex(),
+			"target_gas_limit": settings.TargetGasLimit,
+		}).Debug("Using proposer settings from resolver")
+
+		targetGasLimit := settings.TargetGasLimit
+		if targetGasLimit == 0 && beaconFork >= version.DataVersionGloas {
+			targetGasLimit = attrs.TargetGasLimit
+		}
+
+		return settings.FeeRecipient, targetGasLimit
+	}
+
+	var targetGasLimit uint64
+	if beaconFork >= version.DataVersionGloas {
+		targetGasLimit = attrs.TargetGasLimit
+	}
+
+	if attrs.SuggestedFeeRecipient == (common.Address{}) {
+		return b.feeRecipient, targetGasLimit
+	}
+
+	b.log.WithFields(logrus.Fields{
+		"slot":           attrs.ProposalSlot,
+		"proposer_index": attrs.ProposerIndex,
+		"fee_recipient":  attrs.SuggestedFeeRecipient.Hex(),
+	}).Debug("Using suggested fee recipient from payload_attributes")
+
+	return attrs.SuggestedFeeRecipient, targetGasLimit
+}
+
+// payloadCoinbase returns the fee recipient the payload is built for. From
+// Gloas on the proposer is paid the bid value through the CL, so the block
+// value belongs to the builder: the payload pays its own wallet. Before Gloas
+// the block value IS the proposer's payment, and without a wallet there is no
+// own address to build for.
+func (b *PayloadBuilder) payloadCoinbase(
+	beaconFork version.DataVersion, proposerFeeRecipient common.Address,
+) common.Address {
+	if beaconFork >= version.DataVersionGloas && b.feeRecipient != (common.Address{}) {
+		return b.feeRecipient
+	}
+
+	return proposerFeeRecipient
 }
 
 // forkchoiceUpdated pins the EL head to the build parent; with attributes it
@@ -995,14 +1023,15 @@ func (b *PayloadBuilder) finalizePayload(
 	}
 
 	return &Payload{
-		Attributes:        attrs,
-		ExecutionPayload:  beaconPayload,
-		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),
-		ExecutionRequests: execRequests,
-		BlockHash:         phase0.Hash32(newHash),
-		FeeRecipient:      prelude.feeRecipient,
-		BlockValue:        blockValue,
-		ReadyAt:           time.Now(),
+		Attributes:           attrs,
+		ExecutionPayload:     beaconPayload,
+		BlobsBundle:          beaconBlobsBundleFromEngine(resp.BlobsBundle),
+		ExecutionRequests:    execRequests,
+		BlockHash:            phase0.Hash32(newHash),
+		FeeRecipient:         prelude.feeRecipient,
+		ProposerFeeRecipient: prelude.proposerFeeRecipient,
+		BlockValue:           blockValue,
+		ReadyAt:              time.Now(),
 	}, nil
 }
 

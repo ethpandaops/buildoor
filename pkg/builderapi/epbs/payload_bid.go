@@ -276,10 +276,11 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	//
 	// Value resolution per the frozen settings: an absolute total value (when
 	// set) replaces blockValue+subsidy entirely — before the execution-payment
-	// split; otherwise the (possibly per-slot overridden) subsidy is added to
-	// the block value.
+	// split; otherwise the (possibly per-slot overridden) subsidy is applied to
+	// the block value (negative = the builder's margin, kept from the block
+	// value the payload's own coinbase collects).
 	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + frozenSettings.SubsidyGwei)
+	valueAfterSubsidy := phase0.Gwei(payload_bidder.ApplySubsidyGwei(blockValueGwei, frozenSettings.SubsidyGwei))
 
 	if frozenSettings.TotalValueGwei != nil {
 		valueAfterSubsidy = phase0.Gwei(*frozenSettings.TotalValueGwei)

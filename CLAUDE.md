@@ -386,6 +386,13 @@ npm run clean
      reason, build start time; reports `OnSlotBuilt` back for next_n accounting
      (plan-forced builds don't consume the budget)
    - Calls Engine API to construct execution payloads (forkchoiceUpdated → getPayload)
+   - Fee recipients: the proposer's is resolved per build (gossip preferences
+     post-Gloas, Builder API registrations pre-Gloas, else the
+     `payload_attributes` suggestion) and lands on `Payload.ProposerFeeRecipient`
+     (= `bid.fee_recipient`, where the CL pays the bid value). From Gloas the
+     payload's coinbase (`Payload.FeeRecipient`) is buildoor's wallet, which
+     collects the block value; before Gloas, or without a wallet, the payload
+     pays the proposer directly
    - Emits `PayloadReadyEvent` to subscribers; plan-involved skips fire
      `BuildSkippedEvent` (deduped per slot) for the slot results tracker
    - **Missing-block fallback** (`applyAttributesFallback`): when no attributes
@@ -736,6 +743,11 @@ Key config sections:
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
+  `--epbs-bid-subsidy` / `--builder-api-subsidy` (SIGNED gwei: positive pads
+  the bid over the block value, negative is the builder's margin kept from it
+  — p2p `max(blockValue + subsidy, bid_min)`, Gloas Builder API floored at 0,
+  pre-Gloas getHeader ignores a negative value because its payload pays the
+  proposer directly; shared math in `payload_bidder.ApplySubsidyGwei`),
   `--epbs-bid-value-override` (absolute p2p bid base, 0 = off),
   `--epbs-vote-threshold` (head-vote participation threshold in percent,
   default 60, 0 = off),

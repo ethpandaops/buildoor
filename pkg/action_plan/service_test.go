@@ -305,11 +305,11 @@ func TestFreezeSnapshotsGlobalsAtFreezeTime(t *testing.T) {
 	svc := newTestService(chainSvc, cfg)
 
 	frozen := svc.Freeze(8000)
-	require.Equal(t, uint64(111), frozen.Bid.SubsidyGwei)
+	require.Equal(t, int64(111), frozen.Bid.SubsidyGwei)
 
 	// A later global change must not rewrite the frozen snapshot.
 	cfg.EPBS.BidSubsidy = 222
-	require.Equal(t, uint64(111), svc.Freeze(8000).Bid.SubsidyGwei)
+	require.Equal(t, int64(111), svc.Freeze(8000).Bid.SubsidyGwei)
 }
 
 func TestFreezeRevealSuppressionAndCustomTiming(t *testing.T) {

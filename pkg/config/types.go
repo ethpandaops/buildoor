@@ -174,10 +174,13 @@ type BuilderAPIConfig struct {
 	// is always fully validated.
 	RequireRequestAuth bool `yaml:"require_request_auth" json:"require_request_auth"`
 
-	// BlockValueSubsidyGwei is added to the bid value so the proposer sees a higher bid:
-	// to the getHeader bid value in the Fulu Builder API, and to the block value that
-	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
-	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+	// BlockValueSubsidyGwei is added to the block value of every served bid: the
+	// getHeader bid value before Gloas, the total that forms
+	// bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls. Negative
+	// = the builder's margin, kept from the block value its own coinbase
+	// collects (Gloas only; a pre-Gloas bid never drops below the block value,
+	// which is the proposer's whole payment there).
+	BlockValueSubsidyGwei int64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 
 	// ValueOverrideGwei, when non-zero, replaces the served bid's total value
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
@@ -278,8 +281,10 @@ type EPBSConfig struct {
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
 
 	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
-	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
-	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
+	// local-EL threshold (the BN otherwise self-builds when its local EL value is
+	// higher). Negative = the builder's margin, kept from the block value its
+	// own coinbase collects; BidMinAmount stays the floor.
+	BidSubsidy int64 `yaml:"bid_subsidy" json:"bid_subsidy"`
 
 	// BidValueOverride, when non-zero, replaces the bid base value
 	// (max(blockValue, BidMinAmount) + BidSubsidy) with this absolute amount in

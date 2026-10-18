@@ -398,6 +398,18 @@ func TestHandleGetExecutionPayloadBid_PlanValueResolution(t *testing.T) {
 			wantBidValueGwei: 2500, // 2000 block value + 500 subsidy
 			wantTotalGwei:    2500,
 		},
+		{
+			name:             "negative per-slot subsidy keeps a margin",
+			planJSON:         `{"mode":"custom","value_subsidy_gwei":-500}`,
+			wantBidValueGwei: 1500, // 2000 block value - 500 margin
+			wantTotalGwei:    1500,
+		},
+		{
+			name:             "margin above the block value bids zero",
+			planJSON:         `{"mode":"custom","value_subsidy_gwei":-5000}`,
+			wantBidValueGwei: 0,
+			wantTotalGwei:    0,
+		},
 	}
 
 	for _, test := range tests {
