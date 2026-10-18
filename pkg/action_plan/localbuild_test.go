@@ -27,7 +27,6 @@ func TestResolveLocalBuildInheritsGlobal(t *testing.T) {
 	require.True(t, local.Enabled)
 	require.Equal(t, config.PayloadSourceLocalOrEL, local.PayloadSource)
 	require.Equal(t, config.TxSourceTxPool, local.TxSource)
-	require.True(t, local.BuildELPayload)
 	require.Equal(t, uint64(7), local.MaxTxs)
 	require.Equal(t, uint64(50), local.GasFillPct)
 	require.Equal(t, config.TxOrderingTip, local.Ordering)
@@ -53,7 +52,6 @@ func TestResolveLocalBuildPlanOverrides(t *testing.T) {
 	require.Equal(t, config.PayloadSourceLocal, local.PayloadSource)
 	require.Equal(t, config.TxSourceExplicit, local.TxSource, "a transaction list implies the explicit source")
 	require.Equal(t, []string{"0x01"}, local.Transactions)
-	require.False(t, local.BuildELPayload)
 	require.Equal(t, uint64(3), local.MaxTxs)
 	require.Equal(t, uint64(100), local.GasFillPct)
 	require.Equal(t, config.TxOrderingRandom, local.Ordering)
@@ -128,4 +126,19 @@ func TestBuildPlanIsZeroWithLocal(t *testing.T) {
 	clone := plan.clone()
 	clone.Local.Transactions[0] = "0x02"
 	require.Equal(t, "0x01", plan.Local.Transactions[0])
+}
+
+func TestResolveEngineEnabled(t *testing.T) {
+	cfg := config.DefaultConfig()
+	require.True(t, cfg.Build.EngineEnabled, "the engine builder is on by default")
+
+	frozen := &FrozenPlan{Slot: 10}
+	require.True(t, resolveBuild(frozen, cfg, 0).EngineEnabled)
+
+	cfg.Build.EngineEnabled = false
+	require.False(t, resolveBuild(frozen, cfg, 0).EngineEnabled)
+
+	// A slot plan turns it back on for its slot.
+	frozen.Plan = &SlotPlan{Build: &BuildPlan{Local: &LocalBuildPlan{BuildELPayload: boolPtr(true)}}}
+	require.True(t, resolveBuild(frozen, cfg, 0).EngineEnabled)
 }

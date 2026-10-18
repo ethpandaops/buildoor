@@ -6,6 +6,7 @@ import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
+import { engineBuildRan, testingRuns } from './slotGraphBuilds';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -198,10 +199,14 @@ const buildHeadVotesPaths = (
 };
 
 
+// Height of the build and bid window strips: as tall as their lines' dots.
+const WINDOW_STRIP_HEIGHT = 12;
+
 // One fixed color per build-parent candidate key, consistent across the UI
-// (parent_full keeps the classic build color).
+// (parent_full is the engine build's blue, apart from the testing builds'
+// cyan).
 const CANDIDATE_COLORS: Record<string, string> = {
-  parent_full: '#61e392',
+  parent_full: '#4d8dff',
   parent_empty: '#e6a23c',
   grandparent_full: '#a78bfa',
   grandparent_empty: '#8a8f98'
@@ -416,9 +421,36 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   const pct75X = calculatePosition(slotDuration * 0.75, rangeStart, totalRange);
   const slotEndX = calculatePosition(slotDuration, rangeStart, totalRange);
 
+  // The engine lane (build line + payload dot) only exists when the target ran
+  // the engine-API build; the testing lane is drawn from its own builds.
+  const engineRan = engineBuildRan(state);
+
+  // Build windows: the engine build collects transactions from its start for
+  // payload_build_time; the testing builds have their own window.
+  const engineWindowMs = epbsConfig && config?.build?.engine_enabled !== false &&
+    typeof (config as unknown as Record<string, unknown>)?.payload_build_time === 'number'
+    ? [epbsConfig.build_start_time, epbsConfig.build_start_time + ((config as unknown as Record<string, number>).payload_build_time)]
+    : null;
+  const localConfig = config?.local_build;
+  const testingWindowMs = localConfig?.enabled && localConfig.start_time_ms !== undefined && localConfig.end_time_ms !== undefined
+    ? [localConfig.start_time_ms, localConfig.end_time_ms]
+    : null;
+  const windowBand = (window: number[] | null) => {
+    if (!window) return null;
+    const left = calculatePosition(window[0], rangeStart, totalRange);
+    const right = calculatePosition(window[1], rangeStart, totalRange);
+    if (left >= 100 || right <= 0 || right <= left) return null;
+    return { left: Math.max(0, left), width: Math.min(100, right) - Math.max(0, left) };
+  };
+  const engineBand = windowBand(engineWindowMs);
+  const testingBand = windowBand(testingWindowMs);
+
   // Bid window and reveal marker
   const bidStartX = epbsConfig ? calculatePosition(epbsConfig.bid_start_time, rangeStart, totalRange) : 0;
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
+  // Builder API response gate (timing game): bid responses are held until it.
+  const respondAtMs = config?.builder_api?.respond_at_ms ?? 0;
+  const respondGateX = respondAtMs !== 0 ? calculatePosition(respondAtMs, rangeStart, totalRange) : -1;
   // The reveal marker shows the time gate; a pure vote-gated reveal has no
   // fixed time to mark.
   const revealConfig = config?.reveal;
@@ -486,6 +518,37 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
     );
   };
 
+  // A bid request (getHeader / getExecutionPayloadBid): a line from the
+  // request to our response (growing live while the response is held, e.g.
+  // by the response gate), the green dot where we responded; an unanswered
+  // request keeps its amber dot at the request.
+  const renderHeldCall = (receivedAt: number, deliveredAt: number | undefined, data: PopoverData, key: string) => {
+    const startX = calculatePosition(receivedAt - slotStartTime, rangeStart, totalRange);
+    const heldMs = deliveredAt ? deliveredAt - receivedAt : undefined;
+    const holdCap = respondAtMs !== 0 ? slotStartTime + respondAtMs + 500 : receivedAt + 2000;
+
+    return (
+      <React.Fragment key={key}>
+        {startX < 100 && (heldMs === undefined || heldMs > 0) && (
+          <BuildDelayLine
+            className="builder-api-call-line"
+            leftPct={startX}
+            slotStartTime={slotStartTime}
+            rangeStart={rangeStart}
+            totalRange={totalRange}
+            endAt={deliveredAt}
+            endGapPx={6}
+            expectedEndAt={Math.max(holdCap, receivedAt + 200)}
+            onClick={(e) => showPopover(e, data)}
+          />
+        )}
+        {deliveredAt
+          ? renderEventDot('builder-api-call delivered', deliveredAt - slotStartTime, data, `${key}-delivered`)
+          : renderEventDot('builder-api-call pending', receivedAt - slotStartTime, data, `${key}-pending`)}
+      </React.Fragment>
+    );
+  };
+
   return (
     <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
       <div className="slot-graph-label">
@@ -522,20 +585,48 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             <span className="marker-label">100%</span>
           </div>
 
+          {/* Build windows - a strip around each build line in the chain row,
+              tall enough for the line's dot: the engine line runs through the
+              row's middle, the testing builds' line below it. */}
+          {engineBand && engineWindowMs && (
+            <div
+              className="build-window-bg build-window-engine"
+              style={{ left: `${engineBand.left}%`, width: `${engineBand.width}%`, bottom: `${chainRowBottom + 8}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Engine build: ${engineWindowMs[0]} – ${engineWindowMs[1]} ms`}>engine</span>
+            </div>
+          )}
+          {testingBand && testingWindowMs && (
+            <div
+              className="build-window-bg build-window-testing"
+              style={{ left: `${testingBand.left}%`, width: `${testingBand.width}%`, bottom: `${chainRowBottom - 4}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Testing builds: ${testingWindowMs[0]} – ${testingWindowMs[1]} ms`}>testing</span>
+            </div>
+          )}
+
           {/* Bid window - spans ePBS row only */}
           {epbsActive && epbsRowBottom >= 0 && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
-                bottom: `${epbsRowBottom}px`,
-                height: `${ROW_HEIGHT}px`,
+                bottom: `${epbsRowBottom + (ROW_HEIGHT - WINDOW_STRIP_HEIGHT) / 2}px`,
+                height: `${WINDOW_STRIP_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
               }}
             >
-              <span className="duty-label bid-label">
-                Bid: {epbsConfig.bid_start_time} - {epbsConfig.bid_end_time}ms
-              </span>
+              <span className="duty-label bid-label" title={`Bid window: ${epbsConfig.bid_start_time} – ${epbsConfig.bid_end_time} ms`}>bid</span>
+            </div>
+          )}
+
+          {/* Builder API response gate - spans the Builder API row only */}
+          {builderApiActive && builderApiRowBottom >= 0 && respondGateX >= 0 && respondGateX <= 100 && (
+            <div
+              className="respond-gate-marker"
+              style={{ bottom: `${builderApiRowBottom}px`, height: `${ROW_HEIGHT}px`, left: `${respondGateX}%` }}
+            >
+              <span className="duty-label respond-gate-label" title={`Builder API responses held until ${respondAtMs} ms`}>respond</span>
             </div>
           )}
 
@@ -699,21 +790,42 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
           {/* Build delay line: from build start to payload ready (animates live while building).
               On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
-          {epbsConfig && buildActive && !buildFailed && genesisTime > 0 && buildStartX < 100 && (
+          {epbsConfig && buildActive && !buildFailed && engineRan && genesisTime > 0 && buildStartX < 100 && (
             <BuildDelayLine
               leftPct={buildStartX}
               slotStartTime={slotStartTime}
               rangeStart={rangeStart}
               totalRange={totalRange}
               endAt={buildEndAt}
+              endGapPx={6}
               expectedEndAt={expectedBuildEndAt}
               lineColor={candidateColor(primaryCandidate)}
+              dashed
+              calls={state.payloadEngineCalls
+                ? [
+                    { start: state.payloadEngineCalls.fcu_start, end: state.payloadEngineCalls.fcu_end },
+                    { start: state.payloadEngineCalls.get_payload_start, end: state.payloadEngineCalls.get_payload_end }
+                  ]
+                : undefined}
               onClick={(e) => showPopover(e, {
-                title: `Build Delay${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
+                title: `Engine Build${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
                 items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
+                      ...(state.payloadEngineCalls
+                        ? (() => {
+                            const calls = state.payloadEngineCalls;
+                            return [
+                              { label: 'forkchoiceUpdated', value: `${calls.fcu_start - slotStartTime}ms, took ${calls.fcu_end - calls.fcu_start}ms` },
+                              { label: 'EL building', value: `${calls.get_payload_start - calls.fcu_end}ms (waiting for getPayload)` },
+                              { label: 'getPayload', value: `${calls.get_payload_start - slotStartTime}ms, took ${calls.get_payload_end - calls.get_payload_start}ms` }
+                            ];
+                          })()
+                        : []),
                       { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                      ...(state.payloadUpgrades && state.payloadUpgradedAt
+                        ? [{ label: 'Upgraded', value: `${state.payloadUpgrades}× by testing builds, latest at ${state.payloadUpgradedAt - slotStartTime}ms` }]
+                        : []),
                       { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
                     ]
                   : [
@@ -725,137 +837,35 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           )}
 
 
-          {/* Testing build, live: from its start until the final local_build event (which
-              waits for the engine build and the bid choice) takes over below. */}
-          {(() => {
-            const live = state.localBuildLive;
-            if (!live || state.localBuild || genesisTime <= 0 || !epbsConfig) return null;
-
-            const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
+          {/* Testing lane: every testing build of the primary target, the handed-over one
+              highlighted (green ring when it feeds the bids), the others dimmed. */}
+          {genesisTime > 0 && epbsConfig && testingRuns(state, slot, slotStartTime).map((run) => {
+            const startX = calculatePosition(run.startedAt - slotStartTime, rangeStart, totalRange);
             if (startX >= 100) return null;
-
-            const items = [
-              { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
-              ...(live.phase === 'building'
-                ? [{ label: 'Status', value: 'building…' }]
-                : [
-                    {
-                      label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
-                      value: `${live.at - slotStartTime}ms`
-                    },
-                    { label: 'Duration', value: `${live.at - live.started_at}ms` },
-                    { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
-                  ]),
-              ...(live.error ? [{ label: 'Error', value: live.error }] : []),
-              { label: 'Tx Source', value: live.tx_source || '—' },
-              ...(live.phase === 'ready'
-                ? [
-                    { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
-                    { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
-                    { label: 'Bids With', value: 'decided once the engine build finishes' }
-                  ]
-                : [])
-            ];
-            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
-            const dotClass = live.phase === 'ready'
-              ? 'local-build-created'
-              : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+            const other = run.dimmed ? ' local-build-run-other' : '';
+            const dotClass = run.status === 'ready'
+              ? `local-build-created${run.selected ? ' local-build-selected' : ''}`
+              : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
             return (
-              <>
-                {live.phase !== 'skipped' && (
+              <React.Fragment key={`local-build-${run.run}`}>
+                {run.status !== 'skipped' && (
                   <BuildDelayLine
                     leftPct={startX}
                     slotStartTime={slotStartTime}
                     rangeStart={rangeStart}
                     totalRange={totalRange}
-                    endAt={live.phase === 'building' ? undefined : live.at}
-                    className="local-build-line"
-                    onClick={(e) => showPopover(e, data)}
+                    endGapPx={4}
+                    endAt={run.endAt}
+                    className={`local-build-line${other}`}
+                    onClick={(e) => showPopover(e, run.data)}
                   />
                 )}
-                {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, 'local-build')}
-              </>
+                {run.endAt !== undefined &&
+                  renderEventDot(`${dotClass}${other}`, run.endAt - slotStartTime, run.data, `local-build-dot-${run.run}`)}
+              </React.Fragment>
             );
-          })()}
-
-          {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
-              line. Shown when it ran next to an engine build (two distinct builds) or when it
-              did not produce a payload; a local-only build is already the primary line. */}
-          {(() => {
-            const lb = state.localBuild;
-            if (!lb || genesisTime <= 0 || !epbsConfig) return null;
-            if (lb.status === 'ready' && !lb.el) return null;
-
-            const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
-            // The testing build may start after the engine build (start delay).
-            const localStartMs = lb.started_at ? lb.started_at - slotStartTime : buildStartMs;
-            const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
-            const items = [
-              { label: 'Build Start', value: `${localStartMs}ms` },
-              ...(localStartMs !== buildStartMs
-                ? [{ label: 'Start Delay', value: `${localStartMs - buildStartMs}ms after the engine build` }]
-                : []),
-              ...(lb.status === 'ready' && lb.built_at
-                ? [
-                    { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },
-                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - localStartMs}ms` }
-                  ]
-                : [{ label: lb.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${lb.at - slotStartTime}ms` }]),
-              { label: 'Status', value: `${lb.status}${lb.skip_reason ? ` (${lb.skip_reason})` : ''}` },
-              ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
-              { label: 'Tx Source', value: lb.tx_source || '—' },
-              { label: 'Payload Source', value: lb.payload_source || '—' },
-              { label: 'Bids With', value: lb.selected
-                ? (lb.payload_source === 'higher_value' ? 'custom block (worth more)' : 'custom block')
-                : lb.fallback ? 'engine block (fallback)'
-                  : lb.payload_source === 'higher_value' ? 'engine block (worth at least as much)'
-                    : 'engine block (custom is compare-only)' },
-              ...(lb.local ? [
-                { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
-                { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },
-                { label: 'Contents', value: `${lb.local.num_transactions} txs, ${lb.local.num_blobs} blobs` },
-                { label: 'Gas', value: `${lb.local.gas_used.toLocaleString()} / ${lb.local.gas_limit.toLocaleString()}` }
-              ] : []),
-              ...(lb.info?.selection ? [
-                { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
-                ...(lb.info.selection.fill_candidates
-                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : ''}` }]
-                  : []),
-                ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
-                  ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
-                  : [])
-              ] : []),
-              ...(lb.info?.fill_error ? [{ label: 'EL Mempool', value: `unreadable: ${lb.info.fill_error}` }] : []),
-              ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
-              ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
-              ...(lb.el ? [
-                { label: 'Engine Block Hash', value: truncateHash(lb.el.block_hash), copyValue: lb.el.block_hash },
-                { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
-              ] : [])
-            ];
-            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
-            const dotClass = lb.status === 'ready'
-              ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
-              : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
-
-            return (
-              <>
-                {lb.status === 'ready' && localStartX < 100 && (
-                  <BuildDelayLine
-                    leftPct={localStartX}
-                    slotStartTime={slotStartTime}
-                    rangeStart={rangeStart}
-                    totalRange={totalRange}
-                    endAt={endAt}
-                    className="local-build-line"
-                    onClick={(e) => showPopover(e, data)}
-                  />
-                )}
-                {renderEventDot(dotClass, endAt - slotStartTime, data, 'local-build')}
-              </>
-            );
-          })()}
+          })}
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
@@ -924,7 +934,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           ))}
 
           {/* Payload created — one tab per built candidate payload */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+          {state.payloadCreatedAt && engineRan && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
@@ -1392,16 +1402,19 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                 the popover names the call and carries both timestamps. */}
 
             {/* getHeader (Fulu) */}
-            {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getHeaderDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getHeaderReceivedAt - slotStartTime,
+            {state.getHeaderReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getHeaderReceivedAt,
+              state.getHeaderDeliveredAt,
               {
                 title: 'getHeader (Fulu)',
                 items: [
                   { label: 'Received', value: `${state.getHeaderReceivedAt - slotStartTime}ms` },
-                  state.getHeaderDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getHeaderDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getHeaderDeliveredAt - state.getHeaderReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getHeaderBlockValue ? [{
                     label: 'Block Value',
                     value: state.getHeaderBlockValue + ' wei'
@@ -1439,16 +1452,19 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             )}
 
             {/* getExecutionPayloadBid (Gloas) */}
-            {state.getBidReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getBidDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getBidReceivedAt - slotStartTime,
+            {state.getBidReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getBidReceivedAt,
+              state.getBidDeliveredAt,
               {
                 title: 'getExecutionPayloadBid (Gloas)',
                 items: [
                   { label: 'Received', value: `${state.getBidReceivedAt - slotStartTime}ms` },
-                  state.getBidDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getBidDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getBidDeliveredAt - state.getBidReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getBidBlockValue ? [{
                     label: 'Bid Value',
                     value: state.getBidBlockValue + ' gwei'

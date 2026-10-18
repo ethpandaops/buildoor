@@ -10,7 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -69,9 +68,6 @@ type LocalBuildClient interface {
 	) (*engineall.GetPayloadResponse, error)
 	ProbeTestingAPI(ctx context.Context) execution.TestingAPIStatus
 	ClientVersion(ctx context.Context) (string, error)
-	// PendingPoolTransactions reads the EL mempool for the txpool_el_fill
-	// source.
-	PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error)
 }
 
 var _ LocalBuildClient = (*execution.Client)(nil)
@@ -91,9 +87,10 @@ type LocalBuildRequest struct {
 	// PayloadSource decides which payload feeds consumers: el, local,
 	// local_or_el or higher_value.
 	PayloadSource string
-	// BuildELPayload keeps the engine build running when PayloadSource is
-	// local.
-	BuildELPayload bool
+	// EngineEnabled runs the engine-API build next to the testing builds
+	// (the slot's build.engine_enabled). Without it the testing build alone
+	// feeds the consumers, whatever PayloadSource says.
+	EngineEnabled bool
 
 	// Pool selection tweaks (tx source txpool).
 	MaxTxs     uint64
@@ -111,20 +108,33 @@ type LocalBuildRequest struct {
 	MaxStrikes  uint64
 	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
 	BaseFeeCeilingGwei uint64
-	// StartDelay holds the testing call back after the engine build started,
-	// so transactions arriving meanwhile make it into the block.
-	StartDelay time.Duration
+	// StartMs / EndMs are the testing build window relative to the slot
+	// start; RebuildInterval the minimum gap of change-triggered rebuilds (0 =
+	// one build timed to the window end; see runLocalBuilds).
+	StartMs         int64
+	EndMs           int64
+	RebuildInterval time.Duration
 }
 
-// RunEL reports whether the engine-API build runs alongside the local build.
-// The el, local_or_el and higher_value payload sources need the engine
-// payload; local only keeps it when BuildELPayload is set.
+// RunEL reports whether the engine-API build runs alongside the local build
+// (a target without a local build only reaches the builder with the engine
+// build enabled).
 func (r *LocalBuildRequest) RunEL() bool {
-	if r == nil {
-		return true
+	return r == nil || r.EngineEnabled
+}
+
+// selectionRequest is the request the payload choice works with: without the
+// engine build there is only the testing payload to pick, whatever source the
+// settings name.
+func (r *LocalBuildRequest) selectionRequest() *LocalBuildRequest {
+	if r == nil || r.EngineEnabled {
+		return r
 	}
 
-	return r.PayloadSource != config.PayloadSourceLocal || r.BuildELPayload
+	local := *r
+	local.PayloadSource = config.PayloadSourceLocal
+
+	return &local
 }
 
 // LocalBuildInfo describes how a local payload was assembled.
@@ -139,10 +149,12 @@ type LocalBuildInfo struct {
 	// payload is checked against this list before it is used, and the
 	// included block after inclusion.
 	ExpectedHashes []string `json:"expected_hashes,omitempty"`
-	// InclusionListTxs is how many inclusion-list transactions were prepended.
+	// InclusionListTxs is how many inclusion-list transactions the slot had
+	// (prepended to the list, or ignored by the el_mempool source).
 	InclusionListTxs int `json:"inclusion_list_txs,omitempty"`
-	// InclusionListDropped marks that the build only succeeded after the
-	// inclusion list was dropped (a spec-violating payload, for testing).
+	// InclusionListDropped marks a payload without the slot's inclusion list
+	// (a spec-violating payload): the build only succeeded after dropping it,
+	// or the el_mempool source never carried it.
 	InclusionListDropped bool `json:"inclusion_list_dropped,omitempty"`
 	// DroppedByEL counts submitted transactions the EL left out of the payload
 	// (ELs that silently filter instead of failing the call).
@@ -154,21 +166,47 @@ type LocalBuildInfo struct {
 	// appended after the pool selection; FillError is why the EL mempool
 	// could not be read (the build then used the pool alone); FillDropped
 	// marks that the EL refused the list and the build retried without the
-	// fill.
-	FillTxs     int    `json:"fill_txs,omitempty"`
-	FillError   string `json:"fill_error,omitempty"`
-	FillDropped bool   `json:"fill_dropped,omitempty"`
+	// fill; FillBlobsDropped that a refused list was first retried without
+	// the fill's blob transactions (and their senders' later fill txs).
+	FillTxs          int    `json:"fill_txs,omitempty"`
+	FillError        string `json:"fill_error,omitempty"`
+	FillDropped      bool   `json:"fill_dropped,omitempty"`
+	FillBlobsDropped bool   `json:"fill_blobs_dropped,omitempty"`
 	// Attempts is how many testing_buildBlockV1 calls the build took.
 	Attempts int `json:"attempts,omitempty"`
 	// Dropped lists the pool transactions removed from the attempt after an
 	// attributed EL refusal (txpool source only), with the failure class.
 	Dropped []DroppedTx `json:"dropped,omitempty"`
-	// StartedAt is when the testing build began (after the start delay).
-	StartedAt time.Time `json:"started_at"`
+	// StartedAt is when the testing build began (its selection);
+	// SelectedAt when the list was assembled and the testing call started.
+	StartedAt  time.Time `json:"started_at"`
+	SelectedAt time.Time `json:"selected_at,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
-	// build runs during the engine build's wait, so this is usually well
-	// before the payload's ReadyAt (the hand-over to the consumers).
+	// build runs during the engine build's wait, so this is usually before
+	// the payload's ReadyAt (the hand-over to the consumers).
 	BuiltAt time.Time `json:"built_at"`
+	// Builds is how many testing builds the target ran (rebuilds); this
+	// record describes the one handed over, Run is its number and Runs
+	// summarizes every build up to the hand-over.
+	Builds int             `json:"builds,omitempty"`
+	Run    int             `json:"run,omitempty"`
+	Runs   []LocalBuildRun `json:"runs,omitempty"`
+	// MirrorStarted marks a selection that started the EL mempool mirror
+	// (a full read): untypically slow, so it does not train the timing model.
+	MirrorStarted bool `json:"mirror_started,omitempty"`
+}
+
+// LocalBuildRun summarizes one testing build of a target.
+type LocalBuildRun struct {
+	Run             int       `json:"run"`
+	Status          string    `json:"status"` // ready | failed | skipped
+	StartedAt       time.Time `json:"started_at"`
+	SelectedAt      time.Time `json:"selected_at,omitempty"`
+	At              time.Time `json:"at"` // built, failed or skipped
+	NumTransactions int       `json:"num_transactions,omitempty"`
+	GasUsed         uint64    `json:"gas_used,omitempty"`
+	BlockValueWei   string    `json:"block_value_wei,omitempty"`
+	Error           string    `json:"error,omitempty"`
 }
 
 // DroppedTx is a pool transaction removed from a build attempt after the EL
@@ -226,6 +264,13 @@ type BuildResult struct {
 	LocalErr        error
 	LocalSkipReason string
 	LocalInfo       *LocalBuildInfo
+
+	// Upgrades delivers the picks of testing builds that finish after the
+	// hand-over and beat the payload published last (nil without testing
+	// builds still running), then a final report whose Payload is the pick
+	// already published and whose local fields carry every run. It closes
+	// when the testing window ends.
+	Upgrades <-chan *BuildResult
 }
 
 // LocalBuildEvent reports a slot's local build outcome (one per build target
@@ -470,6 +515,7 @@ func (s *Service) GuardSetting(key string, value any) error {
 type LocalBuildProgressEvent struct {
 	Slot            phase0.Slot
 	Candidate       string
+	Run             int    // the target's build number (rebuilds count up)
 	Phase           string // building | ready | failed | skipped
 	TxSource        string
 	StartedAt       time.Time
@@ -523,7 +569,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		Candidate:          string(candidate),
 		TxSource:           settings.TxSource,
 		PayloadSource:      settings.PayloadSource,
-		BuildELPayload:     settings.BuildELPayload,
+		EngineEnabled:      frozen.Build.EngineEnabled,
 		MaxTxs:             settings.MaxTxs,
 		GasFillPct:         settings.GasFillPct,
 		Ordering:           settings.Ordering,
@@ -531,7 +577,9 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		BlobEncoding:       availability.BlobEncoding,
 		MaxAttempts:        settings.MaxAttempts,
 		MaxStrikes:         settings.MaxStrikes,
-		StartDelay:         time.Duration(settings.StartDelayMs) * time.Millisecond,
+		RebuildInterval:    time.Duration(settings.RebuildIntervalMs) * time.Millisecond,
+		StartMs:            settings.StartTimeMs,
+		EndMs:              settings.EndTimeMs,
 		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 

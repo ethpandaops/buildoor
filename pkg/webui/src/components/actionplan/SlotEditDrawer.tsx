@@ -1,5 +1,5 @@
 import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import type {
   FrozenPlan,
   PlanUpdate,
@@ -27,10 +27,13 @@ import {
   initCategoryState,
   resolveCategory,
   type BuildFlagMode,
+  EMPTY_LOCAL_BUILD_STATE,
   type CategoryFormState,
   type CategoryOutcome,
 } from './planForms';
 import { InfoHint } from '../InfoHint';
+import { Tabs } from '../ui/Tabs';
+import { Tag } from '../ui/Tag';
 import { ArtifactButtons } from '../ArtifactButtons';
 
 // Target of the modal: either an explicit slot list (single slot or grid
@@ -1024,7 +1027,7 @@ const ResultView: React.FC<{
 // Modal
 // ---------------------------------------------------------------------------
 
-interface SlotEditModalProps {
+interface SlotEditDrawerProps {
   target: ModalTarget;
   plans: Record<number, SlotPlan>;
   results: Record<number, SlotResult>;
@@ -1032,9 +1035,18 @@ interface SlotEditModalProps {
   canEdit: boolean;
   applyUpdates: (updates: PlanUpdate[]) => Promise<ApplyUpdatesResult>;
   onClose: () => void;
+  // Reports unsaved edits, so the page can ask before a selection change
+  // replaces the drawer's target.
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export const SlotEditModal: React.FC<SlotEditModalProps> = ({
+// The plan editor's sections, grouped like the dashboard's flow cards.
+type PlanTab = 'result' | 'engine' | 'testing' | 'bid' | 'builder_api' | 'reveal' | 'advanced';
+
+// SlotEditDrawer shows a past slot's outcome or edits the plan of the selected
+// future slots. It is a side drawer, not a modal: the grid stays usable, so the
+// selection can still change while it is open.
+export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
   target,
   plans,
   results,
@@ -1042,6 +1054,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   canEdit,
   applyUpdates,
   onClose,
+  onDirtyChange,
 }) => {
   const count = targetCount(target);
   const isSingle = count === 1;
@@ -1099,6 +1112,19 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   // (checked applies it to all targets, unchecked leaves each slot as it is).
   const [ignoreRules, setIgnoreRules] = useState(initialPlan?.ignore_rules === true);
 
+  const [activeTab, setActiveTab] = useState<PlanTab>(isPastSingle ? 'result' : 'bid');
+
+  // Unsaved edits: the form state differs from the one it opened with.
+  const formSnapshot = JSON.stringify([
+    bidState, apiState, revealState, buildReorg, localBuild, buildCandidates, transforms, ignoreRules,
+  ]);
+  const initialSnapshot = useMemo(() => formSnapshot, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = !isPastSingle && formSnapshot !== initialSnapshot;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [conflictError, setConflictError] = useState<string | null>(null);
@@ -1128,6 +1154,7 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
     setSaving(false);
 
     if (result.ok) {
+      onDirtyChange?.(false);
       onClose();
     } else if (result.conflict) {
       setConflictError(result.error || 'Slot already frozen or past — refresh the view.');
@@ -1284,224 +1311,263 @@ export const SlotEditModal: React.FC<SlotEditModalProps> = ({
   const formDisabled = !canEdit || saving;
   const deletable = bulk || !!initialPlan;
 
+  const customized = (mode: string) => mode === 'custom' || mode === 'disabled';
+  const marked = (on: boolean) =>
+    on ? <span className="sd-dot" aria-label="customized for this slot" /> : undefined;
+  const candidatesSet = Object.values(buildCandidates).some((mode) => mode !== '');
+  const localSet = JSON.stringify(localBuild) !== JSON.stringify(EMPTY_LOCAL_BUILD_STATE);
+
+  const tabs = isPastSingle
+    ? [{ id: 'result' as PlanTab, label: 'Result' }]
+    : [
+        { id: 'engine' as PlanTab, label: 'Engine builder', extra: marked(buildReorg === 'on' || candidatesSet) },
+        { id: 'testing' as PlanTab, label: 'Testing builder', extra: marked(localSet) },
+        { id: 'bid' as PlanTab, label: 'ePBS bidder', extra: marked(customized(bidState.mode)) },
+        { id: 'builder_api' as PlanTab, label: 'Builder API', extra: marked(customized(apiState.mode)) },
+        { id: 'reveal' as PlanTab, label: 'Payload reveal', extra: marked(customized(revealState.mode)) },
+        {
+          id: 'advanced' as PlanTab,
+          label: 'Advanced',
+          extra: marked(ignoreRules || Object.values(transforms).some((v) => v.trim() !== '')),
+        },
+      ];
+  const tab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0].id;
+
+  const slotState = isPastSingle
+    ? { label: 'past', tone: 'neutral' as const }
+    : bulk
+      ? { label: `${count} slots`, tone: 'accent' as const }
+      : rulePlan
+        ? { label: `rule ${rulePlan.rule_id}`, tone: 'info' as const }
+        : initialPlan
+          ? { label: 'planned', tone: 'ok' as const }
+          : { label: 'global baseline', tone: 'neutral' as const };
+
   return (
-    <>
-      <div className="modal fade show d-block" tabIndex={-1} role="dialog" aria-modal="true">
-        <div className="modal-dialog modal-lg modal-dialog-scrollable">
-          <div className="modal-content">
-            <div className="modal-header py-2">
-              <h5 className="modal-title">
-                {isPastSingle ? `${targetLabel} — Result` : `Edit Plan — ${targetLabel}`}
-              </h5>
-              <button type="button" className="btn-close" aria-label="Close" onClick={onClose}></button>
-            </div>
-
-            <div className="modal-body">
-              {conflictError && (
-                <div className="alert alert-warning small py-2">
-                  <i className="fas fa-lock me-1"></i>
-                  {conflictError}
-                </div>
-              )}
-              {formError && <div className="alert alert-danger small py-2">{formError}</div>}
-              {artifactError && (
-                <div className="alert alert-danger small py-2 d-flex align-items-center">
-                  <span className="me-auto">{artifactError}</span>
-                  <button
-                    type="button"
-                    className="btn-close"
-                    aria-label="Dismiss"
-                    onClick={() => setArtifactError(null)}
-                  ></button>
-                </div>
-              )}
-
-              {isPastSingle ? (
-                <ResultView
-                  slot={singleSlot}
-                  result={results[singleSlot]}
-                  storedPlan={plans[singleSlot]}
-                  onArtifactError={setArtifactError}
-                />
-              ) : (
-                <form id="ap-edit-form" onSubmit={handleSave}>
-                  {!canEdit && (
-                    <div className="alert alert-info small py-2">
-                      <i className="fas fa-info-circle me-1"></i>
-                      Login required to edit per-slot plans.
-                    </div>
-                  )}
-                  {bulk && (
-                    <div className="form-text mb-2">
-                      Changes apply to all {count} targeted slots. &quot;unchanged&quot; leaves a
-                      category as it is per slot; &quot;inherit (clear)&quot; removes it.
-                    </div>
-                  )}
-                  {rulePlan && (
-                    <div className="alert alert-secondary small py-2">
-                      <i className="fas fa-repeat me-1"></i>
-                      This slot has no plan of its own — it follows recurring rule{' '}
-                      <strong>{rulePlan.rule_id}</strong>, whose values are pre-filled below. Saving
-                      stores them as an explicit plan for this slot, detaching it from the rule.
-                    </div>
-                  )}
-                  <CategoryForm
-                    title="Bid (p2p)"
-                    hint={BID_CATEGORY_HINT}
-                    bulk={bulk}
-                    state={bidState}
-                    fields={BID_FIELDS}
-                    disabled={formDisabled}
-                    showIgnorePrefs
-                    onChange={setBidState}
-                  />
-                  <CategoryForm
-                    title="Builder API"
-                    hint={BUILDER_API_CATEGORY_HINT}
-                    bulk={bulk}
-                    state={apiState}
-                    fields={BUILDER_API_FIELDS}
-                    disabled={formDisabled}
-                    onChange={setApiState}
-                  />
-                  <CategoryForm
-                    title="Reveal"
-                    hint={REVEAL_CATEGORY_HINT}
-                    bulk={bulk}
-                    state={revealState}
-                    fields={REVEAL_FIELDS}
-                    disabled={formDisabled}
-                    onChange={setRevealState}
-                  />
-                  <BuildForm
-                    bulk={bulk}
-                    value={buildReorg}
-                    disabled={formDisabled}
-                    onChange={setBuildReorg}
-                  />
-                  <LocalBuildForm
-                    bulk={bulk}
-                    state={localBuild}
-                    disabled={formDisabled}
-                    available={localBuildStatus?.availability.available ?? false}
-                    unavailableReason={localBuildStatus?.availability.reason}
-                    onChange={setLocalBuild}
-                  />
-                  {!bulk && (
-                    <div className="mb-3">
-                      <div className="section-header mb-1">
-                        Build candidates
-                        <InfoHint>
-                          Which parent tuples the slot builds a payload for; each candidate is a
-                          separate engine build. Overrides apply per key.
-                          <dl>
-                            <dt>inherit</dt>
-                            <dd>the global build candidate policy for that key</dd>
-                            <dt>auto</dt>
-                            <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
-                            <dt>always</dt>
-                            <dd>build on every scheduled slot</dd>
-                            <dt>never</dt>
-                            <dd>do not build this candidate</dd>
-                          </dl>
-                          Grandparent candidates are not built across an epoch boundary.
-                        </InfoHint>
-                      </div>
-                      <div className="form-text mt-0 mb-1">
-                        Which candidate payloads the slot builds (parent/grandparent block,
-                        full/empty parent payload). Inherit uses the global policy.
-                      </div>
-                      {Object.entries(buildCandidates).map(([key, mode]) => (
-                        <div className="row g-2 align-items-center mb-1" key={key}>
-                          <div className="col-6 small text-secondary">
-                            {key}
-                            {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
-                          </div>
-                          <div className="col-6">
-                            <select
-                              className="form-select form-select-sm"
-                              value={mode}
-                              disabled={formDisabled}
-                              onChange={(e) => setBuildCandidates(prev => ({
-                                ...prev, [key]: e.target.value
-                              }))}
-                            >
-                              <option value="">inherit</option>
-                              <option value="auto">auto</option>
-                              <option value="always">always</option>
-                              <option value="never">never</option>
-                            </select>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="mb-3">
-                    <div className="section-header mb-1">
-                      Recurring rules
-                      <InfoHint>
-                        Rules never merge with a plan: any explicit plan for the slot replaces a
-                        matching rule entirely. Ignoring rules opts the slot out without setting any
-                        category, so it runs on the plain global baseline.
-                        {bulk && ' Checked applies the opt-out to every targeted slot; unchecked leaves each slot as it is.'}
-                      </InfoHint>
-                    </div>
-                    <div className="form-check">
-                      <input
-                        className="form-check-input"
-                        type="checkbox"
-                        id="ap-ignore-rules"
-                        checked={ignoreRules}
-                        disabled={formDisabled}
-                        onChange={(e) => setIgnoreRules(e.target.checked)}
-                      />
-                      <label className="form-check-label small" htmlFor="ap-ignore-rules">
-                        Ignore recurring rules
-                        {bulk && ' (applies to all targeted slots; leave unchecked to keep each as it is)'}
-                      </label>
-                    </div>
-                    <div className="form-text mt-0">
-                      Runs the slot on the plain global baseline even when a rule matches it. Any
-                      category set above already overrides the rule on its own.
-                    </div>
-                  </div>
-                  <TransformEditor
-                    bulk={bulk}
-                    value={transforms}
-                    disabled={formDisabled}
-                    sampleSlot={isSingle ? singleSlot : undefined}
-                    onChange={setTransforms}
-                  />
-                </form>
-              )}
-            </div>
-
-            <div className="modal-footer py-2">
-              {showEditForm && canEdit && deletable && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-outline-danger me-auto"
-                  disabled={saving}
-                  onClick={handleDelete}
-                >
-                  <i className="fas fa-trash me-1"></i>
-                  {bulk ? 'Delete plans' : 'Delete plan'}
-                </button>
-              )}
-              <button type="button" className="btn btn-sm btn-secondary" onClick={onClose}>
-                {showEditForm ? 'Cancel' : 'Close'}
-              </button>
-              {showEditForm && canEdit && (
-                <button type="submit" form="ap-edit-form" className="btn btn-sm btn-primary" disabled={saving}>
-                  {saving && <span className="spinner-border spinner-border-sm me-1"></span>}
-                  Save
-                </button>
-              )}
-            </div>
+    <aside className="sd-panel-root ap-plan-drawer" role="dialog" aria-labelledby="ap-drawer-title">
+      <div className="sd-head">
+        <div className="sd-title-row">
+          <h2 id="ap-drawer-title" className="sd-title">
+            {isPastSingle ? targetLabel : `Plan — ${targetLabel}`}
+          </h2>
+          <Tag tone={slotState.tone}>{slotState.label}</Tag>
+          {dirty && <Tag tone="warn">unsaved</Tag>}
+          <div className="sd-head-actions">
+            <button type="button" className="bd-btn bd-btn-sm" aria-label="Close" onClick={onClose}>
+              <i className="fas fa-xmark" aria-hidden="true"></i>
+            </button>
           </div>
         </div>
+        {!isPastSingle && (
+          <p className="sd-description">
+            {bulk
+              ? `Changes apply to all ${count} selected slots. "unchanged" leaves a category as it is per slot; "inherit (clear)" removes it.`
+              : 'Per-slot instructions on top of the global settings. Shift-click extends the selection, Ctrl/Cmd-click toggles slots.'}
+          </p>
+        )}
+        <Tabs label="Plan sections" active={tab} onChange={setActiveTab} tabs={tabs} />
       </div>
-      <div className="modal-backdrop fade show"></div>
-    </>
+
+      <div className="sd-body">
+        {conflictError && (
+          <div className="alert alert-warning small py-2">
+            <i className="fas fa-lock me-1"></i>
+            {conflictError}
+          </div>
+        )}
+        {formError && <div className="alert alert-danger small py-2">{formError}</div>}
+        {artifactError && (
+          <div className="alert alert-danger small py-2 d-flex align-items-center">
+            <span className="me-auto">{artifactError}</span>
+            <button
+              type="button"
+              className="btn-close"
+              aria-label="Dismiss"
+              onClick={() => setArtifactError(null)}
+            ></button>
+          </div>
+        )}
+
+        {isPastSingle ? (
+          <ResultView
+            slot={singleSlot}
+            result={results[singleSlot]}
+            storedPlan={plans[singleSlot]}
+            onArtifactError={setArtifactError}
+          />
+        ) : (
+          <form id="ap-edit-form" onSubmit={handleSave}>
+            {!canEdit && (
+              <div className="alert alert-info small py-2">
+                <i className="fas fa-info-circle me-1"></i>
+                Login required to edit per-slot plans.
+              </div>
+            )}
+            {rulePlan && (
+              <div className="alert alert-secondary small py-2">
+                <i className="fas fa-repeat me-1"></i>
+                This slot has no plan of its own — it follows recurring rule{' '}
+                <strong>{rulePlan.rule_id}</strong>, whose values are pre-filled. Saving stores them
+                as an explicit plan for this slot, detaching it from the rule.
+              </div>
+            )}
+
+            {tab === 'engine' && (
+              <>
+                <BuildForm bulk={bulk} value={buildReorg} disabled={formDisabled} onChange={setBuildReorg} />
+                {bulk ? (
+                  <div className="form-text">Build candidates can only be set per slot.</div>
+                ) : (
+                  <div className="mb-3">
+                    <div className="section-header mb-1">
+                      Build candidates
+                      <InfoHint>
+                        Which parent tuples the slot builds a payload for; each candidate is a
+                        separate engine build. Overrides apply per key.
+                        <dl>
+                          <dt>inherit</dt>
+                          <dd>the global build candidate policy for that key</dd>
+                          <dt>auto</dt>
+                          <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
+                          <dt>always</dt>
+                          <dd>build on every scheduled slot</dd>
+                          <dt>never</dt>
+                          <dd>do not build this candidate</dd>
+                        </dl>
+                        Grandparent candidates are not built across an epoch boundary.
+                      </InfoHint>
+                    </div>
+                    {Object.entries(buildCandidates).map(([key, mode]) => (
+                      <div className="row g-2 align-items-center mb-1" key={key}>
+                        <div className="col-6 small text-secondary">
+                          {key}
+                          {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
+                        </div>
+                        <div className="col-6">
+                          <select
+                            className="form-select form-select-sm"
+                            value={mode}
+                            disabled={formDisabled}
+                            onChange={(e) => setBuildCandidates((prev) => ({ ...prev, [key]: e.target.value }))}
+                          >
+                            <option value="">inherit</option>
+                            <option value="auto">auto</option>
+                            <option value="always">always</option>
+                            <option value="never">never</option>
+                          </select>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {tab === 'testing' && (
+              <LocalBuildForm
+                bulk={bulk}
+                state={localBuild}
+                disabled={formDisabled}
+                available={localBuildStatus?.availability.available ?? false}
+                unavailableReason={localBuildStatus?.availability.reason}
+                onChange={setLocalBuild}
+              />
+            )}
+
+            {tab === 'bid' && (
+              <CategoryForm
+                title="Bid (p2p)"
+                hint={BID_CATEGORY_HINT}
+                bulk={bulk}
+                state={bidState}
+                fields={BID_FIELDS}
+                disabled={formDisabled}
+                showIgnorePrefs
+                onChange={setBidState}
+              />
+            )}
+
+            {tab === 'builder_api' && (
+              <CategoryForm
+                title="Builder API"
+                hint={BUILDER_API_CATEGORY_HINT}
+                bulk={bulk}
+                state={apiState}
+                fields={BUILDER_API_FIELDS}
+                disabled={formDisabled}
+                onChange={setApiState}
+              />
+            )}
+
+            {tab === 'reveal' && (
+              <CategoryForm
+                title="Reveal"
+                hint={REVEAL_CATEGORY_HINT}
+                bulk={bulk}
+                state={revealState}
+                fields={REVEAL_FIELDS}
+                disabled={formDisabled}
+                onChange={setRevealState}
+              />
+            )}
+
+            {tab === 'advanced' && (
+              <>
+                <div className="mb-3">
+                  <div className="section-header mb-1">
+                    Recurring rules
+                    <InfoHint>
+                      Rules never merge with a plan: any explicit plan for the slot replaces a
+                      matching rule entirely. Ignoring rules opts the slot out without setting any
+                      category, so it runs on the plain global baseline.
+                      {bulk && ' Checked applies the opt-out to every selected slot; unchecked leaves each slot as it is.'}
+                    </InfoHint>
+                  </div>
+                  <div className="form-check">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      id="ap-ignore-rules"
+                      checked={ignoreRules}
+                      disabled={formDisabled}
+                      onChange={(e) => setIgnoreRules(e.target.checked)}
+                    />
+                    <label className="form-check-label small" htmlFor="ap-ignore-rules">
+                      Ignore recurring rules
+                    </label>
+                  </div>
+                </div>
+                <TransformEditor
+                  bulk={bulk}
+                  value={transforms}
+                  disabled={formDisabled}
+                  sampleSlot={isSingle ? singleSlot : undefined}
+                  onChange={setTransforms}
+                />
+              </>
+            )}
+          </form>
+        )}
+      </div>
+
+      <div className="sd-foot">
+        {showEditForm && canEdit && deletable && (
+          <button type="button" className="bd-btn bd-btn-sm bd-btn-danger" disabled={saving} onClick={handleDelete}>
+            <i className="fas fa-trash"></i>
+            {bulk ? 'Delete plans' : 'Delete plan'}
+          </button>
+        )}
+        <span className="sd-foot-text"></span>
+        <button type="button" className="bd-btn bd-btn-sm" onClick={onClose}>
+          {showEditForm ? 'Cancel' : 'Close'}
+        </button>
+        {showEditForm && canEdit && (
+          <button type="submit" form="ap-edit-form" className="bd-btn bd-btn-sm bd-btn-primary" disabled={saving || !dirty}>
+            {saving && <span className="spinner-border spinner-border-sm"></span>}
+            Save
+          </button>
+        )}
+      </div>
+    </aside>
   );
 };

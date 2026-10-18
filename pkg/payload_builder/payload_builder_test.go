@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -113,4 +114,19 @@ func TestBuildFeeRecipients(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyBuiltParent(t *testing.T) {
+	parent := phase0.Hash32{0xaa}
+	attrs := &beacon.PayloadAttributesEvent{ParentBlockHash: parent, ParentBlockNumber: 41}
+
+	built := func(parentHash phase0.Hash32, number uint64) *Payload {
+		return &Payload{ExecutionPayload: &eth2all.ExecutionPayload{ParentHash: parentHash, BlockNumber: number}}
+	}
+
+	assert.NoError(t, verifyBuiltParent(built(parent, 42), attrs))
+	assert.ErrorContains(t, verifyBuiltParent(built(phase0.Hash32{0xbb}, 42), attrs), "built on parent")
+	assert.ErrorContains(t, verifyBuiltParent(built(parent, 43), attrs), "block number")
+	assert.NoError(t, verifyBuiltParent(built(parent, 7), &beacon.PayloadAttributesEvent{ParentBlockHash: parent}),
+		"an unknown parent number is not checked")
 }

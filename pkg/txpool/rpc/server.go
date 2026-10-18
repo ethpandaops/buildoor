@@ -402,6 +402,10 @@ func (s *Server) txpoolContent(id json.RawMessage, caller Caller) response {
 			continue
 		}
 
+		if tx = s.pool.Hydrated(tx); tx == nil {
+			continue
+		}
+
 		sender := tx.Sender.Hex()
 		if pending[sender] == nil {
 			pending[sender] = make(map[string]any, 8)

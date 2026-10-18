@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/gorilla/mux"
+	"github.com/holiman/uint256"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +29,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // recordedBidCall captures one RecordBuilderAPIBid invocation.
@@ -633,4 +636,57 @@ func TestHandleGetExecutionPayloadBid_ReadsChunkedAuthBody(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "invalid SignedRequestAuthV1")
+}
+
+// TestResponseGateServesTheBestPayloadAtTheGate holds the bid until the
+// slot's response gate and serves the payload built by then, not the one
+// cached when the request arrived.
+func TestResponseGateServesTheBestPayloadAtTheGate(t *testing.T) {
+	env := newPayloadBidTestEnv(t, true)
+
+	// Slot 1 starts right now in the test chain; the gate is 300 ms into it.
+	env.cfg.BuilderAPI.RespondAtMs = 300
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+
+		env.handler.payloadCache.Store(&payload_builder.Payload{
+			Attributes: &beacon.PayloadAttributesEvent{ProposalSlot: 1},
+			ExecutionPayload: &eth2all.ExecutionPayload{
+				Version:       version.DataVersionGloas,
+				BaseFeePerGas: uint256.NewInt(7),
+				BlockHash:     phase0.Hash32{0xcd},
+			},
+			BlockHash:  phase0.Hash32{0xcd},
+			BlockValue: big.NewInt(5_000_000_000_000),
+			ReadyAt:    time.Now(),
+		})
+	}()
+
+	started := time.Now()
+	rec := httptest.NewRecorder()
+	env.handler.HandleGetExecutionPayloadBid(rec, newPayloadBidRequest())
+
+	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.GreaterOrEqual(t, time.Since(started), 250*time.Millisecond, "held until the gate")
+
+	bid := decodeSignedExecutionPayloadBid(t, rec.Body.Bytes())
+	require.Equal(t, phase0.Hash32{0xcd}, bid.Message.BlockHash, "the payload built during the wait is served")
+}
+
+// TestResponseGateCancelledRequest records a proposer hanging up during the
+// wait as cancelled and serves nothing.
+func TestResponseGateCancelledRequest(t *testing.T) {
+	env := newPayloadBidTestEnv(t, true)
+	env.cfg.BuilderAPI.RespondAtMs = 2000
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	rec := httptest.NewRecorder()
+	env.handler.HandleGetExecutionPayloadBid(rec, newPayloadBidRequestCtx(ctx))
+
+	require.Empty(t, rec.Body.Bytes())
+	require.NotEmpty(t, env.recorder.bids)
+	require.Equal(t, bidStatusCancelled, env.recorder.bids[len(env.recorder.bids)-1].status)
 }

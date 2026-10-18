@@ -45,6 +45,9 @@ var (
 	// ErrBlobNoSidecar rejects canonical-form blob transactions: without the
 	// sidecar the blobs bundle cannot be produced.
 	ErrBlobNoSidecar = errors.New("blob transaction without sidecar")
+	// ErrBlobSidecar rejects a sidecar that does not match the transaction's
+	// versioned hashes or cannot be converted to cell proofs.
+	ErrBlobSidecar = errors.New("invalid blob sidecar")
 	// ErrOversized rejects transactions above the canonical size cap.
 	ErrOversized = errors.New("oversized transaction")
 	// ErrIntrinsicGas rejects transactions below the minimum gas.
@@ -77,16 +80,26 @@ type ELClient interface {
 	BlockTransactions(ctx context.Context, blockHash common.Hash) (*execution.BlockTxList, bool, error)
 	TransactionBlockHashes(ctx context.Context, hashes []common.Hash) (map[common.Hash]common.Hash, error)
 	SendRawTransaction(ctx context.Context, raw []byte) (common.Hash, error)
+
+	// The EL mempool mirror (see elMirror).
+	PendingPoolTransactions(ctx context.Context) ([]*types.Transaction, error)
+	NewPendingTransactionFilter(ctx context.Context) (string, error)
+	PendingTransactionFilterChanges(ctx context.Context, id string) ([]common.Hash, error)
+	UninstallFilter(ctx context.Context, id string) error
+	TransactionsByHash(ctx context.Context, hashes []common.Hash) (map[common.Hash]*types.Transaction, error)
 }
 
 var _ ELClient = (*execution.Client)(nil)
 
 // PooledTx is one queued transaction with its admission metadata.
 type PooledTx struct {
-	Hash        common.Hash
-	Sender      common.Address
-	Tx          *types.Transaction // sidecar retained for blob transactions
-	Size        uint64             // encoded size as received
+	Hash   common.Hash
+	Sender common.Address
+	// Tx is the transaction (sidecar retained for blob transactions); nil
+	// while it is cold (see tier.go), facts then carry its properties.
+	Tx          *types.Transaction
+	facts       *txFacts
+	Size        uint64 // encoded size as received
 	Arrived     time.Time
 	ArrivedSlot phase0.Slot
 	Seq         uint64 // arrival order (fifo ordering)
@@ -109,13 +122,13 @@ type senderQueue struct {
 }
 
 func (q *senderQueue) find(nonce uint64) (int, bool) {
-	i := sort.Search(len(q.txs), func(i int) bool { return q.txs[i].Tx.Nonce() >= nonce })
+	i := sort.Search(len(q.txs), func(i int) bool { return q.txs[i].Nonce() >= nonce })
 
-	return i, i < len(q.txs) && q.txs[i].Tx.Nonce() == nonce
+	return i, i < len(q.txs) && q.txs[i].Nonce() == nonce
 }
 
 func (q *senderQueue) insert(tx *PooledTx) {
-	i, _ := q.find(tx.Tx.Nonce())
+	i, _ := q.find(tx.Nonce())
 	q.txs = append(q.txs, nil)
 	copy(q.txs[i+1:], q.txs[i:])
 	q.txs[i] = tx
@@ -155,6 +168,12 @@ type Pool struct {
 	builtMu     sync.Mutex
 	builtBlocks map[common.Hash]phase0.Slot // block hashes of payloads we built
 
+	mirror *elMirror // the EL mempool's pending transactions, for the fill
+	store  Store     // persists the queued transactions; nil = memory only
+	// floors are the cold tier's fee floors for the latest head's next base
+	// fee (nil until the first head).
+	floors atomic.Pointer[tierFloors]
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -182,8 +201,22 @@ func NewPool(
 	}
 
 	p.enabled.Store(cfg.TxPool.Enabled)
+	p.mirror = newELMirror(p)
 
 	return p
+}
+
+// UsePendingTxStream lets the EL mempool mirror follow the EL's arrivals
+// live over a websocket instead of polling a filter. Call before Start.
+func (p *Pool) UsePendingTxStream(stream PendingTxStream) {
+	p.mirror.stream = stream
+}
+
+// UseStore persists the queued transactions in store: Start re-admits what
+// it holds, and every change is written through. Call before Start; Stop
+// closes it.
+func (p *Pool) UseStore(store Store) {
+	p.store = store
 }
 
 // Start resolves the chain id (retrying until the EL answers) and starts the
@@ -202,6 +235,18 @@ func (p *Pool) Start(ctx context.Context) error {
 	p.chainID = chainID
 	p.signer = types.LatestSignerForChainID(chainID)
 	p.mu.Unlock()
+
+	if err := p.restore(); err != nil {
+		p.log.WithError(err).Warn("Cannot restore the transaction pool from its store")
+	}
+
+	p.wg.Add(1)
+
+	go func() {
+		defer p.wg.Done()
+
+		p.mirror.run(p.ctx)
+	}()
 
 	// The eviction loop follows beacon head events; without a beacon client
 	// (tests, tooling) the pool only admits and selects.
@@ -250,7 +295,102 @@ func (p *Pool) Stop() error {
 
 	p.wg.Wait()
 
+	if p.store != nil {
+		return p.store.Close()
+	}
+
 	return nil
+}
+
+// restore re-admits the stored transactions with their original metadata.
+// Their age still counts against the TTL, and stale nonces leave at the next
+// selection, as for any queued transaction.
+func (p *Pool) restore() error {
+	if p.store == nil {
+		return nil
+	}
+
+	restored := 0
+
+	err := p.store.Load(func(stored *StoredTx) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+
+		hash := stored.Tx.Hash()
+
+		sender, err := types.Sender(p.signer, stored.Tx)
+		if err != nil {
+			p.store.Delete(hash)
+
+			return
+		}
+
+		if p.byHash[hash] != nil {
+			return
+		}
+
+		queue := p.bySender[sender]
+		if queue == nil {
+			queue = &senderQueue{txs: make([]*PooledTx, 0, 8)}
+			p.bySender[sender] = queue
+		}
+
+		// Two records at one nonce: the later admission replaced the other.
+		if i, ok := queue.find(stored.Tx.Nonce()); ok {
+			if queue.txs[i].Seq >= stored.Seq {
+				p.store.Delete(hash)
+
+				return
+			}
+
+			p.removeLocked(queue.txs[i].Hash) // deletes its record too
+
+			if p.bySender[sender] == nil {
+				p.bySender[sender] = queue
+			}
+		}
+
+		pooled := &PooledTx{
+			Hash:        hash,
+			Sender:      sender,
+			Tx:          stored.Tx,
+			Size:        stored.Tx.Size(),
+			Arrived:     stored.Arrived,
+			ArrivedSlot: stored.ArrivedSlot,
+			Seq:         stored.Seq,
+			Submitter:   stored.Submitter,
+		}
+
+		queue.insert(pooled)
+		p.byHash[hash] = pooled
+		p.seq = max(p.seq, stored.Seq)
+		restored++
+	})
+
+	p.mu.RLock()
+	pending := len(p.byHash)
+	p.mu.RUnlock()
+
+	p.version.Add(1)
+	metrics.TxPoolPending.Set(float64(pending))
+	p.log.WithField("txs", restored).Info("Transaction pool restored from its store")
+
+	return err
+}
+
+// ELMempool returns the EL mempool's pending transactions (senders
+// recovered, each sender's in nonce order) from the mirror, which a build's
+// fill reads instead of the whole txpool_content. started reports that this
+// call started the mirror (a full read: a slow, untypical selection).
+func (p *Pool) ELMempool(ctx context.Context) (txs []*PooledTx, started bool, err error) {
+	return p.mirror.Pending(ctx)
+}
+
+// ContentVersion changes whenever a build could find something new: the
+// pool's content changed or the EL mempool mirror received a transaction
+// clearing the latest base fee.
+func (p *Pool) ContentVersion() uint64 {
+	return p.version.Load() + p.mirror.arrivals.Load()
 }
 
 // SetEnabled switches admission and selection on or off. The queued content
@@ -307,6 +447,15 @@ func (p *Pool) AddFrom(raw []byte, submitter string) (common.Hash, error) {
 		return common.Hash{}, fmt.Errorf("invalid transaction encoding: %w", err)
 	}
 
+	normalized, err := p.normalizeSidecar(tx)
+	if err != nil {
+		p.reject("blob_sidecar")
+
+		return tx.Hash(), err
+	}
+
+	tx = normalized
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -355,6 +504,11 @@ func (p *Pool) AddFrom(raw []byte, submitter string) (common.Hash, error) {
 
 	p.byHash[pooled.Hash] = pooled
 	p.stats.Admitted++
+
+	if p.store != nil {
+		p.store.Put(pooled)
+	}
+
 	p.stats.LastAdmittedAt = pooled.Arrived
 	p.version.Add(1)
 	metrics.TxPoolAdmitted.Inc()
@@ -417,24 +571,29 @@ func (p *Pool) validateLocked(tx *types.Transaction, size uint64) (*PooledTx, er
 // replaceLocked swaps a same-nonce transaction when the replacement bumps the
 // fee cap and the tip (and blob fee cap) by at least replacementBumpPercent.
 func (p *Pool) replaceLocked(queue *senderQueue, replacement *PooledTx) error {
-	i, _ := queue.find(replacement.Tx.Nonce())
+	i, _ := queue.find(replacement.Nonce())
 	old := queue.txs[i]
 
-	if !bumpsFee(old.Tx.GasFeeCap(), replacement.Tx.GasFeeCap()) ||
-		!bumpsFee(old.Tx.GasTipCap(), replacement.Tx.GasTipCap()) {
+	if !bumpsFee(old.GasFeeCap(), replacement.GasFeeCap()) ||
+		!bumpsFee(old.GasTipCap(), replacement.GasTipCap()) {
 		p.rejectLocked("replacement_underpriced")
 
 		return ErrReplaceUnderpriced
 	}
 
-	if old.Tx.Type() == types.BlobTxType && replacement.Tx.Type() == types.BlobTxType &&
-		!bumpsFee(old.Tx.BlobGasFeeCap(), replacement.Tx.BlobGasFeeCap()) {
+	if old.Type() == types.BlobTxType && replacement.Type() == types.BlobTxType &&
+		!bumpsFee(old.BlobGasFeeCap(), replacement.BlobGasFeeCap()) {
 		p.rejectLocked("replacement_underpriced")
 
 		return ErrReplaceUnderpriced
 	}
 
 	delete(p.byHash, old.Hash)
+
+	if p.store != nil {
+		p.store.Delete(old.Hash)
+	}
+
 	queue.txs[i] = replacement
 	replacement.Seq = old.Seq // keeps the sender's fifo position
 	p.stats.Replaced++
@@ -486,12 +645,14 @@ func (p *Pool) forwardToEL(raw []byte, hash common.Hash) {
 	}
 }
 
-// Get returns the queued transaction with the given hash, or nil.
+// Get returns the queued transaction with the given hash, or nil. A cold
+// transaction comes with its body loaded from the store.
 func (p *Pool) Get(hash common.Hash) *PooledTx {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	tx := p.byHash[hash]
+	p.mu.RUnlock()
 
-	return p.byHash[hash]
+	return p.Hydrated(tx)
 }
 
 // Remove drops one transaction by hash.
@@ -519,8 +680,12 @@ func (p *Pool) removeLocked(hash common.Hash) bool {
 
 	delete(p.byHash, hash)
 
+	if p.store != nil {
+		p.store.Delete(hash)
+	}
+
 	if queue := p.bySender[tx.Sender]; queue != nil {
-		queue.remove(tx.Tx.Nonce())
+		queue.remove(tx.Nonce())
 
 		if len(queue.txs) == 0 {
 			delete(p.bySender, tx.Sender)
@@ -563,6 +728,11 @@ func (p *Pool) Clear() int {
 	n := len(p.byHash)
 	p.byHash = make(map[common.Hash]*PooledTx, 1024)
 	p.bySender = make(map[common.Address]*senderQueue, 64)
+
+	if p.store != nil {
+		p.store.Clear()
+	}
+
 	p.stats.Cleared += uint64(n)
 	metrics.TxPoolEvicted.WithLabelValues("cleared").Add(float64(n))
 	metrics.TxPoolPending.Set(0)
@@ -586,11 +756,11 @@ func (p *Pool) PendingNonce(sender common.Address, chainNonce uint64) uint64 {
 	next := chainNonce
 
 	for _, tx := range queue.txs {
-		if tx.Tx.Nonce() < next {
+		if tx.Nonce() < next {
 			continue
 		}
 
-		if tx.Tx.Nonce() != next {
+		if tx.Nonce() != next {
 			break
 		}
 

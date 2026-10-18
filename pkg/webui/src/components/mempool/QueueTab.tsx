@@ -147,7 +147,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
                         <td className="text-end">{tx.nonce}</td>
                         <td>{TX_TYPES[tx.type] ?? tx.type}</td>
                         <td className="text-end">{tx.gas.toLocaleString()}</td>
-                        <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}</td>
+                        <td className="text-end">{weiToGwei(tx.max_fee_per_gas)} / {weiToGwei(tx.max_priority_fee_per_gas)}{tx.cold && <> <Tag title="Far below the base fee: the body waits outside memory until the base fee comes close">cold</Tag></>}</td>
                         <td className="text-end">{weiToEth(tx.value_wei)}</td>
                         <td className="text-end">{tx.blobs ?? 0}</td>
                         <td className="text-end">{formatBytes(tx.size)}</td>

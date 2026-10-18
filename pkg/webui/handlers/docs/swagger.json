@@ -1114,6 +1114,12 @@
                         "name": "max_slot",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "summary = a compact record per slot (build status and headline fields, attempts, inclusion, tx plan) for overview grids",
+                        "name": "view",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1543,6 +1549,101 @@
                     },
                     "404": {
                         "description": "Pool not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool/el-mempool": {
+            "get": {
+                "description": "Returns the state of the mirror of the EL mempool's pending\ntransactions (the testing build's fill source) and a page of\nits content. Public: these are the EL's public transactions.\nReading it never starts the mirror, which runs only while\nbuilds use it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "List the EL mempool mirror",
+                "operationId": "getELMempool",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "Offset",
+                        "name": "offset",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Limit (max 500)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Sender address filter",
+                        "name": "sender",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "arrival | sender | tip",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ELMempoolResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/buildoor/txpool/fees": {
+            "get": {
+                "description": "Buckets the pending transactions of the EL mempool mirror by\nmax fee per gas (log scale) against the next base fee and the\nblock gas limit. buildoor's own (private) transactions are\nincluded, as their own series, only for logged-in readers.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Pending gas by max fee",
+                "operationId": "getTxPoolFees",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/txpool.FeeDistribution"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured or no head",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "EL unavailable",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2369,6 +2470,10 @@
                 "mode": {
                     "$ref": "#/definitions/action_plan.Mode"
                 },
+                "respond_at_ms": {
+                    "description": "RespondAtMs overrides the global response gate (ms after the slot\nstart; 0 = respond immediately), see config.BuilderAPIConfig.",
+                    "type": "integer"
+                },
                 "response_delay_ms": {
                     "description": "ResponseDelayMs delays the bid response by this many milliseconds\n(context-cancellable, capped at one slot).",
                     "type": "integer"
@@ -2444,7 +2549,7 @@
             "type": "object",
             "properties": {
                 "build_el_payload": {
-                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
+                    "description": "BuildELPayload runs (or skips) the engine-API build for the slot,\noverriding build.engine_enabled.",
                     "type": "boolean"
                 },
                 "enabled": {
@@ -2633,6 +2738,10 @@
                         "type": "string"
                     }
                 },
+                "engine_enabled": {
+                    "description": "EngineEnabled runs the engine-API build for the slot: the global\nbuild.engine_enabled, overridden by the plan's build.local\nbuild_el_payload.",
+                    "type": "boolean"
+                },
                 "forced": {
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
                     "type": "boolean"
@@ -2683,6 +2792,10 @@
                     "description": "KeyStrategy is the effective builder key selection strategy for the\nslot's served bids.",
                     "type": "string"
                 },
+                "respond_at_ms": {
+                    "description": "RespondAtMs is the slot's response gate in ms after the slot start (0\n= respond immediately): bid responses wait for it and then serve the\nbest payload built by then.",
+                    "type": "integer"
+                },
                 "serve_candidates": {
                     "description": "ServeCandidates is the effective serve-candidates policy for the slot\n(all, canonical_only, or a comma-separated candidate key list).",
                     "type": "string"
@@ -2708,12 +2821,11 @@
                     "description": "BaseFeeCeilingGwei halves the fill above this next base fee (global-only,\n0 = off; exact lists are never reduced).",
                     "type": "integer"
                 },
-                "build_el_payload": {
-                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
-                    "type": "boolean"
-                },
                 "enabled": {
                     "type": "boolean"
+                },
+                "end_time_ms": {
+                    "type": "integer"
                 },
                 "forced": {
                     "description": "Forced marks that the plan enabled the local build although it is\nglobally disabled.",
@@ -2747,8 +2859,11 @@
                         "type": "string"
                     }
                 },
-                "start_delay_ms": {
-                    "description": "StartDelayMs delays the testing call after the engine build started\n(global-only, 0 = at once).",
+                "rebuild_interval_ms": {
+                    "type": "integer"
+                },
+                "start_time_ms": {
+                    "description": "StartTimeMs / EndTimeMs / RebuildIntervalMs time the testing builds\n(global-only; see config.LocalBuildConfig).",
                     "type": "integer"
                 },
                 "transactions": {
@@ -3144,6 +3259,29 @@
                 }
             }
         },
+        "api.ELMempoolResponse": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "stats": {
+                    "$ref": "#/definitions/txpool.MirrorStats"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "txs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/txpool.TxSummary"
+                    }
+                }
+            }
+        },
         "api.GetValidatorsResponse": {
             "type": "object",
             "properties": {
@@ -3239,10 +3377,10 @@
                 "availability": {
                     "$ref": "#/definitions/payload_builder.LocalBuildAvailability"
                 },
-                "build_el_payload": {
+                "enabled": {
                     "type": "boolean"
                 },
-                "enabled": {
+                "engine_enabled": {
                     "type": "boolean"
                 },
                 "payload_source": {
@@ -4114,8 +4252,12 @@
                     "description": "Attempts is how many testing_buildBlockV1 calls the build took.",
                     "type": "integer"
                 },
+                "builds": {
+                    "description": "Builds is how many testing builds the target ran (rebuilds); this\nrecord describes the one handed over, Run is its number and Runs\nsummarizes every build up to the hand-over.",
+                    "type": "integer"
+                },
                 "built_at": {
-                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually well\nbefore the payload's ReadyAt (the hand-over to the consumers).",
+                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually before\nthe payload's ReadyAt (the hand-over to the consumers).",
                     "type": "string"
                 },
                 "dropped": {
@@ -4140,6 +4282,9 @@
                     "description": "ExplicitTxs is the explicit list length (tx source explicit / queued).",
                     "type": "integer"
                 },
+                "fill_blobs_dropped": {
+                    "type": "boolean"
+                },
                 "fill_dropped": {
                     "type": "boolean"
                 },
@@ -4147,16 +4292,32 @@
                     "type": "string"
                 },
                 "fill_txs": {
-                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill.",
+                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
                     "type": "integer"
                 },
                 "inclusion_list_dropped": {
-                    "description": "InclusionListDropped marks that the build only succeeded after the\ninclusion list was dropped (a spec-violating payload, for testing).",
+                    "description": "InclusionListDropped marks a payload without the slot's inclusion list\n(a spec-violating payload): the build only succeeded after dropping it,\nor the el_mempool source never carried it.",
                     "type": "boolean"
                 },
                 "inclusion_list_txs": {
-                    "description": "InclusionListTxs is how many inclusion-list transactions were prepended.",
+                    "description": "InclusionListTxs is how many inclusion-list transactions the slot had\n(prepended to the list, or ignored by the el_mempool source).",
                     "type": "integer"
+                },
+                "mirror_started": {
+                    "description": "MirrorStarted marks a selection that started the EL mempool mirror\n(a full read): untypically slow, so it does not train the timing model.",
+                    "type": "boolean"
+                },
+                "run": {
+                    "type": "integer"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/payload_builder.LocalBuildRun"
+                    }
+                },
+                "selected_at": {
+                    "type": "string"
                 },
                 "selection": {
                     "description": "Selection is the pool selection summary (tx source txpool).",
@@ -4167,7 +4328,7 @@
                     ]
                 },
                 "started_at": {
-                    "description": "StartedAt is when the testing build began (after the start delay).",
+                    "description": "StartedAt is when the testing build began (its selection);\nSelectedAt when the list was assembled and the testing call started.",
                     "type": "string"
                 },
                 "submitted_txs": {
@@ -4175,6 +4336,40 @@
                     "type": "integer"
                 },
                 "tx_source": {
+                    "type": "string"
+                }
+            }
+        },
+        "payload_builder.LocalBuildRun": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "description": "built, failed or skipped",
+                    "type": "string"
+                },
+                "block_value_wei": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "num_transactions": {
+                    "type": "integer"
+                },
+                "run": {
+                    "type": "integer"
+                },
+                "selected_at": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "ready | failed | skipped",
                     "type": "string"
                 }
             }
@@ -4828,6 +5023,89 @@
                     "type": "integer"
                 },
                 "orphaned": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.FeeBucket": {
+            "type": "object",
+            "properties": {
+                "el_gas": {
+                    "type": "integer"
+                },
+                "el_txs": {
+                    "type": "integer"
+                },
+                "max_fee": {
+                    "type": "string"
+                },
+                "min_fee": {
+                    "type": "string"
+                },
+                "private_gas": {
+                    "type": "integer"
+                },
+                "private_txs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.FeeDistribution": {
+            "type": "object",
+            "properties": {
+                "buckets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/txpool.FeeBucket"
+                    }
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "mirror_active": {
+                    "description": "MirrorActive: the EL mempool part is current (the mirror runs only\nwhile builds use it).",
+                    "type": "boolean"
+                },
+                "next_base_fee": {
+                    "type": "string"
+                },
+                "private": {
+                    "description": "Private: the pool's transactions are included (logged-in readers).",
+                    "type": "boolean"
+                }
+            }
+        },
+        "txpool.MirrorStats": {
+            "type": "object",
+            "properties": {
+                "active": {
+                    "description": "Active: the mirror runs (a build used it within the idle timeout).",
+                    "type": "boolean"
+                },
+                "arrivals": {
+                    "description": "arrivals clearing the latest base fee",
+                    "type": "integer"
+                },
+                "blob_txs": {
+                    "type": "integer"
+                },
+                "gas_sum": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "description": "Mode is how arrivals come in: websocket (live), filter (polled) or\nresync (full reads only, the EL has no filters).",
+                    "type": "string"
+                },
+                "senders": {
+                    "type": "integer"
+                },
+                "started": {
+                    "type": "string"
+                },
+                "synced_at": {
+                    "type": "string"
+                },
+                "txs": {
                     "type": "integer"
                 }
             }

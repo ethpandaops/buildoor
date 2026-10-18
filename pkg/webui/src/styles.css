@@ -125,6 +125,63 @@
   border-right: 2px solid rgba(128, 128, 128, 0.3);
 }
 
+/* Payload build windows (engine and testing builds): bluish strips around
+   their build lines in the chain row, as tall as the line's dot (vertical
+   position and height set inline). */
+.build-window-bg {
+  position: absolute;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.build-window-engine {
+  background: rgba(13, 110, 253, 0.07);
+  border-left: 1px solid rgba(13, 110, 253, 0.35);
+  border-right: 1px solid rgba(13, 110, 253, 0.35);
+}
+
+.build-window-testing {
+  background: rgba(13, 202, 240, 0.08);
+  border-left: 1px dashed rgba(13, 202, 240, 0.5);
+  border-right: 1px dashed rgba(13, 202, 240, 0.5);
+}
+
+.build-window-label {
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  font-size: 7px;
+  line-height: 1;
+  color: rgba(13, 110, 253, 0.85);
+}
+
+.build-window-engine .build-window-label {
+  transform: translateY(calc(-50% - 1px));
+}
+
+/* The windows overlap: the testing label sits at its window's start too,
+   just below its strip, clear of the lines. */
+.build-window-testing .build-window-label {
+  top: 100%;
+  transform: translateY(1px);
+  color: rgba(13, 202, 240, 0.95);
+}
+
+/* Builder API response gate (timing game) - positioned dynamically */
+.respond-gate-marker {
+  position: absolute;
+  width: 2px;
+  background: #ffc107;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.respond-gate-label {
+  left: 4px;
+  color: rgba(255, 193, 7, 0.95);
+  pointer-events: auto;
+}
+
 /* Reveal marker - positioned dynamically */
 .reveal-marker {
   position: absolute;
@@ -149,7 +206,11 @@
 }
 
 .bid-label {
+  top: 50%;
   left: 4px;
+  transform: translateY(-50%);
+  font-size: 7px;
+  line-height: 1;
   color: rgba(25, 135, 84, 0.9);
 }
 
@@ -270,6 +331,7 @@
 .payload-created {
   background: #17a2b8;
   border: 2px solid #138496;
+  top: 3px; /* centred on the engine build line */
 }
 
 .bid-submitted {
@@ -303,6 +365,7 @@
 .build-failed {
   background: #dc3545;
   border: 2px solid #bd2130;
+  top: 3px; /* centred on the engine build line */
 }
 
 .event-dot-crown {
@@ -328,13 +391,14 @@
      0.5px  0.5px 0 #fff;
 }
 
-/* Build delay line - horizontal line from FCU to payload ready */
+/* Build delay line - horizontal line from FCU to payload ready, in the upper
+   half of its window strip */
 .build-delay-line {
   position: absolute;
   height: 3px;
   background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8));
   border-radius: 2px;
-  top: 50%;
+  top: calc(50% - 2px);
   transform: translateY(-50%);
   cursor: pointer;
   z-index: 1;
@@ -379,6 +443,11 @@
 
 .local-build-selected {
   box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45);
+}
+
+/* A rebuild that was not handed over: same element, dimmed. */
+.local-build-run-other {
+  opacity: 0.45;
 }
 
 .local-build-failed {
@@ -448,6 +517,29 @@
   height: 5px;
 }
 
+/* Finalized engine build with known calls: the wait between forkchoiceUpdated
+   and getPayload dashed (in the line color), the calls themselves solid. */
+.build-delay-line-split,
+.build-delay-line-split:hover {
+  height: 1px;
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg, currentColor 0 6px, transparent 6px 10px);
+  opacity: 0.9;
+}
+
+/* In-progress dashed line: pulses while the payload is still building. */
+.build-delay-line-pulse {
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
+/* The calls keep the full line weight on the thin dashed wait. */
+.build-delay-line-call {
+  position: absolute;
+  top: -1px;
+  height: 3px;
+  border-radius: 2px;
+}
+
 /* In-progress build: pulsing leading edge while the payload is still building */
 .build-delay-line-active {
   background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.9));
@@ -461,6 +553,24 @@
 }
 
 /* Builder API call dots — one per call, colored by outcome (Fulu + Gloas) */
+/* A held bid request: from the request to our response. */
+.builder-api-call-line {
+  position: absolute;
+  height: 3px;
+  background: linear-gradient(90deg, rgba(40, 167, 69, 0.35), rgba(40, 167, 69, 0.85));
+  border-radius: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  z-index: 1;
+}
+
+/* Still held: amber, pulsing. */
+.builder-api-call-line-active {
+  background: linear-gradient(90deg, rgba(255, 193, 7, 0.35), rgba(255, 193, 7, 0.9));
+  animation: build-delay-pulse 1s ease-in-out infinite;
+}
+
 .builder-api-call.delivered {
   background: #28a745;
   border: 2px solid #1c7430;
@@ -1587,4 +1697,18 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
 
 .info-hint-callout dd {
   margin: 0 0 0.25rem 0.5rem;
+}
+
+/* Action plan editor: a side drawer beside the grid, not a modal over it. */
+.ap-plan-drawer {
+  position: fixed;
+  top: 0;
+  width: min(560px, 100%);
+  z-index: 1050;
+}
+
+@media (min-width: 1200px) {
+  .ap-drawer-open {
+    padding-right: calc(560px + 0.75rem);
+  }
 }

@@ -1,5 +1,5 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -83,6 +83,10 @@ export interface UseEventStreamResult {
   voteCoverage: VoteCoverage | null;
   slotOutlook: SlotOutlook | null;
   txPoolStats: TxPoolStats | null;
+  // The local build (testing_buildBlockV1) status: probed EL availability,
+  // effective settings, pool state, plan checks. Pushed at connect and on
+  // every change.
+  localBuildStatus: LocalBuildStatus | null;
   currentSlot: number;
   slotStates: Record<number, SlotState>;
   slotConfigs: Record<number, Config>;
@@ -105,6 +109,7 @@ function useEventStreamConnection(): UseEventStreamResult {
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
   const [slotOutlook, setSlotOutlook] = useState<SlotOutlook | null>(null);
   const [txPoolStats, setTxPoolStats] = useState<TxPoolStats | null>(null);
+  const [localBuildStatus, setLocalBuildStatus] = useState<LocalBuildStatus | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
   const [slotConfigs, setSlotConfigs] = useState<Record<number, Config>>({});
@@ -294,6 +299,10 @@ function useEventStreamConnection(): UseEventStreamResult {
           setSlotOutlook(event.data as SlotOutlook);
           break;
 
+        case 'local_build_status':
+          setLocalBuildStatus(event.data as LocalBuildStatus);
+          break;
+
         case 'txpool_stats':
           setTxPoolStats(event.data as TxPoolStats);
           break;
@@ -339,13 +348,16 @@ function useEventStreamConnection(): UseEventStreamResult {
           const data = event.data as LocalBuildProgressEvent;
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };
-            // Display only: the primary target wins, and the final event (if
-            // already there) is authoritative.
-            if (state.localBuildLive && data.candidate && data.candidate !== 'parent_full' &&
-                state.localBuildLive.candidate === 'parent_full') {
-              return prev;
+            // Display only, one entry per build of the target: the primary
+            // target wins, and the final event (if already there) is
+            // authoritative.
+            const runs = state.localBuildLive ?? {};
+            const shown = Object.values(runs)[0];
+            if (shown && data.candidate !== shown.candidate) {
+              if (shown.candidate === 'parent_full' || data.candidate !== 'parent_full') return prev;
+              return { ...prev, [data.slot]: { ...state, localBuildLive: { [data.run ?? 1]: data } } };
             }
-            return { ...prev, [data.slot]: { ...state, localBuildLive: data } };
+            return { ...prev, [data.slot]: { ...state, localBuildLive: { ...runs, [data.run ?? 1]: data } } };
           });
           break;
         }
@@ -433,11 +445,11 @@ function useEventStreamConnection(): UseEventStreamResult {
         }
 
         case 'payload_build_started': {
-          const data = event.data as { slot: number; candidate?: string; started_at: number };
+          const data = event.data as { slot: number; candidate?: string; started_at: number; engine?: boolean };
           addEvent('payload_build_started',
             `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
             event.timestamp);
-          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at },
+          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at, engine: data.engine },
             state => (
               // The primary line spans the primary candidate's own build; the
               // first start seeds it until a payload becomes primary.
@@ -476,6 +488,7 @@ function useEventStreamConnection(): UseEventStreamResult {
             block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
+            engine_calls?: import('../types').EngineCalls;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           const detail = {
@@ -514,12 +527,26 @@ function useEventStreamConnection(): UseEventStreamResult {
             // moves with the primary rather than covering every candidate.
             const own = state.candidateBuilds?.find(b => b.candidate === (data.candidate ?? ''));
 
+            // A testing build replacing the payload after the hand-over: the
+            // build line keeps ending at the hand-over.
+            if (state.payloadReady && state.payloadCandidate === (data.candidate ?? '') &&
+                state.payloadBlockHash && state.payloadBlockHash !== data.block_hash) {
+              return {
+                payloadBlockHash: data.block_hash,
+                payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
+                payloadDetail: detail,
+                payloadUpgrades: (state.payloadUpgrades ?? 0) + 1,
+                payloadUpgradedAt: data.ready_at,
+              };
+            }
+
             return {
             payloadReady: true,
             payloadBuildFailed: false,
             payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
             payloadBuildStartedAt: own?.startedAt ?? state.payloadBuildStartedAt,
             payloadCreatedAt: data.ready_at,
+            payloadEngineCalls: data.engine_calls,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
             payloadDetail: detail
@@ -894,6 +921,7 @@ function useEventStreamConnection(): UseEventStreamResult {
     voteCoverage,
     slotOutlook,
     txPoolStats,
+    localBuildStatus,
     currentSlot,
     slotStates,
     slotConfigs,

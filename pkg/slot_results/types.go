@@ -307,6 +307,10 @@ type SlotResult struct {
 	Epoch uint64      `json:"epoch"`
 	Fork  string      `json:"fork"`
 
+	// resident marks the in-memory summary of a record whose full version
+	// lives in the state-db (see Tracker.compactBefore).
+	resident bool
+
 	// AppliedPlan is the frozen plan snapshot the slot executed under.
 	AppliedPlan *action_plan.FrozenPlan `json:"applied_plan,omitempty"`
 
@@ -532,4 +536,46 @@ func (r *SlotResult) Clone() *SlotResult {
 	// The frozen plan is immutable by contract; sharing the pointer is safe.
 
 	return &c
+}
+
+// Summary returns the result trimmed to what an overview (the action plan
+// grid) shows: the build's status and headline payload fields, the attempts,
+// the inclusion and the tx plan verdict. The applied plan, the candidate
+// builds, the attributes and the testing build details — most of a record's
+// size — are left out; the full record is a per-slot request away.
+func (r *SlotResult) Summary() *SlotResult {
+	if r == nil {
+		return nil
+	}
+
+	s := &SlotResult{
+		Slot:             r.Slot,
+		Epoch:            r.Epoch,
+		Fork:             r.Fork,
+		Bids:             r.Bids,
+		BlockSubmissions: r.BlockSubmissions,
+		RevealAttempts:   r.RevealAttempts,
+		Inclusion:        r.Inclusion,
+		TxPlan:           r.TxPlan,
+		DroppedAttempts:  r.DroppedAttempts,
+		UpdatedAt:        r.UpdatedAt,
+	}
+
+	if b := r.Build; b != nil {
+		s.Build = &BuildOutcome{
+			Status:          b.Status,
+			SkipReason:      b.SkipReason,
+			Candidate:       b.Candidate,
+			BlockHash:       b.BlockHash,
+			BlockValueWei:   b.BlockValueWei,
+			NumTransactions: b.NumTransactions,
+			NumBlobs:        b.NumBlobs,
+			Source:          b.Source,
+			Fallback:        b.Fallback,
+			Error:           b.Error,
+			At:              b.At,
+		}
+	}
+
+	return s
 }

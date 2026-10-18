@@ -56,11 +56,13 @@ export interface BuilderAPIConfig {
   serve_candidates?: string;
   on_demand_build?: boolean;
   key_strategy?: string;
+  respond_at_ms?: number; // response gate, ms after the slot start (0 = immediately)
 }
 
 // Build-candidate policy: which parent candidates a slot builds payloads for
 // (auto | always | never per candidate) and how the engine builds run.
 export interface BuildConfig {
+  engine_enabled?: boolean;
   candidate_parent_full?: string;
   candidate_parent_empty?: string;
   candidate_grandparent_full?: string;
@@ -78,10 +80,12 @@ export interface LocalBuildConfig {
   enabled: boolean;
   payload_source: string; // el | local | local_or_el | higher_value
   tx_source: string; // txpool | txpool_el_fill | empty | el_mempool
-  build_el_payload: boolean;
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
   max_attempts: number;
+  start_time_ms?: number; // testing build window, ms relative to the slot start
+  end_time_ms?: number;
+  rebuild_interval_ms?: number;
 }
 
 // Owned transaction pool settings.
@@ -175,7 +179,7 @@ export interface LocalBuildStatus {
   enabled: boolean;
   payload_source: string;
   tx_source: string;
-  build_el_payload: boolean;
+  engine_enabled: boolean;
   txpool: TxPoolStatus;
   plan_checks?: {
     checked: number;
@@ -197,6 +201,8 @@ export interface TxPoolStats {
   bytes: number;
   gas_sum: number;
   value_wei: string;
+  // Far below the base fee: bodies wait in the store, not in memory.
+  cold?: number;
   admitted: number;
   replaced: number;
   removed: number;
@@ -228,6 +234,7 @@ export interface TxPoolTx {
   arrived_slot: number;
   seq: number;
   strikes?: number;
+  cold?: boolean; // far below the base fee, body not in memory
 }
 
 export interface TxPoolResponse {
@@ -260,6 +267,48 @@ export interface TxSelectionSummary {
   fill_skipped?: Record<string, number>;
 }
 
+// The EL mempool mirror (the testing build's fill source).
+export interface ELMempoolStats {
+  active: boolean;
+  mode?: 'websocket' | 'filter' | 'resync';
+  txs: number;
+  senders: number;
+  blob_txs: number;
+  // Far below the base fee: only their fees and nonces are kept, the body
+  // is refetched from the EL once the base fee comes close.
+  cold_txs?: number;
+  gas_sum: number;
+  arrivals: number;
+  started?: string;
+  synced_at?: string;
+}
+
+export interface ELMempoolResponse {
+  stats: ELMempoolStats;
+  txs: TxPoolTx[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+// Pending gas by max fee (log-scale buckets, wei bounds).
+export interface FeeBucket {
+  min_fee: string;
+  max_fee: string;
+  el_gas: number;
+  el_txs: number;
+  private_gas?: number;
+  private_txs?: number;
+}
+
+export interface FeeDistribution {
+  next_base_fee: string;
+  gas_limit: number;
+  buckets: FeeBucket[];
+  private: boolean;
+  mirror_active: boolean;
+}
+
 export interface TxPoolPreviewResponse {
   selection: TxSelectionSummary;
   parent_hash: string;
@@ -281,9 +330,36 @@ export interface LocalBuildInfo {
   attempts?: number;
   dropped?: { hash?: string; reason: string }[];
   built_at?: string;
+  selected_at?: string;
+  builds?: number; // testing builds the target ran; this record is the handed-over one
+  run?: number; // the handed-over build's number
+  runs?: LocalBuildRun[]; // every build of the target up to the hand-over
+  mirror_started?: boolean;
   fill_txs?: number;
   fill_error?: string;
   fill_dropped?: boolean;
+  fill_blobs_dropped?: boolean;
+}
+
+// The engine build's two calls, unix ms.
+export interface EngineCalls {
+  fcu_start: number;
+  fcu_end: number;
+  get_payload_start: number;
+  get_payload_end: number;
+}
+
+// One testing build of a target (rebuilds run when new transactions arrived).
+export interface LocalBuildRun {
+  run: number;
+  status: 'ready' | 'failed' | 'skipped';
+  started_at: string;
+  selected_at?: string;
+  at: string;
+  num_transactions?: number;
+  gas_used?: number;
+  block_value_wei?: string;
+  error?: string;
 }
 
 // SSE local_build_progress event: the live state of one testing build
@@ -293,6 +369,7 @@ export interface LocalBuildProgressEvent {
   slot: number;
   candidate?: string;
   phase: 'building' | 'ready' | 'failed' | 'skipped';
+  run?: number; // the target's build number
   tx_source?: string;
   started_at: number;
   at: number;
@@ -316,7 +393,7 @@ export interface LocalBuildStreamEvent {
   local?: StreamPayloadSummary;
   el?: StreamPayloadSummary;
   info?: LocalBuildInfo;
-  started_at?: number; // unix ms, when the testing build began (after its start delay)
+  started_at?: number; // unix ms, when the handed-over testing build began
   built_at?: number; // unix ms, when testing_buildBlockV1 returned (ready only)
   el_ready_at?: number; // unix ms, when the engine payload of the target was ready
   at: number;
@@ -691,6 +768,8 @@ export type CandidateKey =
 export interface CandidateBuild {
   candidate: CandidateKey;
   startedAt?: number;
+  // The build runs the engine-API build (absent from older events).
+  engine?: boolean;
   readyAt?: number;
   failedAt?: number;
   failed?: boolean;
@@ -716,6 +795,13 @@ export interface SlotState {
   payloadBuildError?: string;
   payloadReady?: boolean;
   payloadCreatedAt?: number;
+  // The engine build's calls (unix ms): forkchoiceUpdated and getPayload;
+  // the build itself is the wait in between.
+  payloadEngineCalls?: EngineCalls;
+  // Testing builds that replaced the handed-over payload after it (count and
+  // the latest replacement's time); payloadCreatedAt stays the hand-over.
+  payloadUpgrades?: number;
+  payloadUpgradedAt?: number;
   payloadBlockHash?: string;
   payloadBlockValue?: number;
   // Candidate of the primary payload (the most canonical ready build).
@@ -766,7 +852,7 @@ export interface SlotState {
   // Local build extension outcome for the slot's primary target.
   localBuild?: LocalBuildStreamEvent;
   // Live testing build state, until the final localBuild event arrives.
-  localBuildLive?: LocalBuildProgressEvent;
+  localBuildLive?: Record<number, LocalBuildProgressEvent>; // by build number
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.
@@ -944,6 +1030,7 @@ export interface BuilderAPIPlan {
   execution_payment_percent?: number; // 0-100, portion of the served total value
   ignore_preference_limit?: boolean; // serve beyond the proposer's max_execution_payment
   response_delay_ms?: number;
+  respond_at_ms?: number;
   serve_candidates?: string; // all | canonical_only | key list
 }
 
@@ -1078,7 +1165,6 @@ export interface ResolvedLocalBuildSettings {
   transactions?: string[];
   transactions_redacted?: number; // hidden explicit list length (no login)
   queued?: string[];
-  build_el_payload: boolean;
   max_txs?: number;
   gas_fill_pct: number;
   ordering: string;

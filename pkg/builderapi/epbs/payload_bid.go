@@ -234,6 +234,17 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	var parentRoot phase0.Root
 	copy(parentRoot[:], parentRootBytes)
 
+	// Timing game: hold the response until the slot's response gate, then
+	// serve the best payload built by then (testing-build upgrades included).
+	if !frozenSettings.AwaitRespondGate(r.Context(), h.chainSvc.SlotToTime(slot)) {
+		log.WithField("respond_at_ms", frozenSettings.RespondAtMs).Info(
+			"getExecutionPayloadBid: request cancelled while held for the response gate")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusCancelled,
+			"request context cancelled while held for the response gate")
+
+		return
+	}
+
 	event, matchErr := h.matchPayloadForParent(r.Context(), slot, parentRoot, parentHash,
 		frozenSettings.ServeCandidates)
 	if matchErr != nil {

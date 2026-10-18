@@ -1,6 +1,7 @@
 package action_plan
 
 import (
+	"context"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -89,6 +90,11 @@ type ResolvedBuildSettings struct {
 	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 
+	// EngineEnabled runs the engine-API build for the slot: the global
+	// build.engine_enabled, overridden by the plan's build.local
+	// build_el_payload.
+	EngineEnabled bool `json:"engine_enabled"`
+
 	// CandidateModes is the effective build-candidate policy for the slot:
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
@@ -117,8 +123,6 @@ type ResolvedLocalBuildSettings struct {
 	TransactionsRedacted int `json:"transactions_redacted,omitempty"`
 	// Queued is the exact ordered hash list for the queued source.
 	Queued []string `json:"queued,omitempty"`
-	// BuildELPayload keeps the engine build when the payload source is local.
-	BuildELPayload bool `json:"build_el_payload"`
 	// Pool selection parameters (tx source txpool).
 	MaxTxs     uint64 `json:"max_txs,omitempty"`
 	GasFillPct uint64 `json:"gas_fill_pct"`
@@ -130,9 +134,11 @@ type ResolvedLocalBuildSettings struct {
 	// (global-only).
 	MaxAttempts uint64 `json:"max_attempts,omitempty"`
 	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
-	// StartDelayMs delays the testing call after the engine build started
-	// (global-only, 0 = at once).
-	StartDelayMs uint64 `json:"start_delay_ms,omitempty"`
+	// StartTimeMs / EndTimeMs / RebuildIntervalMs time the testing builds
+	// (global-only; see config.LocalBuildConfig).
+	StartTimeMs       int64  `json:"start_time_ms,omitempty"`
+	EndTimeMs         int64  `json:"end_time_ms,omitempty"`
+	RebuildIntervalMs uint64 `json:"rebuild_interval_ms,omitempty"`
 	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
 	// 0 = off; exact lists are never reduced).
 	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
@@ -214,6 +220,11 @@ type ResolvedBuilderAPISettings struct {
 	IgnorePreferenceLimit   bool   `json:"ignore_preference_limit,omitempty"`
 
 	DelayMs int64 `json:"delay_ms,omitempty"`
+
+	// RespondAtMs is the slot's response gate in ms after the slot start (0
+	// = respond immediately): bid responses wait for it and then serve the
+	// best payload built by then.
+	RespondAtMs int64 `json:"respond_at_ms,omitempty"`
 
 	// ServeCandidates is the effective serve-candidates policy for the slot
 	// (all, canonical_only, or a comma-separated candidate key list).
@@ -334,6 +345,12 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
 	build.Local = resolveLocalBuild(frozen.Plan, cfg)
 
+	build.EngineEnabled = cfg.Build.EngineEnabled
+	if frozen.Plan != nil && frozen.Plan.Build != nil && frozen.Plan.Build.Local != nil &&
+		frozen.Plan.Build.Local.BuildELPayload != nil {
+		build.EngineEnabled = *frozen.Plan.Build.Local.BuildELPayload
+	}
+
 	// A plan that explicitly activates (mode custom) an available consumer
 	// forces the build past the schedule. A merely-inherited active consumer
 	// never forces, and a custom category whose consumer is unavailable
@@ -430,14 +447,15 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		Enabled:                 cfg.LocalBuild.Enabled,
 		PayloadSource:           cfg.LocalBuild.NormalizedPayloadSource(),
 		TxSource:                cfg.LocalBuild.NormalizedTxSource(),
-		BuildELPayload:          cfg.LocalBuild.BuildELPayload,
 		MaxTxs:                  cfg.TxPool.MaxTxsPerBlock,
 		GasFillPct:              cfg.TxPool.EffectiveGasFillPct(),
 		Ordering:                cfg.TxPool.NormalizedOrdering(),
 		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
 		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
 		MaxStrikes:              cfg.TxPool.MaxStrikes,
-		StartDelayMs:            cfg.LocalBuild.StartDelayMs,
+		RebuildIntervalMs:       cfg.LocalBuild.RebuildIntervalMs,
+		StartTimeMs:             cfg.LocalBuild.StartTimeMs,
+		EndTimeMs:               cfg.LocalBuild.EndTimeMs,
 		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
 	}
 
@@ -468,10 +486,6 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 	if len(override.Queued) > 0 {
 		local.Queued = make([]string, len(override.Queued))
 		copy(local.Queued, override.Queued)
-	}
-
-	if override.BuildELPayload != nil {
-		local.BuildELPayload = *override.BuildELPayload
 	}
 
 	if override.MaxTxs != nil {
@@ -623,6 +637,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		ExecutionPaymentPercent: cfg.BuilderAPI.ExecutionPaymentPercent,
 		IgnorePreferenceLimit:   cfg.BuilderAPI.IgnorePreferenceLimit,
 		ServeCandidates:         cfg.BuilderAPI.ServeCandidates,
+		RespondAtMs:             cfg.BuilderAPI.RespondAtMs,
 		KeyStrategy:             builderAPIKeyStrategy(cfg),
 		Forced:                  forced,
 	}
@@ -639,6 +654,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		applyOverride(&resolved.ExecutionPaymentPercent, api.ExecutionPaymentPercent)
 		applyOverride(&resolved.IgnorePreferenceLimit, api.IgnorePreferenceLimit)
 		applyOverride(&resolved.DelayMs, api.ResponseDelayMs)
+		applyOverride(&resolved.RespondAtMs, api.RespondAtMs)
 
 		if api.TotalValueOverrideGwei != nil {
 			resolved.TotalValueGwei = cloneScalar(api.TotalValueOverrideGwei)
@@ -702,5 +718,40 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 func applyOverride[T any](target *T, override *T) {
 	if override != nil {
 		*target = *override
+	}
+}
+
+// RespondGate returns when the slot's bid responses may go out (zero = at
+// once), given the proposal slot's start.
+func (s *ResolvedBuilderAPISettings) RespondGate(slotStart time.Time) time.Time {
+	if s == nil || s.RespondAtMs == 0 {
+		return time.Time{}
+	}
+
+	return slotStart.Add(time.Duration(s.RespondAtMs) * time.Millisecond)
+}
+
+// AwaitRespondGate holds a bid response until the slot's response gate; false
+// when ctx (the proposer's request) ended first. Without a gate, or once it
+// passed, it returns at once.
+func (s *ResolvedBuilderAPISettings) AwaitRespondGate(ctx context.Context, slotStart time.Time) bool {
+	gate := s.RespondGate(slotStart)
+	if gate.IsZero() {
+		return true
+	}
+
+	wait := time.Until(gate)
+	if wait <= 0 {
+		return true
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

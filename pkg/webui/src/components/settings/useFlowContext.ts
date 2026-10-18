@@ -7,7 +7,7 @@ import type { FlowContext } from '../../settings/flows';
 // settings drawer derive their values and status from.
 export function useFlowContext(): FlowContext {
   const { config, serviceStatus, stats, builderInfo, builderKeysAggregate, txPoolStats } = useEventStream();
-  const { status: localBuild } = useLocalBuildStatus(serviceStatus?.local_build_available);
+  const { status: localBuild } = useLocalBuildStatus();
 
   return useMemo(
     () => ({ config, serviceStatus, stats, builderInfo, builderKeysAggregate, txPoolStats, localBuild }),

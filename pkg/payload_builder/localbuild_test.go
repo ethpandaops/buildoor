@@ -29,13 +29,19 @@ import (
 
 func TestLocalBuildRequestRunEL(t *testing.T) {
 	require.True(t, (*LocalBuildRequest)(nil).RunEL(), "no local request = engine build only")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceEL}).RunEL())
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL, BuildELPayload: false}).RunEL(),
-		"local_or_el needs the engine payload as fallback")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue, BuildELPayload: false}).RunEL(),
-		"higher_value compares against the engine payload")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: true}).RunEL())
-	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: false}).RunEL())
+	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, EngineEnabled: true}).RunEL())
+	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}).RunEL(),
+		"the engine builder switch decides, not the payload source")
+
+	// Without the engine build every source picks the testing payload.
+	for _, source := range []string{config.PayloadSourceEL, config.PayloadSourceLocalOrEL, config.PayloadSourceHigherValue} {
+		req := &LocalBuildRequest{PayloadSource: source}
+		require.Equal(t, config.PayloadSourceLocal, req.selectionRequest().PayloadSource, source)
+		require.Equal(t, source, req.PayloadSource, "the request itself stays untouched")
+	}
+
+	enabled := &LocalBuildRequest{PayloadSource: config.PayloadSourceEL, EngineEnabled: true}
+	require.Same(t, enabled, enabled.selectionRequest())
 }
 
 func TestSelectPayload(t *testing.T) {
@@ -138,16 +144,10 @@ func TestSelectPayload(t *testing.T) {
 // minimal payload echoing the submitted transactions (or fails the first N
 // calls with failErr, "nonce too low" by default).
 type fakeLocalClient struct {
-	calls      [][][]byte
-	failNext   int
-	failErr    error
-	dropLast   bool
-	pending    []*types.Transaction // the EL mempool (txpool_content pending)
-	pendingErr error
-}
-
-func (f *fakeLocalClient) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
-	return f.pending, f.pendingErr
+	calls    [][][]byte
+	failNext int
+	failErr  error
+	dropLast bool
 }
 
 func (f *fakeLocalClient) BuildBlockV1(_ context.Context, v enginev.DataVersion, parent common.Hash,
@@ -387,7 +387,30 @@ func TestBuildLocalTxSources(t *testing.T) {
 
 // fakePoolEL is the txpool ELClient for builder-level pool tests: every
 // account is funded at nonce 0.
-type fakePoolEL struct{}
+// fakePoolEL is the pool's EL: the parent state, and the EL mempool the
+// mirror reads (txpool_content pending; no filter support).
+type fakePoolEL struct {
+	pending    []*types.Transaction
+	pendingErr error
+}
+
+func (f *fakePoolEL) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
+	return f.pending, f.pendingErr
+}
+
+func (f *fakePoolEL) NewPendingTransactionFilter(context.Context) (string, error) {
+	return "", errors.New("filters not supported")
+}
+
+func (f *fakePoolEL) PendingTransactionFilterChanges(context.Context, string) ([]common.Hash, error) {
+	return nil, errors.New("filters not supported")
+}
+
+func (f *fakePoolEL) UninstallFilter(context.Context, string) error { return nil }
+
+func (f *fakePoolEL) TransactionsByHash(context.Context, []common.Hash) (map[common.Hash]*types.Transaction, error) {
+	return map[common.Hash]*types.Transaction{}, nil
+}
 
 func (f *fakePoolEL) GetChainID(context.Context) (*big.Int, error) { return big.NewInt(1), nil }
 func (f *fakePoolEL) HeaderByHash(context.Context, common.Hash) (*types.Header, error) {
@@ -495,7 +518,9 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 	svc.cfg.LocalBuild.Enabled = true
-	svc.cfg.LocalBuild.StartDelayMs = 900
+	svc.cfg.LocalBuild.RebuildIntervalMs = 400
+	svc.cfg.LocalBuild.StartTimeMs = -2000
+	svc.cfg.LocalBuild.EndTimeMs = -150
 	svc.localBuild.availability = LocalBuildAvailability{Configured: true, Available: true, BlobBundle: true}
 
 	tests := []struct {
@@ -520,7 +545,9 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 			require.Equal(t, tc.wantReq, req != nil)
 
 			if req != nil {
-				require.Equal(t, 900*time.Millisecond, req.StartDelay, "the configured start delay reaches the request")
+				require.Equal(t, 400*time.Millisecond, req.RebuildInterval, "the configured timing reaches the request")
+				require.Equal(t, int64(-2000), req.StartMs)
+				require.Equal(t, int64(-150), req.EndMs)
 			}
 		})
 	}
@@ -531,11 +558,6 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 func TestBuildLocalELFill(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.TxPool.Enabled = true
-
-	pool := txpool.NewPool(cfg, &fakePoolEL{}, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
-	require.NoError(t, pool.Start(context.Background()))
-
-	t.Cleanup(func() { _ = pool.Stop() })
 
 	sign := func(nonce uint64) *types.Transaction {
 		key, err := crypto.GenerateKey()
@@ -553,10 +575,20 @@ func TestBuildLocalELFill(t *testing.T) {
 	raw, err := own.MarshalBinary()
 	require.NoError(t, err)
 
-	_, err = pool.Add(raw)
-	require.NoError(t, err)
-
 	elTx := sign(0)
+
+	// A fresh pool per case: its EL mempool mirror keeps what it read.
+	newPool := func(el *fakePoolEL) *txpool.Pool {
+		pool := txpool.NewPool(cfg, el, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
+		require.NoError(t, pool.Start(context.Background()))
+
+		t.Cleanup(func() { _ = pool.Stop() })
+
+		_, err := pool.Add(raw)
+		require.NoError(t, err)
+
+		return pool
+	}
 
 	req := &LocalBuildRequest{
 		TxSource:    config.TxSourceTxPoolELFill,
@@ -566,9 +598,9 @@ func TestBuildLocalELFill(t *testing.T) {
 	}
 
 	t.Run("pool first, then the EL mempool", func(t *testing.T) {
-		client := &fakeLocalClient{pending: []*types.Transaction{own, elTx}}
+		client := &fakeLocalClient{}
 		b, attrs, prelude := newLocalTestBuilder(client)
-		b.txPool = pool
+		b.txPool = newPool(&fakePoolEL{pending: []*types.Transaction{own, elTx}})
 
 		out := b.buildLocal(context.Background(), attrs, prelude, req)
 		require.NoError(t, out.err)
@@ -580,9 +612,9 @@ func TestBuildLocalELFill(t *testing.T) {
 	})
 
 	t.Run("refusal retries without the fill", func(t *testing.T) {
-		client := &fakeLocalClient{pending: []*types.Transaction{elTx}, failNext: 1, failErr: errors.New("invalid transaction")}
+		client := &fakeLocalClient{failNext: 1, failErr: errors.New("invalid transaction")}
 		b, attrs, prelude := newLocalTestBuilder(client)
-		b.txPool = pool
+		b.txPool = newPool(&fakePoolEL{pending: []*types.Transaction{elTx}})
 
 		out := b.buildLocal(context.Background(), attrs, prelude, req)
 		require.NoError(t, out.err)
@@ -594,9 +626,9 @@ func TestBuildLocalELFill(t *testing.T) {
 	})
 
 	t.Run("unreadable EL mempool builds from the pool alone", func(t *testing.T) {
-		client := &fakeLocalClient{pendingErr: errors.New("method not found")}
+		client := &fakeLocalClient{}
 		b, attrs, prelude := newLocalTestBuilder(client)
-		b.txPool = pool
+		b.txPool = newPool(&fakePoolEL{pendingErr: errors.New("method not found")})
 
 		out := b.buildLocal(context.Background(), attrs, prelude, req)
 		require.NoError(t, out.err)
@@ -616,10 +648,10 @@ func TestFireLocalProgress(t *testing.T) {
 	req := &LocalBuildRequest{Candidate: "parent_full", TxSource: config.TxSourceTxPool}
 	started := time.Now()
 
-	b.fireLocalProgress(attrs, req, started, nil)
-	b.fireLocalProgress(attrs, req, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
-	b.fireLocalProgress(attrs, req, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
-	b.fireLocalProgress(attrs, req, started, &localOutcome{err: errors.New("boom")})
+	b.fireLocalProgress(attrs, req, 1, started, nil)
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{err: errors.New("boom")})
 
 	phases := make([]*LocalBuildProgressEvent, 0, 4)
 	for range 4 {
@@ -688,4 +720,28 @@ func TestLocalBuildInfoPrivateTxs(t *testing.T) {
 			require.Equal(t, tc.want, tc.info.PrivateTxs())
 		})
 	}
+}
+
+// TestWithoutFillBlobTxs drops the fill's blob transactions and the later
+// fill transactions of their senders, keeping everyone else's.
+func TestWithoutFillBlobTxs(t *testing.T) {
+	blobSender, other := common.Address{0x01}, common.Address{0x02}
+
+	entry := func(sender common.Address, nonce uint64, blob bool) *txpool.PooledTx {
+		var inner types.TxData = &types.DynamicFeeTx{Nonce: nonce}
+		if blob {
+			inner = &types.BlobTx{Nonce: nonce}
+		}
+
+		tx := types.NewTx(inner)
+
+		return &txpool.PooledTx{Hash: tx.Hash(), Tx: tx, Sender: sender}
+	}
+
+	before := entry(blobSender, 0, false)
+	blob := entry(blobSender, 1, true)
+	after := entry(blobSender, 2, false)
+	kept := entry(other, 0, false)
+
+	require.Equal(t, []*txpool.PooledTx{before, kept}, withoutFillBlobTxs([]*txpool.PooledTx{before, blob, kept, after}))
 }
