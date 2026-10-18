@@ -521,3 +521,26 @@ func (c *Client) GetPendingDeposits(ctx context.Context, stateID string) ([]*ele
 
 	return resp.Data, nil
 }
+
+// GetValidatorPubkey fetches one validator's pubkey at the head state.
+func (c *Client) GetValidatorPubkey(ctx context.Context, index phase0.ValidatorIndex) (phase0.BLSPubKey, error) {
+	provider, ok := c.client.(eth2client.ValidatorsProvider)
+	if !ok {
+		return phase0.BLSPubKey{}, fmt.Errorf("client does not support validators provider")
+	}
+
+	resp, err := provider.Validators(ctx, &api.ValidatorsOpts{
+		State:   "head",
+		Indices: []phase0.ValidatorIndex{index},
+	})
+	if err != nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("failed to get validator %d: %w", index, err)
+	}
+
+	validator := resp.Data[index]
+	if validator == nil || validator.Validator == nil {
+		return phase0.BLSPubKey{}, fmt.Errorf("validator %d not found", index)
+	}
+
+	return validator.Validator.PublicKey, nil
+}

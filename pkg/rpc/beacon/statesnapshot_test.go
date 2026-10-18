@@ -37,6 +37,8 @@ func TestReadStateSnapshotMatchesTheFullState(t *testing.T) {
 		})
 	}
 
+	state.Validators[2].ExitEpoch = farFutureEpoch
+
 	ds := dynssz.GetGlobalDynSsz()
 
 	// Fill the fixed vectors so the encoding is a valid state.
@@ -51,7 +53,7 @@ func TestReadStateSnapshotMatchesTheFullState(t *testing.T) {
 	full.Validators, full.Balances = state.Validators, state.Balances
 	full.PendingDeposits, full.Builders = state.PendingDeposits, state.Builders
 	full.RANDAOMixes[5] = phase0.Root{0x55}
-	full.ProposerLookahead[2] = 1234
+	full.ProposerLookahead[2] = 1
 	full.BuilderPendingPayments[1].Weight = 9
 
 	encoded, err = ds.MarshalSSZ(full)
@@ -73,11 +75,22 @@ func TestReadStateSnapshotMatchesTheFullState(t *testing.T) {
 
 	require.Equal(t, 3, snap.Validators.Len())
 	for i, v := range full.Validators {
-		require.Equal(t, v.PublicKey, snap.Validators.Pubkeys[i])
 		require.Equal(t, v.EffectiveBalance, snap.Validators.EffectiveBalance[i])
 		require.Equal(t, v.ActivationEpoch, snap.Validators.ActivationEpoch[i])
 		require.Equal(t, v.ExitEpoch, snap.Validators.ExitEpoch[i])
 	}
+
+	// Only the lookahead's pubkeys are kept (index 0 fills the rest of the
+	// zeroed lookahead).
+	require.Equal(t, map[phase0.ValidatorIndex]phase0.BLSPubKey{
+		0: {1},
+		1: {2},
+	}, snap.Validators.ProposerPubkeys)
+
+	require.True(t, snap.Validators.HasExited(phase0.BLSPubKey{1}))
+	require.True(t, snap.Validators.HasExited(phase0.BLSPubKey{2}))
+	require.False(t, snap.Validators.HasExited(phase0.BLSPubKey{3}), "not exited")
+	require.False(t, snap.Validators.HasExited(phase0.BLSPubKey{9}), "unknown")
 }
 
 func TestReadStateSnapshotRejectsATruncatedStream(t *testing.T) {

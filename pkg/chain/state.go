@@ -84,20 +84,17 @@ func (s *service) fetchEpochStats(
 		return nil, fmt.Errorf("failed to get beacon state: %w", err)
 	}
 
-	s.publishValidatorIndexCache(snap.Validators.Pubkeys)
+	s.publishProposerPubkeys(snap.Validators.ProposerPubkeys)
 
 	return s.computeEpochStats(snap, epoch)
 }
 
-// publishValidatorIndexCache replaces the published validator-pubkey cache
-// with the given (index-ordered) pubkeys. GetValidatorPubkeyByIndex reads
-// the cache under RLock but copies out only the element it returns, on the
-// contract that a published array is never written afterwards: callers pass
-// a freshly decoded array (each state snapshot decodes its own) and never
-// touch it again.
-func (s *service) publishValidatorIndexCache(pubkeys []phase0.BLSPubKey) {
+// publishProposerPubkeys replaces the known proposer pubkeys (the latest
+// state's proposer lookahead). The published map is never written
+// afterwards: every state snapshot decodes its own.
+func (s *service) publishProposerPubkeys(pubkeys map[phase0.ValidatorIndex]phase0.BLSPubKey) {
 	s.cacheMu.Lock()
-	s.validatorIndexCache = pubkeys
+	s.proposerPubkeys = pubkeys
 	s.cacheMu.Unlock()
 }
 
@@ -226,14 +223,8 @@ func extractPendingDeposits(deposits []*electra.PendingDeposit, validators *beac
 		}
 	}
 
-	for i, pubkey := range validators.Pubkeys {
-		if uint64(validators.ExitEpoch[i]) == FarFutureEpoch {
-			continue
-		}
-
-		if _, ok := queued[pubkey]; ok {
-			queued[pubkey] = true
-		}
+	for pubkey := range queued {
+		queued[pubkey] = validators.HasExited(pubkey)
 	}
 
 	result := make([]PendingDepositInfo, 0, len(deposits))

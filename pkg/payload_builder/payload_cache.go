@@ -12,6 +12,11 @@ import (
 const (
 	// DefaultCacheSize is the number of slots to keep in the cache.
 	DefaultCacheSize = 100
+	// blobRetentionSlots is how long a cached payload keeps its blobs and
+	// proofs: they serve unblinding and the reveal, both due within the
+	// payload's slot (a reorg re-binding a reveal follows within a slot or
+	// two). The commitments stay with the payload.
+	blobRetentionSlots = 8
 )
 
 // candidatePriority orders candidate keys from most to least canonical; it
@@ -34,6 +39,9 @@ type PayloadCache struct {
 	superseded map[phase0.Slot][]*Payload
 	maxSlots   int
 	mu         sync.RWMutex
+	// blobsReleasedBefore: the payloads of the slots below it have released
+	// their blobs.
+	blobsReleasedBefore phase0.Slot
 }
 
 // NewPayloadCache creates a new payload cache with the specified maximum slots.
@@ -70,6 +78,34 @@ func (c *PayloadCache) Store(event *Payload) {
 
 	variants[key] = event
 	c.evictOld()
+
+	if slot > blobRetentionSlots {
+		c.releaseBlobsBefore(slot - blobRetentionSlots)
+	}
+}
+
+// releaseBlobsBefore drops the blobs and proofs of the payloads of the slots
+// below cutoff, current and superseded ones alike. Must hold mu.
+func (c *PayloadCache) releaseBlobsBefore(cutoff phase0.Slot) {
+	if cutoff <= c.blobsReleasedBefore {
+		return
+	}
+
+	for slot, variants := range c.payloads {
+		if slot >= cutoff || slot < c.blobsReleasedBefore {
+			continue
+		}
+
+		for _, payload := range variants {
+			payload.BlobsBundle.release()
+		}
+
+		for _, payload := range c.superseded[slot] {
+			payload.BlobsBundle.release()
+		}
+	}
+
+	c.blobsReleasedBefore = cutoff
 }
 
 // Get retrieves the slot's primary payload: the most canonical classified

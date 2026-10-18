@@ -10,7 +10,6 @@ import (
 	"github.com/ethpandaops/go-eth2-client/api"
 	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
-	"github.com/ethpandaops/go-eth2-client/spec/deneb"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
@@ -247,11 +246,7 @@ func (h *Handler) writeUnblindedPayloadResponse(
 	if fork >= version.DataVersionDeneb {
 		bundle := event.BlobsBundle
 		if bundle == nil {
-			bundle = &payload_builder.BlobsBundle{
-				Commitments: []deneb.KZGCommitment{},
-				Proofs:      []deneb.KZGProof{},
-				Blobs:       []deneb.Blob{},
-			}
+			bundle = payload_builder.NewBlobsBundle(nil, nil, nil)
 		}
 
 		data = &executionPayloadAndBlobsBundle{

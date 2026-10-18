@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"io"
 	nethttp "net/http"
 	"reflect"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/ethpandaops/go-eth2-client/spec/altair"
@@ -50,17 +53,43 @@ type StateSnapshot struct {
 }
 
 // ValidatorSet is the validator registry reduced to what duties, the
-// index→pubkey lookup and the deposit queue model need, one entry per
-// validator index.
+// proposer lookups and the deposit queue model need. Pubkeys are not kept
+// per validator (48 bytes each, 80 MB on a large network): only those of the
+// proposer lookahead, and a digest of every exited validator's.
 type ValidatorSet struct {
-	Pubkeys          []phase0.BLSPubKey
 	EffectiveBalance []phase0.Gwei
 	ActivationEpoch  []phase0.Epoch
 	ExitEpoch        []phase0.Epoch
+
+	// ProposerPubkeys are the pubkeys of the validators in the state's
+	// proposer lookahead (Fulu+; empty before).
+	ProposerPubkeys map[phase0.ValidatorIndex]phase0.BLSPubKey
+
+	exited []uint64 // sorted pubkeyDigest of every exited validator
 }
 
 // Len is the number of validators.
-func (v *ValidatorSet) Len() int { return len(v.Pubkeys) }
+func (v *ValidatorSet) Len() int { return len(v.EffectiveBalance) }
+
+// HasExited reports whether a validator with the pubkey has exited
+// (initiated an exit). Matched by a 64-bit digest: a false positive needs a
+// digest collision among the exited validators.
+func (v *ValidatorSet) HasExited(pubkey phase0.BLSPubKey) bool {
+	digest := pubkeyDigest(pubkey[:])
+	i := sort.Search(len(v.exited), func(i int) bool { return v.exited[i] >= digest })
+
+	return i < len(v.exited) && v.exited[i] == digest
+}
+
+func pubkeyDigest(pubkey []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(pubkey)
+
+	return h.Sum64()
+}
+
+// farFutureEpoch is the exit epoch of a validator that has not exited.
+const farFutureEpoch = phase0.Epoch(^uint64(0))
 
 // stateTypes are the fork-specific state types whose SSZ layout the stream
 // is read with.
@@ -301,7 +330,8 @@ func (s *StateSnapshot) readDynamic(r io.Reader, ds *dynssz.DynSsz, field *sszty
 
 	switch field.Name {
 	case "Validators":
-		s.Validators, err = readValidators(r, size)
+		// The proposer lookahead is a static field: read before any list.
+		s.Validators, err = readValidators(r, size, s.ProposerLookahead)
 	case "PendingDeposits":
 		s.PendingDeposits, err = readContainers[electra.PendingDeposit](r, ds, field, size)
 	case "Builders":
@@ -320,18 +350,23 @@ func (s *StateSnapshot) readDynamic(r io.Reader, ds *dynssz.DynSsz, field *sszty
 }
 
 // readValidators reduces the registry to a ValidatorSet record by record,
-// never holding the full encoded list.
-func readValidators(r io.Reader, size uint64) (ValidatorSet, error) {
+// never holding the full encoded list. proposers selects the pubkeys kept.
+func readValidators(r io.Reader, size uint64, proposers []phase0.ValidatorIndex) (ValidatorSet, error) {
 	if size%validatorSize != 0 {
 		return ValidatorSet{}, fmt.Errorf("size %d is not a multiple of %d", size, validatorSize)
 	}
 
 	n := size / validatorSize
 	set := ValidatorSet{
-		Pubkeys:          make([]phase0.BLSPubKey, n),
 		EffectiveBalance: make([]phase0.Gwei, n),
 		ActivationEpoch:  make([]phase0.Epoch, n),
 		ExitEpoch:        make([]phase0.Epoch, n),
+		ProposerPubkeys:  make(map[phase0.ValidatorIndex]phase0.BLSPubKey, len(proposers)),
+	}
+
+	wanted := make(map[phase0.ValidatorIndex]struct{}, len(proposers))
+	for _, index := range proposers {
+		wanted[index] = struct{}{}
 	}
 
 	var buf [validatorSize]byte
@@ -341,11 +376,20 @@ func readValidators(r io.Reader, size uint64) (ValidatorSet, error) {
 			return ValidatorSet{}, err
 		}
 
-		copy(set.Pubkeys[i][:], buf[0:48])
 		set.EffectiveBalance[i] = phase0.Gwei(binary.LittleEndian.Uint64(buf[80:88]))
 		set.ActivationEpoch[i] = phase0.Epoch(binary.LittleEndian.Uint64(buf[97:105]))
 		set.ExitEpoch[i] = phase0.Epoch(binary.LittleEndian.Uint64(buf[105:113]))
+
+		if _, ok := wanted[phase0.ValidatorIndex(i)]; ok {
+			set.ProposerPubkeys[phase0.ValidatorIndex(i)] = phase0.BLSPubKey(buf[0:48])
+		}
+
+		if set.ExitEpoch[i] != farFutureEpoch {
+			set.exited = append(set.exited, pubkeyDigest(buf[0:48]))
+		}
 	}
+
+	slices.Sort(set.exited)
 
 	return set, nil
 }
