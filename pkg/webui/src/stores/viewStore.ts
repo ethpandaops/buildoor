@@ -9,7 +9,10 @@ export type ViewType =
   | 'builder-keys'
   | 'registrations'
   | 'audit-log'
-  | 'api-docs';
+  | 'api-docs'
+  // The login gate of the server's /debug/pprof pages (the server serves
+  // the app there to a browser without the login cookie); not in the nav.
+  | 'debug-login';
 
 const VIEW_PATHS: Record<ViewType, string> = {
   overview: '/',
@@ -21,6 +24,7 @@ const VIEW_PATHS: Record<ViewType, string> = {
   registrations: '/registrations',
   'audit-log': '/audit-log',
   'api-docs': '/api-docs',
+  'debug-login': '/debug/pprof',
 };
 
 // Paths of views that moved or were merged into another one; old links and

@@ -1156,6 +1156,11 @@ To make frontend changes:
   gas by max fee in log buckets (8/decade) + next base fee + gas limit, the
   pool's private txs as their own series only with a login
 - `POST /rpc` - Transaction pool JSON-RPC ingress (NOT under `/api`; see 0d)
+- `/debug/pprof/*` - Go profiling, login only: a bearer header (tools) or
+  the `buildoor_debug_token` cookie (browser); a browser without it gets the
+  WebUI's gate page (`pages/DebugLoginPage.tsx`), which sets the cookie from
+  the session (path-scoped, SameSite=Strict, ≤ 30 min) and reloads. Every
+  profile download (not the index page) is audited as `debug.pprof`
 - `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
   arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
   client name into fixed-width time buckets from the slot start (default
