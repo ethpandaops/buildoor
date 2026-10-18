@@ -3,6 +3,7 @@ package payload_builder
 import (
 	"context"
 	"crypto/sha256"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -16,18 +17,19 @@ import (
 )
 
 // blobPoolEngine serves engine_getBlobs from a map, all-or-nothing like V2.
+// The per-transaction requests run concurrently, hence the atomic counter.
 type blobPoolEngine struct {
 	EngineClient
 
 	pool  map[common.Hash]*engineall.BlobAndProof
-	calls int
+	calls atomic.Int32
 }
 
 func (e *blobPoolEngine) GetBlobsAgnostic(
 	_ context.Context,
 	request *engineall.GetBlobsRequest,
 ) (*engineall.GetBlobsResponse, error) {
-	e.calls++
+	e.calls.Add(1)
 
 	resp := &engineall.GetBlobsResponse{Version: request.Version}
 
@@ -108,7 +110,7 @@ func TestEngineBlobSourceCompletesWhatThePoolHolds(t *testing.T) {
 	require.Len(t, sidecar.Proofs, 2*kzg4844.CellProofsPerBlob)
 	require.Equal(t, []common.Hash{hashA, hashB}, sidecar.BlobHashes(), "commitments match the versioned hashes")
 
-	require.Equal(t, 4, engine.calls, "one batch, then one request per transaction")
+	require.Equal(t, int32(4), engine.calls.Load(), "one batch, then one request per transaction")
 }
 
 func TestEngineBlobSourceOneRequestWhenComplete(t *testing.T) {
@@ -128,7 +130,7 @@ func TestEngineBlobSourceOneRequestWhenComplete(t *testing.T) {
 	sidecars, err := source.BlobSidecars(context.Background(), txs)
 	require.NoError(t, err)
 	require.Len(t, sidecars, 2)
-	require.Equal(t, 1, engine.calls)
+	require.Equal(t, int32(1), engine.calls.Load())
 }
 
 func TestEngineBlobSourceVersion(t *testing.T) {
