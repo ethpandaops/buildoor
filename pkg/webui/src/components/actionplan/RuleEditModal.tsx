@@ -12,6 +12,9 @@ import {
   BuildForm,
   LocalBuildForm,
   InclusionListForm,
+  CandidatesForm,
+  initCandidates,
+  candidatesFromState,
   initInclusionListState,
   inclusionListPlanFromState,
   inclusionListError,
@@ -159,6 +162,9 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   const [inclusionList, setInclusionList] = useState<InclusionListFormState>(() =>
     initInclusionListState(rule?.build?.inclusion_list)
   );
+  const [candidates, setCandidates] = useState<Record<string, string>>(() =>
+    initCandidates(rule?.build?.candidates)
+  );
   const [transforms, setTransforms] = useState<TransformState>({
     payload: rule?.transforms?.payload ?? '',
     bid: rule?.transforms?.bid ?? '',
@@ -181,6 +187,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     setBuildReorg(filled.build?.reorg_parent_payload ? 'on' : 'off');
     setLocalBuild(initLocalBuildState(filled.build?.local));
     setInclusionList(initInclusionListState(filled.build?.inclusion_list));
+    setCandidates(initCandidates(filled.build?.candidates));
     setTransforms({ payload: '', bid: '', envelope: '' });
     setFormError(null);
   };
@@ -246,8 +253,10 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       return;
     }
     const ilPlan = inclusionListPlanFromState(inclusionList);
+    const candidatePlan = candidatesFromState(candidates);
     const buildPlan = {
       ...(buildReorg === 'on' ? { reorg_parent_payload: true } : {}),
+      ...(candidatePlan ? { candidates: candidatePlan } : {}),
       ...(localPlan ? { local: localPlan } : {}),
       ...(ilPlan ? { inclusion_list: ilPlan } : {}),
     };
@@ -460,6 +469,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 onChange={setRevealState}
               />
               <BuildForm bulk={false} value={buildReorg} disabled={disabled} onChange={setBuildReorg} />
+              <CandidatesForm state={candidates} disabled={disabled} onChange={setCandidates} />
               <LocalBuildForm
                 bulk={false}
                 state={localBuild}

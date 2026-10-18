@@ -29,6 +29,7 @@ import {
   type BuildFlagMode,
   EMPTY_LOCAL_BUILD_STATE,
   InclusionListForm,
+  CandidatesForm,
   initInclusionListState,
   inclusionListPlanFromState,
   inclusionListError,
@@ -1476,47 +1477,7 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
                 {bulk ? (
                   <div className="form-text">Build candidates can only be set per slot.</div>
                 ) : (
-                  <div className="mb-3">
-                    <div className="section-header mb-1">
-                      Build candidates
-                      <InfoHint>
-                        Which parent tuples the slot builds a payload for; each candidate is a
-                        separate engine build. Overrides apply per key.
-                        <dl>
-                          <dt>inherit</dt>
-                          <dd>the global build candidate policy for that key</dd>
-                          <dt>auto</dt>
-                          <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
-                          <dt>always</dt>
-                          <dd>build on every scheduled slot</dd>
-                          <dt>never</dt>
-                          <dd>do not build this candidate</dd>
-                        </dl>
-                        Grandparent candidates are not built across an epoch boundary.
-                      </InfoHint>
-                    </div>
-                    {Object.entries(buildCandidates).map(([key, mode]) => (
-                      <div className="row g-2 align-items-center mb-1" key={key}>
-                        <div className="col-6 small text-secondary">
-                          {key}
-                          {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
-                        </div>
-                        <div className="col-6">
-                          <select
-                            className="form-select form-select-sm"
-                            value={mode}
-                            disabled={formDisabled}
-                            onChange={(e) => setBuildCandidates((prev) => ({ ...prev, [key]: e.target.value }))}
-                          >
-                            <option value="">inherit</option>
-                            <option value="auto">auto</option>
-                            <option value="always">always</option>
-                            <option value="never">never</option>
-                          </select>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <CandidatesForm state={buildCandidates} disabled={formDisabled} onChange={setBuildCandidates} />
                 )}
                 <InclusionListForm
                   bulk={bulk}

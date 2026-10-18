@@ -626,6 +626,71 @@ export const BuildForm: React.FC<{
 );
 
 // ---------------------------------------------------------------------------
+// Build candidates: per-key overrides of the global candidate policy
+// ---------------------------------------------------------------------------
+
+const CANDIDATE_KEYS = ['parent_full', 'parent_empty', 'grandparent_full', 'grandparent_empty'];
+
+// initCandidates is the form state: every candidate key, '' = inherit.
+export function initCandidates(candidates: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(CANDIDATE_KEYS.map((key) => [key, candidates?.[key] ?? '']));
+}
+
+// candidatesFromState returns the overrides, or undefined when all inherit.
+export function candidatesFromState(state: Record<string, string>): Record<string, string> | undefined {
+  const entries = Object.entries(state).filter(([, mode]) => mode !== '');
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+export const CandidatesForm: React.FC<{
+  state: Record<string, string>;
+  disabled: boolean;
+  onChange: (next: Record<string, string>) => void;
+}> = ({ state, disabled, onChange }) => (
+    <div className="mb-3">
+      <div className="section-header mb-1">
+        Build candidates
+        <InfoHint>
+          Which parent tuples the slot builds a payload for; each candidate is a
+          separate engine build. Overrides apply per key.
+          <dl>
+            <dt>inherit</dt>
+            <dd>the global build candidate policy for that key</dd>
+            <dt>auto</dt>
+            <dd>build when chain signals suggest it is needed (parent payload reveal status, head-vote weakness)</dd>
+            <dt>always</dt>
+            <dd>build on every scheduled slot</dd>
+            <dt>never</dt>
+            <dd>do not build this candidate</dd>
+          </dl>
+          Grandparent candidates are not built across an epoch boundary.
+        </InfoHint>
+      </div>
+      {Object.entries(state).map(([key, mode]) => (
+        <div className="row g-2 align-items-center mb-1" key={key}>
+          <div className="col-6 small text-secondary">
+            {key}
+            {CANDIDATE_KEY_HINTS[key] && <InfoHint>{CANDIDATE_KEY_HINTS[key]}</InfoHint>}
+          </div>
+          <div className="col-6">
+            <select
+              className="form-select form-select-sm"
+              value={mode}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...state, [key]: e.target.value })}
+            >
+              <option value="">inherit</option>
+              <option value="auto">auto</option>
+              <option value="always">always</option>
+              <option value="never">never</option>
+            </select>
+          </div>
+        </div>
+      ))}
+    </div>
+);
+
+// ---------------------------------------------------------------------------
 // Inclusion lists (FOCIL, Heze): modeless overrides of the global handling
 // ---------------------------------------------------------------------------
 
