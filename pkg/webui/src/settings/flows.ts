@@ -88,6 +88,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
     description:
       'Builds the slot payloads through the engine API (forkchoiceUpdated → getPayload): when to start, ' +
       'which parent candidates to build on, which slots to build, and how long slot history is kept.',
+    toggle: { key: 'build.engine_enabled' },
     tabs: [
       { id: 'timing', label: 'Timing', sections: [{ keys: ['epbs.build_start_time', 'payload_build_time', 'extra_data'] }] },
       {
@@ -165,6 +166,9 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
     ],
     status: (ctx) => {
+      if (raw('build.engine_enabled', ctx) === false) {
+        return { label: 'Off', tone: 'neutral', metric: 'the testing build alone feeds the bids' };
+      }
       const mode = raw('schedule.mode', ctx);
       const label = mode === 'every_nth' ? 'Every Nth slot' : mode === 'next_n' ? 'Next N slots' : 'Building';
       return {
@@ -200,9 +204,10 @@ export const FLOWS: Record<FlowId, FlowDef> = {
             keys: [
               'local_build.payload_source',
               'local_build.tx_source',
-              'local_build.build_el_payload',
               'local_build.allow_blobs_without_bundle',
-              'local_build.start_delay_ms',
+              'local_build.rebuild_interval_ms',
+              'local_build.start_time_ms',
+              'local_build.end_time_ms',
               'local_build.max_attempts',
             ],
           },
@@ -224,7 +229,6 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Bid with', keys: ['local_build.payload_source'] },
       { label: 'Transactions', keys: ['local_build.tx_source'] },
-      { label: 'Keep engine build', keys: ['local_build.build_el_payload'] },
       {
         label: 'Blob encoding',
         keys: [],
@@ -232,9 +236,10 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Blobs without bundle', keys: ['local_build.allow_blobs_without_bundle'] },
       {
-        label: 'Start · attempts',
-        keys: ['local_build.start_delay_ms', 'local_build.max_attempts'],
-        value: (ctx) => `${fmt('local_build.start_delay_ms', ctx)} · ${fmt('local_build.max_attempts', ctx)}`,
+        label: 'Window · rebuilds · attempts',
+        keys: ['local_build.start_time_ms', 'local_build.end_time_ms', 'local_build.rebuild_interval_ms', 'local_build.max_attempts'],
+        value: (ctx) =>
+          `${fmt('local_build.start_time_ms', ctx)} – ${fmt('local_build.end_time_ms', ctx)} · ${fmt('local_build.rebuild_interval_ms', ctx)} · ${fmt('local_build.max_attempts', ctx)}`,
       },
       {
         label: 'Plan checks',
@@ -468,7 +473,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         id: 'serving',
         label: 'Serving',
         sections: [
-          { keys: ['builder_api.serve_candidates', 'builder_api.on_demand_build', 'builder_api.require_request_auth'] },
+          { keys: ['builder_api.respond_at_ms', 'builder_api.serve_candidates', 'builder_api.on_demand_build', 'builder_api.require_request_auth'] },
         ],
       },
     ],
@@ -480,6 +485,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Subsidy', keys: ['builder_api.block_value_subsidy_gwei'] },
       { label: 'Absolute value', keys: ['builder_api.value_override_gwei'] },
+      { label: 'Respond at', keys: ['builder_api.respond_at_ms'] },
       {
         label: 'Execution payment',
         keys: ['builder_api.execution_payment_gwei', 'builder_api.execution_payment_percent'],

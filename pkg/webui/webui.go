@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
@@ -34,6 +35,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
 	"github.com/ethpandaops/buildoor/version"
 	"github.com/gorilla/mux"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	httpSwagger "github.com/swaggo/http-swagger"
@@ -153,6 +155,8 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.GetTxPool).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.ClearTxPool).Methods(http.MethodDelete)
 	apiRouter.HandleFunc("/buildoor/txpool/preview", apiHandler.GetTxPoolPreview).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool/el-mempool", apiHandler.GetELMempool).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/buildoor/txpool/fees", apiHandler.GetTxPoolFees).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/txpool/{hash}", apiHandler.DropTxPoolTx).Methods(http.MethodDelete)
 	apiRouter.HandleFunc("/buildoor/rpc-access", apiHandler.GetRPCAccess).Methods(http.MethodGet)
 	apiRouter.HandleFunc("/buildoor/rpc-access/keys", apiHandler.CreateRPCKey).Methods(http.MethodPost)
@@ -190,10 +194,6 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 		c.Layout = httpSwagger.StandaloneLayout
 	}))
 
-	// pprof handler — net/http/pprof registers itself on http.DefaultServeMux
-	// via the blank import above.
-	router.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
-
 	// Optional raw HTML snippet injected into <head> of the served index.html
 	// (e.g. the panda menu loader / analytics). The CLI flag wins; fall back
 	// to the legacy BUILDOOR_INJECT_HEAD_HTML env var when the flag is empty.
@@ -214,12 +214,28 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	if err != nil {
 		logrus.Fatalf("error initializing spa handler: %v", err)
 	}
+	// pprof handler — net/http/pprof registers itself on http.DefaultServeMux
+	// via the blank import above. Profiles need a login: the UI is public, and
+	// a profile both exposes the process internals and costs CPU to collect.
+	// Tools send the bearer token; a browser without the login cookie gets
+	// the WebUI, whose gate page sets it (see requireLogin).
+	router.Handle("/debug/pprof", http.RedirectHandler("/debug/pprof/", http.StatusMovedPermanently))
+	router.PathPrefix("/debug/pprof/").Handler(debugHandler(authHandler, apiHandler, spaHandler, http.DefaultServeMux))
+
 	router.PathPrefix("/").Handler(spaHandler)
+
+	// Responses are gzipped for clients that accept it: the slot results and
+	// the event stream are repetitive JSON (about 10:1). The event stream
+	// stays live: every flush ends a gzip block, so each event reaches the
+	// browser at once.
+	compressed, err := gzhttp.NewWrapper(gzhttp.MinSize(1024))
+	if err != nil {
+		logrus.Fatalf("error initializing the compression middleware: %v", err)
+	}
 
 	n := negroni.New()
 	n.Use(negroni.NewRecovery())
-	//n.Use(gzip.Gzip(gzip.DefaultCompression))
-	n.UseHandler(router)
+	n.UseHandler(compressed(router))
 
 	if frontendConfig.Host == "" {
 		frontendConfig.Host = "0.0.0.0"
@@ -243,4 +259,77 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}()
 
 	return apiHandler
+}
+
+// debugTokenCookie carries the login token for the /debug/pprof pages in a
+// browser. The WebUI's gate page sets it from the session (path-scoped,
+// SameSite=Strict, expiring with the token); see DebugLoginPage.tsx.
+const debugTokenCookie = "buildoor_debug_token"
+
+// debugHandler serves the pprof pages to requests that carry a valid login
+// token, as a bearer header (tools: curl, go tool pprof) or the
+// debugTokenCookie (a browser); always valid when no auth provider is
+// configured. Every profile download (heap, goroutine dump, CPU profile,
+// trace, the command line, ...) lands in the audit log; only the index page
+// with its counts does not. A browser without a valid token gets the WebUI
+// (gate), whose page for this path sets the cookie and reloads, or asks for
+// a login; everything else is a 401.
+func debugHandler(authHandler *auth.AuthHandler, auditor *api.APIHandler, gate, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		if header == "" {
+			if cookie, err := r.Cookie(debugTokenCookie); err == nil {
+				header = cookie.Value
+			}
+		}
+
+		if token := authHandler.CheckAuthToken(header); token != nil {
+			profile := strings.Trim(strings.TrimPrefix(r.URL.Path, "/debug/pprof"), "/")
+			if profile == "" {
+				next.ServeHTTP(w, r)
+
+				return
+			}
+
+			recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			next.ServeHTTP(recorder, r)
+
+			result := "ok"
+			if recorder.status >= http.StatusBadRequest {
+				result = fmt.Sprintf("error: HTTP %d", recorder.status)
+			}
+
+			auditor.Audit(r, token, "debug.pprof", profile, map[string]string{"query": r.URL.RawQuery}, result)
+
+			return
+		}
+
+		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Cache-Control", "no-store")
+			gate.ServeHTTP(w, r)
+
+			return
+		}
+
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		http.Error(w, "login required", http.StatusUnauthorized)
+	})
+}
+
+// statusRecorder captures the status code a handler wrote.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+// Flush keeps streaming responses (CPU profile, trace) flushable.
+func (s *statusRecorder) Flush() {
+	if flusher, ok := s.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

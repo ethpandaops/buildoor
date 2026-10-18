@@ -9,7 +9,10 @@ export type ViewType =
   | 'builder-keys'
   | 'registrations'
   | 'audit-log'
-  | 'api-docs';
+  | 'api-docs'
+  // The login gate of the server's /debug/pprof pages (the server serves
+  // the app there to a browser without the login cookie); not in the nav.
+  | 'debug-login';
 
 const VIEW_PATHS: Record<ViewType, string> = {
   overview: '/',
@@ -21,6 +24,7 @@ const VIEW_PATHS: Record<ViewType, string> = {
   registrations: '/registrations',
   'audit-log': '/audit-log',
   'api-docs': '/api-docs',
+  'debug-login': '/debug/pprof',
 };
 
 // Paths of views that moved or were merged into another one; old links and
@@ -53,8 +57,13 @@ function viewFromPath(pathname: string): ViewType {
   return 'overview';
 }
 
+// The server's own pages the app stands in for (the /debug/pprof login gate)
+// keep their exact URL: the gate reloads it once the login cookie is set, and
+// /debug/pprof/ (the index) is not /debug/pprof.
+const SERVER_PATH_PREFIX = '/debug/';
+
 let currentPath = normalizePath(window.location.pathname);
-if (currentPath !== window.location.pathname) {
+if (currentPath !== window.location.pathname && !window.location.pathname.startsWith(SERVER_PATH_PREFIX)) {
   history.replaceState(null, '', currentPath + window.location.search);
 }
 let currentView: ViewType = viewFromPath(currentPath);

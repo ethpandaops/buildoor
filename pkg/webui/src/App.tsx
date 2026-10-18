@@ -12,6 +12,7 @@ const RegistrationsPage = React.lazy(() => import('./pages/RegistrationsPage'));
 const OverviewPage = React.lazy(() => import('./pages/OverviewPage'));
 const AuditLogPage = React.lazy(() => import('./pages/AuditLogPage'));
 const ApiDocsPage = React.lazy(() => import('./pages/ApiDocsPage'));
+const DebugLoginPage = React.lazy(() => import('./pages/DebugLoginPage'));
 
 export const App: React.FC = () => {
   const currentView = useView();
@@ -30,6 +31,7 @@ export const App: React.FC = () => {
           {currentView === 'overview' && <OverviewPage />}
           {currentView === 'audit-log' && <AuditLogPage />}
           {currentView === 'api-docs' && <ApiDocsPage />}
+          {currentView === 'debug-login' && <DebugLoginPage />}
         </Suspense>
       </main>
       <SettingsDrawer />

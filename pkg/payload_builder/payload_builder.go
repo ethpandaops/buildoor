@@ -44,13 +44,19 @@ type PayloadBuilder struct {
 
 	// Active build tracking: multiple candidate builds may run for the same
 	// slot (one per parent tuple); builds for older slots are cancelled when
-	// a newer slot starts.
+	// a newer slot starts. The testing builds outlive the hand-over (their
+	// own window) and are tracked apart under the same rules.
 	activeBuilds map[activeBuildKey]*activeBuild
+	localLoops   map[activeBuildKey]*activeBuild
 	mu           sync.Mutex
 
 	// localProgress reports each custom build live, ahead of the final
 	// LocalBuildEvent that waits for the engine build and the selection.
 	localProgress *utils.Dispatcher[*LocalBuildProgressEvent]
+
+	// localTiming learns how long a testing build takes, to time the final
+	// one against the hand-over.
+	localTiming buildTimingModel
 }
 
 // activeBuildKey identifies one in-progress build by the full parent tuple:
@@ -97,6 +103,7 @@ func NewPayloadBuilder(
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
+		localLoops:        make(map[activeBuildKey]*activeBuild, 4),
 		localProgress:     &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		log:               log.WithField("component", "payload-builder"),
 	}
@@ -168,6 +175,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		}
 	}
 
+	for key, loop := range b.localLoops {
+		if key.slot != attrs.ProposalSlot || key == buildKey {
+			loop.cancelFn()
+			delete(b.localLoops, key)
+		}
+	}
+
 	buildCtx, cancel := context.WithCancel(ctx)
 
 	build := &activeBuild{cancelFn: cancel}
@@ -203,10 +217,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		payloadAttrs = prelude.payloadAttrs
 	}
 
+	fcuStart := time.Now()
+
 	payloadID, err := b.forkchoiceUpdated(buildCtx, attrs, prelude, payloadAttrs)
 	if err != nil {
 		return nil, err
 	}
+
+	fcuEnd := time.Now()
 
 	if runEL {
 		b.mu.Lock()
@@ -214,57 +232,44 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		b.mu.Unlock()
 	}
 
-	var localCh chan localOutcome
+	// The hand-over: the engine build's getPayload, payload_build_time after
+	// the forkchoice update. Consumers get the best payload there; testing
+	// builds still running in their own window may upgrade it afterwards.
+	deadline := time.Now().Add(b.payloadBuildTime(buildTimeMs))
+
+	var (
+		localResultsSet *localResults
+		localDone       chan struct{}
+		localCtx        context.Context
+	)
 
 	if local != nil {
-		localCh = make(chan localOutcome, 1)
+		localResultsSet = newLocalResults()
+		localDone = make(chan struct{})
+		localCtx = b.startLocalLoop(ctx, buildKey, attrs, local, localDone)
+
+		windowStart, windowEnd := b.localWindow(attrs, local)
 
 		go func() {
-			// The engine build collects transactions until its getPayload;
-			// a start delay lets the testing call see the late arrivals too.
-			if local.StartDelay > 0 {
-				delay := time.NewTimer(local.StartDelay)
-				select {
-				case <-buildCtx.Done():
-					delay.Stop()
-					localCh <- localOutcome{err: fmt.Errorf("local build aborted: %w", buildCtx.Err())}
+			defer close(localDone)
 
-					return
-				case <-delay.C:
-				}
-			}
-
-			started := time.Now()
-			b.fireLocalProgress(attrs, local, started, nil)
-
-			outcome := b.buildLocal(buildCtx, attrs, prelude, local)
-			if outcome.info != nil {
-				outcome.info.StartedAt = started
-			}
-
-			b.fireLocalProgress(attrs, local, started, &outcome)
-
-			localCh <- outcome
+			b.runLocalBuilds(localCtx, attrs, prelude, local, windowStart, windowEnd, localResultsSet)
 		}()
 	}
 
 	if runEL {
-		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, buildTimeMs)
-	}
+		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, deadline)
 
-	if localCh != nil {
-		select {
-		case <-buildCtx.Done():
-			result.LocalErr = fmt.Errorf("local build aborted: %w", buildCtx.Err())
-		case outcome := <-localCh:
-			result.Local = outcome.payload
-			result.LocalInfo = outcome.info
-			result.LocalSkipReason = outcome.skipReason
-			result.LocalErr = outcome.err
+		if result.EL != nil {
+			result.EL.EngineCalls.ForkchoiceStart, result.EL.EngineCalls.ForkchoiceEnd = fcuStart, fcuEnd
 		}
 	}
 
-	result, err = b.selectPayload(result, local)
+	if local != nil {
+		b.collectLocal(buildCtx, result, localResultsSet, localDone, deadline)
+	}
+
+	result, err = b.selectPayload(result, local.selectionRequest())
 
 	// ReadyAt marks the hand-over to the consumers. A selected local payload
 	// was built during the engine build's wait, so its build time would
@@ -272,9 +277,118 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	// build's own completion stays on Local.BuiltAt.
 	if err == nil && result.Source == SourceLocal && result.Payload != nil {
 		result.Payload.ReadyAt = time.Now()
+
+		// The build line describes the engine build either way.
+		if result.EL != nil {
+			result.Payload.EngineCalls = result.EL.EngineCalls
+		}
+	}
+
+	if local != nil && localCtx.Err() == nil {
+		select {
+		case <-localDone:
+		default:
+			upgrades := make(chan *BuildResult, 1)
+			result.Upgrades = upgrades
+
+			go b.followLocal(localCtx, *result, local.selectionRequest(), localResultsSet, localDone, upgrades)
+		}
 	}
 
 	return result, err
+}
+
+// localWindow returns the testing build window of the target in wall time.
+func (b *PayloadBuilder) localWindow(attrs *beacon.PayloadAttributesEvent, req *LocalBuildRequest) (time.Time, time.Time) {
+	slotStart := b.chainSvc.SlotToTime(attrs.ProposalSlot)
+
+	return slotStart.Add(time.Duration(req.StartMs) * time.Millisecond),
+		slotStart.Add(time.Duration(req.EndMs) * time.Millisecond)
+}
+
+// startLocalLoop gives the target's testing builds their own lifetime: until
+// the window ends (plus a build that overruns it), unless a newer build of
+// the tuple, a newer slot or AbortBuild cancels them.
+func (b *PayloadBuilder) startLocalLoop(
+	ctx context.Context,
+	key activeBuildKey,
+	attrs *beacon.PayloadAttributesEvent,
+	req *LocalBuildRequest,
+	done <-chan struct{},
+) context.Context {
+	_, windowEnd := b.localWindow(attrs, req)
+
+	loopCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), windowEnd.Add(lateBuildTimeout))
+	loop := &activeBuild{cancelFn: cancel}
+
+	b.mu.Lock()
+	b.localLoops[key] = loop
+	b.mu.Unlock()
+
+	go func() {
+		select {
+		case <-done:
+		case <-loopCtx.Done():
+		}
+
+		cancel()
+
+		b.mu.Lock()
+		if b.localLoops[key] == loop {
+			delete(b.localLoops, key)
+		}
+		b.mu.Unlock()
+	}()
+
+	return loopCtx
+}
+
+// collectLocal hands the best testing build over once the builds are done or
+// the deadline (plus a short grace for a final build in flight) has passed.
+// A final build still running then is abandoned: the EL finishes it anyway,
+// but no consumer waits for it.
+func (b *PayloadBuilder) collectLocal(
+	ctx context.Context,
+	result *BuildResult,
+	results *localResults,
+	done <-chan struct{},
+	deadline time.Time,
+) {
+	timer := time.NewTimer(max(time.Until(deadline.Add(handoverGrace)), 0))
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+	case <-ctx.Done():
+		result.LocalErr = fmt.Errorf("local build aborted: %w", ctx.Err())
+
+		return
+	}
+
+	outcome, ok := results.result()
+	if !ok {
+		result.LocalErr = errors.New("local build not ready at the hand-over")
+
+		return
+	}
+
+	result.Local = outcome.payload
+	result.LocalInfo = outcome.info
+	result.LocalSkipReason = outcome.skipReason
+	result.LocalErr = outcome.err
+}
+
+// payloadBuildTime is how long the engine build collects transactions before
+// its getPayload: the live setting, or an explicit per-build time
+// (speculative candidates).
+func (b *PayloadBuilder) payloadBuildTime(buildTimeMs uint64) time.Duration {
+	ms := b.cfg.PayloadBuildTime
+	if buildTimeMs != 0 {
+		ms = buildTimeMs
+	}
+
+	return time.Duration(ms) * time.Millisecond
 }
 
 // fireLocalProgress reports a custom build's live state: building (outcome
@@ -282,12 +396,14 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 func (b *PayloadBuilder) fireLocalProgress(
 	attrs *beacon.PayloadAttributesEvent,
 	req *LocalBuildRequest,
+	run int,
 	started time.Time,
 	outcome *localOutcome,
 ) {
 	event := &LocalBuildProgressEvent{
 		Slot:      attrs.ProposalSlot,
 		Candidate: req.Candidate,
+		Run:       run,
 		Phase:     LocalStatusBuilding,
 		TxSource:  req.TxSource,
 		StartedAt: started,
@@ -592,21 +708,14 @@ func (b *PayloadBuilder) buildEngine(
 	attrs *beacon.PayloadAttributesEvent,
 	prelude *buildPrelude,
 	payloadID paris.PayloadID,
-	buildTimeMs uint64,
+	deadline time.Time,
 ) (*Payload, error) {
-	// Read the build time live from config so UI overrides take effect
-	// immediately; an explicit per-build time (speculative candidates) wins.
-	payloadBuildTime := b.cfg.PayloadBuildTime
-	if buildTimeMs != 0 {
-		payloadBuildTime = buildTimeMs
-	}
-
-	b.log.Infof("Allowing payload to build for: %dms", payloadBuildTime)
+	b.log.Infof("Allowing payload to build for: %dms", time.Until(deadline).Milliseconds())
 
 	// Wait for the EL to accumulate transactions, but abort early (with an error)
 	// if the build is cancelled by a newer slot or the context deadline is hit,
 	// rather than sleeping into a doomed getPayload call.
-	buildTimer := time.NewTimer(time.Duration(payloadBuildTime) * time.Millisecond)
+	buildTimer := time.NewTimer(max(time.Until(deadline), 0))
 	defer buildTimer.Stop()
 
 	select {
@@ -616,10 +725,14 @@ func (b *PayloadBuilder) buildEngine(
 	}
 
 	// Retrieve the built payload as the fork-agnostic union.
+	getPayloadStart := time.Now()
+
 	resp, err := b.engineClient.GetPayloadAgnostic(ctx, prelude.engineVersion, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
+
+	getPayloadEnd := time.Now()
 
 	payload, err := b.finalizePayload(ctx, attrs, prelude, resp)
 	if err != nil {
@@ -627,6 +740,7 @@ func (b *PayloadBuilder) buildEngine(
 	}
 
 	payload.Source = SourceEL
+	payload.EngineCalls = &EngineCallTimes{GetPayloadStart: getPayloadStart, GetPayloadEnd: getPayloadEnd}
 
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
@@ -654,8 +768,9 @@ func (b *PayloadBuilder) buildLocal(
 		txs [][]byte
 		// poolSelected are the pool entries behind txs (txpool source only);
 		// submitted is the list error attribution works on — the pool entries
-		// once txs holds nothing but them (no inclusion-list prefix).
-		poolSelected, submitted []*txpool.PooledTx
+		// once txs holds nothing but them (no inclusion-list prefix); fill
+		// is the EL mempool part at the end of txs.
+		poolSelected, submitted, fill []*txpool.PooledTx
 	)
 
 	switch req.TxSource {
@@ -679,6 +794,7 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
+			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("queued list: %w", err)}
@@ -695,6 +811,13 @@ func (b *PayloadBuilder) buildLocal(
 	case config.TxSourceELMempool:
 		txs = nil
 
+		// The EL builds from its own mempool and the testing call carries no
+		// inclusion list: a slot with one gets a payload that ignores it.
+		if il := attrs.InclusionListTransactions; len(il) > 0 {
+			info.InclusionListTxs = len(il)
+			info.InclusionListDropped = true
+		}
+
 	default: // txpool, txpool_el_fill
 		if b.txPool == nil {
 			return localOutcome{skipReason: LocalSkipTxPoolUnavailable}
@@ -707,7 +830,7 @@ func (b *PayloadBuilder) buildLocal(
 		// The fill is best effort: without the EL mempool the block is built
 		// from the pool alone and the reason recorded.
 		var (
-			fill         []*types.Transaction
+			pending      []*txpool.PooledTx
 			fillSidecars txpool.SidecarSource
 		)
 
@@ -716,7 +839,9 @@ func (b *PayloadBuilder) buildLocal(
 				fillSidecars = source
 			}
 
-			pending, err := b.localClient.PendingPoolTransactions(ctx)
+			mirrored, started, err := b.txPool.ELMempool(ctx)
+			info.MirrorStarted = started
+
 			if err != nil {
 				info.FillError = err.Error()
 
@@ -724,7 +849,7 @@ func (b *PayloadBuilder) buildLocal(
 					Warn("Cannot read the EL mempool, building the custom block from the pool alone")
 			}
 
-			fill = pending
+			pending = mirrored
 		}
 
 		selection, err := b.txPool.Select(ctx, &txpool.SelectParams{
@@ -739,7 +864,8 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
-			Fill:           fill,
+			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
+			Fill:           pending,
 			FillSidecars:   fillSidecars,
 		})
 		if err != nil {
@@ -747,6 +873,7 @@ func (b *PayloadBuilder) buildLocal(
 		}
 
 		info.FillTxs = len(selection.Fill)
+		fill = selection.Fill
 
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
@@ -776,6 +903,7 @@ func (b *PayloadBuilder) buildLocal(
 		info.ExpectedHashes = txHashes(txs)
 	}
 
+	info.SelectedAt = time.Now()
 	parentHash := common.Hash(attrs.ParentBlockHash)
 
 	// The EL refuses the whole call on one bad transaction (geth, ethrex) or
@@ -801,6 +929,32 @@ func (b *PayloadBuilder) buildLocal(
 		resp, err = b.localClient.BuildBlockV1(ctx, prelude.engineVersion, parentHash, prelude.payloadAttrs, txs, nil)
 		if err == nil || ctx.Err() != nil {
 			break
+		}
+
+		if !info.FillDropped && !info.FillBlobsDropped && hasBlobTxs(fill) {
+			// The fill's blob transactions carry sidecars assembled from the
+			// EL blob pool: the likeliest part to be refused, so they go
+			// first, together with their senders' later fill transactions.
+			kept := withoutFillBlobTxs(fill)
+
+			encoded, encErr := encodeTxs(kept, req.BlobEncoding)
+			if encErr != nil {
+				return localOutcome{info: info, err: encErr}
+			}
+
+			b.log.WithError(err).WithFields(logrus.Fields{
+				"slot":    attrs.ProposalSlot,
+				"dropped": len(fill) - len(kept),
+			}).Warn("EL refused the transaction list, retrying without the EL mempool blob transactions")
+
+			txs = append(txs[:len(txs)-info.FillTxs:len(txs)-info.FillTxs], encoded...)
+			fill = kept
+			info.FillTxs = len(kept)
+			info.FillBlobsDropped = true
+			info.SubmittedTxs = len(txs)
+			info.ExpectedHashes = txHashes(txs)
+
+			continue
 		}
 
 		if info.FillTxs > 0 && !info.FillDropped {
@@ -886,6 +1040,13 @@ func (b *PayloadBuilder) buildLocal(
 	payload.Local = info
 	info.BuiltAt = payload.ReadyAt
 
+	// geth checks the parent against its head and then builds on whatever
+	// the head is by then: a head that moved in between yields a block on
+	// another parent, which no bid for this target may carry.
+	if err := verifyBuiltParent(payload, attrs); err != nil {
+		return localOutcome{info: info, err: err}
+	}
+
 	// The submitted list is a contract: the payload must hold exactly these
 	// transactions in this order. ELs that silently filter (erigon) or
 	// reorder would otherwise bid a block that is not the plan; the bid is
@@ -901,6 +1062,52 @@ func (b *PayloadBuilder) buildLocal(
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
 	return localOutcome{payload: payload, info: info}
+}
+
+// hasBlobTxs reports whether any of the transactions is a blob transaction.
+func hasBlobTxs(txs []*txpool.PooledTx) bool {
+	for _, tx := range txs {
+		if tx.Tx.Type() == types.BlobTxType {
+			return true
+		}
+	}
+
+	return false
+}
+
+// withoutFillBlobTxs drops the blob transactions of a fill and every later
+// fill transaction of their senders, which would follow a nonce gap.
+func withoutFillBlobTxs(fill []*txpool.PooledTx) []*txpool.PooledTx {
+	kept := make([]*txpool.PooledTx, 0, len(fill))
+	dropped := make(map[common.Address]bool, 4)
+
+	for _, tx := range fill {
+		if dropped[tx.Sender] || tx.Tx.Type() == types.BlobTxType {
+			dropped[tx.Sender] = true
+
+			continue
+		}
+
+		kept = append(kept, tx)
+	}
+
+	return kept
+}
+
+// encodeTxs encodes pool entries for the testing call.
+func encodeTxs(txs []*txpool.PooledTx, blobEncoding string) ([][]byte, error) {
+	out := make([][]byte, 0, len(txs))
+
+	for _, tx := range txs {
+		raw, err := txpool.EncodeTx(tx.Tx, blobEncoding)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s: %w", tx.Hash.Hex(), err)
+		}
+
+		out = append(out, raw)
+	}
+
+	return out, nil
 }
 
 // gweiToWei converts a gwei amount to wei (nil for 0).
@@ -929,6 +1136,25 @@ func txHashes(txs [][]byte) []string {
 	}
 
 	return out
+}
+
+// verifyBuiltParent checks that the payload extends the requested parent.
+func verifyBuiltParent(payload *Payload, attrs *beacon.PayloadAttributesEvent) error {
+	if payload.ExecutionPayload == nil {
+		return errors.New("local payload carries no execution payload")
+	}
+
+	if payload.ExecutionPayload.ParentHash != attrs.ParentBlockHash {
+		return fmt.Errorf("local payload built on parent %#x, requested %#x",
+			payload.ExecutionPayload.ParentHash, attrs.ParentBlockHash)
+	}
+
+	if attrs.ParentBlockNumber > 0 && payload.ExecutionPayload.BlockNumber != attrs.ParentBlockNumber+1 {
+		return fmt.Errorf("local payload has block number %d, the parent is %d",
+			payload.ExecutionPayload.BlockNumber, attrs.ParentBlockNumber)
+	}
+
+	return nil
 }
 
 // verifyBuiltPayload checks that the payload holds exactly the expected
@@ -1118,6 +1344,13 @@ func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 			delete(b.activeBuilds, key)
 
 			b.log.WithField("slot", slot).Debug("Build aborted")
+		}
+	}
+
+	for key, loop := range b.localLoops {
+		if key.slot == slot {
+			loop.cancelFn()
+			delete(b.localLoops, key)
 		}
 	}
 }

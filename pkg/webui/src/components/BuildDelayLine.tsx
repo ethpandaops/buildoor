@@ -13,6 +13,15 @@ interface BuildDelayLineProps {
   className?: string;
   // Overrides the line color (build candidate identity).
   lineColor?: string;
+  // The finalized line's actual request spans (absolute ms): drawn solid,
+  // the waits between them dashed.
+  calls?: { start: number; end: number }[];
+  // Draw the in-progress line dashed: the span is mostly a wait (the engine
+  // build between its two calls).
+  dashed?: boolean;
+  // A finalized line ending in a dot stops this many px short of its end,
+  // so it does not run into (or past) the dot.
+  endGapPx?: number;
 }
 
 // BuildDelayLine renders the payload build span on the slot timeline.
@@ -32,7 +41,10 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
   expectedEndAt,
   onClick,
   className = 'build-delay-line',
-  lineColor
+  lineColor,
+  calls,
+  dashed,
+  endGapPx = 0
 }) => {
   const ref = useRef<HTMLDivElement>(null);
   const left = Math.max(0, leftPct);
@@ -54,11 +66,15 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
       return width;
     };
 
-    // Finalized build: static line from build start to the end time.
+    // Finalized build: static line from build start to the end time,
+    // clipped short of the end dot (call segments included).
     if (endAt) {
       show(pctAt(endAt));
+      el.style.clipPath = endGapPx > 0 ? `inset(-3px ${endGapPx}px -3px 0)` : '';
       return;
     }
+
+    el.style.clipPath = '';
 
     // In progress: lay out the full extent and grow into it in real time.
     const now = Date.now();
@@ -70,17 +86,63 @@ export const BuildDelayLine: React.FC<BuildDelayLineProps> = ({
     const remaining = capAt - now;
     if (remaining <= 0 || progress >= 1) return;
 
+    // Revealed from the left by a clip, so a dashed pattern keeps its
+    // spacing while the line grows (a scale would stretch it).
     const animation = el.animate(
-      // `scale`, not `transform`: the line CSS centers it with a translate.
-      [{ scale: `${progress} 1` }, { scale: '1 1' }],
+      [{ clipPath: `inset(-3px ${(1 - progress) * 100}% -3px 0)` }, { clipPath: 'inset(-3px 0% -3px 0)' }],
       { duration: remaining, easing: 'linear', fill: 'forwards' },
     );
 
     return () => animation.cancel();
-  }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt]);
+  }, [left, slotStartTime, rangeStart, totalRange, endAt, expectedEndAt, endGapPx]);
 
   // Styling: finalized (plain) vs in-progress (pulsing).
   const stateClass = endAt ? '' : ` ${className}-active`;
+
+  // A finalized line with known requests: the span is the dashed wait, each
+  // request a solid segment on it (positioned within the span).
+  const pctAt = (at: number) => ((at - slotStartTime - rangeStart) / totalRange) * 100;
+  const spanWidth = endAt ? Math.min(100, pctAt(endAt)) - left : 0;
+  const segments = endAt && calls && spanWidth > 0
+    ? calls
+      .map((call) => {
+        const from = Math.max(pctAt(call.start), left);
+        const to = Math.min(pctAt(call.end), left + spanWidth);
+        return { left: ((from - left) / spanWidth) * 100, width: Math.max(((to - from) / spanWidth) * 100, 0.8) };
+      })
+      .filter((segment) => segment.left < 100)
+    : null;
+  const color = lineColor ?? 'rgba(77, 141, 255, 0.9)';
+
+  if (segments) {
+    return (
+      <div
+        ref={ref}
+        className={`${className} ${className}-split`}
+        style={{ transformOrigin: 'left center', color }}
+        onClick={onClick}
+      >
+        {segments.map((segment, i) => (
+          <span
+            key={i}
+            className={`${className}-call`}
+            style={{ left: `${segment.left}%`, width: `${segment.width}%`, backgroundColor: color }}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  if (dashed && !endAt) {
+    return (
+      <div
+        ref={ref}
+        className={`${className} ${className}-split ${className}-pulse`}
+        style={{ color }}
+        onClick={onClick}
+      />
+    );
+  }
 
   return (
     <div

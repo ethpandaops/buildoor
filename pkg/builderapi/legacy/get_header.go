@@ -130,6 +130,17 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Timing game: hold the response until the slot's response gate, then
+	// serve the best payload built by then (testing-build upgrades included).
+	if !frozenSettings.AwaitRespondGate(r.Context(), h.chainSvc.SlotToTime(slot)) {
+		log.WithField("respond_at_ms", frozenSettings.RespondAtMs).Info(
+			"getHeader: request cancelled while held for the response gate")
+		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusCancelled,
+			"request context cancelled while held for the response gate")
+
+		return
+	}
+
 	// The slot may hold several candidate payloads (reorg preparedness): serve
 	// whichever one matches the requested parent hash.
 	var event *payload_builder.Payload

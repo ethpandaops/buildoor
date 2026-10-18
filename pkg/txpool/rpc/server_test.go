@@ -64,6 +64,24 @@ func (f *fakeEL) SendRawTransaction(context.Context, []byte) (common.Hash, error
 	return common.Hash{}, nil
 }
 
+func (f *fakeEL) PendingPoolTransactions(context.Context) ([]*types.Transaction, error) {
+	return nil, nil
+}
+
+func (f *fakeEL) NewPendingTransactionFilter(context.Context) (string, error) {
+	return "", errors.New("not used")
+}
+
+func (f *fakeEL) PendingTransactionFilterChanges(context.Context, string) ([]common.Hash, error) {
+	return nil, errors.New("not used")
+}
+
+func (f *fakeEL) UninstallFilter(context.Context, string) error { return nil }
+
+func (f *fakeEL) TransactionsByHash(context.Context, []common.Hash) (map[common.Hash]*types.Transaction, error) {
+	return nil, errors.New("not used")
+}
+
 func (f *fakeEL) RawCall(_ context.Context, method string, params []any) ([]byte, error) {
 	f.calls = append(f.calls, method)
 

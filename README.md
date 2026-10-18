@@ -114,6 +114,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--el-engine-api` | *(required)* | Execution layer Engine API URL |
 | `--el-jwt-secret` | *(required)* | Path to JWT secret file |
 | `--el-rpc` | | Execution layer JSON-RPC URL (required for lifecycle) |
+| `--el-ws` | | EL websocket JSON-RPC URL (optional): the testing build's EL mempool mirror follows `newPendingTransactions` live instead of polling a filter |
 | `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle); from Gloas its address is the coinbase of the built payloads |
 | `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `--config` | | Path to YAML config file |
@@ -124,6 +125,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 |------|---------|-------------|
 | `--builder-api-enabled` | `false` | Enable the Builder API at startup |
 | `--builder-api-subsidy` | `100000` | Block value subsidy added to served bids (Gwei; negative = the builder's margin on Gloas bids, ignored before Gloas) |
+| `--builder-api-respond-at` | `0` | Timing game: hold Builder API bid responses until this many ms after the slot start, then serve the best payload built by then (0 = respond immediately; keep it within the proposer's getHeader timeout) |
 
 ### ePBS Flags
 
@@ -180,16 +182,20 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--engine-build-enabled` | `true` | Run the engine-API build (forkchoiceUpdated → getPayload); off, the testing build alone feeds the bids and slots without one are skipped |
 | `--local-build-enabled` | `false` | Build the additional local payload per slot |
 | `--local-build-payload-source` | `el` | Which payload feeds bids/reveals: `el` (local is a shadow), `local`, `local_or_el`, `higher_value` (whichever block is worth more) |
 | `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `txpool_el_fill` (pool first, then the EL mempool's pending txs fill the block), `empty`, `el_mempool` (per-slot plans may set an explicit list) |
-| `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
+| `--local-build-start-time` | `0` | Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it) |
+| `--local-build-end-time` | `0` | End of the testing build window: no testing build starts unless it is estimated to finish by then (0 = auto: 1/120 of the slot before the slot start) |
+| `--local-build-rebuild-interval` | `0` | Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end; consumers get the best payload at the engine build's hand-over and a better later one for their next request (0 = one build, timed to finish at the window end) |
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
 | `--txpool-auth` | `open` | Who may call `/rpc`: `open` (anonymous callers too, rate-limited) or `api_key` (an API key, `--txpool-auth-token` or a WebUI login is required) |
 | `--txpool-auth-token` | | Static API key, accepted next to the keys managed in the WebUI |
+| `--txpool-store` | | Directory persisting the transaction pool across restarts (its own pebble database, never the state-db; empty = memory only) |
 | `--txpool-rpc-anon-rate` | `20` | Anonymous `/rpc` calls per second (0 = unlimited) |
 | `--txpool-rpc-anon-scope` | `per_ip` | Anonymous rate-limit scope: `per_ip` or `shared` |
 | `--txpool-rpc-key-rate` | `0` | Default `/rpc` calls per second per API key (0 = unlimited) |

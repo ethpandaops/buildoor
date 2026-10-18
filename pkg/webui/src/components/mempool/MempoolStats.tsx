@@ -66,6 +66,7 @@ export const MempoolStats: React.FC<MempoolStatsProps> = ({ stats, gasLimit }) =
         <InlineStat label="Value" value={`${weiToEth(stats?.value_wei)} ETH`} title="Summed value of the queued transactions" />
         <InlineStat label="Size" value={formatBytes(stats?.bytes ?? 0)} />
         <InlineStat label="Blob txs / blobs" value={`${stats?.blob_txs ?? 0} / ${stats?.blobs ?? 0}`} />
+        <InlineStat label="Cold" value={(stats?.cold ?? 0).toLocaleString()} title="Far below the base fee: kept in the pool store instead of memory until the base fee comes close" />
         <InlineStat label="Nonce too low" value={(stats?.evicted_nonce_too_low ?? 0).toLocaleString()} title="Evicted because the chain passed their nonce" />
         <InlineStat label="Expired" value={(stats?.evicted_ttl ?? 0).toLocaleString()} title="Evicted by the slot TTL" />
         <InlineStat label="Struck out" value={(stats?.evicted_strikes ?? 0).toLocaleString()} title="Dropped after repeated attributed EL refusals" />

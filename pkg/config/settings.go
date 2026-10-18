@@ -25,6 +25,8 @@ const (
 // value an operator configured.
 var retiredKeys = map[string]string{
 	"topup_amount": KeyDepositAmount,
+	// The engine build switch used to apply to payload source local only.
+	"local_build.build_el_payload": KeyBuildEngineEnabled,
 }
 
 // keyState holds the in-memory 3-way state for one setting key.

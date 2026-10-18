@@ -39,6 +39,7 @@ type Config struct {
 	ELEngineAPI       string            `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
 	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
 	ELRPC             string            `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	ELWS              string            `yaml:"el_ws" json:"el_ws,omitempty"`                   // Optional: EL websocket, follows the EL mempool live
 	WalletPrivkey     string            `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
 	APIPort           int               `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
 	AuthProviderURL   string            `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
@@ -186,6 +187,15 @@ type BuilderAPIConfig struct {
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
+
+	// RespondAtMs holds bid responses until this many ms after the proposal
+	// slot start (negative = before it), then serves the best payload built
+	// by then: a timing game, the builder keeps collecting transactions while
+	// the proposer waits. 0 = respond immediately. A request arriving after
+	// the gate is answered at once. The proposer's client stops waiting after
+	// its own getHeader timeout, so a gate too far past its request loses the
+	// slot.
+	RespondAtMs int64 `yaml:"respond_at_ms" json:"respond_at_ms"`
 
 	// ExecutionPaymentGwei, when non-zero, claims this absolute portion of a
 	// served Gloas bid's total value as execution_payment (the trusted
@@ -373,6 +383,14 @@ type BuildConfig struct {
 	// CandidateGrandparentEmpty: reorg combined with a withheld grandparent
 	// payload. Gloas only.
 	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
+
+	// EngineEnabled runs the engine-API build (forkchoiceUpdated with
+	// attributes → getPayload; default true). Disabled, the EL builds no
+	// payload of its own: the testing build alone feeds the bids, whatever
+	// the payload source (only the head-pinning forkchoiceUpdated the
+	// testing call needs remains), and a target without a testing build is
+	// skipped.
+	EngineEnabled bool `yaml:"engine_enabled" json:"engine_enabled"`
 
 	// Parallel runs the selected candidate builds concurrently against the
 	// EL, each with its own payload ID (default). Disable it to serialize
@@ -610,13 +628,6 @@ type LocalBuildConfig struct {
 	// may also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
 
-	// BuildELPayload keeps the engine-API build running when PayloadSource is
-	// local (default true, so the EL payload stays available for
-	// comparison). Set to false to skip the engine build and its wait when
-	// only the local payload matters. Ignored for el, local_or_el and
-	// higher_value, which need the engine payload.
-	BuildELPayload bool `yaml:"build_el_payload" json:"build_el_payload"`
-
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on
 	// ELs whose testing endpoint returns an empty blobs bundle (reth, ethrex):
 	// the payload then commits to blobs buildoor cannot reveal — a deliberate
@@ -635,14 +646,23 @@ type LocalBuildConfig struct {
 	// Exact sources (explicit, queued) never retry: a refusal fails them.
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
 
-	// StartDelayMs delays the testing_buildBlockV1 call after the engine
-	// build started (its forkchoiceUpdated), in ms; 0 = at once. The testing
-	// call builds from the transactions known at that moment, while the
-	// engine build keeps adding arrivals until its getPayload, so a delay
-	// lets the testing block see the same late transactions. It should leave
-	// the call time to finish before the engine payload is due
-	// (payload_build_time): the target waits for both.
-	StartDelayMs uint64 `yaml:"start_delay_ms" json:"start_delay_ms"`
+	// StartTimeMs / EndTimeMs bound the testing builds, in ms relative to the
+	// proposal slot start (negative = before it), independent of the engine
+	// build's window. 0 = auto (ApplySlotDefaults). The testing call builds
+	// once from the transactions known when it starts, so no build starts
+	// unless it is estimated to finish by EndTimeMs (observed selection time
+	// plus call cost per gas).
+	StartTimeMs int64 `yaml:"start_time_ms" json:"start_time_ms"`
+	EndTimeMs   int64 `yaml:"end_time_ms" json:"end_time_ms"`
+
+	// RebuildIntervalMs 0 = one testing build, timed to finish at EndTimeMs.
+	// > 0 (pool tx sources) = build at StartTimeMs and rebuild whenever the
+	// pool or the EL mempool got new transactions, at least this many ms
+	// after the previous build, until EndTimeMs. Consumers take the best
+	// payload at the hand-over (the engine build's getPayload); a later,
+	// better testing build replaces it for the next bid or getHeader. Each
+	// build costs the EL a full block execution.
+	RebuildIntervalMs uint64 `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the
@@ -707,6 +727,11 @@ type TxPoolConfig struct {
 	// the keys managed in the WebUI (rate limit RPCKeyRate). Startup-only;
 	// never serialized.
 	AuthToken string `yaml:"auth_token" json:"-"`
+
+	// StoreDir is where the queued transactions persist across restarts (a
+	// pebble database of its own; empty = memory only). Startup-only: pool
+	// transactions never go into the state-db.
+	StoreDir string `yaml:"store_dir" json:"store_dir,omitempty"`
 
 	// RPCAnonRate limits anonymous /rpc calls per second (0 = unlimited), per
 	// client IP or shared by all anonymous callers (RPCAnonScope).

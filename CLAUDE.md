@@ -243,7 +243,7 @@ npm run clean
      every client, never on authrpc). It starts once the engine build's
      forkchoiceUpdated pinned the EL head to the parent (geth and ethrex require
      `parentHash == head`) and runs during the engine build's wait; without an
-     engine build (`local_build.build_el_payload=false` + payload source `local`) a
+     engine build (engine builder off, `build.engine_enabled=false`) a
      head-only FCU is issued first. Only the CANONICAL candidate (`parent_full`,
      or an unclassified tuple) builds locally: geth's testing call builds on the
      EL's current head, and a speculative parent (`parent_empty`,
@@ -255,19 +255,62 @@ npm run clean
      is an inspection-only SHADOW), `local` (strict — no payload when the local
      build fails), `local_or_el` (fallback, recorded), `higher_value` (both
      built, the higher EL-reported block value wins; engine on a tie, the
-     surviving one when a build fails). Tx source:
+     surviving one when a build fails). The ENGINE BUILDER switch
+     `build.engine_enabled` (`--engine-build-enabled`, default on; per-slot
+     plan `build.local.build_el_payload`; the toggle of the Engine builder
+     card) turns the engine build off: only the head-pinning FCU remains, the
+     testing build alone feeds the consumers whatever the payload source, and
+     a target without a testing build is skipped quietly. Tx source:
      `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
-     pending txs from `txpool_content` fill the remaining gas — same
-     parent-state checks, each sender continuing at the nonce/balance the pool
-     left, highest tip first, pool duplicates skipped; `txpool_content` lists
+     pending txs fill the remaining gas — same parent-state checks, each
+     sender continuing at the nonce/balance the pool left, highest tip first,
+     pool duplicates skipped, txs below the next base fee dropped BEFORE any
+     sender's state is read. The txs come from the pool's EL mempool MIRROR
+     (`txpool/elmirror.go`), not a txpool_content read per build: decoded
+     and sender-recovered once, arrivals LIVE over `--el-ws`
+     (`eth_subscribe newPendingTransactions` with full txs; reconnect with
+     backoff, one filter poll after each subscribe covers the gap) or else
+     via `eth_newPendingTransactionFilter` (500 ms poll, also while the
+     websocket is down; both report blob txs, which geth's txpool_content
+     omits), removals by included block (+ lower nonces), stale nonces found
+     by the selection and a full txpool_content resync every 5 min (blob
+     entries, which the resync cannot confirm, expire by age); it starts on
+     the first use and stops after 10 idle minutes. The EL mempool lists
      blob txs without their blobs, so the SELECTED ones are completed from the
      EL blob pool via `engine_getBlobs` (V1 pre-Osaka, V2 after: one batch
      request, per-tx fallback since it answers all-or-nothing; commitments
      computed and checked against the versioned hashes — `payload_builder/
      blobsidecars.go`), an incomplete one is dropped with its sender's later
      fill txs (`blob_unavailable`); a refusal
-     retries once without the fill, an unreadable EL mempool builds from the
-     pool alone) | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     retries without the fill's blob txs first (`fill_blobs_dropped`), then
+     without the fill, an unreadable EL mempool builds from the pool alone)
+     **Testing build timing** (`payload_builder/localtiming.go`): the call is
+     not incremental, and the testing builds have their OWN window
+     (`local_build.start_time_ms`/`end_time_ms`, slot-relative; the engine
+     build keeps `build_start_time` + `payload_build_time`). A build starts
+     only when estimated to finish by the window end (exponentially weighted
+     fit of selection ms + call ms over gas, +2σ of its residuals; seeds
+     until 3 builds; the selection that starts the mirror is left out).
+     `rebuild_interval_ms` 0 = one build timed to the window end; > 0 (pool
+     sources) = build at the window start, rebuild whenever
+     `Pool.ContentVersion` moved (pool changes + mirror arrivals clearing the
+     latest base fee), at least the interval apart. The testing loop has its
+     own lifetime (`startLocalLoop`: window end + 5 s, cancelled like a build
+     by a newer tuple build, a newer slot or `AbortBuild`). The HAND-OVER
+     stays the engine build's getPayload: consumers get the payload source's
+     pick of what exists then; afterwards `followLocal` sends each better
+     pick on `BuildResult.Upgrades` and the service's `followUpgrades`
+     publishes it (classification, transform, supersede rules, cache store,
+     `PayloadReady` + `LocalBuildEvent` again). The cache replaces the
+     tuple's payload for slot/tuple lookups (next p2p bid tick, next
+     getHeader) but keeps the replaced one for `GetByBlockHash` (unblind,
+     reveal, inclusion of bids already made). Runs: `LocalBuildInfo.run`/
+     `runs`, drawn per build in the slot graph (live via
+     `local_build_progress.run`), the engine and testing windows as bluish
+     bands; upgrades keep the build line's hand-over time
+     (`payloadUpgrades`). The hand-over waits for the builds until the
+     deadline + 50 ms, never longer; a build still running is not cut off
+     (the EL finishes it anyway) so its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
      (flagged `inclusion_list_dropped`). Consumers still receive exactly one
@@ -299,8 +342,20 @@ npm run clean
      reth/ethrex, whose testing path returns NO blobs bundle → blob txs skipped as
      `blob_unsupported` unless `local_build.allow_blobs_without_bundle`).
    - **Transaction pool** (`pkg/txpool/`): owned mempool, runtime-toggleable
-     (`txpool.enabled`, content kept while off). Admission is STATELESS (decode,
-     chain id, signature, sidecar required for blob txs, size, caps, same-nonce
+     (`txpool.enabled`, content kept while off; persisted across restarts with
+     `--txpool-store`, see the state-db section). **Cold tier**
+     (`txpool/tier.go`): a transaction whose fee cap is below the next base
+     fee · (7/8)^16 (≈ 12%, at least 16 blocks from includable) keeps only its
+     facts (nonce, fees, gas, value, to, blobs) in memory — `PooledTx.Tx` is
+     nil, read through the `PooledTx` accessors — and its body waits in the
+     pool store (pool) or the EL (mirror; cold arrivals are never held in
+     full); at ≥ (7/8)^12 (≈ 20%) it is loaded back (`Pool.Get`/`Hydrated`
+     load a cold body on demand). Re-tiered on every head from the head's
+     next base fee; entries are swapped, never mutated. Without
+     `--txpool-store` the pool keeps every body in memory. The selection
+     treats a cold transaction as below the base fee. Admission is STATELESS (decode,
+     chain id, signature, sidecar required for blob txs and checked against the
+     versioned hashes, converted to cell proofs once from Osaka on, size, caps, same-nonce
      replacement needs a 10% fee bump; duplicates answer `already known` — the
      substring spamoor treats as success). Nonce/balance/fee floors are checked at
      SELECTION time against the parent state (`Select`: batched
@@ -371,7 +426,7 @@ npm run clean
      blocks. `.hack/txgen` signs transfers into the pool and prints the hashes
      for an exact `build.local.queued` plan.
    - Per-slot: action plan `build.local` (`enabled`, `payload_source`, `tx_source`,
-     `transactions`, `queued`, `build_el_payload`, `max_txs`, `gas_fill_pct`, `ordering`)
+     `transactions`, `queued`, `build_el_payload` (the slot's engine build switch), `max_txs`, `gas_fill_pct`, `ordering`)
      resolves into `FrozenPlan.Build.Local` (rules carry it too). Slot results:
      `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
      artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),
@@ -393,6 +448,11 @@ npm run clean
      payload's coinbase (`Payload.FeeRecipient`) is buildoor's wallet, which
      collects the block value; before Gloas, or without a wallet, the payload
      pays the proposer directly
+   - The payload cache (100 slots) releases a payload's blobs and proofs 8
+     slots after its slot (`blobRetentionSlots`; unblinding and the reveal
+     are due long before); the commitments stay. Read them through
+     `BlobsBundle.Blobs()/Proofs()`; a released bundle fails an unblind or
+     reveal loudly
    - Emits `PayloadReadyEvent` to subscribers; plan-involved skips fire
      `BuildSkippedEvent` (deduped per slot) for the slot results tracker
    - **Missing-block fallback** (`applyAttributesFallback`): when no attributes
@@ -463,6 +523,18 @@ npm run clean
 
 3. **Chain Service** (`pkg/chain/`)
    - Manages epoch-level beacon state
+   - Reads the epoch state STREAMED (`beacon.GetStateSnapshot`,
+     `rpc/beacon/statesnapshot.go`): the SSZ body is walked with each fork's
+     layout from dynamic-ssz and only the fields the chain view reads are
+     decoded (validators reduced record by record to effective balance and
+     activation/exit epochs, plus the pubkeys of the proposer lookahead and
+     a 64-bit digest per exited validator for the deposit queue model;
+     RANDAO mixes, proposer lookahead, pending deposits, builders, pending
+     payments); the rest is skipped unread — never `AgnosticBeaconState` (a
+     large network's state is hundreds of MB, held twice while decoding).
+     `GetValidatorPubkeyByIndex` serves the lookahead's proposers from
+     memory and fetches any other index from the beacon node (bounded
+     cache) — there is no all-validators pubkey array
    - Caches last 2 epochs of state
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
@@ -564,6 +636,11 @@ npm run clean
      reveal attempts, inclusion — plus the frozen `applied_plan` snapshotted at record
      creation. Copy-on-write records; attempts cap at 256/kind with a dropped counter;
      SSE updates coalesce per slot
+   - Records older than two epochs keep only their summary in memory
+     (`resident.go`); the full record is read back from the state-db for
+     `Get`/`GetRange` and late updates, `GetSummaries` serves the grid's
+     `view=summary` from memory. Swapped only once persisted
+     (`memstore.ReplaceResident`); without a state-db records stay full
    - Consumes the services' BLOCKING subscriptions (loss-free history) and implements
      the `builderapi.SlotResultRecorder` interface for request-scoped recording
    - `ArtifactStore`: raw SSZ artifacts per slot — built payload, every signed bid
@@ -584,7 +661,16 @@ npm run clean
      `payload_bidder.RevealService` — no inline envelope publish), submitBuilderPreferences
    - **Bid serving is decided exclusively by the slot's frozen plan** (resolved at
      request time): suppressed slots 204; plan-activated slots serve even when the
-     module is globally disabled. The `enabled` flag keeps gating only the
+     module is globally disabled.
+   - **Response gate** (timing game, `builder_api.respond_at_ms`, slot-relative
+     ms, 0 = respond immediately, per-slot plan override `respond_at_ms`): both
+     dialects hold a validated request until the gate
+     (`ResolvedBuilderAPISettings.AwaitRespondGate`) and only then pick the
+     payload, so the response carries the best payload built by then
+     (testing-build upgrades included); a hang-up during the hold records
+     `cancelled`. Distinct from the plan's `response_delay_ms`, a testing knob
+     applied after the bid is built. Drawn as the "respond" gate in the slot
+     graph's Builder API row The `enabled` flag keeps gating only the
      non-slot-scoped endpoints (registrations, preferences, block submission).
      Frozen per-slot values drive subsidy, absolute total bid value (uint256 wei
      math), the execution-payment split and a context-cancellable response delay.
@@ -644,16 +730,25 @@ npm run clean
      `settings/fields.tsx` (one entry per backend setting key: label, kind,
      unit/scale, options, validation, help text) and are written through
      `settings/write.ts` (generic settings endpoint, service toggle, key target)
-   - Mempool page (tabs Queue / Next block / Access / Settings) and one tabbed
+   - Mempool page (tabs Queue / Next block / EL mempool / Access / Settings;
+     EL mempool = the mirror's state, a pending-gas-by-max-fee chart against
+     the next base fee and one block of gas, buildoor's private txs
+     highlighted for logged-in readers, and the mirrored txs) and one tabbed
      Registrations page (Builder API registrations, proposer preferences,
      payment caps; old /validators, /proposer-preferences,
      /builder-preferences paths redirect)
    - Design tokens + shared primitives in `src/styles/tokens.css` and
      `components/ui/` (light and dark theme); self-hosted IBM Plex fonts
    - **Action Plan View**: epoch × slot timetable (rows = epochs, columns =
-     slots) rendering plan chips + result status per cell; click-to-edit modal
-     for future slots, full outcome detail + SSZ/JSON artifact downloads for
-     past slots; multi-slot/range bulk editing; a Recurring Rules panel
+     slots) rendering plan chips + result status per cell (from the compact
+     `view=summary` results; a slot opened in detail loads its full record);
+     a side drawer (`actionplan/SlotEditDrawer.tsx`, tabbed like the
+     dashboard flows: Engine builder, Testing builder, ePBS bidder, Builder
+     API, Payload reveal, Advanced) edits future slots and shows the full
+     outcome + SSZ/JSON artifact downloads of past slots. Selection: click
+     selects + opens, shift-click selects the range from the anchor,
+     Ctrl/Cmd-click toggles; unsaved edits ask before the drawer retargets.
+     A Recurring Rules panel
      (list/toggle/edit/delete + scenario presets like "win the last slot of
      every epoch and withhold the payload"); rule-derived cells render dashed
      chips; live via the `action_plan_updated`/`action_plan_rules_updated`/
@@ -739,7 +834,8 @@ Key config sections:
   (priority fee floor of the early onboarding deposits, default 50 gwei, max
   10000, 0 = EL suggestion). All four are mutable settings edited in the
   Lifecycle drawer tab
-- **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
+- **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`, `--el-ws`
+  (optional websocket: the EL mempool mirror follows arrivals live)
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,
@@ -772,14 +868,18 @@ Key config sections:
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
-- **Local build / tx pool**: `--local-build-enabled`, `--local-build-start-delay`
-  (ms after the engine build started before the testing call, 0 = at once: the
-  engine build keeps collecting arrivals until its getPayload, an immediate
-  testing call does not), `--local-build-payload-source`
+- **Local build / tx pool**: `--local-build-enabled`,
+  `--local-build-start-time` / `--local-build-end-time` (the testing build
+  window, signed ms relative to the slot start, 0 = auto as a share of the
+  slot), `--local-build-rebuild-interval` (min gap between change-triggered
+  testing rebuilds, 0 = one build timed to the window end; see "Testing
+  build timing" in 0d),
+  `--local-build-payload-source`
   (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
-  el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
+  el_mempool), `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
+  `--txpool-store` (pool persistence directory, startup-only, empty = memory),
   `--txpool-rpc-anon-rate`, `--txpool-rpc-anon-scope`, `--txpool-rpc-key-rate`,
   `--txpool-rpc-proxy-hops`, `--txpool-rpc-upstreams`, `--txpool-ordering`, `--txpool-block-max-txs`,
   `--txpool-gas-fill-pct`, `--txpool-max-txs`, `--txpool-max-txs-per-sender`,
@@ -843,6 +943,13 @@ The optional **state-db** (`pkg/db`, mirrors spamoor: `glebarez/go-sqlite` + `sq
   slot column) holding raw SSZ artifacts per slot (payload/bid/envelope), fed by
   the tracker's async batching writer. SQLite does not shrink the file on delete
 - `audit_log` — every authenticated mutating action (actor from JWT subject)
+
+Pool transactions are deliberately NOT in the state-db: `--txpool-store` gives
+the owned pool its own pebble database (`txpool/store.go`, go-ethereum's
+engine, LSM for the per-slot churn; RLP records keyed by tx hash with
+submitter/arrival/seq; puts and deletes coalesced in memory and flushed
+every 100 ms without fsync, synced on Stop; `Start` re-admits the records,
+TTL and stale-nonce checks apply as usual).
 
 When `--state-db` is unset the database runs in a disabled no-op mode and behaviour
 is in-memory-only as before. Repository methods early-return; never nil-check the
@@ -1026,8 +1133,10 @@ To make frontend changes:
   (auth + audit). Body `{rules: [...]}`; each rule has an id slug, `enabled`,
   `slots_in_epoch`, optional `from_epoch`/`to_epoch` and the same categories as a
   slot plan. All-or-nothing validation (400 on any bad rule); max 32 rules
-- `GET /api/buildoor/slot-results?min_slot=&max_slot=` - Attempt-level outcome
-  history per slot (build, bids, submissions, reveals, inclusion, applied plan)
+- `GET /api/buildoor/slot-results?min_slot=&max_slot=&view=` - Attempt-level outcome
+  history per slot (build, bids, submissions, reveals, inclusion, applied plan);
+  `view=summary` trims each record to what overview grids need (no applied
+  plan, attributes, testing build runs or per-candidate builds)
 - `GET /api/buildoor/slot-results/{slot}/payload|envelope|bids|bids/{index}` - Raw
   SSZ artifacts with beacon-API content negotiation: `Accept:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
@@ -1041,8 +1150,17 @@ To make frontend changes:
   senders, gas sum, value, blobs, lifetime counters) + a page of queued txs;
   `GET /api/buildoor/txpool/preview` dry-runs the selection on the current head;
   `DELETE /api/buildoor/txpool` / `DELETE /api/buildoor/txpool/{hash}` drop
-  (auth + audit)
+  (auth + audit); `GET /api/buildoor/txpool/el-mempool?offset=&limit=&sender=&sort=`
+  the EL mempool mirror's stats + a page of it (public: the EL's public txs;
+  reading never starts the mirror); `GET /api/buildoor/txpool/fees` pending
+  gas by max fee in log buckets (8/decade) + next base fee + gas limit, the
+  pool's private txs as their own series only with a login
 - `POST /rpc` - Transaction pool JSON-RPC ingress (NOT under `/api`; see 0d)
+- `/debug/pprof/*` - Go profiling, login only: a bearer header (tools) or
+  the `buildoor_debug_token` cookie (browser); a browser without it gets the
+  WebUI's gate page (`pages/DebugLoginPage.tsx`), which sets the cookie from
+  the session (path-scoped, SameSite=Strict, ≤ 30 min) and reloads. Every
+  profile download (not the index page) is audited as `debug.pprof`
 - `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
   arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
   client name into fixed-width time buckets from the slot start (default
@@ -1068,6 +1186,9 @@ To make frontend changes:
   `action_plan_updated`/`slot_result_updated` (REST is the source of truth;
   views refetch via `connectionGeneration`). `lifecycle` events are tagged with
   the current slot so they replay too
+- **Compression**: the whole router (REST and this stream alike) is gzipped
+  by `klauspost/compress/gzhttp` above 1 KB; it flushes with the SSE writer,
+  so events still arrive live
 - **Cost per viewer** (the UI is public): every event is JSON-encoded once at
   fan-out, not per client; head-vote updates are coalesced to one per curve per
   250 ms (threshold crossings immediate) with percentages rounded to 2
@@ -1096,6 +1217,11 @@ To make frontend changes:
   status/skip reason/error, tx + payload source, whether it fed the bids or was
   a fallback, headline properties of the local and the EL payload, the
   selection summary
+- `local_build_status` - The local build status (the `GET
+  /api/buildoor/local-build/status` body: probed EL availability, effective
+  settings, pool state, plan check counters), sent at connect and whenever
+  its encoding changed (checked once per second, forced after a probe). The
+  UI reads it from the stream only, never polls the REST endpoint
 - `txpool_stats` - Pool aggregates + counters, sent at connect and whenever the
   pool's version changed (checked once per second)
 - `slot_result_updated` - Fired when a slot's result record changes (coalesced to
@@ -1234,9 +1360,9 @@ SSZ/JSON content negotiation. Blobs bundles are not captured (documented future
 artifact kind).
 
 **WebUI**: the Action Plan tab renders an epoch × slot timetable (rows = epochs,
-columns = slots) with plan chips + result status per cell, click-to-edit modal
-(future slots) / full outcome detail with artifact downloads (past slots),
-multi-slot/range bulk editing, and a Recurring Rules panel with scenario presets.
+columns = slots) with plan chips + result status per cell, a side drawer that
+edits the selected future slots / shows a past slot's full outcome with
+artifact downloads, multi-slot/range selection (shift, Ctrl/Cmd) and bulk editing, and a Recurring Rules panel with scenario presets.
 Rule-derived cells draw dashed chips; opening one pre-fills the rule's values and
 saving detaches that slot into an explicit plan.
 

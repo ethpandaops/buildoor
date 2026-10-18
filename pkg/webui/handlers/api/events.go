@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	mathbits "math/bits"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
@@ -23,6 +25,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 )
@@ -64,6 +67,7 @@ const (
 	EventTypeLocalBuild                  EventType = "local_build"
 	EventTypeLocalBuildProgress          EventType = "local_build_progress"
 	EventTypeTxPoolStats                 EventType = "txpool_stats"
+	EventTypeLocalBuildStatus            EventType = "local_build_status"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
 	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
 	EventTypeSlotResultUpdated           EventType = "slot_result_updated"
@@ -134,6 +138,9 @@ type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
 	Candidate string `json:"candidate,omitempty"`
 	StartedAt int64  `json:"started_at"`
+	// Engine is set when the build runs the engine-API build (the graph's
+	// engine lane); without it only testing builds run.
+	Engine bool `json:"engine"`
 }
 
 // PayloadAttributesStreamEvent is sent when a payload_attributes event is
@@ -165,10 +172,21 @@ type PayloadBuildFailedStreamEvent struct {
 }
 
 // PayloadReadyStreamEvent is sent when a payload becomes available.
+// EngineCallsStream times the engine build's two calls (unix ms): the build
+// line draws them solid and the wait in between dashed.
+type EngineCallsStream struct {
+	ForkchoiceStart int64 `json:"fcu_start"`
+	ForkchoiceEnd   int64 `json:"fcu_end"`
+	GetPayloadStart int64 `json:"get_payload_start"`
+	GetPayloadEnd   int64 `json:"get_payload_end"`
+}
+
 type PayloadReadyStreamEvent struct {
-	Slot      uint64 `json:"slot"`
-	Candidate string `json:"candidate,omitempty"`
-	BlockHash string `json:"block_hash"`
+	Slot uint64 `json:"slot"`
+	// EngineCalls times the engine build's calls (absent without one).
+	EngineCalls *EngineCallsStream `json:"engine_calls,omitempty"`
+	Candidate   string             `json:"candidate,omitempty"`
+	BlockHash   string             `json:"block_hash"`
 	// Parent tuple this payload was built on: the execution parent (hash and,
 	// where known, its block number) and the beacon parent (root and its
 	// slot), so the UI can show what the payload actually extends.
@@ -508,8 +526,8 @@ type LocalBuildStreamEvent struct {
 	Local         *StreamPayloadSummary           `json:"local,omitempty"`
 	EL            *StreamPayloadSummary           `json:"el,omitempty"`
 	Info          *payload_builder.LocalBuildInfo `json:"info,omitempty"`
-	// StartedAt is when the testing build began, after the configured start
-	// delay (unix ms, 0 when it never started).
+	// StartedAt is when the handed-over testing build began (unix ms, 0 when
+	// it never started).
 	StartedAt int64 `json:"started_at,omitempty"`
 	// BuiltAt is when testing_buildBlockV1 returned (unix ms, 0 unless ready);
 	// ELReadyAt is when the engine payload of the same target was ready.
@@ -676,6 +694,12 @@ type EventStreamManager struct {
 	// Track the last broadcast pool version to avoid spam
 	lastTxPoolVersion   uint64
 	lastTxPoolVersionMu sync.Mutex
+
+	// The local build status is re-sent when its encoding changed (a probe,
+	// a setting, a plan check verdict).
+	planVerifier           atomic.Pointer[tx_plan_verifier.Verifier]
+	lastLocalBuildStatus   []byte
+	lastLocalBuildStatusMu sync.Mutex
 }
 
 // NewEventStreamManager creates a new event stream manager.
@@ -1116,6 +1140,7 @@ func (m *EventStreamManager) Start() {
 				m.sendBuilderInfo()
 				m.sendServiceStatus()
 				m.sendTxPoolStats(false)
+				m.sendLocalBuildStatus(false)
 			}
 		}
 	}()
@@ -1300,6 +1325,7 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 			Slot:      uint64(event.Slot),
 			Candidate: event.Candidate,
 			StartedAt: event.StartedAt.UnixMilli(),
+			Engine:    event.Engine,
 		},
 	})
 }
@@ -1354,6 +1380,15 @@ func (m *EventStreamManager) payloadReadyStreamEvent(
 		BlockValue:        event.BlockValue.String(),
 		ReadyAt:           event.ReadyAt.UnixMilli(),
 		FeeRecipient:      event.FeeRecipient.Hex(),
+	}
+
+	if calls := event.EngineCalls; calls != nil {
+		data.EngineCalls = &EngineCallsStream{
+			ForkchoiceStart: calls.ForkchoiceStart.UnixMilli(),
+			ForkchoiceEnd:   calls.ForkchoiceEnd.UnixMilli(),
+			GetPayloadStart: calls.GetPayloadStart.UnixMilli(),
+			GetPayloadEnd:   calls.GetPayloadEnd.UnixMilli(),
+		}
 	}
 
 	// The beacon parent's slot makes the payload's position in the chain
@@ -1943,7 +1978,8 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 type LocalBuildProgressStreamEvent struct {
 	Slot            uint64 `json:"slot"`
 	Candidate       string `json:"candidate,omitempty"`
-	Phase           string `json:"phase"` // building | ready | failed | skipped
+	Run             int    `json:"run,omitempty"` // the target's build number
+	Phase           string `json:"phase"`         // building | ready | failed | skipped
 	TxSource        string `json:"tx_source,omitempty"`
 	StartedAt       int64  `json:"started_at"`
 	At              int64  `json:"at"`
@@ -1961,6 +1997,7 @@ func (m *EventStreamManager) handleLocalBuildProgress(event *payload_builder.Loc
 	data := LocalBuildProgressStreamEvent{
 		Slot:            uint64(event.Slot),
 		Candidate:       event.Candidate,
+		Run:             event.Run,
 		Phase:           event.Phase,
 		TxSource:        event.TxSource,
 		StartedAt:       event.StartedAt.UnixMilli(),
@@ -2004,6 +2041,32 @@ func (m *EventStreamManager) sendTxPoolStats(force bool) {
 		Type:      EventTypeTxPoolStats,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      pool.Stats(),
+	})
+}
+
+// sendLocalBuildStatus broadcasts the local build status when it changed
+// since the last broadcast (or unconditionally when force is set).
+func (m *EventStreamManager) sendLocalBuildStatus(force bool) {
+	status := localBuildStatus(m.builderSvc, m.planVerifier.Load())
+
+	encoded, err := json.Marshal(status)
+	if err != nil {
+		return
+	}
+
+	m.lastLocalBuildStatusMu.Lock()
+	changed := force || !bytes.Equal(encoded, m.lastLocalBuildStatus)
+	m.lastLocalBuildStatus = encoded
+	m.lastLocalBuildStatusMu.Unlock()
+
+	if !changed {
+		return
+	}
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeLocalBuildStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      status,
 	})
 }
 
@@ -2131,6 +2194,15 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		Type:      EventTypeSlotOutlook,
 		Timestamp: time.Now().UnixMilli(),
 		Data:      m.buildSlotOutlook(m.builderSvc.GetCurrentSlot() + 1),
+	}) {
+		return
+	}
+
+	// Send the local build status
+	if !send(&StreamEvent{
+		Type:      EventTypeLocalBuildStatus,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      localBuildStatus(m.builderSvc, m.planVerifier.Load()),
 	}) {
 		return
 	}

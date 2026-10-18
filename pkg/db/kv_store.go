@@ -95,6 +95,36 @@ func (p *KVPersistence[K, V]) Load() (map[K]V, error) {
 	return entries, nil
 }
 
+// Get reads one entry; false when it is absent (or the database disabled).
+func (p *KVPersistence[K, V]) Get(key K) (V, bool, error) {
+	var zero V
+
+	if !p.db.Enabled() {
+		return zero, false, nil
+	}
+
+	rows := []kvRow{}
+
+	err := p.db.readerDB.Select(&rows, `
+		SELECT key, value
+		FROM kv_store
+		WHERE namespace = $1 AND key = $2`, p.namespace, p.codec.EncodeKey(key))
+	if err != nil {
+		return zero, false, fmt.Errorf("error reading kv_store %q entry: %w", p.namespace, err)
+	}
+
+	if len(rows) == 0 {
+		return zero, false, nil
+	}
+
+	value, err := p.codec.DecodeValue(rows[0].Value)
+	if err != nil {
+		return zero, false, fmt.Errorf("error decoding kv_store %q entry: %w", p.namespace, err)
+	}
+
+	return value, true, nil
+}
+
 // PersistBatch upserts and deletes the given entries in a single transaction.
 // Values that fail to encode are skipped with a warning (retrying them can
 // never succeed). No-op when the database is disabled.

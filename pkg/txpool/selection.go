@@ -27,6 +27,10 @@ const (
 	SkipBlobFull            = "blob_full"
 	SkipMaxTxs              = "max_txs"
 	SkipBlobUnsupported     = "blob_unsupported"
+	// SkipBlobSidecarVersion marks a blob transaction whose sidecar has the
+	// other proof format than the block's fork needs (admitted across the
+	// Osaka transition).
+	SkipBlobSidecarVersion = "blob_sidecar_version"
 	// SkipBlobUnavailable marks an EL mempool blob transaction whose blobs the
 	// EL's blob pool could not supply; the sender's later fill transactions
 	// follow it out.
@@ -69,12 +73,15 @@ type SelectParams struct {
 	IncludeBlobTxs bool
 	// BlobEncoding is network (sidecar carried) or canonical.
 	BlobEncoding string
-	// Fill holds the EL mempool's pending transactions (each sender's in
-	// nonce order). They fill the gas and blobs the pool selection left,
-	// after it: each sender continues at the nonce and balance the pool
-	// selection left, the highest tip goes first, duplicates of pool
-	// transactions are skipped.
-	Fill []*types.Transaction
+	// CellProofs marks an Osaka+ block: the network encoding then needs
+	// version 1 (cell proof) sidecars, before it version 0 ones.
+	CellProofs bool
+	// Fill holds the EL mempool's pending transactions (senders recovered,
+	// each sender's in nonce order). They fill the gas and blobs the pool
+	// selection left, after it: each sender continues at the nonce and
+	// balance the pool selection left, the highest tip goes first,
+	// duplicates of pool transactions are skipped.
+	Fill []*PooledTx
 	// FillSidecars completes the selected fill blob transactions, which
 	// txpool_content lists without their blobs. Without it the network
 	// encoding cannot carry them and the fill skips blob transactions; the
@@ -473,6 +480,11 @@ func (p *Pool) SelectQueued(ctx context.Context, hashes []common.Hash, params *S
 				return nil, fmt.Errorf("select queued: tx %d (%s) is a blob transaction the EL cannot bundle", i, tx.Hash.Hex())
 			}
 
+			if params.BlobEncoding != config.BlobEncodingCanonical && !sidecarFits(tx.Tx, params.CellProofs) {
+				return nil, fmt.Errorf("select queued: tx %d (%s) has a blob sidecar of the wrong proof format for this fork",
+					i, tx.Hash.Hex())
+			}
+
 			if sel.BlobBaseFee != nil && tx.Tx.BlobGasFeeCap().Cmp(sel.BlobBaseFee) < 0 {
 				return nil, fmt.Errorf("select queued: tx %d (%s) does not clear the blob base fee", i, tx.Hash.Hex())
 			}
@@ -526,7 +538,7 @@ func (p *Pool) readyRun(
 	run := make([]*PooledTx, 0, len(queue))
 
 	for i, tx := range queue {
-		txNonce := tx.Tx.Nonce()
+		txNonce := tx.Nonce()
 
 		if txNonce < nonce {
 			sel.Skipped[SkipNonceTooLow]++
@@ -540,10 +552,13 @@ func (p *Pool) readyRun(
 		switch {
 		case txNonce > nonce:
 			reason = SkipNonceGap
-		case tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0:
+		case tx.Cold() || tx.GasFeeCap().Cmp(sel.BaseFee) < 0:
+			// A cold transaction is far below the base fee by definition.
 			reason = SkipFeeBelowBase
 		case tx.Tx.Type() == types.BlobTxType && !params.IncludeBlobTxs:
 			reason = SkipBlobUnsupported
+		case params.BlobEncoding != config.BlobEncodingCanonical && !sidecarFits(tx.Tx, params.CellProofs):
+			reason = SkipBlobSidecarVersion
 		case tx.Tx.Type() == types.BlobTxType && sel.BlobBaseFee != nil &&
 			tx.Tx.BlobGasFeeCap().Cmp(sel.BlobBaseFee) < 0:
 			reason = SkipBlobFeeBelowBase
@@ -705,12 +720,8 @@ func (p *Pool) mergeHeads(
 }
 
 // SkipDuplicate marks an EL mempool fill transaction that is also queued in
-// the pool (the pool selection decides about it); SkipInvalidSender one whose
-// signature does not recover.
-const (
-	SkipDuplicate     = "duplicate"
-	SkipInvalidSender = "invalid_sender"
-)
+// the pool (the pool selection decides about it).
+const SkipDuplicate = "duplicate"
 
 // selectFill places the EL mempool's pending transactions (params.Fill) after
 // the pool selection, within the gas, byte, count and blob budgets it left.
@@ -729,6 +740,8 @@ func (p *Pool) selectFill(
 ) ([]*PooledTx, error) {
 	sel.FillCandidates = len(params.Fill)
 	sel.FillSkipped = make(map[string]int, 4)
+
+	p.mirror.noteBaseFee(sel.BaseFee)
 
 	if len(params.Fill) == 0 {
 		return nil, nil
@@ -753,29 +766,26 @@ func (p *Pool) selectFill(
 		fillParams.MaxTxs = params.MaxTxs - uint64(len(sel.Selected))
 	}
 
-	queues := make(map[common.Address][]*PooledTx, len(params.Fill))
+	queues := make(map[common.Address][]*PooledTx, 64)
 
-	for i, tx := range params.Fill {
-		if p.Get(tx.Hash()) != nil {
+	for _, tx := range params.Fill {
+		if p.Get(tx.Hash) != nil {
 			sel.FillSkipped[SkipDuplicate]++
 
 			continue
 		}
 
-		sender, err := types.Sender(p.signer, tx)
-		if err != nil {
-			sel.FillSkipped[SkipInvalidSender]++
+		// Most of a busy EL mempool sits below the base fee. Dropped before
+		// any sender's state is read, which is the per-build cost that
+		// scales with the mempool; a sender's later nonces then fail on
+		// the gap.
+		if tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0 {
+			sel.FillSkipped[SkipFeeBelowBase]++
 
 			continue
 		}
 
-		queues[sender] = append(queues[sender], &PooledTx{
-			Hash:   tx.Hash(),
-			Tx:     tx,
-			Sender: sender,
-			Size:   tx.Size(),
-			Seq:    uint64(i),
-		})
+		queues[tx.Sender] = append(queues[tx.Sender], tx)
 	}
 
 	senders := make([]common.Address, 0, len(queues))
@@ -842,9 +852,11 @@ func (p *Pool) selectFill(
 		}
 
 		// Nonce-too-low fill transactions belong to the EL's pool: never
-		// evict anything for them.
+		// evict anything of ours for them, only the mirror's stale copies.
 		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, &ignored)
 	}
+
+	p.mirror.dropStale(ignored)
 
 	fill := p.mergeHeads(fillSel, &fillParams, senders, ready, maxBlockBytes-min(sel.Bytes, maxBlockBytes))
 
@@ -937,9 +949,9 @@ func (p *Pool) completeFillBlobs(
 	return kept
 }
 
-func hasBlobTx(txs []*types.Transaction) bool {
+func hasBlobTx(txs []*PooledTx) bool {
 	for _, tx := range txs {
-		if tx.Type() == types.BlobTxType {
+		if tx.Tx.Type() == types.BlobTxType {
 			return true
 		}
 	}
@@ -987,7 +999,7 @@ func (p *Pool) prependInclusionList(sel *Selection, selected [][]byte, inclusion
 func (p *Pool) hasBlobTxs(queues map[common.Address][]*PooledTx) bool {
 	for _, txs := range queues {
 		for _, tx := range txs {
-			if tx.Tx.Type() == types.BlobTxType {
+			if tx.Type() == types.BlobTxType {
 				return true
 			}
 		}

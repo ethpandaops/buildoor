@@ -47,6 +47,7 @@ type Store[K comparable, V any] struct {
 	persistence Persistence[K, V] // nil = in-memory only
 	dirty       map[K]struct{}    // changed since last flush
 	deleted     map[K]struct{}    // deleted since last flush
+	inflight    map[K]struct{}    // upserts of the flush in progress
 
 	flushInterval time.Duration // test override hook
 	maxPending    int           // test override hook
@@ -197,16 +198,20 @@ func (s *Store[K, V]) Flush() error {
 	deletedSnap := s.deleted
 	s.dirty = make(map[K]struct{}, 64)
 	s.deleted = make(map[K]struct{}, 16)
+	s.inflight = dirtySnap
 
 	s.mu.Unlock()
 
-	if err := p.PersistBatch(upserts, deletes); err != nil {
+	err := p.PersistBatch(upserts, deletes)
+	if err != nil {
 		s.requeue(dirtySnap, deletedSnap)
-
-		return err
 	}
 
-	return nil
+	s.mu.Lock()
+	s.inflight = nil
+	s.mu.Unlock()
+
+	return err
 }
 
 // requeue re-marks a failed batch for the next flush without clobbering
@@ -253,6 +258,33 @@ func (s *Store[K, V]) Put(key K, value V) bool {
 	s.mu.Unlock()
 
 	s.notify(pending)
+
+	return true
+}
+
+// ReplaceResident swaps the in-memory value of key without marking it for
+// persistence, so the persisted value stays authoritative: a caller keeps a
+// smaller stand-in resident and reads the full value from the backend. Only
+// a present key whose latest change was already persisted is replaced;
+// reports whether it was.
+func (s *Store[K, V]) ReplaceResident(key K, value V) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.entries[key]; !ok {
+		return false
+	}
+
+	if _, dirty := s.dirty[key]; dirty {
+		return false
+	}
+
+	// A failed flush re-marks its keys and would persist the stand-in.
+	if _, flushing := s.inflight[key]; flushing {
+		return false
+	}
+
+	s.entries[key] = value
 
 	return true
 }

@@ -122,7 +122,7 @@ const PAYLOAD_SOURCES = [
 
 const TX_SOURCES = [
   { value: 'txpool', label: 'buildoor mempool', short: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
-  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs; geth does not list its blob transactions, so they stay out there). If the EL refuses the list, the build retries once without the EL part." },
+  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs). If the EL refuses the list, the build retries once without the EL part." },
   { value: 'el_mempool', label: 'EL mempool', short: 'EL mempool', hint: 'The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths).' },
   { value: 'empty', label: 'None (empty block)', short: 'empty', hint: 'No transactions at all.' },
 ];
@@ -407,6 +407,22 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
         Head-vote participation in percent below which the head block counts as contested
         (<code>build.auto_weak_head_pct</code>), arming the grandparent (reorg) candidates set to
         auto. 0 = off: auto reorg candidates never build.
+      </>
+    ),
+  },
+  'build.engine_enabled': {
+    label: 'Engine builder',
+    kind: 'bool',
+    boolLabels: { on: 'on', off: 'off' },
+    hint: 'Off: the EL builds no payload of its own, the testing build alone feeds the bids.',
+    help: (
+      <>
+        Runs the engine-API build (<code>build.engine_enabled</code>, forkchoiceUpdated with
+        attributes → getPayload). Off gives the EL room to breathe: only the head-pinning
+        forkchoiceUpdated the testing call needs remains, the testing build alone feeds the bids
+        whatever the payload source says, and a slot without a testing build (testing builder off or
+        unavailable, speculative candidates) gets no payload. Per-slot action plans can switch it
+        for their slot.
       </>
     ),
   },
@@ -928,6 +944,23 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'builder_api.respond_at_ms': {
+    label: 'Respond at',
+    kind: 'number',
+    unit: 'ms',
+    zeroLabel: 'immediately',
+    hint: 'Hold bid responses until this many ms after the slot start, then serve the best payload built by then. 0 = respond immediately.',
+    help: (
+      <>
+        A timing game (<code>builder_api.respond_at_ms</code>, ms relative to the proposal slot&apos;s
+        start): a getHeader / getExecutionPayloadBid request is held until the gate and only then
+        answered with the best payload built so far, so the builder keeps collecting transactions
+        while the proposer waits. A request arriving after the gate is answered at once. 0 = respond
+        immediately. The proposer&apos;s client gives up after its own getHeader timeout, so a gate
+        too far past its request loses the slot. Per-slot action plans can override it.
+      </>
+    ),
+  },
   'builder_api.execution_payment_gwei': {
     label: 'Execution payment',
     kind: 'number',
@@ -1117,24 +1150,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
-  'local_build.build_el_payload': {
-    label: 'Keep running the engine build when bidding with the custom block',
-    short: 'Keep engine build',
-    kind: 'bool',
-    boolLabels: { on: 'yes', off: 'no' },
-    hint: 'Off saves the EL the second build.',
-    inactiveWhen: (draft) =>
-      str(draft, 'local_build.payload_source') === 'local'
-        ? null
-        : 'Only matters when bidding with the custom block alone; the other choices always build the engine block.',
-    help: (
-      <>
-        Only matters for <em>Bid with: Custom block</em> (<code>local_build.build_el_payload</code>).
-        On, the engine block is still built for comparison. The other choices always build it. Off
-        saves the EL the second build.
-      </>
-    ),
-  },
   'local_build.allow_blobs_without_bundle': {
     label: 'Include blob transactions on ELs without a blobs bundle',
     short: 'Blobs without bundle',
@@ -1170,29 +1185,59 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
-  'local_build.start_delay_ms': {
-    label: 'Start delay',
+  'local_build.start_time_ms': {
+    label: 'Testing window start',
+    short: 'Window start',
+    kind: 'number',
+    unit: 'ms',
+    hint: 'When the testing builds may start, relative to the slot start (negative = before it).',
+    help: (
+      <>
+        Opening of the testing build window in ms relative to the proposal slot&apos;s start
+        (<code>local_build.start_time_ms</code>), independent of the engine build&apos;s window.
+        Startup default: 20% of the slot before the slot start. The first testing build needs the
+        engine build&apos;s forkchoice update (the EL head pinned to the parent), so it never starts
+        before the engine build.
+      </>
+    ),
+  },
+  'local_build.end_time_ms': {
+    label: 'Testing window end',
+    short: 'Window end',
+    kind: 'number',
+    unit: 'ms',
+    hint: 'No testing build starts unless it is estimated to finish by then.',
+    validate: (value, draft) =>
+      Number(value) <= num(draft, 'local_build.start_time_ms')
+        ? 'The testing window must close after it opens.'
+        : null,
+    help: (
+      <>
+        Close of the testing build window in ms relative to the proposal slot&apos;s start
+        (<code>local_build.end_time_ms</code>). A testing build starts only when it is estimated to
+        finish by then, from the observed selection time and EL cost per gas. Startup default: 1/120
+        of the slot before the slot start. Consumers get the best payload when the engine build
+        finishes; a better testing build after that replaces it for the next bid or getHeader call,
+        so the window may end after the engine build.
+      </>
+    ),
+  },
+  'local_build.rebuild_interval_ms': {
+    label: 'Rebuild interval',
     kind: 'number',
     unit: 'ms',
     min: 0,
-    max: 12000,
-    zeroLabel: 'at once',
-    hint: 'Wait after the engine build started before calling testing_buildBlockV1.',
-    validate: (value, draft) => {
-      const buildTime = num(draft, 'payload_build_time');
-      return buildTime > 0 && Number(value) >= buildTime
-        ? `Must be below the build time (${buildTime} ms): the testing block would miss its bids.`
-        : null;
-    },
+    zeroLabel: 'one timed build',
+    hint: 'Minimum gap between testing builds; rebuilds happen only when new transactions arrived. 0 = one build, timed to the window end.',
     help: (
       <>
-        Delay of the testing build after the engine build started
-        (<code>local_build.start_delay_ms</code>, 0 = at once). testing_buildBlockV1 builds from
-        the transactions known at the moment of the call, while the engine build keeps adding
-        arrivals until its payload is fetched (<code>payload_build_time</code> later), so an early
-        testing block misses the late ones and is often worth less. A delay of about half the build
-        time catches most of them. Leave the call time to finish before the engine payload is due:
-        the slot&apos;s bids wait for both builds.
+        testing_buildBlockV1 builds once from the transactions known when it is called. With 0
+        (<code>local_build.rebuild_interval_ms</code>) there is one testing build, timed to finish at
+        the window end. With an interval the first build runs at the window start and a rebuild
+        follows whenever buildoor&apos;s mempool or the EL mempool got new transactions that clear
+        the base fee, at least this many ms after the previous build, until the window end. The most
+        valuable build is used; the slot graph draws each one. Each build costs the EL a full block
+        execution, which matters on an EL shared with validators.
       </>
     ),
   },
