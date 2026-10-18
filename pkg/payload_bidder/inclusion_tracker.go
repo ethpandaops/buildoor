@@ -503,11 +503,15 @@ func (t *InclusionTracker) buildWonBlock(
 		}
 	}
 
+	// An engine-built payload holds the EL mempool's transactions only.
+	privateTxs := min(payload.Local.PrivateTxs(), numTxs)
+
 	return &WonBlock{
 		Source:          source,
 		Slot:            uint64(payload.Attributes.ProposalSlot),
 		BlockHash:       fmt.Sprintf("%#x", blockHash),
 		NumTransactions: numTxs,
+		NumPrivateTxs:   &privateTxs,
 		NumBlobs:        numBlobs,
 		ValueWei:        valueWei,
 		ValueETH:        valueETH,

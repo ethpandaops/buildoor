@@ -32,7 +32,7 @@ func defaultsConfig() *Config {
 // boot simulates a process start: it builds a fresh effective config from the
 // (possibly bumped) defaults, optionally overlays an operator-supplied subsidy,
 // and constructs a settings.Service against the shared db.
-func boot(t *testing.T, store *db.Database, defaults *Config, suppliedVal *uint64) *Service {
+func boot(t *testing.T, store *db.Database, defaults *Config, suppliedVal *int64) *Service {
 	t.Helper()
 
 	eff := *defaults // value copy — the shared effective config for this "boot"
@@ -49,7 +49,7 @@ func boot(t *testing.T, store *db.Database, defaults *Config, suppliedVal *uint6
 	return svc
 }
 
-func u64(v uint64) *uint64 { return &v }
+func i64(v int64) *int64 { return &v }
 
 func setSubsidy(t *testing.T, svc *Service, v uint64) {
 	t.Helper()
@@ -68,38 +68,38 @@ func TestThreeWayResolution(t *testing.T) {
 	require.NoError(t, store.Init())
 
 	defaults := defaultsConfig()
-	require.Equal(t, uint64(100000000), defaults.EPBS.BidSubsidy)
+	require.Equal(t, int64(100000000), defaults.EPBS.BidSubsidy)
 
 	// 1. Boot with --epbs-bid-subsidy 500 -> CLI wins over default.
-	svc := boot(t, store, defaults, u64(500))
-	require.Equal(t, uint64(500), svc.Load().EPBS.BidSubsidy)
+	svc := boot(t, store, defaults, i64(500))
+	require.Equal(t, int64(500), svc.Load().EPBS.BidSubsidy)
 
 	// 2. UI sets 600 -> UI wins.
 	setSubsidy(t, svc, 600)
-	require.Equal(t, uint64(600), svc.Load().EPBS.BidSubsidy)
+	require.Equal(t, int64(600), svc.Load().EPBS.BidSubsidy)
 
 	// 3. Restart, flag unchanged at 500 -> UI override (600) still wins.
-	svc = boot(t, store, defaults, u64(500))
-	require.Equal(t, uint64(600), svc.Load().EPBS.BidSubsidy)
+	svc = boot(t, store, defaults, i64(500))
+	require.Equal(t, int64(600), svc.Load().EPBS.BidSubsidy)
 
 	// 4. Operator changes the flag to 700 -> CLI change wins over old UI value.
-	svc = boot(t, store, defaults, u64(700))
-	require.Equal(t, uint64(700), svc.Load().EPBS.BidSubsidy)
+	svc = boot(t, store, defaults, i64(700))
+	require.Equal(t, int64(700), svc.Load().EPBS.BidSubsidy)
 
 	// 5. Restart, flag unchanged at 700 -> CLI stays (UI 600 does not resurrect).
-	svc = boot(t, store, defaults, u64(700))
-	require.Equal(t, uint64(700), svc.Load().EPBS.BidSubsidy)
+	svc = boot(t, store, defaults, i64(700))
+	require.Equal(t, int64(700), svc.Load().EPBS.BidSubsidy)
 
 	// 6. UI sets 800 -> UI wins again.
 	setSubsidy(t, svc, 800)
-	require.Equal(t, uint64(800), svc.Load().EPBS.BidSubsidy)
+	require.Equal(t, int64(800), svc.Load().EPBS.BidSubsidy)
 
 	// 7. Upgrade safety: flag removed, hardcoded default bumped to 550M.
 	//    The default bump must NOT clobber the UI override.
 	bumped := defaultsConfig()
 	bumped.EPBS.BidSubsidy = 550000000
 	svc = boot(t, store, bumped, nil)
-	require.Equal(t, uint64(800), svc.Load().EPBS.BidSubsidy)
+	require.Equal(t, int64(800), svc.Load().EPBS.BidSubsidy)
 
 	require.NoError(t, store.Close())
 }
@@ -117,7 +117,7 @@ func TestDisabledDBNoPersistence(t *testing.T) {
 	require.Equal(t, defaults.EPBS.BidSubsidy, svc.Load().EPBS.BidSubsidy)
 
 	setSubsidy(t, svc, 123)
-	require.Equal(t, uint64(123), svc.Load().EPBS.BidSubsidy)
+	require.Equal(t, int64(123), svc.Load().EPBS.BidSubsidy)
 
 	// New "boot" — no persistence, falls back to the default.
 	svc = boot(t, store, defaults, nil)
@@ -204,8 +204,13 @@ func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {
 		{KeyBuilderAPIExecutionPaymentPct, uint64(250), false},
 		{KeyDepositAmount, uint64(32000000000), true},
 		{KeyDepositAmount, uint64(0), false},
+		{KeyEarlyDepositTip, uint64(0), true},
+		{KeyEarlyDepositTip, uint64(10000), true},
+		{KeyEarlyDepositTip, uint64(10001), false},
 		{KeyScheduleMode, "every_nth", true},
 		{KeyScheduleMode, "sometimes", false},
+		{KeyLocalBuildStartDelayMs, uint64(1000), true},
+		{KeyLocalBuildStartDelayMs, uint64(12001), false},
 	}
 
 	for _, tt := range tests {
@@ -228,4 +233,35 @@ func TestDefaultsAreValid(t *testing.T) {
 	for _, field := range Fields() {
 		require.NoError(t, ValidateSetting(field.Key, field.Get(defaults)), field.Key)
 	}
+}
+
+// TestSourcesFollowTheWinningLayer checks that Sources reports the layer the
+// effective value comes from, dates UI overrides, and survives a restart.
+func TestSourcesFollowTheWinningLayer(t *testing.T) {
+	dir := t.TempDir()
+	store := db.NewDatabase(&db.Config{File: filepath.Join(dir, "state.db")}, testLogger())
+	require.NoError(t, store.Init())
+
+	defaults := defaultsConfig()
+
+	svc := boot(t, store, defaults, nil)
+	_, ok := svc.Sources()[subsidyKey]
+	require.False(t, ok, "a default value has no source entry")
+
+	svc = boot(t, store, defaults, i64(500))
+	require.Equal(t, SettingSource{Source: SourceCLI}, svc.Sources()[subsidyKey])
+
+	setSubsidy(t, svc, 600)
+	src := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, src.Source)
+	require.NotZero(t, src.UpdatedAt)
+
+	// Restart with the flag unchanged: the UI override still wins, dated by
+	// its persisted write.
+	svc = boot(t, store, defaults, i64(500))
+	restarted := svc.Sources()[subsidyKey]
+	require.Equal(t, SourceUI, restarted.Source)
+	require.Equal(t, src.UpdatedAt, restarted.UpdatedAt)
+
+	require.NoError(t, store.Close())
 }

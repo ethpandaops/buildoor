@@ -351,7 +351,7 @@ func TestSchedulerAbsoluteBidValue(t *testing.T) {
 		bidPlan        string
 		blockValueGwei uint64
 		minAmountGwei  uint64
-		subsidyGwei    uint64
+		subsidyGwei    int64
 		wantValue      uint64
 	}{
 		{
@@ -377,6 +377,30 @@ func TestSchedulerAbsoluteBidValue(t *testing.T) {
 			minAmountGwei:  50,
 			subsidyGwei:    0,
 			wantValue:      50,
+		},
+		{
+			name:           "negative subsidy keeps a margin from the block value",
+			bidPlan:        `{"mode":"custom"}`,
+			blockValueGwei: 100,
+			minAmountGwei:  50,
+			subsidyGwei:    -30,
+			wantValue:      70, // max(100 - 30, 50)
+		},
+		{
+			name:           "min amount floors the bid after the margin",
+			bidPlan:        `{"mode":"custom"}`,
+			blockValueGwei: 100,
+			minAmountGwei:  80,
+			subsidyGwei:    -30,
+			wantValue:      80,
+		},
+		{
+			name:           "per-slot negative subsidy overrides the global one",
+			bidPlan:        `{"mode":"custom","bid_subsidy":-60}`,
+			blockValueGwei: 100,
+			minAmountGwei:  0,
+			subsidyGwei:    9,
+			wantValue:      40,
 		},
 	}
 

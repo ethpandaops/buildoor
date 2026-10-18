@@ -495,6 +495,7 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 	svc.cfg.LocalBuild.Enabled = true
+	svc.cfg.LocalBuild.StartDelayMs = 900
 	svc.localBuild.availability = LocalBuildAvailability{Configured: true, Available: true, BlobBundle: true}
 
 	tests := []struct {
@@ -517,6 +518,10 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 
 			require.Equal(t, tc.wantSkip, skip)
 			require.Equal(t, tc.wantReq, req != nil)
+
+			if req != nil {
+				require.Equal(t, 900*time.Millisecond, req.StartDelay, "the configured start delay reaches the request")
+			}
 		})
 	}
 }
@@ -631,4 +636,56 @@ func TestFireLocalProgress(t *testing.T) {
 	require.Equal(t, LocalSkipTxPoolDisabled, phases[2].SkipReason)
 	require.Equal(t, LocalStatusFailed, phases[3].Phase)
 	require.Equal(t, "boom", phases[3].Error)
+}
+
+// TestLocalBuildInfoPublicDropsTransactionHashes checks that the public copy
+// carries no transaction hash of the custom block (pool selection, expected
+// list, EL refusals) while counts and reasons stay.
+func TestLocalBuildInfoPublicDropsTransactionHashes(t *testing.T) {
+	info := &LocalBuildInfo{
+		TxSource:       "txpool",
+		Selection:      &txpool.Summary{Selected: 1, Hashes: []string{"0x01"}},
+		ExpectedHashes: []string{"0x01", "0x02"},
+		Dropped:        []DroppedTx{{Hash: "0x03", Reason: "nonce"}},
+		SubmittedTxs:   2,
+	}
+
+	public := info.Public()
+
+	require.Nil(t, public.ExpectedHashes)
+	require.Empty(t, public.Selection.Hashes)
+	require.Equal(t, 1, public.Selection.Selected)
+	require.Equal(t, []DroppedTx{{Reason: "nonce"}}, public.Dropped)
+	require.Equal(t, 2, public.SubmittedTxs)
+
+	// The original keeps everything (the logged-in view and the verifier use it).
+	require.Equal(t, []string{"0x01"}, info.Selection.Hashes)
+	require.Equal(t, "0x03", info.Dropped[0].Hash)
+}
+
+// TestLocalBuildInfoPrivateTxs counts the transactions buildoor supplied
+// itself: the sent list minus the EL mempool fill and the inclusion list,
+// unless those were dropped on a retry.
+func TestLocalBuildInfoPrivateTxs(t *testing.T) {
+	hashes := func(n int) []string { return make([]string, n) }
+
+	tests := []struct {
+		name string
+		info *LocalBuildInfo
+		want int
+	}{
+		{name: "engine payload", info: nil, want: 0},
+		{name: "el mempool source", info: &LocalBuildInfo{TxSource: "el_mempool"}, want: 0},
+		{name: "pool only", info: &LocalBuildInfo{ExpectedHashes: hashes(3)}, want: 3},
+		{name: "pool and fill", info: &LocalBuildInfo{ExpectedHashes: hashes(30), FillTxs: 29}, want: 1},
+		{name: "fill dropped", info: &LocalBuildInfo{ExpectedHashes: hashes(1), FillTxs: 29, FillDropped: true}, want: 1},
+		{name: "inclusion list", info: &LocalBuildInfo{ExpectedHashes: hashes(5), InclusionListTxs: 2}, want: 3},
+		{name: "inclusion list dropped", info: &LocalBuildInfo{ExpectedHashes: hashes(3), InclusionListTxs: 2, InclusionListDropped: true}, want: 3},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, tc.info.PrivateTxs())
+		})
+	}
 }

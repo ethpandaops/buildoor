@@ -190,6 +190,21 @@ func TestGetHeader_InvalidSlot(t *testing.T) {
 
 // TestGetHeader_SubsidyInBidValue returns 200 with bid value = block_value + BlockValueSubsidyGwei.
 func TestGetHeader_SubsidyInBidValue(t *testing.T) {
+	// block_value 500_000_000_000_000 wei + subsidy 1_000_000 gwei (= 1_000_000_000_000_000 wei) = 1_500_000_000_000_000 wei
+	assert.Equal(t, "1500000000000000", getHeaderBidValue(t, 1_000_000), "bid value should be block_value_wei + subsidy_wei")
+}
+
+// TestGetHeader_NegativeSubsidyIgnored serves the plain block value: before
+// Gloas the payload pays the proposer, so there is no margin to keep.
+func TestGetHeader_NegativeSubsidyIgnored(t *testing.T) {
+	assert.Equal(t, "500000000000000", getHeaderBidValue(t, -100_000))
+}
+
+// getHeaderBidValue serves one getHeader with the given global subsidy and
+// returns the bid value (wei) of the response.
+func getHeaderBidValue(t *testing.T, subsidyGwei int64) string {
+	t.Helper()
+
 	registry := newTestKeyRegistry(t, 1)
 	blsSigner := registry.Primary().BLSSigner()
 	pk := blsSigner.PublicKey()
@@ -221,7 +236,7 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 	// The subsidy is resolved from the plan service's config at freeze time,
 	// so the server and the plan service must share one config.
 	fullCfg := &config.Config{APIPort: 8080, BuilderAPIEnabled: true}
-	fullCfg.BuilderAPI.BlockValueSubsidyGwei = 1_000_000
+	fullCfg.BuilderAPI.BlockValueSubsidyGwei = subsidyGwei
 	cfg := &fullCfg.BuilderAPI
 	log := logrus.New()
 	cache := payload_builder.NewPayloadCache(10)
@@ -265,8 +280,8 @@ func TestGetHeader_SubsidyInBidValue(t *testing.T) {
 		} `json:"data"`
 	}
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	// block_value 500_000_000_000_000 wei + subsidy 1_000_000 gwei (= 1_000_000_000_000_000 wei) = 1_500_000_000_000_000 wei
-	assert.Equal(t, "1500000000000000", resp.Data.Message.Value, "bid value should be block_value_wei + subsidy_wei")
+
+	return resp.Data.Message.Value
 }
 
 // TestSubmitBlindedBlockV2_InvalidJSON returns 400 for invalid JSON body.

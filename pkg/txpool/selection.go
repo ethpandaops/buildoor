@@ -27,8 +27,12 @@ const (
 	SkipBlobFull            = "blob_full"
 	SkipMaxTxs              = "max_txs"
 	SkipBlobUnsupported     = "blob_unsupported"
-	SkipSizeFull            = "size_full"
-	SkipDisabled            = "txpool_disabled"
+	// SkipBlobUnavailable marks an EL mempool blob transaction whose blobs the
+	// EL's blob pool could not supply; the sender's later fill transactions
+	// follow it out.
+	SkipBlobUnavailable = "blob_unavailable"
+	SkipSizeFull        = "size_full"
+	SkipDisabled        = "txpool_disabled"
 )
 
 // maxBlockBytes bounds the encoded transaction bytes of a selection: geth's
@@ -66,11 +70,23 @@ type SelectParams struct {
 	// BlobEncoding is network (sidecar carried) or canonical.
 	BlobEncoding string
 	// Fill holds the EL mempool's pending transactions (each sender's in
-	// nonce order). They fill the gas the pool selection left, after it: each
-	// sender continues at the nonce and balance the pool selection left, the
-	// highest tip goes first, duplicates of pool transactions and blob
-	// transactions (no sidecar) are skipped.
+	// nonce order). They fill the gas and blobs the pool selection left,
+	// after it: each sender continues at the nonce and balance the pool
+	// selection left, the highest tip goes first, duplicates of pool
+	// transactions are skipped.
 	Fill []*types.Transaction
+	// FillSidecars completes the selected fill blob transactions, which
+	// txpool_content lists without their blobs. Without it the network
+	// encoding cannot carry them and the fill skips blob transactions; the
+	// canonical encoding needs no sidecar.
+	FillSidecars SidecarSource
+}
+
+// SidecarSource supplies the blob sidecars of EL mempool blob transactions.
+type SidecarSource interface {
+	// BlobSidecars returns the sidecar of every transaction it could
+	// complete, keyed by transaction hash; the others are left out.
+	BlobSidecars(ctx context.Context, txs []*types.Transaction) (map[common.Hash]*types.BlobTxSidecar, error)
 }
 
 // Selection is the assembled transaction list plus its accounting.
@@ -103,10 +119,12 @@ type Selection struct {
 
 	// FillCandidates / Fill are the EL mempool transactions offered (params
 	// Fill) and the ones placed after the pool selection; FillGasSum,
-	// FillSkipped and FillBytes account them separately from the pool's.
+	// FillBlobs, FillSkipped and FillBytes account them separately from the
+	// pool's.
 	FillCandidates int
 	Fill           []*PooledTx
 	FillGasSum     uint64
+	FillBlobs      int
 	FillBytes      uint64
 	FillSkipped    map[string]int
 }
@@ -131,6 +149,7 @@ type Summary struct {
 	FillCandidates int            `json:"fill_candidates,omitempty"`
 	FillSelected   int            `json:"fill_selected,omitempty"`
 	FillGasSum     uint64         `json:"fill_gas_sum,omitempty"`
+	FillBlobs      int            `json:"fill_blobs,omitempty"`
 	FillSkipped    map[string]int `json:"fill_skipped,omitempty"`
 }
 
@@ -154,6 +173,7 @@ func (s *Selection) Summary() *Summary {
 		FillCandidates:   s.FillCandidates,
 		FillSelected:     len(s.Fill),
 		FillGasSum:       s.FillGasSum,
+		FillBlobs:        s.FillBlobs,
 	}
 
 	if len(s.FillSkipped) > 0 {
@@ -281,7 +301,7 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		return sel, nil
 	}
 
-	if params.IncludeBlobTxs && p.hasBlobTxs(queues) {
+	if params.IncludeBlobTxs && (p.hasBlobTxs(queues) || fillCarriesBlobs(params) && hasBlobTx(params.Fill)) {
 		blobFee, err := p.elClient.BlobBaseFee(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("select: %w", err)
@@ -696,8 +716,10 @@ const (
 // the pool selection, within the gas, byte, count and blob budgets it left.
 // Each sender continues at the nonce and balance the pool selection left,
 // the same parent-state checks apply, and the highest effective tip goes
-// first, like an EL's own block building. Blob transactions are skipped:
-// txpool_content does not carry their sidecars.
+// first, like an EL's own block building. txpool_content lists blob
+// transactions without their blobs: the network encoding takes them only
+// when params.FillSidecars completes them, which is asked for the selected
+// ones alone (see completeFillBlobs).
 func (p *Pool) selectFill(
 	ctx context.Context,
 	sel *Selection,
@@ -714,8 +736,12 @@ func (p *Pool) selectFill(
 
 	fillParams := *params
 	fillParams.Ordering = config.TxOrderingTip
-	fillParams.IncludeBlobTxs = false
+	fillParams.IncludeBlobTxs = fillCarriesBlobs(params)
 	fillParams.MaxBlobs = 0
+
+	if fillParams.IncludeBlobTxs {
+		fillParams.MaxBlobs = params.MaxBlobs - min(uint64(sel.Blobs), params.MaxBlobs)
+	}
 
 	if params.MaxTxs > 0 {
 		if uint64(len(sel.Selected)) >= params.MaxTxs {
@@ -791,9 +817,10 @@ func (p *Pool) selectFill(
 	}
 
 	fillSel := &Selection{
-		Skipped:   sel.FillSkipped,
-		BaseFee:   sel.BaseFee,
-		GasBudget: sel.GasBudget - min(sel.GasSum, sel.GasBudget),
+		Skipped:     sel.FillSkipped,
+		BaseFee:     sel.BaseFee,
+		BlobBaseFee: sel.BlobBaseFee,
+		GasBudget:   sel.GasBudget - min(sel.GasSum, sel.GasBudget),
 	}
 
 	ready := make(map[common.Address][]*PooledTx, len(senders))
@@ -821,10 +848,103 @@ func (p *Pool) selectFill(
 
 	fill := p.mergeHeads(fillSel, &fillParams, senders, ready, maxBlockBytes-min(sel.Bytes, maxBlockBytes))
 
-	sel.FillGasSum = fillSel.GasSum
-	sel.FillBytes = fillSel.Bytes
+	if fillParams.IncludeBlobTxs && params.BlobEncoding != config.BlobEncodingCanonical {
+		fill = p.completeFillBlobs(ctx, sel, params.FillSidecars, fill)
+	}
+
+	sel.FillGasSum = 0
+	sel.FillBytes = 0
+	sel.FillBlobs = 0
+
+	for _, tx := range fill {
+		sel.FillGasSum += tx.Tx.Gas()
+		sel.FillBytes += tx.Size
+		sel.FillBlobs += len(tx.Tx.BlobHashes())
+	}
 
 	return fill, nil
+}
+
+// fillCarriesBlobs reports whether the fill may select blob transactions:
+// blobs are allowed for the block, and the encoding either needs no sidecar
+// (canonical) or a source can supply it.
+func fillCarriesBlobs(params *SelectParams) bool {
+	return params.IncludeBlobTxs &&
+		(params.BlobEncoding == config.BlobEncodingCanonical || params.FillSidecars != nil)
+}
+
+// completeFillBlobs attaches the sidecars of the selected fill blob
+// transactions. One the source cannot complete is dropped, and the same
+// sender's later fill transactions with it: they would follow a nonce gap.
+// The blob space it frees is not refilled.
+func (p *Pool) completeFillBlobs(
+	ctx context.Context,
+	sel *Selection,
+	source SidecarSource,
+	fill []*PooledTx,
+) []*PooledTx {
+	blobTxs := make([]*types.Transaction, 0, len(fill))
+
+	for _, tx := range fill {
+		if tx.Tx.Type() == types.BlobTxType {
+			blobTxs = append(blobTxs, tx.Tx)
+		}
+	}
+
+	if len(blobTxs) == 0 {
+		return fill
+	}
+
+	sidecars, err := source.BlobSidecars(ctx, blobTxs)
+	if err != nil {
+		p.log.WithError(err).WithField("blob_txs", len(blobTxs)).
+			Debug("Cannot read the EL blob pool, leaving the EL mempool blob transactions out")
+	}
+
+	kept := make([]*PooledTx, 0, len(fill))
+	dropped := make(map[common.Address]bool)
+
+	for _, tx := range fill {
+		if dropped[tx.Sender] {
+			sel.FillSkipped[SkipNonceGap]++
+
+			continue
+		}
+
+		if tx.Tx.Type() != types.BlobTxType {
+			kept = append(kept, tx)
+
+			continue
+		}
+
+		sidecar := sidecars[tx.Hash]
+		if sidecar == nil {
+			sel.FillSkipped[SkipBlobUnavailable]++
+			dropped[tx.Sender] = true
+
+			continue
+		}
+
+		kept = append(kept, &PooledTx{
+			Hash:   tx.Hash,
+			Tx:     tx.Tx.WithBlobTxSidecar(sidecar),
+			Sender: tx.Sender,
+			Size:   tx.Size,
+			Seq:    tx.Seq,
+		})
+	}
+
+	return kept
+}
+
+func hasBlobTx(txs []*types.Transaction) bool {
+	for _, tx := range txs {
+		if tx.Type() == types.BlobTxType {
+			return true
+		}
+	}
+
+	return false
 }
 
 // effectiveTip is the priority fee a transaction actually pays over the base

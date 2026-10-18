@@ -197,7 +197,7 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           {frozen.build.local?.enabled && (
             <span
               className={`ms-1 ${badgeClass('info')}`}
-              title={`Custom build via testing_buildBlockV1: bids with ${frozen.build.local.payload_source}, transactions from ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
+              title={`Testing build via testing_buildBlockV1: bids with ${frozen.build.local.payload_source}, transactions from ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
             >
               custom: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
             </span>
@@ -236,7 +236,7 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
           <KV label="Min / Increase" hint={<>Min: floor of <code>max(block value, min) + subsidy</code>. Increase: added per earlier bid of the same payload.</>}>
             {formatGwei(frozen.bid.min_gwei)} / {formatGwei(frozen.bid.increase_gwei)}
           </KV>
-          <KV label="Subsidy" hint="Added on top of max(block value, min); unused when a value override is set.">
+          <KV label="Subsidy" hint="Added on top of max(block value, min); negative = the margin kept from the block value. Unused when a value override is set.">
             {formatGwei(frozen.bid.subsidy_gwei)}
           </KV>
           <KV label="Value Override" hint="Absolute bid base replacing max(block value, min) + subsidy; — = none, the formula applied.">{formatGwei(frozen.bid.value_gwei)}</KV>
@@ -272,7 +272,7 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
       </div>
       {frozen.builder_api ? (
         <div className="row g-2 mb-2">
-          <KV label="Subsidy" hint="Added to the block value of served bids; unused when a total value override is set.">
+          <KV label="Subsidy" hint="Added to the block value of served bids; negative = the margin kept from it (Gloas only). Unused when a total value override is set.">
             {formatGwei(frozen.builder_api.subsidy_gwei)}
           </KV>
           <KV label="Total Value Override" hint="Absolute total value served, replacing block value + subsidy; — = none.">
@@ -512,7 +512,7 @@ const ResultView: React.FC<{
                 <div className="col-12">
                   <div className="config-item">
                     <div className="config-item-label d-flex align-items-center gap-2">
-                      Custom build (testing_buildBlockV1)
+                      Testing build (testing_buildBlockV1)
                       <span className={badgeClass(
                         build.local_build.status === 'ready' ? 'success' :
                         build.local_build.status === 'failed' ? 'danger' : 'secondary'
@@ -571,7 +571,7 @@ const ResultView: React.FC<{
                           {build.local_build.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
                           {build.local_build.info.dropped_by_el ? ` · ${build.local_build.info.dropped_by_el} dropped by the EL` : ''}
                           {build.local_build.info.attempts && build.local_build.info.attempts > 1 ? ` · ${build.local_build.info.attempts} attempts` : ''}
-                          {build.local_build.info.dropped?.length ? ` · dropped after EL refusal: ${build.local_build.info.dropped.map((d) => `${d.hash.slice(0, 10)}… (${d.reason})`).join(', ')}` : ''}
+                          {build.local_build.info.dropped?.length ? ` · dropped after EL refusal: ${build.local_build.info.dropped.map((d) => (d.hash ? `${d.hash.slice(0, 10)}… (${d.reason})` : d.reason)).join(', ')}` : ''}
                         </div>
                       )}
                     </div>
@@ -966,7 +966,7 @@ const ResultView: React.FC<{
             <strong className="small">
               Tx plan check
               <InfoHint>
-                Post-inclusion check of a custom build: does the canonical block hold exactly the
+                Post-inclusion check of a testing build: does the canonical block hold exactly the
                 planned transactions, in order?
                 <dl>
                   <dt>pending</dt>

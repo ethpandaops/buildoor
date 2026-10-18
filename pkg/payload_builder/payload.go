@@ -44,10 +44,14 @@ type Payload struct {
 
 	// Metadata not carried by the objects above.
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
-	FeeRecipient common.Address // resolved proposer fee recipient for the bid
-	BlockValue   *big.Int       // EL-reported block value (wei)
-	ReadyAt      time.Time      // when the payload became ready
-	BuildSeq     uint64         // see PayloadBuildStartedEvent.BuildSeq
+	FeeRecipient common.Address // the payload's coinbase, which receives the block value
+	// ProposerFeeRecipient is the proposer's resolved fee recipient: the
+	// bid.fee_recipient a Gloas bid pays its value to. Before Gloas it equals
+	// FeeRecipient (the block value itself is the proposer's payment).
+	ProposerFeeRecipient common.Address
+	BlockValue           *big.Int  // EL-reported block value (wei)
+	ReadyAt              time.Time // when the payload became ready
+	BuildSeq             uint64    // see PayloadBuildStartedEvent.BuildSeq
 
 	// activity is the bid/reveal log, appended by the payload_bidder and read by
 	// the WebUI. The mutex also makes Payload copy-unsafe, enforcing the

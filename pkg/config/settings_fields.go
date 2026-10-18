@@ -92,7 +92,7 @@ func Fields() []Field {
 		newField(KeyEPBSBidMinAmount, "epbs-bid-min", func(c *Config) *uint64 { return &c.EPBS.BidMinAmount }),
 		newField(KeyEPBSBidIncrease, "epbs-bid-increase", func(c *Config) *uint64 { return &c.EPBS.BidIncrease }),
 		newField(KeyEPBSBidInterval, "epbs-bid-interval", func(c *Config) *int64 { return &c.EPBS.BidInterval }),
-		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *uint64 { return &c.EPBS.BidSubsidy }),
+		newField(KeyEPBSBidSubsidy, "epbs-bid-subsidy", func(c *Config) *int64 { return &c.EPBS.BidSubsidy }),
 		newField(KeyEPBSBidValueOverride, "epbs-bid-value-override", func(c *Config) *uint64 { return &c.EPBS.BidValueOverride }),
 		newField(KeyEPBSHeadVoteThreshold, "epbs-vote-threshold", func(c *Config) *uint64 { return &c.EPBS.HeadVoteThresholdPct }),
 		newField(KeyEPBSBidCandidate, "epbs-bid-candidate", func(c *Config) *string { return &c.EPBS.BidCandidate }),
@@ -125,6 +125,7 @@ func Fields() []Field {
 		newField(KeyLocalBuildBuildELPayload, "local-build-el-payload", func(c *Config) *bool { return &c.LocalBuild.BuildELPayload }),
 		newField(KeyLocalBuildAllowBlobsNoBundle, "local-build-allow-blobs-without-bundle", func(c *Config) *bool { return &c.LocalBuild.AllowBlobsWithoutBundle }),
 		newField(KeyLocalBuildMaxAttempts, "local-build-max-attempts", func(c *Config) *uint64 { return &c.LocalBuild.MaxAttempts }),
+		newField(KeyLocalBuildStartDelayMs, "local-build-start-delay", func(c *Config) *uint64 { return &c.LocalBuild.StartDelayMs }),
 
 		newField(KeyTxPoolEnabled, "txpool-enabled", func(c *Config) *bool { return &c.TxPool.Enabled }),
 		newField(KeyTxPoolOrdering, "txpool-ordering", func(c *Config) *string { return &c.TxPool.Ordering }),
@@ -145,7 +146,7 @@ func Fields() []Field {
 
 		newField(KeyPayloadBuildTime, "payload-build-time", func(c *Config) *uint64 { return &c.PayloadBuildTime }),
 		newField(KeyExtraData, "extra-data", func(c *Config) *string { return &c.ExtraData }),
-		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *uint64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
+		newField(KeyBuilderAPISubsidy, "builder-api-subsidy", func(c *Config) *int64 { return &c.BuilderAPI.BlockValueSubsidyGwei }),
 		newField(KeyBuilderAPIValueOverride, "builder-api-value-override", func(c *Config) *uint64 { return &c.BuilderAPI.ValueOverrideGwei }),
 		newField(KeyBuilderAPIExecutionPayment, "builder-api-execution-payment", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentGwei }),
 		newField(KeyBuilderAPIExecutionPaymentPct, "builder-api-execution-payment-percent", func(c *Config) *uint64 { return &c.BuilderAPI.ExecutionPaymentPercent }),
@@ -167,6 +168,7 @@ func Fields() []Field {
 		newField(KeyDepositAmount, "deposit-amount", func(c *Config) *uint64 { return &c.DepositAmount }),
 		newField(KeyTopupThreshold, "topup-threshold", func(c *Config) *uint64 { return &c.TopupThreshold }),
 		newField(KeyDepositMaxFee, "deposit-max-fee", func(c *Config) *uint64 { return &c.DepositMaxFeeGwei }),
+		newField(KeyEarlyDepositTip, "early-deposit-tip", func(c *Config) *uint64 { return &c.EarlyDepositTipGwei }),
 
 		newField(KeyEPBSEnabled, "epbs-enabled", func(c *Config) *bool { return &c.EPBSEnabled }),
 		newField(KeyBuilderAPIEnabled, "builder-api-enabled", func(c *Config) *bool { return &c.BuilderAPIEnabled }),

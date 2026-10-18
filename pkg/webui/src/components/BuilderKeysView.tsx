@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { BuilderKeysTable } from './BuilderKeysTable';
 import { InfoHint } from './InfoHint';
 import { useBuilderKeyActions, useBuilderKeys } from '../hooks/useBuilderKeys';
-import { useSettings } from '../hooks/useSettings';
+import { openSettings } from '../stores/settingsDrawerStore';
 import type { BuilderKeysAggregate } from '../types';
 
 interface BuilderKeysViewProps {
@@ -27,19 +27,8 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
   );
   const actions = useBuilderKeyActions();
 
-  const [targetInput, setTargetInput] = useState('');
-  const [editingTarget, setEditingTarget] = useState(false);
   const [busyKey, setBusyKey] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const { postSettings } = useSettings();
-  const [editingPolicy, setEditingPolicy] = useState(false);
-  const [policyForm, setPolicyForm] = useState({ auto_deposit: true, auto_exit: true, max_index: 0 });
-
-  useEffect(() => {
-    if (!editingTarget) {
-      setTargetInput(String(settings.target_count));
-    }
-  }, [settings.target_count, editingTarget]);
 
   const runAction = async (keyIndex: number, action: () => Promise<{ ok: boolean; error?: string }>) => {
     setBusyKey(keyIndex);
@@ -53,52 +42,6 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
     setBusyKey(null);
     refetch();
   };
-
-  const saveTarget = async () => {
-    const target = parseInt(targetInput, 10);
-    if (!Number.isFinite(target) || target < 1) {
-      setActionError('target must be at least 1');
-      return;
-    }
-
-    setActionError(null);
-
-    const result = await actions.setTarget(target);
-    if (!result.ok) {
-      setActionError(result.error ?? 'failed to set target');
-    }
-
-    setEditingTarget(false);
-    refetch();
-  };
-
-  const startEditingPolicy = () => {
-    setPolicyForm({
-      auto_deposit: settings.auto_deposit,
-      auto_exit: settings.auto_exit,
-      max_index: settings.max_index,
-    });
-    setEditingPolicy(true);
-  };
-
-  const savePolicy = async () => {
-    setActionError(null);
-
-    const result = await postSettings({
-      'builder_keys.auto_deposit': policyForm.auto_deposit,
-      'builder_keys.auto_exit': policyForm.auto_exit,
-      'builder_keys.max_index': policyForm.max_index,
-    });
-    if (!result.ok) {
-      setActionError(result.error ?? 'failed to update key settings');
-      return;
-    }
-
-    setEditingPolicy(false);
-    refetch();
-  };
-
-  const lowering = editingTarget && parseInt(targetInput, 10) < settings.target_count;
 
   return (
     <div className="card">
@@ -142,127 +85,12 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
           </span>
           <span className="fw-bold">{formatGwei(aggregate.total_effective_gwei)} ETH</span>
 
-          {actions.isLoggedIn && !editingTarget && (
-            <button
-              className="btn btn-sm btn-outline-primary"
-              onClick={() => {
-                setTargetInput(String(settings.target_count));
-                setEditingTarget(true);
-              }}
-            >
-              <i className="fas fa-pencil-alt me-1"></i>Target
-            </button>
-          )}
-
-          {actions.isLoggedIn && !editingTarget && !editingPolicy && (
-            <button className="btn btn-sm btn-outline-primary" onClick={startEditingPolicy}>
-              <i className="fas fa-sliders-h me-1"></i>Settings
-            </button>
-          )}
-
-          {actions.isLoggedIn && editingTarget && (
-            <>
-              <input
-                type="number"
-                min={1}
-                max={settings.max_index + 1}
-                className="form-control form-control-sm"
-                style={{ width: '6rem' }}
-                value={targetInput}
-                onChange={(e) => setTargetInput(e.target.value)}
-              />
-              <button className="btn btn-sm btn-primary" onClick={saveTarget}>
-                Save
-              </button>
-              <button className="btn btn-sm btn-secondary" onClick={() => setEditingTarget(false)}>
-                Cancel
-              </button>
-            </>
-          )}
+          <button type="button" className="bd-btn bd-btn-sm" onClick={() => openSettings('lifecycle', 'fleet')}>
+            <i className={`fas ${actions.isLoggedIn ? 'fa-sliders-h' : 'fa-eye'}`} aria-hidden="true"></i>
+            Fleet settings
+          </button>
         </div>
       </div>
-
-      {editingPolicy && (
-        <div className="border-bottom px-3 py-2">
-          <div className="d-flex flex-wrap align-items-center gap-3">
-            <div className="form-check mb-0">
-              <input
-                type="checkbox"
-                className="form-check-input"
-                id="builder-keys-auto-deposit"
-                checked={policyForm.auto_deposit}
-                onChange={(e) => setPolicyForm({ ...policyForm, auto_deposit: e.target.checked })}
-              />
-              <label className="form-check-label" htmlFor="builder-keys-auto-deposit">
-                Auto-deposit keys below the target
-                <InfoHint>
-                  <code>builder_keys.auto_deposit</code>: when on, the lifecycle manager deposits new
-                  keys (one transaction per reconcile pass, from the funding wallet) until the
-                  managed count reaches the target. Off = no new keys are deposited automatically;
-                  the Deposit button still works.
-                </InfoHint>
-              </label>
-            </div>
-            <div className="form-check mb-0">
-              <input
-                type="checkbox"
-                className="form-check-input"
-                id="builder-keys-auto-exit"
-                checked={policyForm.auto_exit}
-                onChange={(e) => setPolicyForm({ ...policyForm, auto_exit: e.target.checked })}
-              />
-              <label className="form-check-label" htmlFor="builder-keys-auto-exit">
-                Auto-exit keys above the target
-                <InfoHint>
-                  <code>builder_keys.auto_exit</code>: when on, managed keys above the target are
-                  exited, highest index first, skipping keys with pending payments. Irreversible:
-                  an exited builder key can never be reactivated. Off = surplus keys stay
-                  registered.
-                </InfoHint>
-              </label>
-            </div>
-            <div className="d-flex align-items-center gap-2">
-              <label className="form-label mb-0" htmlFor="builder-keys-max-index">
-                Max key index
-                <InfoHint>
-                  <code>builder_keys.max_index</code>: highest derivation index buildoor may use
-                  (index 0 = the entry key). Caps the target at max index + 1 keys and bounds the
-                  startup scan for previously used keys.
-                </InfoHint>
-              </label>
-              <input
-                type="number"
-                min={0}
-                id="builder-keys-max-index"
-                className="form-control form-control-sm"
-                style={{ width: '6rem' }}
-                value={policyForm.max_index}
-                onChange={(e) =>
-                  setPolicyForm({ ...policyForm, max_index: parseInt(e.target.value, 10) || 0 })
-                }
-              />
-            </div>
-            <div className="ms-auto d-flex gap-2">
-              <button className="btn btn-sm btn-primary" onClick={savePolicy}>Save</button>
-              <button className="btn btn-sm btn-secondary" onClick={() => setEditingPolicy(false)}>
-                Cancel
-              </button>
-            </div>
-          </div>
-          <div className="form-text">
-            Auto-exit is irreversible: an exited builder key can never be reactivated. The max
-            index caps how far key derivation may reach, bounding the target.
-          </div>
-        </div>
-      )}
-
-      {lowering && (
-        <div className="alert alert-warning rounded-0 mb-0 py-2 small">
-          <i className="fas fa-exclamation-triangle me-1"></i>
-          Lowering the target exits surplus keys, highest index first. An exited builder key can
-          never be reactivated.
-        </div>
-      )}
 
       <div className="card-body p-2">
         <BuilderKeysTable

@@ -35,6 +35,15 @@ type keyState struct {
 	hasUI    bool
 	uiValue  any
 	uiSeq    int64
+	uiAt     int64 // unix ms of the last UI write (0 = unknown)
+}
+
+// SettingSource names the layer a setting's effective value comes from when
+// it is not the hardcoded default.
+type SettingSource struct {
+	Source string `json:"source"` // SourceCLI | SourceUI
+	// UpdatedAt is when the UI override was written (unix ms; UI layer only).
+	UpdatedAt int64 `json:"updated_at,omitempty"`
 }
 
 // Service is the central authority for buildoor's mutable runtime configuration.
@@ -129,6 +138,12 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 				ks.hasUI = true
 				ks.uiValue = v
 				ks.uiSeq = row.UISeq
+
+				// The row carries one timestamp for its last write; it dates
+				// the UI override when that was the newer layer.
+				if row.UISeq >= row.CLISeq {
+					ks.uiAt = row.UpdatedAt
+				}
 			} else {
 				s.log.WithError(derr).WithField("key", f.Key).Warn("ignoring undecodable ui override")
 			}
@@ -228,6 +243,40 @@ func (s *Service) Load() *Config {
 	return s.effective
 }
 
+// Sources reports, for every setting whose effective value does not come
+// from the hardcoded default, the layer that supplied it — the same recency
+// resolution recompute applies.
+func (s *Service) Sources() map[string]SettingSource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make(map[string]SettingSource, len(s.keyState))
+
+	for key, ks := range s.keyState {
+		var winSeq int64
+
+		source := ""
+
+		if ks.hasCLI && ks.cliSeq > winSeq {
+			source = SourceCLI
+			winSeq = ks.cliSeq
+		}
+
+		if ks.hasUI && ks.uiSeq > winSeq {
+			source = SourceUI
+		}
+
+		switch source {
+		case SourceCLI:
+			out[key] = SettingSource{Source: SourceCLI}
+		case SourceUI:
+			out[key] = SettingSource{Source: SourceUI, UpdatedAt: ks.uiAt}
+		}
+	}
+
+	return out
+}
+
 // AddGuard registers a runtime guard consulted on every setting write.
 func (s *Service) AddGuard(g SettingGuard) {
 	s.mu.Lock()
@@ -292,6 +341,7 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		ks.hasUI = true
 		ks.uiValue = v
 		ks.uiSeq = s.nextSeq()
+		ks.uiAt = time.Now().UnixMilli()
 		s.persist(f, ks, actor)
 
 		s.log.WithFields(logrus.Fields{

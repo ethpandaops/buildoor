@@ -2314,7 +2314,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "bid_subsidy": {
-                    "description": "gwei",
+                    "description": "gwei, negative = margin",
                     "type": "integer"
                 },
                 "bid_value_gwei": {
@@ -2393,7 +2393,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "value_subsidy_gwei": {
-                    "description": "ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot.",
+                    "description": "ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot\n(negative = margin, see config.BuilderAPIConfig.BlockValueSubsidyGwei).",
                     "type": "integer"
                 }
             }
@@ -2617,6 +2617,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "subsidy_gwei": {
+                    "description": "negative = margin",
                     "type": "integer"
                 },
                 "value_gwei": {
@@ -2698,6 +2699,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "subsidy_gwei": {
+                    "description": "negative = margin (Gloas only)",
                     "type": "integer"
                 },
                 "total_value_gwei": {
@@ -2755,6 +2757,10 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                },
+                "start_delay_ms": {
+                    "description": "StartDelayMs delays the testing call after the engine build started\n(global-only, 0 = at once).",
+                    "type": "integer"
                 },
                 "transactions": {
                     "description": "Transactions is the explicit list (0x-hex) for the explicit source.",
@@ -4039,6 +4045,10 @@ const docTemplate = `{
                 "num_blobs": {
                     "type": "integer"
                 },
+                "num_private_txs": {
+                    "description": "NumPrivateTxs counts the transactions buildoor supplied itself (its\nown mempool or an action plan's list); the rest came from the EL's\npublic mempool. Absent on records from before it was tracked.",
+                    "type": "integer"
+                },
                 "num_transactions": {
                     "type": "integer"
                 },
@@ -4166,6 +4176,10 @@ const docTemplate = `{
                             "$ref": "#/definitions/txpool.Summary"
                         }
                     ]
+                },
+                "started_at": {
+                    "description": "StartedAt is when the testing build began (after the start delay).",
+                    "type": "string"
                 },
                 "submitted_txs": {
                     "description": "SubmittedTxs is how many transactions were handed to the EL (-1 for the\nel_mempool source, where the EL chooses).",
@@ -4510,6 +4524,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "num_blobs": {
+                    "type": "integer"
+                },
+                "num_private_txs": {
+                    "description": "NumPrivateTxs counts the transactions buildoor supplied itself (own\nmempool or plan list); absent on records from before it was tracked.",
                     "type": "integer"
                 },
                 "num_transactions": {
@@ -4910,6 +4928,9 @@ const docTemplate = `{
                 },
                 "ceiling_applied": {
                     "type": "boolean"
+                },
+                "fill_blobs": {
+                    "type": "integer"
                 },
                 "fill_candidates": {
                     "description": "EL mempool fill (tx source txpool_el_fill).",

@@ -70,7 +70,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
-	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
+	rootCmd.PersistentFlags().Int64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the block value of served Builder API bids; negative = the builder's margin (Gloas only)")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment", defaults.BuilderAPI.ExecutionPaymentGwei, "Absolute portion in gwei of a served Gloas bid's total value claimed as execution_payment; the claim is unbacked and capped by the proposer's advertised max_execution_payment (0 = disabled, wins over the percent)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment-percent", defaults.BuilderAPI.ExecutionPaymentPercent, "Percentage (0-100) of a served Gloas bid's total value claimed as execution_payment (0 = disabled)")
@@ -87,6 +87,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
 	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
+	rootCmd.PersistentFlags().Uint64("early-deposit-tip", defaults.EarlyDepositTipGwei, "Priority fee floor in Gwei of the early onboarding deposit transactions (0 = EL suggestion)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
@@ -106,7 +107,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
+	rootCmd.PersistentFlags().Int64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold; negative = the builder's margin")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
@@ -133,6 +134,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
+	rootCmd.PersistentFlags().Uint64("local-build-start-delay", defaults.LocalBuild.StartDelayMs, "Delay of the testing_buildBlockV1 call after the engine build started, in ms (0 = at once): later transaction arrivals make it into the testing block; leave it time to finish before the engine payload is due")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
@@ -287,7 +289,7 @@ func initConfig(root *cobra.Command) error {
 		BuilderAPI: config.BuilderAPIConfig{
 			BuilderURL:              v.GetString("builder-api-url"),
 			RequireRequestAuth:      v.GetBool("builder-api-require-auth"),
-			BlockValueSubsidyGwei:   v.GetUint64("builder-api-subsidy"),
+			BlockValueSubsidyGwei:   v.GetInt64("builder-api-subsidy"),
 			ValueOverrideGwei:       v.GetUint64("builder-api-value-override"),
 			ExecutionPaymentGwei:    v.GetUint64("builder-api-execution-payment"),
 			ExecutionPaymentPercent: v.GetUint64("builder-api-execution-payment-percent"),
@@ -303,10 +305,11 @@ func initConfig(root *cobra.Command) error {
 			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
 			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
-		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
-		DepositAmount:     v.GetUint64("deposit-amount"),
-		TopupThreshold:    v.GetUint64("topup-threshold"),
-		ExtraData:         v.GetString("extra-data"),
+		DepositMaxFeeGwei:   v.GetUint64("deposit-max-fee"),
+		EarlyDepositTipGwei: v.GetUint64("early-deposit-tip"),
+		DepositAmount:       v.GetUint64("deposit-amount"),
+		TopupThreshold:      v.GetUint64("topup-threshold"),
+		ExtraData:           v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
@@ -320,7 +323,7 @@ func initConfig(root *cobra.Command) error {
 			BidMinAmount:         v.GetUint64("epbs-bid-min"),
 			BidIncrease:          v.GetUint64("epbs-bid-increase"),
 			BidInterval:          v.GetInt64("epbs-bid-interval"),
-			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
+			BidSubsidy:           v.GetInt64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 			BidCandidate:         v.GetString("epbs-bid-candidate"),
@@ -337,6 +340,7 @@ func initConfig(root *cobra.Command) error {
 			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
+			StartDelayMs:            v.GetUint64("local-build-start-delay"),
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:            v.GetBool("txpool-enabled"),

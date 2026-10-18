@@ -30,10 +30,14 @@ type WonBlock struct {
 	Slot            uint64 `json:"slot"`
 	BlockHash       string `json:"block_hash"`
 	NumTransactions int    `json:"num_transactions"`
-	NumBlobs        int    `json:"num_blobs"`
-	ValueWei        string `json:"value_wei"`
-	ValueETH        string `json:"value_eth"`
-	Timestamp       int64  `json:"timestamp"` // Unix milliseconds at inclusion time
+	// NumPrivateTxs counts the transactions buildoor supplied itself (its
+	// own mempool or an action plan's list); the rest came from the EL's
+	// public mempool. Absent on records from before it was tracked.
+	NumPrivateTxs *int   `json:"num_private_txs,omitempty"`
+	NumBlobs      int    `json:"num_blobs"`
+	ValueWei      string `json:"value_wei"`
+	ValueETH      string `json:"value_eth"`
+	Timestamp     int64  `json:"timestamp"` // Unix milliseconds at inclusion time
 }
 
 // WonBlockCodec translates the won-block store's entries to their persisted

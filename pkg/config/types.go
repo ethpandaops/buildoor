@@ -57,11 +57,14 @@ type Config struct {
 	TopupThreshold uint64 `yaml:"topup_threshold" json:"topup_threshold"`
 	// DepositMaxFeeGwei delays builder deposits and top-ups while the deposit
 	// contract's queue fee is above it (0 = no limit).
-	DepositMaxFeeGwei uint64         `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
+	DepositMaxFeeGwei uint64 `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+	// EarlyDepositTipGwei is the priority fee floor in gwei of the early
+	// onboarding deposit transactions (0 = the EL's suggestion).
+	EarlyDepositTipGwei uint64         `yaml:"early_deposit_tip" json:"early_deposit_tip"`
+	Schedule            ScheduleConfig `yaml:"schedule" json:"schedule"`
+	EPBS                EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal              RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build               BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
 	// LocalBuild is the opt-in local block building extension: an additional
 	// payload per slot built through the EL's testing_buildBlockV1 from a
 	// chosen transaction source, and the selector deciding which payload
@@ -171,10 +174,13 @@ type BuilderAPIConfig struct {
 	// is always fully validated.
 	RequireRequestAuth bool `yaml:"require_request_auth" json:"require_request_auth"`
 
-	// BlockValueSubsidyGwei is added to the bid value so the proposer sees a higher bid:
-	// to the getHeader bid value in the Fulu Builder API, and to the block value that
-	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
-	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+	// BlockValueSubsidyGwei is added to the block value of every served bid: the
+	// getHeader bid value before Gloas, the total that forms
+	// bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls. Negative
+	// = the builder's margin, kept from the block value its own coinbase
+	// collects (Gloas only; a pre-Gloas bid never drops below the block value,
+	// which is the proposer's whole payment there).
+	BlockValueSubsidyGwei int64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 
 	// ValueOverrideGwei, when non-zero, replaces the served bid's total value
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
@@ -275,8 +281,10 @@ type EPBSConfig struct {
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
 
 	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
-	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
-	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
+	// local-EL threshold (the BN otherwise self-builds when its local EL value is
+	// higher). Negative = the builder's margin, kept from the block value its
+	// own coinbase collects; BidMinAmount stays the floor.
+	BidSubsidy int64 `yaml:"bid_subsidy" json:"bid_subsidy"`
 
 	// BidValueOverride, when non-zero, replaces the bid base value
 	// (max(blockValue, BidMinAmount) + BidSubsidy) with this absolute amount in
@@ -626,6 +634,15 @@ type LocalBuildConfig struct {
 	// from the attempt (and striked in the pool) and the build retries.
 	// Exact sources (explicit, queued) never retry: a refusal fails them.
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
+
+	// StartDelayMs delays the testing_buildBlockV1 call after the engine
+	// build started (its forkchoiceUpdated), in ms; 0 = at once. The testing
+	// call builds from the transactions known at that moment, while the
+	// engine build keeps adding arrivals until its getPayload, so a delay
+	// lets the testing block see the same late transactions. It should leave
+	// the call time to finish before the engine payload is due
+	// (payload_build_time): the target waits for both.
+	StartDelayMs uint64 `yaml:"start_delay_ms" json:"start_delay_ms"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the

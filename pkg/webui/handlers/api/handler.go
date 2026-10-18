@@ -105,6 +105,7 @@ func NewAPIHandler(
 			builderAPISvc, revealSvc, inclusionTracker, payments,
 			planSvc, resultTracker,
 		)
+		h.eventStreamMgr.AttachSources(settingsSvc, validatorStore, propPrefSvc, valRanges)
 		h.eventStreamMgr.Start()
 	}
 

@@ -155,8 +155,11 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 
 	// Value resolution per the frozen settings: an absolute total value (when
 	// set) replaces blockValue+subsidy entirely; otherwise the (possibly
-	// per-slot overridden) subsidy is added to the block value.
-	subsidyGwei := frozenSettings.SubsidyGwei
+	// per-slot overridden) subsidy is added to the block value. A negative
+	// subsidy (a Gloas margin) does not apply: the payload pays the proposer's
+	// fee recipient, so the block value is its whole payment and a lower claim
+	// only loses to the proposer's local block.
+	subsidyGwei := uint64(max(frozenSettings.SubsidyGwei, 0))
 	totalValueGwei := frozenSettings.TotalValueGwei
 
 	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))

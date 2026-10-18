@@ -130,6 +130,9 @@ type ResolvedLocalBuildSettings struct {
 	// (global-only).
 	MaxAttempts uint64 `json:"max_attempts,omitempty"`
 	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
+	// StartDelayMs delays the testing call after the engine build started
+	// (global-only, 0 = at once).
+	StartDelayMs uint64 `json:"start_delay_ms,omitempty"`
 	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
 	// 0 = off; exact lists are never reduced).
 	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
@@ -145,7 +148,7 @@ type ResolvedBidSettings struct {
 	IntervalMs   int64  `json:"interval_ms"`
 	MinGwei      uint64 `json:"min_gwei"`
 	IncreaseGwei uint64 `json:"increase_gwei"`
-	SubsidyGwei  uint64 `json:"subsidy_gwei"`
+	SubsidyGwei  int64  `json:"subsidy_gwei"` // negative = margin
 
 	// ValueGwei, when set, is the absolute bid base value replacing the
 	// max(blockValue, min) + subsidy formula (IncreaseGwei still applies).
@@ -194,7 +197,7 @@ const maxKeysPerStep = 1024
 // ResolvedBuilderAPISettings are the effective Builder API bid-serving
 // parameters for the slot.
 type ResolvedBuilderAPISettings struct {
-	SubsidyGwei uint64 `json:"subsidy_gwei"`
+	SubsidyGwei int64 `json:"subsidy_gwei"` // negative = margin (Gloas only)
 
 	// TotalValueGwei, when set, is the absolute total proposer-visible bid
 	// value (before the Gloas execution-payment split).
@@ -434,6 +437,7 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
 		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
 		MaxStrikes:              cfg.TxPool.MaxStrikes,
+		StartDelayMs:            cfg.LocalBuild.StartDelayMs,
 		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
 	}
 

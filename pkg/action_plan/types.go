@@ -58,7 +58,7 @@ type BidPlan struct {
 	BidMinAmount *uint64 `json:"bid_min_amount,omitempty"` // gwei
 	BidIncrease  *uint64 `json:"bid_increase,omitempty"`   // gwei
 	BidInterval  *int64  `json:"bid_interval,omitempty"`   // ms, >= 0, 0 = single bid
-	BidSubsidy   *uint64 `json:"bid_subsidy,omitempty"`    // gwei
+	BidSubsidy   *int64  `json:"bid_subsidy,omitempty"`    // gwei, negative = margin
 
 	// BidCandidate overrides which built candidate payload this slot's p2p
 	// bids commit to: auto, all, or a specific candidate key.
@@ -161,8 +161,9 @@ func (p *BidPlan) validate(slotMs int64) error {
 type BuilderAPIPlan struct {
 	Mode Mode `json:"mode"`
 
-	// ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot.
-	ValueSubsidyGwei *uint64 `json:"value_subsidy_gwei,omitempty"`
+	// ValueSubsidyGwei replaces the global BlockValueSubsidyGwei for this slot
+	// (negative = margin, see config.BuilderAPIConfig.BlockValueSubsidyGwei).
+	ValueSubsidyGwei *int64 `json:"value_subsidy_gwei,omitempty"`
 
 	// TotalValueOverrideGwei is the absolute total proposer-visible bid value
 	// (before the Gloas execution-payment split), replacing block value +

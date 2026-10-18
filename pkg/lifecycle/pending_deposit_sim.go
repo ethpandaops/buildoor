@@ -102,10 +102,11 @@ func drainTransition(
 
 // simulateDepositSurvives appends our deposits to the back of the queue and
 // replays the epoch transitions from the queue's epoch (fromEpoch) up to and
-// including the transition into forkEpoch. It returns true if the LAST of our
+// including the transition into forkEpoch. It returns true if the FIRST of our
 // deposits is never drained — i.e. the whole batch is still queued when the fork
-// upgrade runs. Onboarding several builder keys appends several entries back to
-// back, so the batch survives exactly when its last entry does.
+// upgrade runs. The queue drains from the front, so the batch's first entry is
+// the first to go: once it survives, every entry behind it does too. A drained
+// entry is applied as an ordinary validator deposit and never becomes a builder.
 func simulateDepositSurvives(
 	queue, ours []simDeposit,
 	depositBalanceToConsume, churnLimit, maxPerEpoch uint64,
@@ -128,11 +129,12 @@ func simulateDepositSurvives(
 
 	dbtc := depositBalanceToConsume
 	head := 0
+	firstOurs := len(queue)
 
 	for next := fromEpoch + 1; next <= forkEpoch; next++ {
 		head, dbtc = drainTransition(sim, head, dbtc, churnLimit, maxPerEpoch, next, slotsPerEpoch)
-		if head == len(sim) {
-			// Our last deposit was drained — it would not survive to the fork.
+		if head > firstOurs {
+			// Our first deposit was drained — it would be applied before the fork.
 			return false
 		}
 	}
@@ -144,7 +146,8 @@ func simulateDepositSurvives(
 // The queue is the epoch snapshot's pending deposits followed by the arrivals since
 // the snapshot (deposits newer than stats.StateSlot, in queue order). It returns true
 // if a batch of depositCount deposits of ourAmountGwei each, landing at landingSlot,
-// would all still be in the pending_deposits queue at forkEpoch. It returns false (be
+// would all still be in the pending_deposits queue at forkEpoch (judged by its
+// first entry, see simulateDepositSurvives). It returns false (be
 // conservative) when the fork is not in the future or the spec lacks the
 // deposit-processing parameters needed to model draining.
 func depositsSurviveUntilFork(

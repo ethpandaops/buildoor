@@ -9,17 +9,20 @@ interface TxPoolQuery {
   sort: string;
 }
 
-// Fetches a page of the transaction pool and, on demand, the dry-run
-// selection preview. refreshKey (the SSE pool version) triggers a refetch.
-export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
+// Fetches a page of the transaction pool while `active` and, on demand, the
+// dry-run selection preview. refreshKey (the SSE pool version) triggers a
+// refetch of the page.
+export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unknown) {
   const [data, setData] = useState<TxPoolResponse | null>(null);
   const [preview, setPreview] = useState<TxPoolPreviewResponse | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // True when the backend refused the pool read without a login (401): the
-  // pool holds private transactions, readable by operators only.
+  // True when the backend refused the pool read (or the preview) without a
+  // login (401): the pool holds private transactions, readable by operators
+  // only.
   const [unauthorized, setUnauthorized] = useState(false);
+  const [previewUnauthorized, setPreviewUnauthorized] = useState(false);
   const { getAuthHeader, isLoggedIn } = useAuth();
 
   const authHeaders = useCallback(async (): Promise<HeadersInit> => {
@@ -70,9 +73,11 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
       if (response.status === 401) {
         setPreview(null);
         setPreviewError(null);
+        setPreviewUnauthorized(true);
         return;
       }
-      const body = await response.json();
+      setPreviewUnauthorized(false);
+      const body = await response.json().catch(() => ({}));
       if (!response.ok) {
         setPreview(null);
         setPreviewError(body.error || response.statusText);
@@ -86,24 +91,45 @@ export function useTxPool(query: TxPoolQuery, refreshKey?: unknown) {
   }, [authHeaders, isLoggedIn]);
 
   useEffect(() => {
+    if (!active) return;
     fetchPool();
-  }, [fetchPool, refreshKey]);
+  }, [active, fetchPool, refreshKey]);
 
   const clear = useCallback(async (): Promise<string | null> => {
-    const response = await fetch('/api/buildoor/txpool', { method: 'DELETE', headers: await authHeaders() });
-    const body = await response.json();
-    if (!response.ok) return body.error || response.statusText;
-    await fetchPool();
+    try {
+      const response = await fetch('/api/buildoor/txpool', { method: 'DELETE', headers: await authHeaders() });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) return body.error || response.statusText;
+    } catch (err) {
+      return err instanceof Error ? err.message : 'Unknown error';
+    }
+    if (active) await fetchPool();
     return null;
-  }, [authHeaders, fetchPool]);
+  }, [active, authHeaders, fetchPool]);
 
   const drop = useCallback(async (hash: string): Promise<string | null> => {
-    const response = await fetch(`/api/buildoor/txpool/${hash}`, { method: 'DELETE', headers: await authHeaders() });
-    const body = await response.json();
-    if (!response.ok) return body.error || response.statusText;
+    try {
+      const response = await fetch(`/api/buildoor/txpool/${hash}`, { method: 'DELETE', headers: await authHeaders() });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) return body.error || response.statusText;
+    } catch (err) {
+      return err instanceof Error ? err.message : 'Unknown error';
+    }
     await fetchPool();
     return null;
   }, [authHeaders, fetchPool]);
 
-  return { data, loading, error, unauthorized, refresh: fetchPool, preview, previewError, fetchPreview, clear, drop };
+  return {
+    data,
+    loading,
+    error,
+    unauthorized,
+    refresh: fetchPool,
+    preview,
+    previewError,
+    previewUnauthorized,
+    fetchPreview,
+    clear,
+    drop,
+  };
 }

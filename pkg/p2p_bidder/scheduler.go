@@ -19,6 +19,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
@@ -620,9 +621,11 @@ func (s *Scheduler) planBidStep(
 // bidValueFor computes the bid value for the payload's next bid.
 //
 // ValueGwei, when set, is an absolute base (per-slot custom value or the global
-// bid value override, resolved at freeze time) replacing the
-// max(blockValue, BidMinAmount) + BidSubsidy formula. The subsidy pads the
-// formula bid so it clears the proposer BN's local-build threshold.
+// bid value override, resolved at freeze time) replacing the subsidy formula.
+// A positive subsidy pads the bid so it clears the proposer BN's local-build
+// threshold: max(blockValue, BidMinAmount) + BidSubsidy. A negative subsidy is
+// the builder's margin, kept from the block value its own coinbase collects;
+// BidMinAmount stays the floor: max(blockValue + BidSubsidy, BidMinAmount).
 //
 // escalations is how many bids this payload already has, so every bid lands one
 // increase above the last and each one can be the new highest for the tuple.
@@ -636,9 +639,10 @@ func (s *Scheduler) bidValueFor(
 
 	if bidSettings.ValueGwei != nil {
 		value = *bidSettings.ValueGwei
+	} else if blockValue := weiToGweiClamped(payload.BlockValue); bidSettings.SubsidyGwei >= 0 {
+		value = s.addGweiClamped(slot, max(blockValue, bidSettings.MinGwei), uint64(bidSettings.SubsidyGwei))
 	} else {
-		value = max(weiToGweiClamped(payload.BlockValue), bidSettings.MinGwei)
-		value = s.addGweiClamped(slot, value, bidSettings.SubsidyGwei)
+		value = max(payload_bidder.ApplySubsidyGwei(blockValue, bidSettings.SubsidyGwei), bidSettings.MinGwei)
 	}
 
 	if escalations > 0 {

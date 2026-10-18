@@ -514,3 +514,33 @@ func TestMalformedRequests(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
+
+// TestPassthroughAllowlist pins the forwarded read surface: the standard
+// public reads pass, every privileged or node-local method is refused —
+// including ones the allowlist never heard of.
+func TestPassthroughAllowlist(t *testing.T) {
+	allowed := []string{
+		"eth_blockNumber", "eth_call", "eth_estimateGas", "eth_getBalance", "eth_getLogs",
+		"eth_getBlockByNumber", "eth_getTransactionReceipt", "eth_feeHistory", "net_listening",
+	}
+	for _, method := range allowed {
+		require.True(t, passthroughAllowed(method), method)
+	}
+
+	refused := []string{
+		// privileged namespaces
+		"admin_peers", "debug_traceTransaction", "trace_block", "testing_buildBlockV1",
+		"engine_newPayloadV4", "personal_listAccounts", "miner_setEtherbase", "txpool_inspect",
+		// signing / sending / bundles
+		"eth_sendTransaction", "eth_sign", "eth_signTypedData_v4", "eth_sendBundle", "eth_callBundle",
+		// node-local answers
+		"eth_accounts", "eth_coinbase", "eth_pendingTransactions", "eth_fillTransaction", "net_peerCount",
+		// stateful
+		"eth_newFilter", "eth_getFilterChanges", "eth_subscribe",
+		// unknown
+		"eth_somethingNew", "",
+	}
+	for _, method := range refused {
+		require.False(t, passthroughAllowed(method), method)
+	}
+}

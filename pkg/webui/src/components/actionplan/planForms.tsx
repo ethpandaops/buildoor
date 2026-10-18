@@ -60,8 +60,9 @@ export const BID_FIELDS: FieldDef[] = [
     key: 'bid_min_amount', label: 'Bid Min', unit: 'gwei',
     hint: (
       <>
-        Floor of the bid base: <code>max(block value, min) + subsidy</code>. Ignored when a Bid Value
-        Override applies.
+        Floor of the bid: <code>max(block value, min) + subsidy</code>, or{' '}
+        <code>max(block value + subsidy, min)</code> with a negative subsidy. Ignored when a Bid
+        Value Override applies.
       </>
     ),
   },
@@ -83,7 +84,8 @@ export const BID_FIELDS: FieldDef[] = [
     hint: (
       <>
         Added <strong>on top of</strong> <code>max(block value, min)</code>, so it outbids competitors
-        whatever the block is worth. Ignored when a Bid Value Override applies.
+        whatever the block is worth. A negative value is the margin kept from the block value (the
+        bid never drops below Bid Min). Ignored when a Bid Value Override applies.
       </>
     ),
   },
@@ -124,7 +126,8 @@ export const BUILDER_API_FIELDS: FieldDef[] = [
     hint: (
       <>
         Added to the block value of bids served to proposers; replaces the global Builder API subsidy
-        for this slot. Ignored when a Total Value Override applies.
+        for this slot. A negative value is the margin kept from the block value (Gloas only). Ignored
+        when a Total Value Override applies.
       </>
     ),
   },
@@ -702,7 +705,7 @@ export function localBuildPlanFromState(state: LocalBuildFormState): LocalBuildP
 // login, so writing the plan back would lose them.
 export function hiddenTransactionsError(plan: LocalBuildPlan | undefined): string | null {
   if (!plan?.transactions_redacted || plan.transactions?.length) return null;
-  return `The custom build's ${plan.transactions_redacted} explicit transactions are hidden (no login): ` +
+  return `The testing build's ${plan.transactions_redacted} explicit transactions are hidden (no login): ` +
     'log in and reopen the plan to edit them, or replace the list before saving.';
 }
 
@@ -731,10 +734,10 @@ export const LocalBuildForm: React.FC<{
     <div className="mb-3">
       <div className="d-flex align-items-center gap-2 mb-1">
         <div className="section-header">
-          Custom build
+          Testing build
           <InfoHint>
             The testing_buildBlockV1 build next to the engine build: buildoor hands the EL the
-            transaction list. Overrides the global Custom Build settings for these slots.
+            transaction list. Overrides the global Testing builder settings for these slots.
           </InfoHint>
         </div>
         <select
