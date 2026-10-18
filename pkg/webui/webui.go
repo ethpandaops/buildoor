@@ -34,10 +34,10 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/webui/types"
 	"github.com/ethpandaops/buildoor/version"
 	"github.com/gorilla/mux"
+	"github.com/klauspost/compress/gzhttp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"github.com/klauspost/compress/gzhttp"
 	"github.com/urfave/negroni"
 
 	_ "net/http/pprof"

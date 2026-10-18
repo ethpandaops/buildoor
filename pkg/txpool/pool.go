@@ -99,7 +99,7 @@ type PooledTx struct {
 	// while it is cold (see tier.go), facts then carry its properties.
 	Tx          *types.Transaction
 	facts       *txFacts
-	Size        uint64             // encoded size as received
+	Size        uint64 // encoded size as received
 	Arrived     time.Time
 	ArrivedSlot phase0.Slot
 	Seq         uint64 // arrival order (fifo ordering)
