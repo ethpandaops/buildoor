@@ -57,8 +57,13 @@ function viewFromPath(pathname: string): ViewType {
   return 'overview';
 }
 
+// The server's own pages the app stands in for (the /debug/pprof login gate)
+// keep their exact URL: the gate reloads it once the login cookie is set, and
+// /debug/pprof/ (the index) is not /debug/pprof.
+const SERVER_PATH_PREFIX = '/debug/';
+
 let currentPath = normalizePath(window.location.pathname);
-if (currentPath !== window.location.pathname) {
+if (currentPath !== window.location.pathname && !window.location.pathname.startsWith(SERVER_PATH_PREFIX)) {
   history.replaceState(null, '', currentPath + window.location.search);
 }
 let currentView: ViewType = viewFromPath(currentPath);

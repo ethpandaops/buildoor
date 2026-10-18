@@ -219,6 +219,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	// a profile both exposes the process internals and costs CPU to collect.
 	// Tools send the bearer token; a browser without the login cookie gets
 	// the WebUI, whose gate page sets it (see requireLogin).
+	router.Handle("/debug/pprof", http.RedirectHandler("/debug/pprof/", http.StatusMovedPermanently))
 	router.PathPrefix("/debug/pprof/").Handler(debugHandler(authHandler, apiHandler, spaHandler, http.DefaultServeMux))
 
 	router.PathPrefix("/").Handler(spaHandler)
