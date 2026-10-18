@@ -339,13 +339,16 @@ function useEventStreamConnection(): UseEventStreamResult {
           const data = event.data as LocalBuildProgressEvent;
           setSlotStates(prev => {
             const state = prev[data.slot] || { slot: data.slot };
-            // Display only: the primary target wins, and the final event (if
-            // already there) is authoritative.
-            if (state.localBuildLive && data.candidate && data.candidate !== 'parent_full' &&
-                state.localBuildLive.candidate === 'parent_full') {
-              return prev;
+            // Display only, one entry per build of the target: the primary
+            // target wins, and the final event (if already there) is
+            // authoritative.
+            const runs = state.localBuildLive ?? {};
+            const shown = Object.values(runs)[0];
+            if (shown && data.candidate !== shown.candidate) {
+              if (shown.candidate === 'parent_full' || data.candidate !== 'parent_full') return prev;
+              return { ...prev, [data.slot]: { ...state, localBuildLive: { [data.run ?? 1]: data } } };
             }
-            return { ...prev, [data.slot]: { ...state, localBuildLive: data } };
+            return { ...prev, [data.slot]: { ...state, localBuildLive: { ...runs, [data.run ?? 1]: data } } };
           });
           break;
         }

@@ -186,7 +186,7 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
-| `--local-build-rebuild-interval` | `0` | Earlier testing builds every this many ms before the final one, which is timed to finish just before the payload is due; the most valuable is used (0 = final build only) |
+| `--local-build-rebuild-interval` | `0` | Minimum gap in ms between testing builds: build at once, then rebuild whenever new transactions arrived while a build still fits before the payload is due; the most valuable is used (0 = one build, timed to finish just before the payload is due) |
 | `--local-build-ready-margin` | `100` | Safety margin in ms between the final testing build's estimated end and the payload hand-over |
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |

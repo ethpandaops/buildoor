@@ -636,16 +636,17 @@ type LocalBuildConfig struct {
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
 
 	// The testing_buildBlockV1 call builds once from the transactions known
-	// when it starts, so it starts as late as it can: its final build is
-	// timed to finish ReadyMarginMs before the payload is handed over (the
-	// engine build's getPayload, payload_build_time after its
-	// forkchoiceUpdated), estimated from the observed selection time and
-	// call cost per gas.
+	// when it starts. With RebuildIntervalMs 0 it is one build, timed to
+	// finish ReadyMarginMs before the payload is handed over (the engine
+	// build's getPayload, payload_build_time after its forkchoiceUpdated),
+	// estimated from the observed selection time and call cost per gas.
 	//
-	// RebuildIntervalMs adds earlier builds every this many ms before the
-	// final one (0 = the final build only): the best of them is handed over,
-	// so a late or failed final build still has a block behind it. Each
-	// build costs the EL a full block execution.
+	// RebuildIntervalMs > 0 (pool tx sources) builds at once instead and
+	// rebuilds whenever the pool or the EL mempool got new transactions, at
+	// least this many ms after the previous build and only while a build is
+	// still estimated to finish ReadyMarginMs before the hand-over. The most
+	// valuable build is handed over. Each build costs the EL a full block
+	// execution.
 	RebuildIntervalMs uint64 `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
 	// ReadyMarginMs is the safety margin between the final build's estimated
 	// end and the hand-over, on top of the estimate's own spread.

@@ -640,10 +640,10 @@ func TestFireLocalProgress(t *testing.T) {
 	req := &LocalBuildRequest{Candidate: "parent_full", TxSource: config.TxSourceTxPool}
 	started := time.Now()
 
-	b.fireLocalProgress(attrs, req, started, nil)
-	b.fireLocalProgress(attrs, req, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
-	b.fireLocalProgress(attrs, req, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
-	b.fireLocalProgress(attrs, req, started, &localOutcome{err: errors.New("boom")})
+	b.fireLocalProgress(attrs, req, 1, started, nil)
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
+	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{err: errors.New("boom")})
 
 	phases := make([]*LocalBuildProgressEvent, 0, 4)
 	for range 4 {

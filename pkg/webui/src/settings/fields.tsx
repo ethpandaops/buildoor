@@ -1176,18 +1176,19 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     unit: 'ms',
     min: 0,
     max: 12000,
-    zeroLabel: 'final build only',
-    hint: 'Earlier testing builds every this many ms before the final one; the best block is used.',
+    zeroLabel: 'one timed build',
+    hint: 'Minimum gap between testing builds; rebuilds happen only when new transactions arrived. 0 = one build, timed to the hand-over.',
     help: (
       <>
-        testing_buildBlockV1 builds once from the transactions known when it is called, so the
-        final testing build is timed to finish just before the payload is due (the engine
-        build&apos;s getPayload, <code>payload_build_time</code> after its start), estimated from the
-        observed selection time and EL cost per gas. With an interval
-        (<code>local_build.rebuild_interval_ms</code>) earlier builds run every this many ms before
-        it, and the most valuable block is handed over: a fallback when the final build fails or
-        overruns. Each build costs the EL a full block execution, which matters on an EL shared with
-        validators. 0 = the final build only.
+        testing_buildBlockV1 builds once from the transactions known when it is called. With 0
+        (<code>local_build.rebuild_interval_ms</code>) there is one testing build, timed to finish
+        just before the payload is due (the engine build&apos;s getPayload,
+        <code> payload_build_time</code> after its start), estimated from the observed selection time
+        and EL cost per gas. With an interval the first build runs at once and a rebuild follows
+        whenever buildoor&apos;s mempool or the EL mempool got new transactions that clear the base
+        fee, at least this many ms after the previous build and only while it can still finish in
+        time. The most valuable build is handed over; the slot graph draws each one. Each build costs
+        the EL a full block execution, which matters on an EL shared with validators.
       </>
     ),
   },

@@ -725,59 +725,112 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           )}
 
 
-          {/* Testing build, live: from its start until the final local_build event (which
-              waits for the engine build and the bid choice) takes over below. */}
-          {(() => {
-            const live = state.localBuildLive;
-            if (!live || state.localBuild || genesisTime <= 0 || !epbsConfig) return null;
+          {/* Testing builds, live: one bar per build of the target (rebuilds run when new
+              transactions arrived), until the final local_build event (which waits for the
+              engine build and the bid choice) takes over below. */}
+          {state.localBuildLive && !state.localBuild && genesisTime > 0 && epbsConfig &&
+            Object.values(state.localBuildLive)
+              .sort((a, b) => (a.run ?? 1) - (b.run ?? 1))
+              .map((live) => {
+                const run = live.run ?? 1;
+                const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
+                if (startX >= 100) return null;
 
-            const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
-            if (startX >= 100) return null;
+                const items = [
+                  { label: 'Build', value: `#${run}` },
+                  { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
+                  ...(live.phase === 'building'
+                    ? [{ label: 'Status', value: 'building…' }]
+                    : [
+                        {
+                          label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
+                          value: `${live.at - slotStartTime}ms`
+                        },
+                        { label: 'Duration', value: `${live.at - live.started_at}ms` },
+                        { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
+                      ]),
+                  ...(live.error ? [{ label: 'Error', value: live.error }] : []),
+                  { label: 'Tx Source', value: live.tx_source || '—' },
+                  ...(live.phase === 'ready'
+                    ? [
+                        { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
+                        { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
+                        { label: 'Bids With', value: 'decided once the engine build finishes' }
+                      ]
+                    : [])
+                ];
+                const data = { title: 'Testing Build (testing_buildBlockV1)', items };
+                const dotClass = live.phase === 'ready'
+                  ? 'local-build-created'
+                  : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
-            const items = [
-              { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
-              ...(live.phase === 'building'
-                ? [{ label: 'Status', value: 'building…' }]
-                : [
-                    {
-                      label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
-                      value: `${live.at - slotStartTime}ms`
-                    },
-                    { label: 'Duration', value: `${live.at - live.started_at}ms` },
-                    { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
-                  ]),
-              ...(live.error ? [{ label: 'Error', value: live.error }] : []),
-              { label: 'Tx Source', value: live.tx_source || '—' },
-              ...(live.phase === 'ready'
-                ? [
-                    { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
-                    { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
-                    { label: 'Bids With', value: 'decided once the engine build finishes' }
+                return (
+                  <React.Fragment key={`local-build-live-${run}`}>
+                    {live.phase !== 'skipped' && (
+                      <BuildDelayLine
+                        leftPct={startX}
+                        slotStartTime={slotStartTime}
+                        rangeStart={rangeStart}
+                        totalRange={totalRange}
+                        endAt={live.phase === 'building' ? undefined : live.at}
+                        className="local-build-line"
+                        onClick={(e) => showPopover(e, data)}
+                      />
+                    )}
+                    {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, `local-build-live-dot-${run}`)}
+                  </React.Fragment>
+                );
+              })}
+
+          {/* The target's other testing builds (rebuilds), dimmed: the handed-over one is
+              drawn in full below. */}
+          {state.localBuild?.info?.runs && state.localBuild.info.runs.length > 1 && genesisTime > 0 && epbsConfig &&
+            state.localBuild.info.runs
+              .filter((run) => run.run !== state.localBuild?.info?.run)
+              .map((run) => {
+                const startedMs = Date.parse(run.started_at) - slotStartTime;
+                const atMs = Date.parse(run.at) - slotStartTime;
+                const startX = calculatePosition(startedMs, rangeStart, totalRange);
+                if (startX >= 100) return null;
+
+                const data = {
+                  title: `Testing Build #${run.run} (not handed over)`,
+                  items: [
+                    { label: 'Started', value: `${startedMs}ms` },
+                    ...(run.selected_at ? [{ label: 'Selection', value: `${Date.parse(run.selected_at) - Date.parse(run.started_at)}ms` }] : []),
+                    { label: run.status === 'ready' ? 'Built At' : run.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${atMs}ms` },
+                    { label: 'Duration', value: `${atMs - startedMs}ms` },
+                    { label: 'Status', value: run.status },
+                    ...(run.error ? [{ label: 'Error', value: run.error }] : []),
+                    ...(run.status === 'ready'
+                      ? [
+                          { label: 'Contents', value: `${run.num_transactions ?? 0} txs, gas ${(run.gas_used ?? 0).toLocaleString()}` },
+                          { label: 'Block Value', value: formatGwei(Number(BigInt(run.block_value_wei || '0') / 1000000000n)) }
+                        ]
+                      : [])
                   ]
-                : [])
-            ];
-            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
-            const dotClass = live.phase === 'ready'
-              ? 'local-build-created'
-              : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+                };
+                const dotClass = run.status === 'ready'
+                  ? 'local-build-created'
+                  : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
-            return (
-              <>
-                {live.phase !== 'skipped' && (
-                  <BuildDelayLine
-                    leftPct={startX}
-                    slotStartTime={slotStartTime}
-                    rangeStart={rangeStart}
-                    totalRange={totalRange}
-                    endAt={live.phase === 'building' ? undefined : live.at}
-                    className="local-build-line"
-                    onClick={(e) => showPopover(e, data)}
-                  />
-                )}
-                {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, 'local-build')}
-              </>
-            );
-          })()}
+                return (
+                  <React.Fragment key={`local-build-run-${run.run}`}>
+                    {run.status === 'ready' && (
+                      <BuildDelayLine
+                        leftPct={startX}
+                        slotStartTime={slotStartTime}
+                        rangeStart={rangeStart}
+                        totalRange={totalRange}
+                        endAt={Date.parse(run.at)}
+                        className="local-build-line local-build-run-other"
+                        onClick={(e) => showPopover(e, data)}
+                      />
+                    )}
+                    {renderEventDot(`${dotClass} local-build-run-other`, atMs, data, `local-build-run-dot-${run.run}`)}
+                  </React.Fragment>
+                );
+              })}
 
           {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
               line. Shown when it ran next to an engine build (two distinct builds) or when it
@@ -796,14 +849,14 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               : null;
             const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
             const items = [
+              ...(lb.info?.builds && lb.info.builds > 1
+                ? [{ label: 'Build', value: `#${lb.info.run ?? '?'} of ${lb.info.builds} (the most valuable)` }]
+                : []),
               { label: 'Build Start', value: `${localStartMs}ms` },
               ...(localStartMs !== buildStartMs
                 ? [{ label: 'Started', value: `${localStartMs - buildStartMs}ms after the engine build` }]
                 : []),
               ...(selectionMs !== null ? [{ label: 'Selection', value: `${selectionMs}ms` }] : []),
-              ...(lb.info?.builds && lb.info.builds > 1
-                ? [{ label: 'Builds', value: `${lb.info.builds} (the most valuable one is shown)` }]
-                : []),
               ...(lb.status === 'ready' && lb.built_at
                 ? [
                     { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },

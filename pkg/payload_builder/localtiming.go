@@ -6,13 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // The testing build is not incremental: it builds once from the list it is
-// handed. runLocalBuilds therefore times its final build to finish just before
-// the hand-over, from a model of how long a build takes, and optionally runs
-// earlier builds as a fallback.
+// handed. runLocalBuilds therefore either times a single build to finish just
+// before the hand-over, from a model of how long a build takes, or builds at
+// once and rebuilds whenever new transactions arrived while a build still
+// fits before the hand-over.
 
 const (
 	// timingDecay weighs the previous observations against a new one: the
@@ -34,6 +36,9 @@ const (
 	handoverGrace = 50 * time.Millisecond
 	// lateBuildTimeout bounds a build that outlives the hand-over.
 	lateBuildTimeout = 5 * time.Second
+	// rebuildPollInterval is how often a waiting rebuild checks for new
+	// transactions (the mirror itself polls the EL every 500 ms).
+	rebuildPollInterval = 25 * time.Millisecond
 )
 
 // buildTimingModel estimates one testing build's duration: the selection
@@ -117,17 +122,17 @@ func msDuration(ms float64) time.Duration {
 // localResults collects a target's testing builds; the hand-over takes the
 // best one at the deadline.
 type localResults struct {
-	mu     sync.Mutex
-	best   *localOutcome // highest block value of the successful builds
-	last   *localOutcome // the latest build, for the reason when none succeeded
-	builds int
+	mu   sync.Mutex
+	best *localOutcome // highest block value of the successful builds
+	last *localOutcome // the latest build, for the reason when none succeeded
+	runs []LocalBuildRun
 }
 
-func (r *localResults) add(outcome localOutcome) {
+func (r *localResults) add(outcome localOutcome, run LocalBuildRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.builds++
+	r.runs = append(r.runs, run)
 	r.last = &outcome
 
 	if outcome.payload == nil {
@@ -141,7 +146,8 @@ func (r *localResults) add(outcome localOutcome) {
 }
 
 // result returns the outcome handed over: the best build, else the latest
-// failure or skip; ok is false when no build finished.
+// failure or skip; ok is false when no build finished. Its info carries the
+// summary of every build so far.
 func (r *localResults) result() (localOutcome, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -156,17 +162,24 @@ func (r *localResults) result() (localOutcome, bool) {
 	}
 
 	if chosen.info != nil {
-		chosen.info.Builds = r.builds
+		chosen.info.Builds = len(r.runs)
+		chosen.info.Runs = append([]LocalBuildRun(nil), r.runs...)
 	}
 
 	return *chosen, true
 }
 
-// runLocalBuilds runs the target's testing builds. The final build starts at
-// deadline - ReadyMargin - the model's estimate, so it finishes right before
-// the hand-over with the newest transactions; with a rebuild interval earlier
-// builds run every interval before it (from now on), each a fallback should a
-// later one fail or overrun. A skip ends the loop: it would skip again.
+// runLocalBuilds runs the target's testing builds.
+//
+// Without a rebuild interval it is one build, started at deadline -
+// ReadyMargin - the model's estimate so it finishes right before the
+// hand-over with the newest transactions.
+//
+// With one (pool sources only) the first build starts at once, and every
+// later one once the pool or the EL mempool got new transactions, at least
+// the interval after the previous build and only while a build started then
+// is still estimated to finish in time. No news, no rebuild: the block would
+// be the same. A skip ends the loop: it would skip again.
 func (b *PayloadBuilder) runLocalBuilds(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
@@ -179,70 +192,153 @@ func (b *PayloadBuilder) runLocalBuilds(
 		return deadline.Add(-req.ReadyMargin - b.localTiming.estimate())
 	}
 
-	start := latestStart()
+	rebuild := req.RebuildInterval > 0 && b.txPool != nil &&
+		(req.TxSource == config.TxSourceTxPool || req.TxSource == config.TxSourceTxPoolELFill)
 
-	if interval := req.RebuildInterval; interval > 0 {
-		if ahead := time.Until(start); ahead > 0 {
-			start = start.Add(-ahead.Truncate(interval))
-		}
+	start := latestStart()
+	if rebuild {
+		start = time.Now()
 	}
 
-	for {
-		if wait := time.Until(start); wait > 0 {
-			timer := time.NewTimer(wait)
+	if !sleepUntil(ctx, start) {
+		return
+	}
 
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-
-				return
-			case <-timer.C:
-			}
+	for run := 1; ; run++ {
+		var version uint64
+		if rebuild {
+			version = b.txPool.ContentVersion()
 		}
 
-		started := time.Now()
-		b.fireLocalProgress(attrs, req, started, nil)
+		outcome, summary := b.runLocalBuild(ctx, attrs, prelude, req, deadline, run)
+		results.add(outcome, summary)
 
-		// A build is not cut off at the hand-over: the EL finishes it
-		// anyway, and its duration is what keeps the model from timing the
-		// next final build too late.
-		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Until(deadline)+lateBuildTimeout)
-		outcome := b.buildLocal(buildCtx, attrs, prelude, req)
-
-		cancel()
-
-		if outcome.info != nil {
-			outcome.info.StartedAt = started
-		}
-
-		b.observeLocalTiming(outcome)
-		b.fireLocalProgress(attrs, req, started, &outcome)
-		results.add(outcome)
-
-		if req.RebuildInterval == 0 || outcome.skipReason != "" || ctx.Err() != nil {
+		if !rebuild || outcome.skipReason != "" || ctx.Err() != nil {
 			return
 		}
 
-		// The grid stays aligned to the final build; a model that moved
-		// shifts the final build, never past its latest start.
-		next := start.Add(req.RebuildInterval)
-		if latest := latestStart(); next.After(latest) {
-			if !latest.After(start.Add(req.RebuildInterval / 2)) {
-				return
-			}
+		if !b.awaitRebuild(ctx, summary.StartedAt.Add(req.RebuildInterval), latestStart, version) {
+			return
+		}
+	}
+}
 
-			next = latest
+// awaitRebuild waits until earliest and then for new transactions, as long as
+// a build started now would still finish before the hand-over.
+func (b *PayloadBuilder) awaitRebuild(
+	ctx context.Context, earliest time.Time, latestStart func() time.Time, version uint64,
+) bool {
+	if !sleepUntil(ctx, earliest) {
+		return false
+	}
+
+	ticker := time.NewTicker(rebuildPollInterval)
+	defer ticker.Stop()
+
+	for {
+		if time.Now().After(latestStart()) {
+			return false
 		}
 
-		start = next
+		if b.txPool.ContentVersion() != version {
+			return true
+		}
+
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+// runLocalBuild runs one testing build. It is not cut off at the hand-over:
+// the EL finishes it anyway, and its duration is what keeps the model from
+// timing the next build too late.
+func (b *PayloadBuilder) runLocalBuild(
+	ctx context.Context,
+	attrs *beacon.PayloadAttributesEvent,
+	prelude *buildPrelude,
+	req *LocalBuildRequest,
+	deadline time.Time,
+	run int,
+) (localOutcome, LocalBuildRun) {
+	started := time.Now()
+	b.fireLocalProgress(attrs, req, run, started, nil)
+
+	buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Until(deadline)+lateBuildTimeout)
+	outcome := b.buildLocal(buildCtx, attrs, prelude, req)
+
+	cancel()
+
+	if outcome.info != nil {
+		outcome.info.StartedAt = started
+		outcome.info.Run = run
+	}
+
+	b.observeLocalTiming(outcome)
+	b.fireLocalProgress(attrs, req, run, started, &outcome)
+
+	return outcome, summarizeRun(run, started, outcome)
+}
+
+// summarizeRun condenses one build for the target's run list.
+func summarizeRun(run int, started time.Time, outcome localOutcome) LocalBuildRun {
+	summary := LocalBuildRun{Run: run, StartedAt: started, At: time.Now()}
+
+	if outcome.info != nil {
+		summary.SelectedAt = outcome.info.SelectedAt
+	}
+
+	switch {
+	case outcome.payload != nil:
+		summary.Status = LocalStatusReady
+		summary.At = outcome.payload.ReadyAt
+		summary.BlockValueWei = blockValue(outcome.payload).String()
+
+		if ep := outcome.payload.ExecutionPayload; ep != nil {
+			summary.NumTransactions = len(ep.Transactions)
+			summary.GasUsed = ep.GasUsed
+		}
+	case outcome.skipReason != "":
+		summary.Status = LocalStatusSkipped
+		summary.Error = outcome.skipReason
+	default:
+		summary.Status = LocalStatusFailed
+
+		if outcome.err != nil {
+			summary.Error = outcome.err.Error()
+		}
+	}
+
+	return summary
+}
+
+// sleepUntil waits until t; false when ctx ended first.
+func sleepUntil(ctx context.Context, t time.Time) bool {
+	wait := time.Until(t)
+	if wait <= 0 {
+		return ctx.Err() == nil
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
 // observeLocalTiming feeds a successful build's selection and call times to
-// the timing model (per attempt: retries repeat the call).
+// the timing model (per attempt: retries repeat the call). A selection that
+// started the EL mempool mirror is left out: a one-off full read.
 func (b *PayloadBuilder) observeLocalTiming(outcome localOutcome) {
 	info := outcome.info
-	if outcome.payload == nil || info == nil || info.SelectedAt.IsZero() || info.StartedAt.IsZero() {
+	if outcome.payload == nil || info == nil || info.MirrorStarted ||
+		info.SelectedAt.IsZero() || info.StartedAt.IsZero() {
 		return
 	}
 

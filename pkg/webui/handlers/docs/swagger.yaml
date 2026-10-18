@@ -1423,7 +1423,8 @@ definitions:
       builds:
         description: |-
           Builds is how many testing builds the target ran (rebuilds); this
-          record describes the one handed over.
+          record describes the one handed over, Run is its number and Runs
+          summarizes every build up to the hand-over.
         type: integer
       built_at:
         description: |-
@@ -1482,6 +1483,17 @@ definitions:
           InclusionListTxs is how many inclusion-list transactions the slot had
           (prepended to the list, or ignored by the el_mempool source).
         type: integer
+      mirror_started:
+        description: |-
+          MirrorStarted marks a selection that started the EL mempool mirror
+          (a full read): untypically slow, so it does not train the timing model.
+        type: boolean
+      run:
+        type: integer
+      runs:
+        items:
+          $ref: '#/definitions/payload_builder.LocalBuildRun'
+        type: array
       selected_at:
         type: string
       selection:
@@ -1499,6 +1511,29 @@ definitions:
           el_mempool source, where the EL chooses).
         type: integer
       tx_source:
+        type: string
+    type: object
+  payload_builder.LocalBuildRun:
+    properties:
+      at:
+        description: built, failed or skipped
+        type: string
+      block_value_wei:
+        type: string
+      error:
+        type: string
+      gas_used:
+        type: integer
+      num_transactions:
+        type: integer
+      run:
+        type: integer
+      selected_at:
+        type: string
+      started_at:
+        type: string
+      status:
+        description: ready | failed | skipped
         type: string
     type: object
   rpc.CallerStats:

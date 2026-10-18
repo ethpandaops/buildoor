@@ -368,9 +368,17 @@ func (p *Pool) restore() error {
 
 // ELMempool returns the EL mempool's pending transactions (senders
 // recovered, each sender's in nonce order) from the mirror, which a build's
-// fill reads instead of the whole txpool_content.
-func (p *Pool) ELMempool(ctx context.Context) ([]*PooledTx, error) {
+// fill reads instead of the whole txpool_content. started reports that this
+// call started the mirror (a full read: a slow, untypical selection).
+func (p *Pool) ELMempool(ctx context.Context) (txs []*PooledTx, started bool, err error) {
 	return p.mirror.Pending(ctx)
+}
+
+// ContentVersion changes whenever a build could find something new: the
+// pool's content changed or the EL mempool mirror received a transaction
+// clearing the latest base fee.
+func (p *Pool) ContentVersion() uint64 {
+	return p.version.Load() + p.mirror.arrivals.Load()
 }
 
 // SetEnabled switches admission and selection on or off. The queued content

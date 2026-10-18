@@ -1943,7 +1943,8 @@ func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildE
 type LocalBuildProgressStreamEvent struct {
 	Slot            uint64 `json:"slot"`
 	Candidate       string `json:"candidate,omitempty"`
-	Phase           string `json:"phase"` // building | ready | failed | skipped
+	Run             int    `json:"run,omitempty"` // the target's build number
+	Phase           string `json:"phase"`         // building | ready | failed | skipped
 	TxSource        string `json:"tx_source,omitempty"`
 	StartedAt       int64  `json:"started_at"`
 	At              int64  `json:"at"`
@@ -1961,6 +1962,7 @@ func (m *EventStreamManager) handleLocalBuildProgress(event *payload_builder.Loc
 	data := LocalBuildProgressStreamEvent{
 		Slot:            uint64(event.Slot),
 		Candidate:       event.Candidate,
+		Run:             event.Run,
 		Phase:           event.Phase,
 		TxSource:        event.TxSource,
 		StartedAt:       event.StartedAt.UnixMilli(),

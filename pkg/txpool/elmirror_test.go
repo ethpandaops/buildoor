@@ -15,7 +15,7 @@ import (
 func mirrorHashes(t *testing.T, pool *Pool) []common.Hash {
 	t.Helper()
 
-	pending, err := pool.ELMempool(context.Background())
+	pending, _, err := pool.ELMempool(context.Background())
 	require.NoError(t, err)
 
 	out := make([]common.Hash, 0, len(pending))
@@ -38,8 +38,9 @@ func TestELMirrorFollowsTheELMempool(t *testing.T) {
 
 	// Activation reads txpool_content once; senders come recovered, nonces
 	// in order.
-	pending, err := pool.ELMempool(context.Background())
+	pending, started, err := pool.ELMempool(context.Background())
 	require.NoError(t, err)
+	require.True(t, started, "the first call starts the mirror")
 	require.Len(t, pending, 2)
 	require.Equal(t, []common.Hash{tx0.Hash(), tx1.Hash()}, []common.Hash{pending[0].Hash, pending[1].Hash})
 	require.Equal(t, acc.addr, pending[0].Sender)

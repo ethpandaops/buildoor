@@ -283,10 +283,26 @@ export interface LocalBuildInfo {
   built_at?: string;
   selected_at?: string;
   builds?: number; // testing builds the target ran; this record is the handed-over one
+  run?: number; // the handed-over build's number
+  runs?: LocalBuildRun[]; // every build of the target up to the hand-over
+  mirror_started?: boolean;
   fill_txs?: number;
   fill_error?: string;
   fill_dropped?: boolean;
   fill_blobs_dropped?: boolean;
+}
+
+// One testing build of a target (rebuilds run when new transactions arrived).
+export interface LocalBuildRun {
+  run: number;
+  status: 'ready' | 'failed' | 'skipped';
+  started_at: string;
+  selected_at?: string;
+  at: string;
+  num_transactions?: number;
+  gas_used?: number;
+  block_value_wei?: string;
+  error?: string;
 }
 
 // SSE local_build_progress event: the live state of one testing build
@@ -296,6 +312,7 @@ export interface LocalBuildProgressEvent {
   slot: number;
   candidate?: string;
   phase: 'building' | 'ready' | 'failed' | 'skipped';
+  run?: number; // the target's build number
   tx_source?: string;
   started_at: number;
   at: number;
@@ -769,7 +786,7 @@ export interface SlotState {
   // Local build extension outcome for the slot's primary target.
   localBuild?: LocalBuildStreamEvent;
   // Live testing build state, until the final localBuild event arrives.
-  localBuildLive?: LocalBuildProgressEvent;
+  localBuildLive?: Record<number, LocalBuildProgressEvent>; // by build number
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.

@@ -317,12 +317,14 @@ func (b *PayloadBuilder) payloadBuildTime(buildTimeMs uint64) time.Duration {
 func (b *PayloadBuilder) fireLocalProgress(
 	attrs *beacon.PayloadAttributesEvent,
 	req *LocalBuildRequest,
+	run int,
 	started time.Time,
 	outcome *localOutcome,
 ) {
 	event := &LocalBuildProgressEvent{
 		Slot:      attrs.ProposalSlot,
 		Candidate: req.Candidate,
+		Run:       run,
 		Phase:     LocalStatusBuilding,
 		TxSource:  req.TxSource,
 		StartedAt: started,
@@ -753,7 +755,9 @@ func (b *PayloadBuilder) buildLocal(
 				fillSidecars = source
 			}
 
-			mirrored, err := b.txPool.ELMempool(ctx)
+			mirrored, started, err := b.txPool.ELMempool(ctx)
+			info.MirrorStarted = started
+
 			if err != nil {
 				info.FillError = err.Error()
 

@@ -381,6 +381,11 @@
   box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45);
 }
 
+/* A rebuild that was not handed over: same element, dimmed. */
+.local-build-run-other {
+  opacity: 0.45;
+}
+
 .local-build-failed {
   background: #dc3545;
   border: 1px solid #b02a37;

@@ -7,9 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
 
 func TestBuildTimingModel(t *testing.T) {
@@ -49,58 +54,92 @@ func TestLocalResultsHandsOverTheBest(t *testing.T) {
 	_, ok := results.result()
 	require.False(t, ok, "nothing finished yet")
 
-	results.add(localOutcome{err: errors.New("refused"), info: &LocalBuildInfo{}})
+	results.add(localOutcome{err: errors.New("refused"), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
 
 	outcome, ok := results.result()
 	require.True(t, ok)
 	require.Error(t, outcome.err, "without a success the latest failure is handed over")
 
 	low, high, tie := built(5), built(9), built(9)
-	results.add(low)
-	results.add(high)
-	results.add(tie)
-	results.add(localOutcome{err: errors.New("late refusal"), info: &LocalBuildInfo{}})
+	results.add(low, LocalBuildRun{Run: 2})
+	results.add(high, LocalBuildRun{Run: 3})
+	results.add(tie, LocalBuildRun{Run: 4})
+	results.add(localOutcome{err: errors.New("late refusal"), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 5})
 
 	outcome, ok = results.result()
 	require.True(t, ok)
 	require.Same(t, tie.payload, outcome.payload, "the highest value wins, the later build a tie")
 	require.Equal(t, 5, outcome.info.Builds)
+	require.Len(t, outcome.info.Runs, 5, "every build is summarized")
 }
 
-func TestRunLocalBuildsTimesTheFinalBuild(t *testing.T) {
+func TestRunLocalBuildsTimesTheSingleBuild(t *testing.T) {
 	client := &fakeLocalClient{}
 	b, attrs, prelude := newLocalTestBuilder(client)
 
-	// The seeded estimate (370 ms) and margin put the final build 580 ms out; a 300 ms
-	// interval adds builds before it. The fake builds take no time, so the
-	// model learns that and moves the final build closer to the deadline.
-	deadline := time.Now().Add(time.Second)
-	req := &LocalBuildRequest{
-		TxSource:        config.TxSourceEmpty,
-		RebuildInterval: 300 * time.Millisecond,
-		ReadyMargin:     50 * time.Millisecond,
-	}
+	// Without a rebuild interval: one build, timed by the seeded estimate
+	// (370 ms) and the margin to end before the deadline.
+	deadline := time.Now().Add(600 * time.Millisecond)
+	req := &LocalBuildRequest{TxSource: config.TxSourceEmpty, ReadyMargin: 50 * time.Millisecond}
 
 	var results localResults
 
 	b.runLocalBuilds(context.Background(), attrs, prelude, req, deadline, &results)
-
-	require.GreaterOrEqual(t, len(client.calls), 2, "rebuilds every interval")
-	require.True(t, time.Now().Before(deadline), "every build ends before the deadline")
+	require.Len(t, client.calls, 1)
 
 	outcome, ok := results.result()
 	require.True(t, ok)
 	require.NoError(t, outcome.err)
-	require.Equal(t, len(client.calls), outcome.info.Builds)
-	require.True(t, outcome.info.StartedAt.After(deadline.Add(-500*time.Millisecond)),
-		"the handed-over (latest, equal-valued) build is the final one, timed late")
+	require.Equal(t, 1, outcome.info.Run)
+	require.WithinDuration(t, deadline.Add(-420*time.Millisecond), outcome.info.StartedAt, 60*time.Millisecond)
+}
 
-	// Without an interval only the final build runs.
-	client.calls = nil
+func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.TxPool.Enabled = true
 
-	b.runLocalBuilds(context.Background(), attrs, prelude,
-		&LocalBuildRequest{TxSource: config.TxSourceEmpty}, time.Now().Add(500*time.Millisecond), &localResults{})
-	require.Len(t, client.calls, 1)
+	pool := txpool.NewPool(cfg, &fakePoolEL{}, &stubChain{stubChainService{spec: &chain.ChainSpec{SlotsPerEpoch: 32}}}, nil, logrus.New())
+	require.NoError(t, pool.Start(context.Background()))
+
+	t.Cleanup(func() { _ = pool.Stop() })
+
+	client := &fakeLocalClient{}
+	b, attrs, prelude := newLocalTestBuilder(client)
+	b.txPool = pool
+
+	req := &LocalBuildRequest{
+		TxSource:        config.TxSourceTxPool,
+		RebuildInterval: 100 * time.Millisecond,
+		ReadyMargin:     50 * time.Millisecond,
+		GasFillPct:      100,
+	}
+
+	// A transaction arrives after the first build: one rebuild, then quiet.
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+
+		key, _ := crypto.GenerateKey()
+		tx, _ := types.SignNewTx(key, types.LatestSignerForChainID(big.NewInt(1)), &types.DynamicFeeTx{
+			ChainID: big.NewInt(1), GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2), Gas: 21000,
+		})
+		raw, _ := tx.MarshalBinary()
+		_, _ = pool.Add(raw)
+	}()
+
+	var results localResults
+
+	started := time.Now()
+	b.runLocalBuilds(context.Background(), attrs, prelude, req, started.Add(time.Second), &results)
+
+	require.Len(t, client.calls, 2, "the first build at once, a rebuild for the arrival, none without news")
+	require.Empty(t, client.calls[0])
+	require.Len(t, client.calls[1], 1)
+
+	outcome, ok := results.result()
+	require.True(t, ok)
+	require.Equal(t, 2, outcome.info.Run, "the later build wins the tie")
+	require.Len(t, outcome.info.Runs, 2)
+	require.Less(t, outcome.info.Runs[0].StartedAt.Sub(started), 50*time.Millisecond, "the first build starts at once")
 }
 
 func TestCollectLocalStopsAtTheDeadline(t *testing.T) {
@@ -112,7 +151,7 @@ func TestCollectLocalStopsAtTheDeadline(t *testing.T) {
 
 	// An earlier build is handed over while a later one still runs.
 	results := &localResults{}
-	results.add(localOutcome{payload: &Payload{BlockValue: big.NewInt(1)}, info: &LocalBuildInfo{}})
+	results.add(localOutcome{payload: &Payload{BlockValue: big.NewInt(1)}, info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
 
 	result = &BuildResult{}
 	b.collectLocal(context.Background(), result, results, make(chan struct{}), time.Now())

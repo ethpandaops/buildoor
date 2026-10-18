@@ -740,6 +740,8 @@ func (p *Pool) selectFill(
 	sel.FillCandidates = len(params.Fill)
 	sel.FillSkipped = make(map[string]int, 4)
 
+	p.mirror.noteBaseFee(sel.BaseFee)
+
 	if len(params.Fill) == 0 {
 		return nil, nil
 	}

@@ -4129,7 +4129,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "builds": {
-                    "description": "Builds is how many testing builds the target ran (rebuilds); this\nrecord describes the one handed over.",
+                    "description": "Builds is how many testing builds the target ran (rebuilds); this\nrecord describes the one handed over, Run is its number and Runs\nsummarizes every build up to the hand-over.",
                     "type": "integer"
                 },
                 "built_at": {
@@ -4179,6 +4179,19 @@ const docTemplate = `{
                     "description": "InclusionListTxs is how many inclusion-list transactions the slot had\n(prepended to the list, or ignored by the el_mempool source).",
                     "type": "integer"
                 },
+                "mirror_started": {
+                    "description": "MirrorStarted marks a selection that started the EL mempool mirror\n(a full read): untypically slow, so it does not train the timing model.",
+                    "type": "boolean"
+                },
+                "run": {
+                    "type": "integer"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/payload_builder.LocalBuildRun"
+                    }
+                },
                 "selected_at": {
                     "type": "string"
                 },
@@ -4199,6 +4212,40 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "tx_source": {
+                    "type": "string"
+                }
+            }
+        },
+        "payload_builder.LocalBuildRun": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "description": "built, failed or skipped",
+                    "type": "string"
+                },
+                "block_value_wei": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "num_transactions": {
+                    "type": "integer"
+                },
+                "run": {
+                    "type": "integer"
+                },
+                "selected_at": {
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "ready | failed | skipped",
                     "type": "string"
                 }
             }

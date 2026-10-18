@@ -174,8 +174,27 @@ type LocalBuildInfo struct {
 	// the payload's ReadyAt (the hand-over to the consumers).
 	BuiltAt time.Time `json:"built_at"`
 	// Builds is how many testing builds the target ran (rebuilds); this
-	// record describes the one handed over.
-	Builds int `json:"builds,omitempty"`
+	// record describes the one handed over, Run is its number and Runs
+	// summarizes every build up to the hand-over.
+	Builds int             `json:"builds,omitempty"`
+	Run    int             `json:"run,omitempty"`
+	Runs   []LocalBuildRun `json:"runs,omitempty"`
+	// MirrorStarted marks a selection that started the EL mempool mirror
+	// (a full read): untypically slow, so it does not train the timing model.
+	MirrorStarted bool `json:"mirror_started,omitempty"`
+}
+
+// LocalBuildRun summarizes one testing build of a target.
+type LocalBuildRun struct {
+	Run             int       `json:"run"`
+	Status          string    `json:"status"` // ready | failed | skipped
+	StartedAt       time.Time `json:"started_at"`
+	SelectedAt      time.Time `json:"selected_at,omitempty"`
+	At              time.Time `json:"at"` // built, failed or skipped
+	NumTransactions int       `json:"num_transactions,omitempty"`
+	GasUsed         uint64    `json:"gas_used,omitempty"`
+	BlockValueWei   string    `json:"block_value_wei,omitempty"`
+	Error           string    `json:"error,omitempty"`
 }
 
 // DroppedTx is a pool transaction removed from a build attempt after the EL
@@ -477,6 +496,7 @@ func (s *Service) GuardSetting(key string, value any) error {
 type LocalBuildProgressEvent struct {
 	Slot            phase0.Slot
 	Candidate       string
+	Run             int    // the target's build number (rebuilds count up)
 	Phase           string // building | ready | failed | skipped
 	TxSource        string
 	StartedAt       time.Time

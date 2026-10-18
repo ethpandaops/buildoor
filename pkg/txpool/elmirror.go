@@ -2,8 +2,10 @@ package txpool
 
 import (
 	"context"
+	"math/big"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -40,6 +42,13 @@ type elMirror struct {
 	pool *Pool
 	log  logrus.FieldLogger
 
+	// arrivals counts mirrored transactions that clear baseFeeHint (the
+	// latest selection's base fee): the signal that a rebuild could pick up
+	// something new. Arrivals below it are the bulk of a busy mempool and
+	// would never make a block.
+	arrivals    atomic.Uint64
+	baseFeeHint atomic.Uint64 // wei; 0 = unknown, every arrival counts
+
 	// syncMu serializes the EL-facing work (activation, polls, resyncs).
 	syncMu   sync.Mutex
 	filterID string
@@ -69,9 +78,10 @@ func newELMirror(pool *Pool) *elMirror {
 }
 
 // Pending returns the mirrored pending transactions, each sender's in nonce
-// order. The first call after an idle period reads the full EL mempool; later
-// calls are served from memory while the background loop keeps it current.
-func (m *elMirror) Pending(ctx context.Context) ([]*PooledTx, error) {
+// order. The first call after an idle period reads the full EL mempool
+// (started reports it); later calls are served from memory while the
+// background loop keeps it current.
+func (m *elMirror) Pending(ctx context.Context) (txs []*PooledTx, started bool, err error) {
 	m.mu.Lock()
 	m.lastUsed = time.Now()
 	active := m.active
@@ -79,8 +89,10 @@ func (m *elMirror) Pending(ctx context.Context) ([]*PooledTx, error) {
 
 	if !active {
 		if err := m.activate(ctx); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+
+		started = true
 	}
 
 	m.mu.Lock()
@@ -110,7 +122,15 @@ func (m *elMirror) Pending(ctx context.Context) ([]*PooledTx, error) {
 		}
 	}
 
-	return out, nil
+	return out, started, nil
+}
+
+// noteBaseFee records the base fee the latest selection used: arrivals
+// below it do not count as news for a rebuild.
+func (m *elMirror) noteBaseFee(baseFee *big.Int) {
+	if baseFee != nil && baseFee.IsUint64() {
+		m.baseFeeHint.Store(baseFee.Uint64())
+	}
 }
 
 // activate installs the filter and loads the full EL mempool.
@@ -349,6 +369,10 @@ func (m *elMirror) insert(tx *types.Transaction, now time.Time) {
 
 	byNonce[tx.Nonce()] = entry
 	m.byHash[entry.tx.Hash] = entry
+
+	if hint := m.baseFeeHint.Load(); hint == 0 || tx.GasFeeCap().Cmp(new(big.Int).SetUint64(hint)) >= 0 {
+		m.arrivals.Add(1)
+	}
 }
 
 // noteBlock drops the transactions an included block carries and every

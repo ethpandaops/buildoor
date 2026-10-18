@@ -281,10 +281,14 @@ npm run clean
      `ready_margin_ms` − estimate, where the hand-over is the engine build's
      getPayload (`payload_build_time` after its forkchoiceUpdated) and the
      estimate an exponentially weighted fit of selection ms + call ms over
-     gas (+2σ of its residuals; seeds until 3 builds). With
-     `rebuild_interval_ms` earlier builds run on a grid aligned to the final
-     one; the highest-value build (later wins a tie) is handed over
-     (`LocalBuildInfo.builds`). The hand-over waits for the builds until the
+     gas (+2σ of its residuals; seeds until 3 builds; the selection that
+     starts the mirror is left out). With `rebuild_interval_ms` > 0 (pool
+     sources) the first build runs at once and a rebuild follows whenever
+     `Pool.ContentVersion` moved (pool changes + mirror arrivals clearing the
+     latest base fee), at least the interval after the previous build and
+     only while it is estimated to finish in time; the highest-value build
+     (later wins a tie) is handed over (`LocalBuildInfo.run`/`runs`, drawn
+     per build in the slot graph, live via `local_build_progress.run`). The hand-over waits for the builds until the
      deadline + 50 ms, never longer; a build still running is not cut off
      (the EL finishes it anyway) so its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
@@ -794,8 +798,8 @@ Key config sections:
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
 - **Local build / tx pool**: `--local-build-enabled`,
-  `--local-build-rebuild-interval` (earlier testing builds every N ms before
-  the final one, best value handed over, 0 = final only),
+  `--local-build-rebuild-interval` (min gap between change-triggered testing
+  rebuilds, best value handed over, 0 = one build timed to the hand-over),
   `--local-build-ready-margin` (ms kept free before the hand-over; the final
   build is timed by a learned model, see "Testing build timing" in 0d),
   `--local-build-payload-source`
