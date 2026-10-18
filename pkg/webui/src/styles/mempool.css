@@ -276,10 +276,25 @@
 
 /* ----------------------------------------------------- fee distribution -- */
 
+.bd-mp-feechart {
+  width: 100%;
+  min-height: 200px;
+}
+
 .bd-mp-feechart svg {
   display: block;
-  width: 100%;
-  height: auto;
+}
+
+.bd-mp-feechart-below {
+  opacity: 0.25;
+}
+
+.bd-mp-feechart-base-label {
+  fill: var(--bd-danger-fg);
+}
+
+.bd-mp-feechart-cum-label {
+  fill: var(--bd-info-fg);
 }
 
 .bd-mp-feechart-el {
@@ -311,7 +326,7 @@
 
 .bd-mp-feechart-excluded {
   fill: var(--bd-danger-bg);
-  opacity: 0.35;
+  opacity: 0.12;
   pointer-events: none;
 }
 
