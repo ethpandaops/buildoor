@@ -1249,15 +1249,18 @@ func (b *PayloadBuilder) finalizePayload(
 	}
 
 	return &Payload{
-		Attributes:           attrs,
-		ExecutionPayload:     beaconPayload,
-		BlobsBundle:          beaconBlobsBundleFromEngine(resp.BlobsBundle),
-		ExecutionRequests:    execRequests,
-		BlockHash:            phase0.Hash32(newHash),
-		FeeRecipient:         prelude.feeRecipient,
-		ProposerFeeRecipient: prelude.proposerFeeRecipient,
-		BlockValue:           blockValue,
-		ReadyAt:              time.Now(),
+		Attributes:        attrs,
+		ExecutionPayload:  beaconPayload,
+		BlobsBundle:       beaconBlobsBundleFromEngine(resp.BlobsBundle),
+		ExecutionRequests: execRequests,
+		BlockHash:         phase0.Hash32(newHash),
+
+		EngineExecutionRequests: resp.ExecutionRequests,
+		EngineVersion:           enginePayload.Version,
+		FeeRecipient:            prelude.feeRecipient,
+		ProposerFeeRecipient:    prelude.proposerFeeRecipient,
+		BlockValue:              blockValue,
+		ReadyAt:                 time.Now(),
 	}, nil
 }
 

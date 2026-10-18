@@ -13,9 +13,9 @@
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "@fortawesome/fontawesome-free": "^7.3.1",
     "bootstrap": "^5.3.8",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "swagger-ui-react": "^5.33.1"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "swagger-ui-react": "^5.33.3"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
