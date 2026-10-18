@@ -308,6 +308,10 @@ and begins building blocks according to configuration.`,
 
 			txPool = txpool.NewPool(cfg, rpcClient, chainSvc, clClient, logger)
 
+			if cfg.ELWS != "" {
+				txPool.UsePendingTxStream(execution.NewPendingTxStream(cfg.ELWS))
+			}
+
 			if dir := cfg.TxPool.StoreDir; dir != "" {
 				store, err := txpool.OpenPebbleStore(dir, logger)
 				if err != nil {

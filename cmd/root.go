@@ -62,6 +62,7 @@ func init() {
 	rootCmd.PersistentFlags().String("el-engine-api", "", "Execution layer engine API URL (JWT-authenticated)")
 	rootCmd.PersistentFlags().String("el-jwt-secret", "", "Path to JWT secret file for engine API authentication")
 	rootCmd.PersistentFlags().String("el-rpc", "", "Execution layer JSON-RPC URL (for lifecycle transactions)")
+	rootCmd.PersistentFlags().String("el-ws", "", "Execution layer websocket JSON-RPC URL (optional): the testing build's EL mempool mirror follows newPendingTransactions live instead of polling a filter over --el-rpc")
 	rootCmd.PersistentFlags().String("wallet-privkey", "", "Wallet ECDSA private key (hex)")
 	rootCmd.PersistentFlags().Int("api-port", 0, "HTTP API port (0 = disabled)")
 	rootCmd.PersistentFlags().String("auth-provider-url", "", "Optional authenticatoor URL (e.g. https://auth.<devnet>.example.io); when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty the API is unauthenticated.")
@@ -280,6 +281,7 @@ func initConfig(root *cobra.Command) error {
 		ELEngineAPI:       v.GetString("el-engine-api"),
 		ELJWTSecret:       v.GetString("el-jwt-secret"),
 		ELRPC:             v.GetString("el-rpc"),
+		ELWS:              v.GetString("el-ws"),
 		WalletPrivkey:     v.GetString("wallet-privkey"),
 		APIPort:           v.GetInt("api-port"),
 		AuthProviderURL:   v.GetString("auth-provider-url"),

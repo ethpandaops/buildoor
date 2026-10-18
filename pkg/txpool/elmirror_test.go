@@ -2,6 +2,7 @@ package txpool
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -129,4 +130,60 @@ func TestSelectFillSkipsBelowBaseFeeWithoutStateReads(t *testing.T) {
 	require.Equal(t, richTx.Hash(), sel.Fill[0].Hash)
 	require.Equal(t, 1, sel.FillSkipped[SkipFeeBelowBase])
 	require.NotContains(t, el.stateReads, cheap.addr, "no state read for a sender priced out")
+}
+
+// fakeStream is a websocket subscription the test feeds and ends.
+type fakeStream struct {
+	subscribed chan chan<- *types.Transaction
+	errs       chan error
+}
+
+func (f *fakeStream) SubscribePendingTransactions(
+	_ context.Context, ch chan<- *types.Transaction,
+) (execution.PendingTxSubscription, error) {
+	f.subscribed <- ch
+
+	return f, nil
+}
+
+func (f *fakeStream) Err() <-chan error { return f.errs }
+func (f *fakeStream) Unsubscribe()      {}
+
+func TestELMirrorFollowsTheStream(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	stream := &fakeStream{subscribed: make(chan chan<- *types.Transaction, 2), errs: make(chan error, 1)}
+	pool.UsePendingTxStream(stream)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go pool.mirror.run(ctx)
+
+	_, _, err := pool.ELMempool(ctx) // starts the mirror, and with it the stream
+	require.NoError(t, err)
+
+	var ch chan<- *types.Transaction
+	select {
+	case ch = <-stream.subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no subscription")
+	}
+
+	require.Eventually(t, pool.mirror.streamLive.Load, time.Second, 10*time.Millisecond)
+
+	// Arrivals are mirrored the moment they are pushed, no filter poll needed.
+	tx, _ := signTx(t, newAccount(t), txOpts{nonce: 0})
+	before := pool.ContentVersion()
+	ch <- tx
+
+	require.Eventually(t, func() bool { return pool.mirror.size() == 1 }, time.Second, 5*time.Millisecond)
+	require.NotEqual(t, before, pool.ContentVersion(), "an arrival is news for a rebuild")
+
+	// A lost connection hands over to the filter and resubscribes.
+	stream.errs <- errors.New("connection reset")
+
+	require.Eventually(t, func() bool { return !pool.mirror.streamLive.Load() || len(stream.subscribed) > 0 },
+		time.Second, 5*time.Millisecond)
 }

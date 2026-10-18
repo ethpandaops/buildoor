@@ -81,3 +81,55 @@ func (c *Client) TransactionsByHash(ctx context.Context, hashes []common.Hash) (
 
 	return out, nil
 }
+
+// PendingTxSubscription is a live subscription to the EL mempool's arrivals.
+type PendingTxSubscription interface {
+	// Err delivers the error that ended the subscription (connection lost).
+	Err() <-chan error
+	Unsubscribe()
+}
+
+// PendingTxStream subscribes to the transactions entering the EL mempool over
+// a websocket (eth_subscribe newPendingTransactions with full transactions):
+// live, where a pending transaction filter has to be polled. Every
+// subscription dials its own connection, so a reconnect is a new subscribe.
+type PendingTxStream struct {
+	url string
+}
+
+// NewPendingTxStream creates the stream for the EL's websocket URL.
+func NewPendingTxStream(url string) *PendingTxStream {
+	return &PendingTxStream{url: url}
+}
+
+// SubscribePendingTransactions delivers every transaction entering the EL
+// mempool to ch (blob transactions without their sidecars).
+func (s *PendingTxStream) SubscribePendingTransactions(
+	ctx context.Context, ch chan<- *types.Transaction,
+) (PendingTxSubscription, error) {
+	client, err := rpc.DialContext(ctx, s.url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to %s: %w", s.url, err)
+	}
+
+	sub, err := client.EthSubscribe(ctx, ch, "newPendingTransactions", true)
+	if err != nil {
+		client.Close()
+
+		return nil, fmt.Errorf("failed to subscribe to pending transactions: %w", err)
+	}
+
+	return &pendingTxSubscription{client: client, sub: sub}, nil
+}
+
+type pendingTxSubscription struct {
+	client *rpc.Client
+	sub    *rpc.ClientSubscription
+}
+
+func (s *pendingTxSubscription) Err() <-chan error { return s.sub.Err() }
+
+func (s *pendingTxSubscription) Unsubscribe() {
+	s.sub.Unsubscribe()
+	s.client.Close()
+}

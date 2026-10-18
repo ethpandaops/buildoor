@@ -114,6 +114,7 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--el-engine-api` | *(required)* | Execution layer Engine API URL |
 | `--el-jwt-secret` | *(required)* | Path to JWT secret file |
 | `--el-rpc` | | Execution layer JSON-RPC URL (required for lifecycle) |
+| `--el-ws` | | EL websocket JSON-RPC URL (optional): the testing build's EL mempool mirror follows `newPendingTransactions` live instead of polling a filter |
 | `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle); from Gloas its address is the coinbase of the built payloads |
 | `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `--config` | | Path to YAML config file |

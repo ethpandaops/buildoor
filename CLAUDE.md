@@ -262,8 +262,11 @@ npm run clean
      pool duplicates skipped, txs below the next base fee dropped BEFORE any
      sender's state is read. The txs come from the pool's EL mempool MIRROR
      (`txpool/elmirror.go`), not a txpool_content read per build: decoded
-     and sender-recovered once, arrivals via `eth_newPendingTransactionFilter`
-     (500 ms poll; it reports blob txs too, which geth's txpool_content
+     and sender-recovered once, arrivals LIVE over `--el-ws`
+     (`eth_subscribe newPendingTransactions` with full txs; reconnect with
+     backoff, one filter poll after each subscribe covers the gap) or else
+     via `eth_newPendingTransactionFilter` (500 ms poll, also while the
+     websocket is down; both report blob txs, which geth's txpool_content
      omits), removals by included block (+ lower nonces), stale nonces found
      by the selection and a full txpool_content resync every 5 min (blob
      entries, which the resync cannot confirm, expire by age); it starts on
@@ -764,7 +767,8 @@ Key config sections:
   (priority fee floor of the early onboarding deposits, default 50 gwei, max
   10000, 0 = EL suggestion). All four are mutable settings edited in the
   Lifecycle drawer tab
-- **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`
+- **Clients**: `--cl-client`, `--el-engine-api`, `--el-rpc`, `--el-ws`
+  (optional websocket: the EL mempool mirror follows arrivals live)
 - **Schedule**: `--schedule-mode` (all/every_nth/next_n), `--schedule-every-nth`, `--schedule-next-n`
 - **ePBS timing**: `--build-start-time`, `--epbs-bid-start`, `--epbs-bid-end`
 - **Bidding**: `--epbs-bid-min`, `--epbs-bid-increase`, `--epbs-bid-interval`,

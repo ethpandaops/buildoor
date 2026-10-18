@@ -11,6 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/sirupsen/logrus"
+
+	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 )
 
 const (
@@ -30,17 +32,37 @@ const (
 	mirrorMaxTxs = 100_000
 	// mirrorCallTimeout bounds each EL call of the mirror.
 	mirrorCallTimeout = 10 * time.Second
+	// Reconnect backoff of the websocket stream.
+	mirrorStreamMinBackoff = time.Second
+	mirrorStreamMaxBackoff = 30 * time.Second
+	// mirrorStreamBuffer absorbs arrival bursts while senders are recovered.
+	mirrorStreamBuffer = 4096
 )
+
+// PendingTxStream streams the transactions entering the EL mempool (see
+// execution.PendingTxStream).
+type PendingTxStream interface {
+	SubscribePendingTransactions(ctx context.Context, ch chan<- *types.Transaction) (execution.PendingTxSubscription, error)
+}
 
 // elMirror keeps a decoded copy of the EL mempool's pending transactions so a
 // build does not read, decode and sender-recover the whole txpool_content
-// every time. A pending transaction filter reports the arrivals (blob
-// transactions included, which geth's txpool_content leaves out); included
-// blocks, stale nonces and a periodic full resync remove what left the EL.
-// It runs only while builds use it.
+// every time. Arrivals come live from a websocket subscription when one is
+// configured, else (and while it is down) from a polled pending transaction
+// filter; both cover blob transactions, which geth's txpool_content leaves
+// out. Included blocks, stale nonces and a periodic full resync remove what
+// left the EL. It runs only while builds use it.
 type elMirror struct {
 	pool *Pool
 	log  logrus.FieldLogger
+
+	// stream, when set, delivers the arrivals live. streamLive pauses the
+	// filter polls; pollOnce asks for one more poll after a (re)subscribe,
+	// which catches what arrived before the subscription.
+	stream       PendingTxStream
+	streamLive   atomic.Bool
+	pollOnce     atomic.Bool
+	followCancel context.CancelFunc // owned by the run goroutine
 
 	// arrivals counts mirrored transactions that clear baseFeeHint (the
 	// latest selection's base fee): the signal that a rebuild could pick up
@@ -192,8 +214,17 @@ func (m *elMirror) run(ctx context.Context) {
 			continue
 		}
 
+		if m.stream != nil && m.followCancel == nil {
+			followCtx, cancel := context.WithCancel(ctx)
+			m.followCancel = cancel
+
+			go m.follow(followCtx)
+		}
+
 		m.syncMu.Lock()
-		m.poll(ctx)
+		if !m.streamLive.Load() || m.pollOnce.Swap(false) {
+			m.poll(ctx)
+		}
 
 		if time.Since(m.syncedAt) > mirrorResyncInterval {
 			if err := m.resync(ctx); err != nil {
@@ -201,6 +232,72 @@ func (m *elMirror) run(ctx context.Context) {
 			}
 		}
 		m.syncMu.Unlock()
+	}
+}
+
+// follow keeps the websocket subscription up while the mirror runs,
+// reconnecting with backoff; while it is down the filter polls take over.
+func (m *elMirror) follow(ctx context.Context) {
+	backoff := mirrorStreamMinBackoff
+
+	for ctx.Err() == nil {
+		ch := make(chan *types.Transaction, mirrorStreamBuffer)
+
+		sub, err := m.stream.SubscribePendingTransactions(ctx, ch)
+		if err != nil {
+			m.log.WithError(err).Debug("Cannot subscribe to the EL mempool, polling the filter")
+
+			if !sleepCtx(ctx, backoff) {
+				return
+			}
+
+			backoff = min(2*backoff, mirrorStreamMaxBackoff)
+
+			continue
+		}
+
+		backoff = mirrorStreamMinBackoff
+		m.streamLive.Store(true)
+		m.pollOnce.Store(true)
+		m.log.Info("Following the EL mempool live over websocket")
+
+		err = m.consume(ctx, ch, sub)
+
+		sub.Unsubscribe()
+		m.streamLive.Store(false)
+
+		if err != nil {
+			m.log.WithError(err).Warn("EL mempool subscription lost, polling the filter until it is back")
+		}
+	}
+}
+
+// consume inserts the streamed arrivals until the subscription or ctx ends.
+func (m *elMirror) consume(ctx context.Context, ch <-chan *types.Transaction, sub execution.PendingTxSubscription) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-sub.Err():
+			return err
+		case tx := <-ch:
+			if tx != nil {
+				m.insert(tx, time.Now())
+			}
+		}
+	}
+}
+
+// sleepCtx waits d; false when ctx ended first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -447,8 +544,14 @@ func (m *elMirror) removeLocked(tx *PooledTx) {
 	}
 }
 
-// deactivate stops following the EL mempool and frees the mirror.
+// deactivate stops following the EL mempool and frees the mirror. Called
+// from the run goroutine only (it owns followCancel).
 func (m *elMirror) deactivate() {
+	if m.followCancel != nil {
+		m.followCancel()
+		m.followCancel = nil
+	}
+
 	m.syncMu.Lock()
 	defer m.syncMu.Unlock()
 

@@ -200,6 +200,12 @@ func NewPool(
 	return p
 }
 
+// UsePendingTxStream lets the EL mempool mirror follow the EL's arrivals
+// live over a websocket instead of polling a filter. Call before Start.
+func (p *Pool) UsePendingTxStream(stream PendingTxStream) {
+	p.mirror.stream = stream
+}
+
 // UseStore persists the queued transactions in store: Start re-admits what
 // it holds, and every change is written through. Call before Start; Stop
 // closes it.

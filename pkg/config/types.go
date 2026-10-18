@@ -39,6 +39,7 @@ type Config struct {
 	ELEngineAPI       string            `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
 	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
 	ELRPC             string            `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	ELWS              string            `yaml:"el_ws" json:"el_ws,omitempty"`                   // Optional: EL websocket, follows the EL mempool live
 	WalletPrivkey     string            `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
 	APIPort           int               `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
 	AuthProviderURL   string            `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
