@@ -130,10 +130,11 @@ type ResolvedLocalBuildSettings struct {
 	// (global-only).
 	MaxAttempts uint64 `json:"max_attempts,omitempty"`
 	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
-	// RebuildIntervalMs / ReadyMarginMs time the testing builds against the
-	// hand-over (global-only; see config.LocalBuildConfig).
+	// StartTimeMs / EndTimeMs / RebuildIntervalMs time the testing builds
+	// (global-only; see config.LocalBuildConfig).
+	StartTimeMs       int64  `json:"start_time_ms,omitempty"`
+	EndTimeMs         int64  `json:"end_time_ms,omitempty"`
 	RebuildIntervalMs uint64 `json:"rebuild_interval_ms,omitempty"`
-	ReadyMarginMs     uint64 `json:"ready_margin_ms,omitempty"`
 	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
 	// 0 = off; exact lists are never reduced).
 	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
@@ -439,7 +440,8 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
 		MaxStrikes:              cfg.TxPool.MaxStrikes,
 		RebuildIntervalMs:       cfg.LocalBuild.RebuildIntervalMs,
-		ReadyMarginMs:           cfg.LocalBuild.ReadyMarginMs,
+		StartTimeMs:             cfg.LocalBuild.StartTimeMs,
+		EndTimeMs:               cfg.LocalBuild.EndTimeMs,
 		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
 	}
 

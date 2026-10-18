@@ -11,7 +11,7 @@ import (
 
 const (
 	// DefaultCacheSize is the number of slots to keep in the cache.
-	DefaultCacheSize = 1000
+	DefaultCacheSize = 100
 )
 
 // candidatePriority orders candidate keys from most to least canonical; it
@@ -25,11 +25,15 @@ var candidatePriority = []chain.CandidateKey{
 
 // PayloadCache stores built payloads per slot, keyed by the parent tuple they
 // were built on: reorg and payload-miss handling can produce several
-// candidate payloads for the same slot.
+// candidate payloads for the same slot. A tuple's newer payload (a better
+// testing build after the hand-over) replaces it for the lookups by slot or
+// tuple, while the replaced one stays findable by block hash: a bid made on
+// it must still unblind, reveal and be recognised when included.
 type PayloadCache struct {
-	payloads map[phase0.Slot]map[beacon.AttrParentKey]*Payload
-	maxSlots int
-	mu       sync.RWMutex
+	payloads   map[phase0.Slot]map[beacon.AttrParentKey]*Payload
+	superseded map[phase0.Slot][]*Payload
+	maxSlots   int
+	mu         sync.RWMutex
 }
 
 // NewPayloadCache creates a new payload cache with the specified maximum slots.
@@ -39,8 +43,9 @@ func NewPayloadCache(maxSlots int) *PayloadCache {
 	}
 
 	return &PayloadCache{
-		payloads: make(map[phase0.Slot]map[beacon.AttrParentKey]*Payload, maxSlots),
-		maxSlots: maxSlots,
+		payloads:   make(map[phase0.Slot]map[beacon.AttrParentKey]*Payload, maxSlots),
+		superseded: make(map[phase0.Slot][]*Payload, 16),
+		maxSlots:   maxSlots,
 	}
 }
 
@@ -58,7 +63,12 @@ func (c *PayloadCache) Store(event *Payload) {
 		c.payloads[slot] = variants
 	}
 
-	variants[beacon.AttrParentKeyOf(event.Attributes)] = event
+	key := beacon.AttrParentKeyOf(event.Attributes)
+	if old := variants[key]; old != nil && old != event && old.BlockHash != event.BlockHash {
+		c.superseded[slot] = append(c.superseded[slot], old)
+	}
+
+	variants[key] = event
 	c.evictOld()
 }
 
@@ -147,18 +157,35 @@ func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *Payload {
 		}
 	}
 
+	for _, payloads := range c.superseded {
+		for _, payload := range payloads {
+			if payload.BlockHash == blockHash {
+				return payload
+			}
+		}
+	}
+
 	return nil
 }
 
-// Remove drops the given payload from the cache when it is still the cached
-// build of its parent tuple (a newer build on the same tuple stays). Returns
-// whether the payload was removed.
+// Remove drops the given payload from the cache. Returns whether it was
+// still the cached build of its parent tuple (a newer build on the same
+// tuple stays); a payload a newer one already replaced is dropped too, but
+// reported as not removed, since the tuple's payload did not change.
 func (c *PayloadCache) Remove(payload *Payload) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	slot := payload.Attributes.ProposalSlot
 	key := beacon.AttrParentKeyOf(payload.Attributes)
+
+	for i, old := range c.superseded[slot] {
+		if old == payload {
+			c.superseded[slot] = append(c.superseded[slot][:i], c.superseded[slot][i+1:]...)
+
+			return false
+		}
+	}
 
 	variants := c.payloads[slot]
 	if variants[key] != payload {
@@ -180,6 +207,7 @@ func (c *PayloadCache) Delete(slot phase0.Slot) {
 	defer c.mu.Unlock()
 
 	delete(c.payloads, slot)
+	delete(c.superseded, slot)
 }
 
 // GetAll returns all cached payloads.
@@ -222,6 +250,13 @@ func (c *PayloadCache) evictOld() {
 		}
 
 		delete(c.payloads, oldestSlot)
+		delete(c.superseded, oldestSlot)
+	}
+
+	for slot := range c.superseded {
+		if _, ok := c.payloads[slot]; !ok {
+			delete(c.superseded, slot)
+		}
 	}
 }
 
@@ -233,6 +268,12 @@ func (c *PayloadCache) Cleanup(olderThan phase0.Slot) {
 	for slot := range c.payloads {
 		if slot < olderThan {
 			delete(c.payloads, slot)
+		}
+	}
+
+	for slot := range c.superseded {
+		if slot < olderThan {
+			delete(c.superseded, slot)
 		}
 	}
 }

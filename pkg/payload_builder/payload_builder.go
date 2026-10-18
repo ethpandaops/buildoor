@@ -44,8 +44,10 @@ type PayloadBuilder struct {
 
 	// Active build tracking: multiple candidate builds may run for the same
 	// slot (one per parent tuple); builds for older slots are cancelled when
-	// a newer slot starts.
+	// a newer slot starts. The testing builds outlive the hand-over (their
+	// own window) and are tracked apart under the same rules.
 	activeBuilds map[activeBuildKey]*activeBuild
+	localLoops   map[activeBuildKey]*activeBuild
 	mu           sync.Mutex
 
 	// localProgress reports each custom build live, ahead of the final
@@ -101,6 +103,7 @@ func NewPayloadBuilder(
 		settingsResolvers: settingsResolvers,
 		cfg:               cfg,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
+		localLoops:        make(map[activeBuildKey]*activeBuild, 4),
 		localProgress:     &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		log:               log.WithField("component", "payload-builder"),
 	}
@@ -172,6 +175,13 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		}
 	}
 
+	for key, loop := range b.localLoops {
+		if key.slot != attrs.ProposalSlot || key == buildKey {
+			loop.cancelFn()
+			delete(b.localLoops, key)
+		}
+	}
+
 	buildCtx, cancel := context.WithCancel(ctx)
 
 	build := &activeBuild{cancelFn: cancel}
@@ -219,26 +229,27 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 	}
 
 	// The hand-over: the engine build's getPayload, payload_build_time after
-	// the forkchoice update. The testing builds are timed to finish before it.
+	// the forkchoice update. Consumers get the best payload there; testing
+	// builds still running in their own window may upgrade it afterwards.
 	deadline := time.Now().Add(b.payloadBuildTime(buildTimeMs))
-
-	// The testing builds stop at the hand-over.
-	localCtx, localCancel := context.WithCancel(buildCtx)
-	defer localCancel()
 
 	var (
 		localResultsSet *localResults
 		localDone       chan struct{}
+		localCtx        context.Context
 	)
 
 	if local != nil {
-		localResultsSet = &localResults{}
+		localResultsSet = newLocalResults()
 		localDone = make(chan struct{})
+		localCtx = b.startLocalLoop(ctx, buildKey, attrs, local, localDone)
+
+		windowStart, windowEnd := b.localWindow(attrs, local)
 
 		go func() {
 			defer close(localDone)
 
-			b.runLocalBuilds(localCtx, attrs, prelude, local, deadline, localResultsSet)
+			b.runLocalBuilds(localCtx, attrs, prelude, local, windowStart, windowEnd, localResultsSet)
 		}()
 	}
 
@@ -248,7 +259,6 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	if local != nil {
 		b.collectLocal(buildCtx, result, localResultsSet, localDone, deadline)
-		localCancel()
 	}
 
 	result, err = b.selectPayload(result, local)
@@ -261,7 +271,63 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		result.Payload.ReadyAt = time.Now()
 	}
 
+	if local != nil && localCtx.Err() == nil {
+		select {
+		case <-localDone:
+		default:
+			upgrades := make(chan *BuildResult, 1)
+			result.Upgrades = upgrades
+
+			go b.followLocal(localCtx, *result, local, localResultsSet, localDone, upgrades)
+		}
+	}
+
 	return result, err
+}
+
+// localWindow returns the testing build window of the target in wall time.
+func (b *PayloadBuilder) localWindow(attrs *beacon.PayloadAttributesEvent, req *LocalBuildRequest) (time.Time, time.Time) {
+	slotStart := b.chainSvc.SlotToTime(attrs.ProposalSlot)
+
+	return slotStart.Add(time.Duration(req.StartMs) * time.Millisecond),
+		slotStart.Add(time.Duration(req.EndMs) * time.Millisecond)
+}
+
+// startLocalLoop gives the target's testing builds their own lifetime: until
+// the window ends (plus a build that overruns it), unless a newer build of
+// the tuple, a newer slot or AbortBuild cancels them.
+func (b *PayloadBuilder) startLocalLoop(
+	ctx context.Context,
+	key activeBuildKey,
+	attrs *beacon.PayloadAttributesEvent,
+	req *LocalBuildRequest,
+	done <-chan struct{},
+) context.Context {
+	_, windowEnd := b.localWindow(attrs, req)
+
+	loopCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), windowEnd.Add(lateBuildTimeout))
+	loop := &activeBuild{cancelFn: cancel}
+
+	b.mu.Lock()
+	b.localLoops[key] = loop
+	b.mu.Unlock()
+
+	go func() {
+		select {
+		case <-done:
+		case <-loopCtx.Done():
+		}
+
+		cancel()
+
+		b.mu.Lock()
+		if b.localLoops[key] == loop {
+			delete(b.localLoops, key)
+		}
+		b.mu.Unlock()
+	}()
+
+	return loopCtx
 }
 
 // collectLocal hands the best testing build over once the builds are done or
@@ -1260,6 +1326,13 @@ func (b *PayloadBuilder) AbortBuild(slot phase0.Slot) {
 			delete(b.activeBuilds, key)
 
 			b.log.WithField("slot", slot).Debug("Build aborted")
+		}
+	}
+
+	for key, loop := range b.localLoops {
+		if key.slot == slot {
+			loop.cancelFn()
+			delete(b.localLoops, key)
 		}
 	}
 }

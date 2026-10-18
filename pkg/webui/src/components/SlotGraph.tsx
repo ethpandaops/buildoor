@@ -416,6 +416,25 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   const pct75X = calculatePosition(slotDuration * 0.75, rangeStart, totalRange);
   const slotEndX = calculatePosition(slotDuration, rangeStart, totalRange);
 
+  // Build windows: the engine build collects transactions from its start for
+  // payload_build_time; the testing builds have their own window.
+  const engineWindowMs = epbsConfig && typeof (config as unknown as Record<string, unknown>)?.payload_build_time === 'number'
+    ? [epbsConfig.build_start_time, epbsConfig.build_start_time + ((config as unknown as Record<string, number>).payload_build_time)]
+    : null;
+  const localConfig = config?.local_build;
+  const testingWindowMs = localConfig?.enabled && localConfig.start_time_ms !== undefined && localConfig.end_time_ms !== undefined
+    ? [localConfig.start_time_ms, localConfig.end_time_ms]
+    : null;
+  const windowBand = (window: number[] | null) => {
+    if (!window) return null;
+    const left = calculatePosition(window[0], rangeStart, totalRange);
+    const right = calculatePosition(window[1], rangeStart, totalRange);
+    if (left >= 100 || right <= 0 || right <= left) return null;
+    return { left: Math.max(0, left), width: Math.min(100, right) - Math.max(0, left) };
+  };
+  const engineBand = windowBand(engineWindowMs);
+  const testingBand = windowBand(testingWindowMs);
+
   // Bid window and reveal marker
   const bidStartX = epbsConfig ? calculatePosition(epbsConfig.bid_start_time, rangeStart, totalRange) : 0;
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
@@ -521,6 +540,18 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           <div className="slot-marker slot-end-marker" style={{ left: `${slotEndX}%` }}>
             <span className="marker-label">100%</span>
           </div>
+
+          {/* Build windows - span the whole graph behind the build lines */}
+          {engineBand && engineWindowMs && (
+            <div className="build-window-bg build-window-engine" style={{ left: `${engineBand.left}%`, width: `${engineBand.width}%` }}>
+              <span className="duty-label build-window-label">Engine build: {engineWindowMs[0]} - {engineWindowMs[1]}ms</span>
+            </div>
+          )}
+          {testingBand && testingWindowMs && (
+            <div className="build-window-bg build-window-testing" style={{ left: `${testingBand.left}%`, width: `${testingBand.width}%` }}>
+              <span className="duty-label build-window-label">Testing builds: {testingWindowMs[0]} - {testingWindowMs[1]}ms</span>
+            </div>
+          )}
 
           {/* Bid window - spans ePBS row only */}
           {epbsActive && epbsRowBottom >= 0 && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
@@ -714,6 +745,9 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
                       { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                      ...(state.payloadUpgrades && state.payloadUpgradedAt
+                        ? [{ label: 'Upgraded', value: `${state.payloadUpgrades}× by testing builds, latest at ${state.payloadUpgradedAt - slotStartTime}ms` }]
+                        : []),
                       { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
                     ]
                   : [

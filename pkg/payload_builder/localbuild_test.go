@@ -513,7 +513,8 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 	svc.cfg.LocalBuild.Enabled = true
 	svc.cfg.LocalBuild.RebuildIntervalMs = 400
-	svc.cfg.LocalBuild.ReadyMarginMs = 150
+	svc.cfg.LocalBuild.StartTimeMs = -2000
+	svc.cfg.LocalBuild.EndTimeMs = -150
 	svc.localBuild.availability = LocalBuildAvailability{Configured: true, Available: true, BlobBundle: true}
 
 	tests := []struct {
@@ -539,7 +540,8 @@ func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
 
 			if req != nil {
 				require.Equal(t, 400*time.Millisecond, req.RebuildInterval, "the configured timing reaches the request")
-				require.Equal(t, 150*time.Millisecond, req.ReadyMargin)
+				require.Equal(t, int64(-2000), req.StartMs)
+				require.Equal(t, int64(-150), req.EndMs)
 			}
 		})
 	}

@@ -59,7 +59,6 @@ func DefaultConfig() *Config {
 			BuildELPayload: true,
 			BlobEncoding:   BlobEncodingAuto,
 			MaxAttempts:    3,
-			ReadyMarginMs:  100,
 		},
 		TxPool: TxPoolConfig{
 			Auth:            TxPoolAuthOpen,
@@ -107,6 +106,10 @@ const referenceSlotTimeMs = 12000
 //	BidEndTime:       -100ms @12s  (e.g.   -50ms @6s)
 //	Reveal.TimeMs:    5000ms @12s  (e.g.  2500ms @6s)
 //
+// The testing build window (LocalBuild.StartTimeMs / EndTimeMs) is set as a
+// share of the slot directly: it opens 20% of the slot before the slot start
+// and closes 1/120 of it before (with the bid window).
+//
 // PayloadBuildTime must leave headroom beyond the EL's own build deadline:
 // geth, for example, fills transactions for up to 2s (--miner.recommit) after
 // preparing the block and only then seals it, so under load its first full
@@ -136,6 +139,14 @@ func (c *Config) ApplySlotDefaults(slotTimeMs int64) {
 
 	if c.EPBS.BidEndTime == 0 {
 		c.EPBS.BidEndTime = -100 * slotTimeMs / referenceSlotTimeMs
+	}
+
+	if c.LocalBuild.StartTimeMs == 0 {
+		c.LocalBuild.StartTimeMs = -slotTimeMs / 5
+	}
+
+	if c.LocalBuild.EndTimeMs == 0 {
+		c.LocalBuild.EndTimeMs = -slotTimeMs / 120
 	}
 
 	if c.Reveal.TimeMs == 0 {

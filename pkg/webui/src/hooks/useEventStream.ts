@@ -517,6 +517,19 @@ function useEventStreamConnection(): UseEventStreamResult {
             // moves with the primary rather than covering every candidate.
             const own = state.candidateBuilds?.find(b => b.candidate === (data.candidate ?? ''));
 
+            // A testing build replacing the payload after the hand-over: the
+            // build line keeps ending at the hand-over.
+            if (state.payloadReady && state.payloadCandidate === (data.candidate ?? '') &&
+                state.payloadBlockHash && state.payloadBlockHash !== data.block_hash) {
+              return {
+                payloadBlockHash: data.block_hash,
+                payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
+                payloadDetail: detail,
+                payloadUpgrades: (state.payloadUpgrades ?? 0) + 1,
+                payloadUpgradedAt: data.ready_at,
+              };
+            }
+
             return {
             payloadReady: true,
             payloadBuildFailed: false,

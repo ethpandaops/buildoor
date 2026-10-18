@@ -2821,6 +2821,9 @@ const docTemplate = `{
                 "enabled": {
                     "type": "boolean"
                 },
+                "end_time_ms": {
+                    "type": "integer"
+                },
                 "forced": {
                     "description": "Forced marks that the plan enabled the local build although it is\nglobally disabled.",
                     "type": "boolean"
@@ -2853,11 +2856,11 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
-                "ready_margin_ms": {
+                "rebuild_interval_ms": {
                     "type": "integer"
                 },
-                "rebuild_interval_ms": {
-                    "description": "RebuildIntervalMs / ReadyMarginMs time the testing builds against the\nhand-over (global-only; see config.LocalBuildConfig).",
+                "start_time_ms": {
+                    "description": "StartTimeMs / EndTimeMs / RebuildIntervalMs time the testing builds\n(global-only; see config.LocalBuildConfig).",
                     "type": "integer"
                 },
                 "transactions": {

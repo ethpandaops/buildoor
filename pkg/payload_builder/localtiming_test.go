@@ -14,6 +14,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
 )
 
@@ -78,20 +79,31 @@ func TestRunLocalBuildsTimesTheSingleBuild(t *testing.T) {
 	b, attrs, prelude := newLocalTestBuilder(client)
 
 	// Without a rebuild interval: one build, timed by the seeded estimate
-	// (370 ms) and the margin to end before the deadline.
-	deadline := time.Now().Add(600 * time.Millisecond)
-	req := &LocalBuildRequest{TxSource: config.TxSourceEmpty, ReadyMargin: 50 * time.Millisecond}
+	// (370 ms) to end at the window end.
+	windowEnd := time.Now().Add(600 * time.Millisecond)
+	req := &LocalBuildRequest{TxSource: config.TxSourceEmpty}
 
-	var results localResults
+	results := newLocalResults()
 
-	b.runLocalBuilds(context.Background(), attrs, prelude, req, deadline, &results)
+	b.runLocalBuilds(context.Background(), attrs, prelude, req, time.Now(), windowEnd, results)
 	require.Len(t, client.calls, 1)
 
 	outcome, ok := results.result()
 	require.True(t, ok)
 	require.NoError(t, outcome.err)
 	require.Equal(t, 1, outcome.info.Run)
-	require.WithinDuration(t, deadline.Add(-420*time.Millisecond), outcome.info.StartedAt, 60*time.Millisecond)
+	require.WithinDuration(t, windowEnd.Add(-370*time.Millisecond), outcome.info.StartedAt, 60*time.Millisecond)
+
+	// A window opening later than that holds the build back to its start.
+	client.calls = nil
+	windowStart := time.Now().Add(400 * time.Millisecond)
+
+	results = newLocalResults()
+	b.runLocalBuilds(context.Background(), attrs, prelude, req, windowStart, windowStart.Add(100*time.Millisecond), results)
+
+	outcome, ok = results.result()
+	require.True(t, ok)
+	require.False(t, outcome.info.StartedAt.Before(windowStart))
 }
 
 func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
@@ -110,7 +122,6 @@ func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
 	req := &LocalBuildRequest{
 		TxSource:        config.TxSourceTxPool,
 		RebuildInterval: 100 * time.Millisecond,
-		ReadyMargin:     50 * time.Millisecond,
 		GasFillPct:      100,
 	}
 
@@ -126,10 +137,10 @@ func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
 		_, _ = pool.Add(raw)
 	}()
 
-	var results localResults
+	results := newLocalResults()
 
 	started := time.Now()
-	b.runLocalBuilds(context.Background(), attrs, prelude, req, started.Add(time.Second), &results)
+	b.runLocalBuilds(context.Background(), attrs, prelude, req, started, started.Add(time.Second), results)
 
 	require.Len(t, client.calls, 2, "the first build at once, a rebuild for the arrival, none without news")
 	require.Empty(t, client.calls[0])
@@ -157,4 +168,64 @@ func TestCollectLocalStopsAtTheDeadline(t *testing.T) {
 	b.collectLocal(context.Background(), result, results, make(chan struct{}), time.Now())
 	require.NoError(t, result.LocalErr)
 	require.NotNil(t, result.Local)
+}
+
+func TestFollowLocalUpgradesOnlyBetterPicks(t *testing.T) {
+	b, attrs, _ := newLocalTestBuilder(&fakeLocalClient{})
+
+	payload := func(value int64, hash byte) *Payload {
+		return &Payload{Attributes: attrs, BlockValue: big.NewInt(value), BlockHash: [32]byte{hash}}
+	}
+
+	engine := payload(10, 0xe1)
+	handedOver := BuildResult{EL: engine, Payload: engine, Source: SourceEL}
+	req := &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}
+
+	results := newLocalResults()
+	done := make(chan struct{})
+	upgrades := make(chan *BuildResult, 4)
+
+	go b.followLocal(context.Background(), handedOver, req, results, done, upgrades)
+
+	// Worth less than the engine block: the published pick stays.
+	results.add(localOutcome{payload: payload(5, 0x01), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
+
+	// Worth more: published as an upgrade.
+	better := payload(20, 0x02)
+	results.add(localOutcome{payload: better, info: &LocalBuildInfo{}}, LocalBuildRun{Run: 2})
+
+	select {
+	case upgrade := <-upgrades:
+		require.Same(t, better, upgrade.Payload)
+		require.Equal(t, SourceLocal, upgrade.Source)
+		require.Equal(t, 2, upgrade.LocalInfo.Builds)
+	case <-time.After(time.Second):
+		t.Fatal("no upgrade")
+	}
+
+	close(done)
+
+	_, open := <-upgrades
+	require.False(t, open, "the upgrades end with the builds")
+}
+
+func TestPayloadCacheKeepsSupersededPayloads(t *testing.T) {
+	cache := NewPayloadCache(8)
+	attrs := &beacon.PayloadAttributesEvent{ProposalSlot: 5, ParentBlockHash: [32]byte{0xaa}}
+
+	first := &Payload{Attributes: attrs, BlockHash: [32]byte{1}}
+	second := &Payload{Attributes: attrs, BlockHash: [32]byte{2}}
+
+	cache.Store(first)
+	cache.Store(second)
+
+	require.Same(t, second, cache.Get(5), "the newer payload is the tuple's payload")
+	require.Len(t, cache.GetSlotPayloads(5), 1)
+	require.Same(t, first, cache.GetByBlockHash([32]byte{1}), "a bid on the old payload still finds it")
+
+	require.False(t, cache.Remove(first), "the tuple's payload did not change")
+	require.Nil(t, cache.GetByBlockHash([32]byte{1}), "but the old payload is gone")
+
+	cache.Cleanup(6)
+	require.Nil(t, cache.GetByBlockHash([32]byte{2}))
 }

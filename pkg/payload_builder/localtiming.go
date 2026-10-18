@@ -119,13 +119,21 @@ func msDuration(ms float64) time.Duration {
 	return time.Duration(ms * float64(time.Millisecond))
 }
 
-// localResults collects a target's testing builds; the hand-over takes the
-// best one at the deadline.
+// localResults collects a target's testing builds: the hand-over takes the
+// best one, and every new best one after it can upgrade the published
+// payload (see followLocal).
 type localResults struct {
 	mu   sync.Mutex
 	best *localOutcome // highest block value of the successful builds
 	last *localOutcome // the latest build, for the reason when none succeeded
 	runs []LocalBuildRun
+
+	// improved signals a new best build (buffered, coalescing).
+	improved chan struct{}
+}
+
+func newLocalResults() *localResults {
+	return &localResults{improved: make(chan struct{}, 1)}
 }
 
 func (r *localResults) add(outcome localOutcome, run LocalBuildRun) {
@@ -142,12 +150,18 @@ func (r *localResults) add(outcome localOutcome, run LocalBuildRun) {
 	// The later build wins a tie: it saw the newer transactions.
 	if r.best == nil || blockValue(outcome.payload).Cmp(blockValue(r.best.payload)) >= 0 {
 		r.best = &outcome
+
+		select {
+		case r.improved <- struct{}{}:
+		default:
+		}
 	}
 }
 
-// result returns the outcome handed over: the best build, else the latest
-// failure or skip; ok is false when no build finished. Its info carries the
-// summary of every build so far.
+// result returns the outcome to hand over: the best build, else the latest
+// failure or skip; ok is false when no build finished. Its info is a copy
+// carrying the summary of every build so far (the original stays with the
+// payload, read concurrently).
 func (r *localResults) result() (localOutcome, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -161,43 +175,49 @@ func (r *localResults) result() (localOutcome, bool) {
 		return localOutcome{}, false
 	}
 
+	outcome := *chosen
+
 	if chosen.info != nil {
-		chosen.info.Builds = len(r.runs)
-		chosen.info.Runs = append([]LocalBuildRun(nil), r.runs...)
+		info := *chosen.info
+		info.Builds = len(r.runs)
+		info.Runs = append([]LocalBuildRun(nil), r.runs...)
+		outcome.info = &info
 	}
 
-	return *chosen, true
+	return outcome, true
 }
 
-// runLocalBuilds runs the target's testing builds.
+// runLocalBuilds runs the target's testing builds inside their window
+// [windowStart, windowEnd], independent of the engine build's.
 //
-// Without a rebuild interval it is one build, started at deadline -
-// ReadyMargin - the model's estimate so it finishes right before the
-// hand-over with the newest transactions.
+// Without a rebuild interval it is one build, started at windowEnd - the
+// model's estimate (not before windowStart) so it finishes at the window
+// end with the newest transactions.
 //
-// With one (pool sources only) the first build starts at once, and every
-// later one once the pool or the EL mempool got new transactions, at least
-// the interval after the previous build and only while a build started then
-// is still estimated to finish in time. No news, no rebuild: the block would
-// be the same. A skip ends the loop: it would skip again.
+// With one (pool sources only) the first build starts at windowStart, and
+// every later one once the pool or the EL mempool got new transactions, at
+// least the interval after the previous build and only while a build
+// started then is still estimated to finish by windowEnd. No news, no
+// rebuild: the block would be the same. A skip ends the loop: it would skip
+// again.
 func (b *PayloadBuilder) runLocalBuilds(
 	ctx context.Context,
 	attrs *beacon.PayloadAttributesEvent,
 	prelude *buildPrelude,
 	req *LocalBuildRequest,
-	deadline time.Time,
+	windowStart, windowEnd time.Time,
 	results *localResults,
 ) {
 	latestStart := func() time.Time {
-		return deadline.Add(-req.ReadyMargin - b.localTiming.estimate())
+		return windowEnd.Add(-b.localTiming.estimate())
 	}
 
 	rebuild := req.RebuildInterval > 0 && b.txPool != nil &&
 		(req.TxSource == config.TxSourceTxPool || req.TxSource == config.TxSourceTxPoolELFill)
 
 	start := latestStart()
-	if rebuild {
-		start = time.Now()
+	if rebuild || start.Before(windowStart) {
+		start = windowStart
 	}
 
 	if !sleepUntil(ctx, start) {
@@ -210,7 +230,7 @@ func (b *PayloadBuilder) runLocalBuilds(
 			version = b.txPool.ContentVersion()
 		}
 
-		outcome, summary := b.runLocalBuild(ctx, attrs, prelude, req, deadline, run)
+		outcome, summary := b.runLocalBuild(ctx, attrs, prelude, req, windowEnd, run)
 		results.add(outcome, summary)
 
 		if !rebuild || outcome.skipReason != "" || ctx.Err() != nil {
@@ -344,4 +364,72 @@ func (b *PayloadBuilder) observeLocalTiming(outcome localOutcome) {
 
 	call := info.BuiltAt.Sub(info.SelectedAt) / time.Duration(max(info.Attempts, 1))
 	b.localTiming.observe(info.SelectedAt.Sub(info.StartedAt), call, outcome.payload.ExecutionPayload.GasUsed)
+}
+
+// followLocal publishes the testing builds that finish after the hand-over:
+// whenever a new best build makes the payload source's pick (selectPayload)
+// a different payload than the one published last, the new pick goes out on
+// upgrades, so the next bid or getHeader uses it. The picks only improve: the
+// best testing build is the highest-valued one so far. upgrades closes when
+// the builds are done.
+func (b *PayloadBuilder) followLocal(
+	ctx context.Context,
+	handedOver BuildResult,
+	req *LocalBuildRequest,
+	results *localResults,
+	done <-chan struct{},
+	upgrades chan<- *BuildResult,
+) {
+	defer close(upgrades)
+
+	current := handedOver.Payload
+
+	publish := func() {
+		outcome, ok := results.result()
+		if !ok || outcome.payload == nil {
+			return
+		}
+
+		next := handedOver
+		next.Local, next.LocalInfo, next.LocalErr, next.LocalSkipReason = outcome.payload, outcome.info, nil, ""
+		next.Payload, next.Source, next.Fallback = nil, "", false
+
+		picked, err := b.selectPayload(&next, req)
+		if err != nil || picked.Payload == nil || (current != nil && picked.Payload.BlockHash == current.BlockHash) {
+			return
+		}
+
+		if picked.Source == SourceLocal {
+			picked.Payload.ReadyAt = time.Now()
+		}
+
+		// Not bound to ctx: it ends with the last build, whose pick must still
+		// go out. The consumer drops picks of a superseded build itself.
+		timer := time.NewTimer(lateBuildTimeout)
+		defer timer.Stop()
+
+		select {
+		case upgrades <- picked:
+			current = picked.Payload
+		case <-timer.C:
+		}
+	}
+
+	for {
+		select {
+		case <-results.improved:
+			publish()
+		case <-done:
+			// The last build may have finished right before the loop did.
+			select {
+			case <-results.improved:
+				publish()
+			default:
+			}
+
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
 }

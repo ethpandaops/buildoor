@@ -209,10 +209,6 @@ func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {
 		{KeyEarlyDepositTip, uint64(10001), false},
 		{KeyScheduleMode, "every_nth", true},
 		{KeyScheduleMode, "sometimes", false},
-		{KeyLocalBuildRebuildIntervalMs, uint64(1000), true},
-		{KeyLocalBuildRebuildIntervalMs, uint64(12001), false},
-		{KeyLocalBuildReadyMarginMs, uint64(2000), true},
-		{KeyLocalBuildReadyMarginMs, uint64(2001), false},
 	}
 
 	for _, tt := range tests {

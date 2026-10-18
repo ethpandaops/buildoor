@@ -907,6 +907,15 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 
 	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
 
+	// Testing builds still running in their window publish better payloads
+	// after this hand-over; followed once the hand-over itself is published,
+	// so an upgrade never lands before the payload it replaces.
+	if result != nil && result.Upgrades != nil {
+		defer func() {
+			go s.followUpgrades(slot, target, event, build, localReq, result.Upgrades)
+		}()
+	}
+
 	if localReq != nil || localSkip != "" {
 		s.emitLocalBuild(slot, target, result, localReq, localSkip, err)
 	}
@@ -989,6 +998,66 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 
 	s.emitPayloadReady(slot, payloadEvent)
 	s.completeBuild(build)
+}
+
+// followUpgrades publishes the testing builds' upgrades of a target's
+// payload: same classification, transform and supersede rules as the
+// hand-over. The newer payload replaces the old one for the next bid or
+// getHeader; the old one stays findable by block hash for the bids already
+// made on it.
+func (s *Service) followUpgrades(
+	slot phase0.Slot,
+	target *buildTarget,
+	event *beacon.PayloadAttributesEvent,
+	build *candidateBuild,
+	localReq *LocalBuildRequest,
+	upgrades <-chan *BuildResult,
+) {
+	for upgrade := range upgrades {
+		if s.buildAborted(build) || upgrade.Payload == nil {
+			continue
+		}
+
+		payload := upgrade.Payload
+		payload.BuildSeq = build.seq
+
+		if s.txPool != nil {
+			s.txPool.NoteBuiltBlock(common.Hash(payload.BlockHash), slot)
+		}
+
+		if event == target.attrs {
+			payload.Candidate = target.candidate
+		} else {
+			payload.Candidate = s.classifyCandidate(payload.Attributes)
+		}
+
+		if err := s.applyPayloadTransform(s.ctx, slot, payload); err != nil {
+			s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed on an upgraded payload")
+
+			continue
+		}
+
+		s.scheduledBuildMu.Lock()
+		if build.aborted {
+			s.scheduledBuildMu.Unlock()
+
+			continue
+		}
+
+		build.payload = payload
+		s.payloadCache.Store(payload)
+		s.scheduledBuildMu.Unlock()
+
+		s.log.WithFields(logrus.Fields{
+			"slot":        slot,
+			"source":      upgrade.Source,
+			"block_hash":  fmt.Sprintf("%x", payload.BlockHash[:8]),
+			"block_value": payload.BlockValue,
+		}).Info("Testing build upgraded the published payload")
+
+		s.emitPayloadReady(slot, payload)
+		s.emitLocalBuild(slot, target, upgrade, localReq, "", nil)
+	}
 }
 
 // completeBuild marks the build's ready event as dispatched. A supersede that

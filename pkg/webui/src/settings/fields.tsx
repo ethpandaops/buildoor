@@ -1170,41 +1170,59 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'local_build.start_time_ms': {
+    label: 'Testing window start',
+    short: 'Window start',
+    kind: 'number',
+    unit: 'ms',
+    hint: 'When the testing builds may start, relative to the slot start (negative = before it).',
+    help: (
+      <>
+        Opening of the testing build window in ms relative to the proposal slot&apos;s start
+        (<code>local_build.start_time_ms</code>), independent of the engine build&apos;s window.
+        Startup default: 20% of the slot before the slot start. The first testing build needs the
+        engine build&apos;s forkchoice update (the EL head pinned to the parent), so it never starts
+        before the engine build.
+      </>
+    ),
+  },
+  'local_build.end_time_ms': {
+    label: 'Testing window end',
+    short: 'Window end',
+    kind: 'number',
+    unit: 'ms',
+    hint: 'No testing build starts unless it is estimated to finish by then.',
+    validate: (value, draft) =>
+      Number(value) <= num(draft, 'local_build.start_time_ms')
+        ? 'The testing window must close after it opens.'
+        : null,
+    help: (
+      <>
+        Close of the testing build window in ms relative to the proposal slot&apos;s start
+        (<code>local_build.end_time_ms</code>). A testing build starts only when it is estimated to
+        finish by then, from the observed selection time and EL cost per gas. Startup default: 1/120
+        of the slot before the slot start. Consumers get the best payload when the engine build
+        finishes; a better testing build after that replaces it for the next bid or getHeader call,
+        so the window may end after the engine build.
+      </>
+    ),
+  },
   'local_build.rebuild_interval_ms': {
     label: 'Rebuild interval',
     kind: 'number',
     unit: 'ms',
     min: 0,
-    max: 12000,
     zeroLabel: 'one timed build',
-    hint: 'Minimum gap between testing builds; rebuilds happen only when new transactions arrived. 0 = one build, timed to the hand-over.',
+    hint: 'Minimum gap between testing builds; rebuilds happen only when new transactions arrived. 0 = one build, timed to the window end.',
     help: (
       <>
         testing_buildBlockV1 builds once from the transactions known when it is called. With 0
-        (<code>local_build.rebuild_interval_ms</code>) there is one testing build, timed to finish
-        just before the payload is due (the engine build&apos;s getPayload,
-        <code> payload_build_time</code> after its start), estimated from the observed selection time
-        and EL cost per gas. With an interval the first build runs at once and a rebuild follows
-        whenever buildoor&apos;s mempool or the EL mempool got new transactions that clear the base
-        fee, at least this many ms after the previous build and only while it can still finish in
-        time. The most valuable build is handed over; the slot graph draws each one. Each build costs
-        the EL a full block execution, which matters on an EL shared with validators.
-      </>
-    ),
-  },
-  'local_build.ready_margin_ms': {
-    label: 'Ready margin',
-    kind: 'number',
-    unit: 'ms',
-    min: 0,
-    max: 2000,
-    hint: "Safety margin between the final testing build's estimated end and the payload hand-over.",
-    help: (
-      <>
-        Kept free between the final testing build&apos;s estimated end and the hand-over
-        (<code>local_build.ready_margin_ms</code>), on top of the estimate&apos;s own spread. A build
-        that is still running at the hand-over is not used for that slot; a larger margin trades
-        fresher transactions for fewer misses.
+        (<code>local_build.rebuild_interval_ms</code>) there is one testing build, timed to finish at
+        the window end. With an interval the first build runs at the window start and a rebuild
+        follows whenever buildoor&apos;s mempool or the EL mempool got new transactions that clear
+        the base fee, at least this many ms after the previous build, until the window end. The most
+        valuable build is used; the slot graph draws each one. Each build costs the EL a full block
+        execution, which matters on an EL shared with validators.
       </>
     ),
   },

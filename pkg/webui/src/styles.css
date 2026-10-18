@@ -125,6 +125,39 @@
   border-right: 2px solid rgba(128, 128, 128, 0.3);
 }
 
+/* Payload build windows (engine and testing builds): bluish bands across the
+   whole graph, behind the build lines. They overlap, so the labels sit at the
+   top (engine) and bottom (testing). */
+.build-window-bg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.build-window-engine {
+  background: rgba(13, 110, 253, 0.07);
+  border-left: 1px solid rgba(13, 110, 253, 0.35);
+  border-right: 1px solid rgba(13, 110, 253, 0.35);
+}
+
+.build-window-testing {
+  background: rgba(13, 202, 240, 0.08);
+  border-left: 1px dashed rgba(13, 202, 240, 0.5);
+  border-right: 1px dashed rgba(13, 202, 240, 0.5);
+}
+
+.build-window-label {
+  left: 4px;
+  color: rgba(13, 110, 253, 0.85);
+}
+
+.build-window-testing .build-window-label {
+  top: auto;
+  bottom: 2px;
+  color: rgba(13, 202, 240, 0.95);
+}
+
 /* Reveal marker - positioned dynamically */
 .reveal-marker {
   position: absolute;

@@ -135,8 +135,9 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
-	rootCmd.PersistentFlags().Uint64("local-build-rebuild-interval", defaults.LocalBuild.RebuildIntervalMs, "Minimum gap in ms between testing builds: build at once, then rebuild whenever new transactions arrived while a build still fits before the payload is due; the most valuable is used (0 = one build, timed to finish just before the payload is due)")
-	rootCmd.PersistentFlags().Uint64("local-build-ready-margin", defaults.LocalBuild.ReadyMarginMs, "Safety margin in ms between the final testing build's estimated end and the payload hand-over")
+	rootCmd.PersistentFlags().Uint64("local-build-rebuild-interval", defaults.LocalBuild.RebuildIntervalMs, "Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end (0 = one build, timed to finish at the window end)")
+	rootCmd.PersistentFlags().Int64("local-build-start-time", defaults.LocalBuild.StartTimeMs, "Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it)")
+	rootCmd.PersistentFlags().Int64("local-build-end-time", defaults.LocalBuild.EndTimeMs, "End of the testing build window in ms relative to the slot start: no testing build starts unless it is estimated to finish by then (0 = auto: 1/120 of the slot before it)")
 	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
 	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
 	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
@@ -345,7 +346,8 @@ func initConfig(root *cobra.Command) error {
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
 			RebuildIntervalMs:       v.GetUint64("local-build-rebuild-interval"),
-			ReadyMarginMs:           v.GetUint64("local-build-ready-margin"),
+			StartTimeMs:             v.GetInt64("local-build-start-time"),
+			EndTimeMs:               v.GetInt64("local-build-end-time"),
 		},
 		TxPool: config.TxPoolConfig{
 			Enabled:            v.GetBool("txpool-enabled"),

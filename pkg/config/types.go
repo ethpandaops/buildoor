@@ -636,22 +636,23 @@ type LocalBuildConfig struct {
 	// Exact sources (explicit, queued) never retry: a refusal fails them.
 	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
 
-	// The testing_buildBlockV1 call builds once from the transactions known
-	// when it starts. With RebuildIntervalMs 0 it is one build, timed to
-	// finish ReadyMarginMs before the payload is handed over (the engine
-	// build's getPayload, payload_build_time after its forkchoiceUpdated),
-	// estimated from the observed selection time and call cost per gas.
-	//
-	// RebuildIntervalMs > 0 (pool tx sources) builds at once instead and
-	// rebuilds whenever the pool or the EL mempool got new transactions, at
-	// least this many ms after the previous build and only while a build is
-	// still estimated to finish ReadyMarginMs before the hand-over. The most
-	// valuable build is handed over. Each build costs the EL a full block
-	// execution.
+	// StartTimeMs / EndTimeMs bound the testing builds, in ms relative to the
+	// proposal slot start (negative = before it), independent of the engine
+	// build's window. 0 = auto (ApplySlotDefaults). The testing call builds
+	// once from the transactions known when it starts, so no build starts
+	// unless it is estimated to finish by EndTimeMs (observed selection time
+	// plus call cost per gas).
+	StartTimeMs int64 `yaml:"start_time_ms" json:"start_time_ms"`
+	EndTimeMs   int64 `yaml:"end_time_ms" json:"end_time_ms"`
+
+	// RebuildIntervalMs 0 = one testing build, timed to finish at EndTimeMs.
+	// > 0 (pool tx sources) = build at StartTimeMs and rebuild whenever the
+	// pool or the EL mempool got new transactions, at least this many ms
+	// after the previous build, until EndTimeMs. Consumers take the best
+	// payload at the hand-over (the engine build's getPayload); a later,
+	// better testing build replaces it for the next bid or getHeader. Each
+	// build costs the EL a full block execution.
 	RebuildIntervalMs uint64 `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
-	// ReadyMarginMs is the safety margin between the final build's estimated
-	// end and the hand-over, on top of the estimate's own spread.
-	ReadyMarginMs uint64 `yaml:"ready_margin_ms" json:"ready_margin_ms"`
 }
 
 // NormalizedPayloadSource applies the config's own payload source with the

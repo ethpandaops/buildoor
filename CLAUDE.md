@@ -280,18 +280,30 @@ npm run clean
      retries without the fill's blob txs first (`fill_blobs_dropped`), then
      without the fill, an unreadable EL mempool builds from the pool alone)
      **Testing build timing** (`payload_builder/localtiming.go`): the call is
-     not incremental, so the FINAL build starts at hand-over −
-     `ready_margin_ms` − estimate, where the hand-over is the engine build's
-     getPayload (`payload_build_time` after its forkchoiceUpdated) and the
-     estimate an exponentially weighted fit of selection ms + call ms over
-     gas (+2σ of its residuals; seeds until 3 builds; the selection that
-     starts the mirror is left out). With `rebuild_interval_ms` > 0 (pool
-     sources) the first build runs at once and a rebuild follows whenever
+     not incremental, and the testing builds have their OWN window
+     (`local_build.start_time_ms`/`end_time_ms`, slot-relative; the engine
+     build keeps `build_start_time` + `payload_build_time`). A build starts
+     only when estimated to finish by the window end (exponentially weighted
+     fit of selection ms + call ms over gas, +2σ of its residuals; seeds
+     until 3 builds; the selection that starts the mirror is left out).
+     `rebuild_interval_ms` 0 = one build timed to the window end; > 0 (pool
+     sources) = build at the window start, rebuild whenever
      `Pool.ContentVersion` moved (pool changes + mirror arrivals clearing the
-     latest base fee), at least the interval after the previous build and
-     only while it is estimated to finish in time; the highest-value build
-     (later wins a tie) is handed over (`LocalBuildInfo.run`/`runs`, drawn
-     per build in the slot graph, live via `local_build_progress.run`). The hand-over waits for the builds until the
+     latest base fee), at least the interval apart. The testing loop has its
+     own lifetime (`startLocalLoop`: window end + 5 s, cancelled like a build
+     by a newer tuple build, a newer slot or `AbortBuild`). The HAND-OVER
+     stays the engine build's getPayload: consumers get the payload source's
+     pick of what exists then; afterwards `followLocal` sends each better
+     pick on `BuildResult.Upgrades` and the service's `followUpgrades`
+     publishes it (classification, transform, supersede rules, cache store,
+     `PayloadReady` + `LocalBuildEvent` again). The cache replaces the
+     tuple's payload for slot/tuple lookups (next p2p bid tick, next
+     getHeader) but keeps the replaced one for `GetByBlockHash` (unblind,
+     reveal, inclusion of bids already made). Runs: `LocalBuildInfo.run`/
+     `runs`, drawn per build in the slot graph (live via
+     `local_build_progress.run`), the engine and testing windows as bluish
+     bands; upgrades keep the build line's hand-over time
+     (`payloadUpgrades`). The hand-over waits for the builds until the
      deadline + 50 ms, never longer; a build still running is not cut off
      (the EL finishes it anyway) so its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
@@ -805,10 +817,11 @@ Key config sections:
   `--slot-artifact-retention-epochs` (default 100; raw payloads dominate disk),
   `--slot-artifact-capture-enabled` (default true)
 - **Local build / tx pool**: `--local-build-enabled`,
-  `--local-build-rebuild-interval` (min gap between change-triggered testing
-  rebuilds, best value handed over, 0 = one build timed to the hand-over),
-  `--local-build-ready-margin` (ms kept free before the hand-over; the final
-  build is timed by a learned model, see "Testing build timing" in 0d),
+  `--local-build-start-time` / `--local-build-end-time` (the testing build
+  window, signed ms relative to the slot start, 0 = auto as a share of the
+  slot), `--local-build-rebuild-interval` (min gap between change-triggered
+  testing rebuilds, 0 = one build timed to the window end; see "Testing
+  build timing" in 0d),
   `--local-build-payload-source`
   (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
   el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,

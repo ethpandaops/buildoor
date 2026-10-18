@@ -107,11 +107,12 @@ type LocalBuildRequest struct {
 	MaxStrikes  uint64
 	// BaseFeeCeilingGwei halves the pool fill above this next base fee (0 = off).
 	BaseFeeCeilingGwei uint64
-	// RebuildInterval adds earlier builds every interval before the final
-	// one (0 = final build only); ReadyMargin is the final build's safety
-	// margin before the hand-over (see runLocalBuilds).
+	// StartMs / EndMs are the testing build window relative to the slot
+	// start; RebuildInterval the minimum gap of change-triggered rebuilds (0 =
+	// one build timed to the window end; see runLocalBuilds).
+	StartMs         int64
+	EndMs           int64
 	RebuildInterval time.Duration
-	ReadyMargin     time.Duration
 }
 
 // RunEL reports whether the engine-API build runs alongside the local build.
@@ -252,6 +253,11 @@ type BuildResult struct {
 	LocalErr        error
 	LocalSkipReason string
 	LocalInfo       *LocalBuildInfo
+
+	// Upgrades delivers the picks of testing builds that finish after the
+	// hand-over and beat the payload published last (nil without testing
+	// builds still running). It closes when the testing window ends.
+	Upgrades <-chan *BuildResult
 }
 
 // LocalBuildEvent reports a slot's local build outcome (one per build target
@@ -559,7 +565,8 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		MaxAttempts:        settings.MaxAttempts,
 		MaxStrikes:         settings.MaxStrikes,
 		RebuildInterval:    time.Duration(settings.RebuildIntervalMs) * time.Millisecond,
-		ReadyMargin:        time.Duration(settings.ReadyMarginMs) * time.Millisecond,
+		StartMs:            settings.StartTimeMs,
+		EndMs:              settings.EndTimeMs,
 		BaseFeeCeilingGwei: settings.BaseFeeCeilingGwei,
 	}
 

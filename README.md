@@ -187,8 +187,9 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--local-build-el-payload` | `true` | Keep the engine-API build when the payload source is `local` |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
-| `--local-build-rebuild-interval` | `0` | Minimum gap in ms between testing builds: build at once, then rebuild whenever new transactions arrived while a build still fits before the payload is due; the most valuable is used (0 = one build, timed to finish just before the payload is due) |
-| `--local-build-ready-margin` | `100` | Safety margin in ms between the final testing build's estimated end and the payload hand-over |
+| `--local-build-start-time` | `0` | Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it) |
+| `--local-build-end-time` | `0` | End of the testing build window: no testing build starts unless it is estimated to finish by then (0 = auto: 1/120 of the slot before the slot start) |
+| `--local-build-rebuild-interval` | `0` | Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end; consumers get the best payload at the engine build's hand-over and a better later one for their next request (0 = one build, timed to finish at the window end) |
 | `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
 | `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
 | `--txpool-auth` | `open` | Who may call `/rpc`: `open` (anonymous callers too, rate-limited) or `api_key` (an API key, `--txpool-auth-token` or a WebUI login is required) |

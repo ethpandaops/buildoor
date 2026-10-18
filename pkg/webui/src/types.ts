@@ -82,6 +82,9 @@ export interface LocalBuildConfig {
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
   max_attempts: number;
+  start_time_ms?: number; // testing build window, ms relative to the slot start
+  end_time_ms?: number;
+  rebuild_interval_ms?: number;
 }
 
 // Owned transaction pool settings.
@@ -775,6 +778,10 @@ export interface SlotState {
   payloadBuildError?: string;
   payloadReady?: boolean;
   payloadCreatedAt?: number;
+  // Testing builds that replaced the handed-over payload after it (count and
+  // the latest replacement's time); payloadCreatedAt stays the hand-over.
+  payloadUpgrades?: number;
+  payloadUpgradedAt?: number;
   payloadBlockHash?: string;
   payloadBlockValue?: number;
   // Candidate of the primary payload (the most canonical ready build).
