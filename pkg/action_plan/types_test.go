@@ -151,7 +151,7 @@ func TestSlotPlanValidate(t *testing.T) {
 		},
 		{
 			name:    "overrides on disabled bid",
-			plan:    &SlotPlan{Bid: &BidPlan{Mode: ModeDisabled, BidSubsidy: uint64Ptr(1)}},
+			plan:    &SlotPlan{Bid: &BidPlan{Mode: ModeDisabled, BidSubsidy: int64Ptr(1)}},
 			wantErr: "custom mode",
 		},
 		{
@@ -281,12 +281,12 @@ func TestApplyUpdateToPlanSetPaths(t *testing.T) {
 			existing: &SlotPlan{Bid: &BidPlan{
 				Mode:         ModeCustom,
 				BidMinAmount: uint64Ptr(5000),
-				BidSubsidy:   uint64Ptr(77),
+				BidSubsidy:   int64Ptr(77),
 			}},
 			set: map[string]json.RawMessage{"bid.bid_min_amount": json.RawMessage("9000")},
 			check: func(t *testing.T, result *SlotPlan) {
 				require.Equal(t, uint64(9000), *result.Bid.BidMinAmount)
-				require.Equal(t, uint64(77), *result.Bid.BidSubsidy, "sibling override must survive")
+				require.Equal(t, int64(77), *result.Bid.BidSubsidy, "sibling override must survive")
 			},
 		},
 		{
@@ -294,12 +294,12 @@ func TestApplyUpdateToPlanSetPaths(t *testing.T) {
 			existing: &SlotPlan{Bid: &BidPlan{
 				Mode:         ModeCustom,
 				BidMinAmount: uint64Ptr(5000),
-				BidSubsidy:   uint64Ptr(77),
+				BidSubsidy:   int64Ptr(77),
 			}},
 			set: map[string]json.RawMessage{"bid.bid_min_amount": json.RawMessage("null")},
 			check: func(t *testing.T, result *SlotPlan) {
 				require.Nil(t, result.Bid.BidMinAmount)
-				require.Equal(t, uint64(77), *result.Bid.BidSubsidy)
+				require.Equal(t, int64(77), *result.Bid.BidSubsidy)
 			},
 		},
 		{
@@ -313,7 +313,7 @@ func TestApplyUpdateToPlanSetPaths(t *testing.T) {
 		},
 		{
 			name:     "category path with object replaces the category",
-			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeCustom, BidSubsidy: uint64Ptr(1)}},
+			existing: &SlotPlan{Bid: &BidPlan{Mode: ModeCustom, BidSubsidy: int64Ptr(1)}},
 			set:      map[string]json.RawMessage{"bid": json.RawMessage(`{"mode":"disabled"}`)},
 			check: func(t *testing.T, result *SlotPlan) {
 				require.Equal(t, ModeDisabled, result.Bid.Mode)
@@ -377,7 +377,7 @@ func TestApplyUpdateToPlanSetAfterCategoryPatch(t *testing.T) {
 		Set: map[string]json.RawMessage{"bid.bid_subsidy": json.RawMessage("20")},
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(20), *result.Bid.BidSubsidy, "set paths apply after category patches")
+	require.Equal(t, int64(20), *result.Bid.BidSubsidy, "set paths apply after category patches")
 }
 
 func TestApplyUpdateToPlanBuildCategory(t *testing.T) {

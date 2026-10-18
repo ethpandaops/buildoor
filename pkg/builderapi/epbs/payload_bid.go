@@ -234,6 +234,17 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	var parentRoot phase0.Root
 	copy(parentRoot[:], parentRootBytes)
 
+	// Timing game: hold the response until the slot's response gate, then
+	// serve the best payload built by then (testing-build upgrades included).
+	if !frozenSettings.AwaitRespondGate(r.Context(), h.chainSvc.SlotToTime(slot)) {
+		log.WithField("respond_at_ms", frozenSettings.RespondAtMs).Info(
+			"getExecutionPayloadBid: request cancelled while held for the response gate")
+		h.recordBid(slot, fork.String(), "", nil, 0, 0, bidStatusCancelled,
+			"request context cancelled while held for the response gate")
+
+		return
+	}
+
 	event, matchErr := h.matchPayloadForParent(r.Context(), slot, parentRoot, parentHash,
 		frozenSettings.ServeCandidates)
 	if matchErr != nil {
@@ -276,10 +287,11 @@ func (h *Handler) HandleGetExecutionPayloadBid(w http.ResponseWriter, r *http.Re
 	//
 	// Value resolution per the frozen settings: an absolute total value (when
 	// set) replaces blockValue+subsidy entirely — before the execution-payment
-	// split; otherwise the (possibly per-slot overridden) subsidy is added to
-	// the block value.
+	// split; otherwise the (possibly per-slot overridden) subsidy is applied to
+	// the block value (negative = the builder's margin, kept from the block
+	// value the payload's own coinbase collects).
 	blockValueGwei := new(big.Int).Div(event.BlockValue, big.NewInt(1e9)).Uint64()
-	valueAfterSubsidy := phase0.Gwei(blockValueGwei + frozenSettings.SubsidyGwei)
+	valueAfterSubsidy := phase0.Gwei(payload_bidder.ApplySubsidyGwei(blockValueGwei, frozenSettings.SubsidyGwei))
 
 	if frozenSettings.TotalValueGwei != nil {
 		valueAfterSubsidy = phase0.Gwei(*frozenSettings.TotalValueGwei)

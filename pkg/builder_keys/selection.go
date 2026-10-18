@@ -13,8 +13,10 @@ const (
 	// StrategyRoundRobin rotates through the ready keys by slot, spreading bids
 	// and their payments evenly across the fleet.
 	StrategyRoundRobin = "round_robin"
-	// StrategySingle always uses the lowest-index ready key. One key bids per
-	// slot, which is how a single-key deployment behaves.
+	// StrategySingle always uses the lowest-index ready key. Keys that already
+	// bid in the slot are not ready, so a re-bid within the slot moves to the
+	// next index; with keys-per-slot 1 a single key bids per slot, which is
+	// how a single-key deployment behaves.
 	StrategySingle = "single"
 	// StrategyRandom shuffles the ready keys per slot (deterministically, so a
 	// slot's assignment is reproducible).

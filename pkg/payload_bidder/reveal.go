@@ -2,6 +2,7 @@ package payload_bidder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -80,7 +81,11 @@ func BuildSignedEnvelope(
 		Signature: sig,
 	}
 
-	if p.BlobsBundle != nil && len(p.BlobsBundle.Blobs) > 0 {
+	if p.BlobsBundle.Released() {
+		return nil, nil, nil, errors.New("the payload's blobs were already released (too old to reveal)")
+	}
+
+	if len(p.BlobsBundle.Blobs()) > 0 {
 		blobs = p.BlobsBundle.BlobsAsBytes()
 		proofs = p.BlobsBundle.ProofsAsBytes()
 	}

@@ -69,6 +69,12 @@ func (h *APIHandler) audit(r *http.Request, token *jwt.Token, action, target str
 	}
 }
 
+// Audit records an authenticated action that is not an API mutation (e.g.
+// a profile download) in the audit log; see audit.
+func (h *APIHandler) Audit(r *http.Request, token *jwt.Token, action, target string, detail any, result string) {
+	h.audit(r, token, action, target, detail, result)
+}
+
 // mustJSON marshals a value for use as a settings override; the inputs are
 // always simple scalars so marshalling cannot fail in practice.
 func mustJSON(v any) json.RawMessage {

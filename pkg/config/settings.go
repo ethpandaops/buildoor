@@ -19,6 +19,16 @@ const (
 	SourceUI      = "ui"
 )
 
+// retiredKeys maps a settings key that no longer exists to the key that took
+// over its meaning. A UI override persisted under the retired key is adopted by
+// its successor on startup, so merging two settings never silently discards the
+// value an operator configured.
+var retiredKeys = map[string]string{
+	"topup_amount": KeyDepositAmount,
+	// The engine build switch used to apply to payload source local only.
+	"local_build.build_el_payload": KeyBuildEngineEnabled,
+}
+
 // keyState holds the in-memory 3-way state for one setting key.
 type keyState struct {
 	hasCLI   bool
@@ -27,6 +37,15 @@ type keyState struct {
 	hasUI    bool
 	uiValue  any
 	uiSeq    int64
+	uiAt     int64 // unix ms of the last UI write (0 = unknown)
+}
+
+// SettingSource names the layer a setting's effective value comes from when
+// it is not the hardcoded default.
+type SettingSource struct {
+	Source string `json:"source"` // SourceCLI | SourceUI
+	// UpdatedAt is when the UI override was written (unix ms; UI layer only).
+	UpdatedAt int64 `json:"updated_at,omitempty"`
 }
 
 // Service is the central authority for buildoor's mutable runtime configuration.
@@ -50,6 +69,17 @@ type Service struct {
 	seq         int64
 	keyState    map[string]*keyState
 	subscribers []func()
+	guards      []SettingGuard
+}
+
+// SettingGuard vetoes setting writes against runtime state the config layer
+// cannot know — e.g. enabling the local build while the EL does not expose the
+// testing namespace. Guards run after the static validation of every write;
+// the first error rejects the whole update.
+type SettingGuard interface {
+	// GuardSetting returns an error when the decoded value must not be
+	// applied to the key.
+	GuardSetting(key string, value any) error
 }
 
 // New constructs the settings service.
@@ -110,10 +140,54 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 				ks.hasUI = true
 				ks.uiValue = v
 				ks.uiSeq = row.UISeq
+
+				// The row carries one timestamp for its last write; it dates
+				// the UI override when that was the newer layer.
+				if row.UISeq >= row.CLISeq {
+					ks.uiAt = row.UpdatedAt
+				}
 			} else {
 				s.log.WithError(derr).WithField("key", f.Key).Warn("ignoring undecodable ui override")
 			}
 		}
+	}
+
+	// Adopt UI overrides persisted under retired keys. An override already
+	// stored under the successor key is newer by construction and wins.
+	adopted := make(map[string]struct{}, len(retiredKeys))
+
+	for retired, successor := range retiredKeys {
+		row, ok := rowByKey[retired]
+		if !ok || row.UISeq == 0 || !row.UIValue.Valid {
+			continue
+		}
+
+		if row.UISeq > s.seq {
+			s.seq = row.UISeq
+		}
+
+		ks := s.keyState[successor]
+		if ks.hasUI {
+			continue
+		}
+
+		v, derr := s.byKey[successor].Decode(json.RawMessage(row.UIValue.String))
+		if derr != nil {
+			s.log.WithError(derr).WithField("key", retired).Warn("ignoring undecodable retired ui override")
+
+			continue
+		}
+
+		ks.hasUI = true
+		ks.uiValue = v
+		ks.uiSeq = row.UISeq
+		adopted[successor] = struct{}{}
+
+		s.log.WithFields(logrus.Fields{
+			"retired_key": retired,
+			"key":         successor,
+			"value":       v,
+		}).Info("Adopted ui override of a retired setting")
 	}
 
 	// Pass 2: reconcile the CLI layer against what the operator supplied now.
@@ -133,7 +207,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		}
 
 		isSupplied := supplied[f.Key]
-		changed := false
+		_, changed := adopted[f.Key]
 
 		switch {
 		case isSupplied:
@@ -171,6 +245,48 @@ func (s *Service) Load() *Config {
 	return s.effective
 }
 
+// Sources reports, for every setting whose effective value does not come
+// from the hardcoded default, the layer that supplied it — the same recency
+// resolution recompute applies.
+func (s *Service) Sources() map[string]SettingSource {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make(map[string]SettingSource, len(s.keyState))
+
+	for key, ks := range s.keyState {
+		var winSeq int64
+
+		source := ""
+
+		if ks.hasCLI && ks.cliSeq > winSeq {
+			source = SourceCLI
+			winSeq = ks.cliSeq
+		}
+
+		if ks.hasUI && ks.uiSeq > winSeq {
+			source = SourceUI
+		}
+
+		switch source {
+		case SourceCLI:
+			out[key] = SettingSource{Source: SourceCLI}
+		case SourceUI:
+			out[key] = SettingSource{Source: SourceUI, UpdatedAt: ks.uiAt}
+		}
+	}
+
+	return out
+}
+
+// AddGuard registers a runtime guard consulted on every setting write.
+func (s *Service) AddGuard(g SettingGuard) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.guards = append(s.guards, g)
+}
+
 // OnChange registers a callback invoked (outside the service lock) after every
 // applied change. Used to trigger module-side resets and re-reads.
 func (s *Service) OnChange(fn func()) {
@@ -206,9 +322,16 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 			return fmt.Errorf("decode %q: %w", key, err)
 		}
 
-		if err := validateValue(key, v); err != nil {
+		if err := ValidateSetting(key, v); err != nil {
 			s.mu.Unlock()
 			return err
+		}
+
+		for _, g := range s.guards {
+			if err := g.GuardSetting(key, v); err != nil {
+				s.mu.Unlock()
+				return err
+			}
 		}
 
 		decoded[key] = v
@@ -220,6 +343,7 @@ func (s *Service) SetMany(updates map[string]json.RawMessage, actor string) erro
 		ks.hasUI = true
 		ks.uiValue = v
 		ks.uiSeq = s.nextSeq()
+		ks.uiAt = time.Now().UnixMilli()
 		s.persist(f, ks, actor)
 
 		s.log.WithFields(logrus.Fields{
@@ -300,25 +424,4 @@ func (s *Service) persist(f Field, ks *keyState, actor string) {
 	if err := s.store.PutSetting(row); err != nil {
 		s.log.WithError(err).WithField("key", f.Key).Warn("failed to persist setting")
 	}
-}
-
-// validateValue performs light per-field validation of incoming UI values.
-func validateValue(key string, v any) error {
-	if key == KeyScheduleMode {
-		mode, _ := v.(ScheduleMode)
-		switch mode {
-		case ScheduleModeAll, ScheduleModeEveryN, ScheduleModeNextN:
-		default:
-			return fmt.Errorf("invalid schedule mode %q", mode)
-		}
-	}
-
-	if key == KeySlotResultRetentionEpochs || key == KeySlotArtifactRetentionEpochs {
-		epochs, _ := v.(uint64)
-		if epochs == 0 {
-			return fmt.Errorf("%s must be greater than 0", key)
-		}
-	}
-
-	return nil
 }

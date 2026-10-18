@@ -2,8 +2,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -17,7 +20,15 @@ var (
 	cfg     *config.Config
 	logger  *logrus.Logger
 	v       *viper.Viper
+
+	// cfgFileErr is the error of reading the config file; it surfaces from
+	// initConfig because the config is loaded before the logger exists.
+	cfgFileErr error
 )
+
+// envPrefix namespaces the environment variables that supply flag values:
+// --deposit-amount is read from BUILDOOR_DEPOSIT_AMOUNT.
+const envPrefix = "BUILDOOR"
 
 var rootCmd = &cobra.Command{
 	Use:   "buildoor",
@@ -27,7 +38,7 @@ submit bids, and reveal payloads with configurable behavior.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		initLogger()
 
-		if err := initConfig(); err != nil {
+		if err := initConfig(cmd.Root()); err != nil {
 			return err
 		}
 
@@ -51,6 +62,7 @@ func init() {
 	rootCmd.PersistentFlags().String("el-engine-api", "", "Execution layer engine API URL (JWT-authenticated)")
 	rootCmd.PersistentFlags().String("el-jwt-secret", "", "Path to JWT secret file for engine API authentication")
 	rootCmd.PersistentFlags().String("el-rpc", "", "Execution layer JSON-RPC URL (for lifecycle transactions)")
+	rootCmd.PersistentFlags().String("el-ws", "", "Execution layer websocket JSON-RPC URL (optional): the testing build's EL mempool mirror follows newPendingTransactions live instead of polling a filter over --el-rpc")
 	rootCmd.PersistentFlags().String("wallet-privkey", "", "Wallet ECDSA private key (hex)")
 	rootCmd.PersistentFlags().Int("api-port", 0, "HTTP API port (0 = disabled)")
 	rootCmd.PersistentFlags().String("auth-provider-url", "", "Optional authenticatoor URL (e.g. https://auth.<devnet>.example.io); when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty the API is unauthenticated.")
@@ -59,8 +71,9 @@ func init() {
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
 	rootCmd.PersistentFlags().Bool("epbs-enabled", false, "Enable ePBS bidding/revealing at startup")
 	rootCmd.PersistentFlags().Bool("builder-api-enabled", defaults.BuilderAPIEnabled, "Enable traditional Builder API at startup (served on --api-port)")
-	rootCmd.PersistentFlags().Uint64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the bid value in both Fulu (getHeader) and Gloas (ExecutionPayment) Builder API bids")
+	rootCmd.PersistentFlags().Int64("builder-api-subsidy", defaults.BuilderAPI.BlockValueSubsidyGwei, "Gwei added to the block value of served Builder API bids; negative = the builder's margin (Gloas only)")
 	rootCmd.PersistentFlags().Uint64("builder-api-value-override", defaults.BuilderAPI.ValueOverrideGwei, "Absolute total value in gwei served in Builder API bids, replacing block value + subsidy (0 = disabled)")
+	rootCmd.PersistentFlags().Int64("builder-api-respond-at", defaults.BuilderAPI.RespondAtMs, "Hold Builder API bid responses until this many ms after the slot start, then serve the best payload built by then (0 = respond immediately; keep it within the proposer's getHeader timeout)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment", defaults.BuilderAPI.ExecutionPaymentGwei, "Absolute portion in gwei of a served Gloas bid's total value claimed as execution_payment; the claim is unbacked and capped by the proposer's advertised max_execution_payment (0 = disabled, wins over the percent)")
 	rootCmd.PersistentFlags().Uint64("builder-api-execution-payment-percent", defaults.BuilderAPI.ExecutionPaymentPercent, "Percentage (0-100) of a served Gloas bid's total value claimed as execution_payment (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("builder-api-ignore-preference-limit", defaults.BuilderAPI.IgnorePreferenceLimit, "Serve the configured execution_payment portion even beyond the proposer's advertised max_execution_payment (deliberately spec-violating, for client-side rejection testing)")
@@ -73,10 +86,10 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("builder-keys-discovery-gap", defaults.BuilderKeys.DiscoveryGap, "Number of consecutive unused indices that ends the startup scan for previously deposited keys")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-deposit", defaults.BuilderKeys.AutoDeposit, "Deposit new builder keys to reach the target count")
 	rootCmd.PersistentFlags().Bool("builder-keys-auto-exit", defaults.BuilderKeys.AutoExit, "Exit surplus builder keys when the managed count exceeds the target (irreversible)")
-	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Builder deposit amount in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Balance threshold for auto top-up in Gwei")
-	rootCmd.PersistentFlags().Uint64("topup-amount", defaults.TopupAmount, "Amount to top-up in Gwei")
+	rootCmd.PersistentFlags().Uint64("deposit-amount", defaults.DepositAmount, "Amount in Gwei of every builder key deposit: early onboarding, registration and each top-up")
+	rootCmd.PersistentFlags().Uint64("topup-threshold", defaults.TopupThreshold, "Effective balance in Gwei below which a builder key is topped up by --deposit-amount")
 	rootCmd.PersistentFlags().Uint64("deposit-max-fee", defaults.DepositMaxFeeGwei, "Max builder deposit contract queue fee in Gwei; deposits/top-ups are delayed above this (0 = no limit)")
+	rootCmd.PersistentFlags().Uint64("early-deposit-tip", defaults.EarlyDepositTipGwei, "Priority fee floor in Gwei of the early onboarding deposit transactions (0 = EL suggestion)")
 	rootCmd.PersistentFlags().String("extra-data", defaults.ExtraData, "Prefix injected into the built payload's extra-data field (padded with the EL's original extra data, truncated to 32 bytes)")
 	rootCmd.PersistentFlags().String("log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().String("state-db", "", "Optional path to a SQLite state-db. When set, UI setting overrides, won blocks, validator registrations, proposer preferences and an audit log are persisted across restarts. When empty, runtime changes are in-memory only.")
@@ -96,7 +109,7 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("epbs-bid-min", defaults.EPBS.BidMinAmount, "Minimum bid amount in gwei")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-increase", defaults.EPBS.BidIncrease, "Bid increase per subsequent bid in gwei")
 	rootCmd.PersistentFlags().Int64("epbs-bid-interval", defaults.EPBS.BidInterval, "Interval between bids in ms (0 = single bid)")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold")
+	rootCmd.PersistentFlags().Int64("epbs-bid-subsidy", defaults.EPBS.BidSubsidy, "Gwei added to every bid so it clears the proposer's local-EL threshold; negative = the builder's margin")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-value-override", defaults.EPBS.BidValueOverride, "Absolute p2p bid base value in gwei, replacing max(blockValue, bid-min) + subsidy (0 = disabled); allows underbidding the block value for testing")
 	rootCmd.PersistentFlags().Uint64("epbs-vote-threshold", defaults.EPBS.HeadVoteThresholdPct, "Head-vote participation threshold in percent; crossing it fires an immediate threshold_met update (0 = disabled)")
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
@@ -111,10 +124,40 @@ func init() {
 	rootCmd.PersistentFlags().String("build-candidate-parent-empty", defaults.Build.CandidateParentEmpty, "Build the payload-miss candidate on the head block but its execution parent: auto, always or never")
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-full", defaults.Build.CandidateGrandparentFull, "Build the reorg candidate on the head block's parent: auto, always or never")
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-empty", defaults.Build.CandidateGrandparentEmpty, "Build the reorg + payload-miss candidate: auto, always or never")
+	rootCmd.PersistentFlags().Bool("engine-build-enabled", defaults.Build.EngineEnabled, "Run the engine-API build (forkchoiceUpdated → getPayload); disabled, the testing build alone feeds the bids and slots without one are skipped")
 	rootCmd.PersistentFlags().Bool("build-parallel", defaults.Build.Parallel, "Build selected candidates concurrently against the EL instead of sequentially (canonical first, speculative after)")
 	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
 	rootCmd.PersistentFlags().Bool("build-enforce-bid-gas-limit", defaults.Build.EnforceBidGasLimit, "Adjust the built payload's gas limit to the exact bid-gossip-legal value when the EL ignored the proposer's target")
+
+	// Local block building extension (testing_buildBlockV1) and the owned transaction pool
+	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
+	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, local_or_el, or higher_value (whichever is worth more)")
+	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, txpool_el_fill (pool first, then the EL mempool's pending txs), empty or el_mempool")
+	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
+	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
+	rootCmd.PersistentFlags().Uint64("local-build-rebuild-interval", defaults.LocalBuild.RebuildIntervalMs, "Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end (0 = one build, timed to finish at the window end)")
+	rootCmd.PersistentFlags().Int64("local-build-start-time", defaults.LocalBuild.StartTimeMs, "Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it)")
+	rootCmd.PersistentFlags().Int64("local-build-end-time", defaults.LocalBuild.EndTimeMs, "End of the testing build window in ms relative to the slot start: no testing build starts unless it is estimated to finish by then (0 = auto: 1/120 of the slot before it)")
+	rootCmd.PersistentFlags().String("local-build-blob-encoding", defaults.LocalBuild.BlobEncoding, "Blob transaction encoding handed to testing_buildBlockV1: auto (from the EL identity), network or canonical")
+	rootCmd.PersistentFlags().Bool("txpool-enabled", defaults.TxPool.Enabled, "Enable the owned transaction pool and its JSON-RPC ingress at /rpc on --api-port (requires --el-rpc)")
+	rootCmd.PersistentFlags().String("txpool-auth", defaults.TxPool.Auth, "Who may call the /rpc ingress: open (anonymous callers too, rate-limited) or api_key (an API key, --txpool-auth-token or a WebUI login is required)")
+	rootCmd.PersistentFlags().String("txpool-auth-token", defaults.TxPool.AuthToken, "Static API key for the /rpc ingress, accepted next to the keys managed in the WebUI")
+	rootCmd.PersistentFlags().String("txpool-store", defaults.TxPool.StoreDir, "Directory persisting the transaction pool across restarts (its own pebble database, never the state-db; empty = memory only)")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-anon-rate", defaults.TxPool.RPCAnonRate, "Anonymous /rpc calls per second (0 = unlimited), per client IP or shared (--txpool-rpc-anon-scope)")
+	rootCmd.PersistentFlags().String("txpool-rpc-anon-scope", defaults.TxPool.RPCAnonScope, "Anonymous /rpc rate-limit scope: per_ip or shared")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-key-rate", defaults.TxPool.RPCKeyRate, "Default /rpc calls per second per API key (0 = unlimited); keys may override it")
+	rootCmd.PersistentFlags().Uint64("txpool-rpc-proxy-hops", defaults.TxPool.RPCProxyHops, "Trusted reverse proxies in front of /rpc: the client IP is the X-Forwarded-For entry that many hops from the right (0 = connection address)")
+	rootCmd.PersistentFlags().String("txpool-rpc-upstreams", defaults.TxPool.RPCUpstreams, "RPC endpoints /rpc reads through: comma-separated <local|url>@<priority>, lowest priority first, equal priorities round robin")
+	rootCmd.PersistentFlags().String("txpool-ordering", defaults.TxPool.Ordering, "Block selection order of pool transactions: fifo, tip, random or round_robin")
+	rootCmd.PersistentFlags().Uint64("txpool-block-max-txs", defaults.TxPool.MaxTxsPerBlock, "Max pool transactions per local block (0 = unlimited)")
+	rootCmd.PersistentFlags().Uint64("txpool-gas-fill-pct", defaults.TxPool.GasFillPct, "Share of the block gas limit the pool selection fills (1-100)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs", defaults.TxPool.MaxPoolTxs, "Max queued transactions in the pool")
+	rootCmd.PersistentFlags().Uint64("txpool-max-txs-per-sender", defaults.TxPool.MaxTxsPerSender, "Max queued transactions per sender")
+	rootCmd.PersistentFlags().Uint64("txpool-tx-ttl-slots", defaults.TxPool.TxTTLSlots, "Expire queued transactions older than this many slots; an expired transaction is dropped together with its sender's higher nonces, which could not execute behind the gap (0 = never)")
+	rootCmd.PersistentFlags().Uint64("txpool-max-strikes", defaults.TxPool.MaxStrikes, "Drop a queued transaction after this many attributed build failures (0 = never)")
+	rootCmd.PersistentFlags().Uint64("txpool-base-fee-ceiling-gwei", defaults.TxPool.BaseFeeCeilingGwei, "Above this next base fee (gwei) pool selections fill only to the EIP-1559 gas target, so a long max-fill run does not price its own transactions out (0 = off; exact lists are never reduced)")
+	rootCmd.PersistentFlags().Bool("txpool-forward-to-el", defaults.TxPool.ForwardToEL, "Also submit admitted transactions to the EL mempool (shadow mode for A/B comparisons)")
 
 	// Payload reveal (shared by the p2p bidder and Builder API flows)
 	rootCmd.PersistentFlags().Bool("reveal-enabled", defaults.Reveal.Enabled, "Globally enable payload reveals (per-slot action plans can still force/suppress)")
@@ -176,18 +219,62 @@ func loadConfigFile() {
 		v.AddConfigPath("$HOME/.buildoor")
 	}
 
+	v.SetEnvPrefix(envPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	v.AutomaticEnv()
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			if logger != nil {
-				logger.WithError(err).Warn("Error reading config file")
-			}
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			cfgFileErr = err
 		}
 	}
 }
 
-func initConfig() error {
+// checkConfigFileKeys rejects config-file keys that are not flag names. Values
+// resolve by flag name, so any other key — a typo, or a nested/underscored
+// spelling — would be read without complaint and never applied.
+func checkConfigFileKeys(root *cobra.Command) error {
+	used := v.ConfigFileUsed()
+	if used == "" {
+		return nil
+	}
+
+	file := viper.New()
+	file.SetConfigFile(used)
+
+	if err := file.ReadInConfig(); err != nil {
+		return fmt.Errorf("failed to read config file %s: %w", used, err)
+	}
+
+	unknown := make([]string, 0, 4)
+
+	for _, key := range file.AllKeys() {
+		if root.PersistentFlags().Lookup(key) == nil {
+			unknown = append(unknown, key)
+		}
+	}
+
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	sort.Strings(unknown)
+
+	return fmt.Errorf(
+		"config file %s: unknown keys %s — keys are the flag names without the leading dashes "+
+			"(e.g. deposit-amount)", used, strings.Join(unknown, ", "))
+}
+
+func initConfig(root *cobra.Command) error {
+	if cfgFileErr != nil {
+		return fmt.Errorf("failed to read config file: %w", cfgFileErr)
+	}
+
+	if err := checkConfigFileKeys(root); err != nil {
+		return err
+	}
+
 	cfg = &config.Config{
 		BuilderPrivkey:    v.GetString("builder-privkey"),
 		BuilderMnemonic:   v.GetString("builder-mnemonic"),
@@ -196,6 +283,7 @@ func initConfig() error {
 		ELEngineAPI:       v.GetString("el-engine-api"),
 		ELJWTSecret:       v.GetString("el-jwt-secret"),
 		ELRPC:             v.GetString("el-rpc"),
+		ELWS:              v.GetString("el-ws"),
 		WalletPrivkey:     v.GetString("wallet-privkey"),
 		APIPort:           v.GetInt("api-port"),
 		AuthProviderURL:   v.GetString("auth-provider-url"),
@@ -207,8 +295,9 @@ func initConfig() error {
 		BuilderAPI: config.BuilderAPIConfig{
 			BuilderURL:              v.GetString("builder-api-url"),
 			RequireRequestAuth:      v.GetBool("builder-api-require-auth"),
-			BlockValueSubsidyGwei:   v.GetUint64("builder-api-subsidy"),
+			BlockValueSubsidyGwei:   v.GetInt64("builder-api-subsidy"),
 			ValueOverrideGwei:       v.GetUint64("builder-api-value-override"),
+			RespondAtMs:             v.GetInt64("builder-api-respond-at"),
 			ExecutionPaymentGwei:    v.GetUint64("builder-api-execution-payment"),
 			ExecutionPaymentPercent: v.GetUint64("builder-api-execution-payment-percent"),
 			IgnorePreferenceLimit:   v.GetBool("builder-api-ignore-preference-limit"),
@@ -223,11 +312,11 @@ func initConfig() error {
 			AutoDeposit:  v.GetBool("builder-keys-auto-deposit"),
 			AutoExit:     v.GetBool("builder-keys-auto-exit"),
 		},
-		DepositMaxFeeGwei: v.GetUint64("deposit-max-fee"),
-		DepositAmount:     v.GetUint64("deposit-amount"),
-		TopupThreshold:    v.GetUint64("topup-threshold"),
-		TopupAmount:       v.GetUint64("topup-amount"),
-		ExtraData:         v.GetString("extra-data"),
+		DepositMaxFeeGwei:   v.GetUint64("deposit-max-fee"),
+		EarlyDepositTipGwei: v.GetUint64("early-deposit-tip"),
+		DepositAmount:       v.GetUint64("deposit-amount"),
+		TopupThreshold:      v.GetUint64("topup-threshold"),
+		ExtraData:           v.GetString("extra-data"),
 		Schedule: config.ScheduleConfig{
 			Mode:      config.ScheduleMode(v.GetString("schedule-mode")),
 			EveryNth:  v.GetUint64("schedule-every-nth"),
@@ -241,7 +330,7 @@ func initConfig() error {
 			BidMinAmount:         v.GetUint64("epbs-bid-min"),
 			BidIncrease:          v.GetUint64("epbs-bid-increase"),
 			BidInterval:          v.GetInt64("epbs-bid-interval"),
-			BidSubsidy:           v.GetUint64("epbs-bid-subsidy"),
+			BidSubsidy:           v.GetInt64("epbs-bid-subsidy"),
 			BidValueOverride:     v.GetUint64("epbs-bid-value-override"),
 			HeadVoteThresholdPct: v.GetUint64("epbs-vote-threshold"),
 			BidCandidate:         v.GetString("epbs-bid-candidate"),
@@ -249,6 +338,37 @@ func initConfig() error {
 			KeyStrategy:          v.GetString("epbs-key-strategy"),
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
+		},
+		LocalBuild: config.LocalBuildConfig{
+			Enabled:                 v.GetBool("local-build-enabled"),
+			PayloadSource:           v.GetString("local-build-payload-source"),
+			TxSource:                v.GetString("local-build-tx-source"),
+			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
+			BlobEncoding:            v.GetString("local-build-blob-encoding"),
+			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
+			RebuildIntervalMs:       v.GetUint64("local-build-rebuild-interval"),
+			StartTimeMs:             v.GetInt64("local-build-start-time"),
+			EndTimeMs:               v.GetInt64("local-build-end-time"),
+		},
+		TxPool: config.TxPoolConfig{
+			Enabled:            v.GetBool("txpool-enabled"),
+			Auth:               v.GetString("txpool-auth"),
+			AuthToken:          v.GetString("txpool-auth-token"),
+			StoreDir:           v.GetString("txpool-store"),
+			RPCAnonRate:        v.GetUint64("txpool-rpc-anon-rate"),
+			RPCAnonScope:       v.GetString("txpool-rpc-anon-scope"),
+			RPCKeyRate:         v.GetUint64("txpool-rpc-key-rate"),
+			RPCProxyHops:       v.GetUint64("txpool-rpc-proxy-hops"),
+			RPCUpstreams:       v.GetString("txpool-rpc-upstreams"),
+			Ordering:           v.GetString("txpool-ordering"),
+			MaxTxsPerBlock:     v.GetUint64("txpool-block-max-txs"),
+			GasFillPct:         v.GetUint64("txpool-gas-fill-pct"),
+			MaxPoolTxs:         v.GetUint64("txpool-max-txs"),
+			MaxTxsPerSender:    v.GetUint64("txpool-max-txs-per-sender"),
+			TxTTLSlots:         v.GetUint64("txpool-tx-ttl-slots"),
+			MaxStrikes:         v.GetUint64("txpool-max-strikes"),
+			BaseFeeCeilingGwei: v.GetUint64("txpool-base-fee-ceiling-gwei"),
+			ForwardToEL:        v.GetBool("txpool-forward-to-el"),
 		},
 		Reveal: config.RevealConfig{
 			Enabled:             v.GetBool("reveal-enabled"),
@@ -265,6 +385,7 @@ func initConfig() error {
 			CandidateParentEmpty:      v.GetString("build-candidate-parent-empty"),
 			CandidateGrandparentFull:  v.GetString("build-candidate-grandparent-full"),
 			CandidateGrandparentEmpty: v.GetString("build-candidate-grandparent-empty"),
+			EngineEnabled:             v.GetBool("engine-build-enabled"),
 			Parallel:                  v.GetBool("build-parallel"),
 			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
 			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),
@@ -285,25 +406,28 @@ func initConfig() error {
 		return fmt.Errorf("provide only one of --builder-privkey or --builder-mnemonic, not both")
 	}
 
-	for flag, mode := range map[string]string{
-		"--build-candidate-parent-full":       cfg.Build.CandidateParentFull,
-		"--build-candidate-parent-empty":      cfg.Build.CandidateParentEmpty,
-		"--build-candidate-grandparent-full":  cfg.Build.CandidateGrandparentFull,
-		"--build-candidate-grandparent-empty": cfg.Build.CandidateGrandparentEmpty,
-	} {
-		if mode != config.NormalizedCandidateMode(mode, "") {
-			return fmt.Errorf("invalid %s %q: must be auto, always or never", flag, mode)
+	// The retired /rpc auth modes auth_token (WebUI login) and static (shared
+	// secret) both required authentication; api_key accepts either.
+	cfg.TxPool.Auth = config.NormalizeRetiredTxPoolAuth(cfg.TxPool.Auth)
+
+	// Operator-supplied values pass the same validation as UI overrides, so a
+	// typo fails the start instead of being replaced by a module's fallback.
+	for _, field := range config.Fields() {
+		if err := config.ValidateSetting(field.Key, field.Get(cfg)); err != nil {
+			return fmt.Errorf("invalid --%s: %w", field.FlagKey, err)
 		}
 	}
 
-	if cfg.Reveal.GateMode != cfg.Reveal.NormalizedGateMode() {
-		return fmt.Errorf("invalid --reveal-gate-mode %q: must be time, vote, vote_or_time or vote_and_time",
-			cfg.Reveal.GateMode)
+	// Startup-only options and cross-field requirements of the local build and
+	// the transaction pool (not mutable settings, so not covered above).
+	if cfg.LocalBuild.BlobEncoding != config.NormalizedBlobEncoding(cfg.LocalBuild.BlobEncoding) {
+		return fmt.Errorf("invalid --local-build-blob-encoding %q: must be auto, network or canonical",
+			cfg.LocalBuild.BlobEncoding)
 	}
 
-	if cfg.Reveal.BroadcastValidation != cfg.Reveal.NormalizedBroadcastValidation() {
-		return fmt.Errorf("invalid --reveal-broadcast-validation %q: must be gossip, consensus or consensus_and_equivocation",
-			cfg.Reveal.BroadcastValidation)
+	if (cfg.LocalBuild.Enabled || cfg.TxPool.Enabled) && cfg.ELRPC == "" {
+		return fmt.Errorf("--el-rpc is required when --local-build-enabled or --txpool-enabled is set " +
+			"(testing_buildBlockV1 and the pool's state lookups live on the EL JSON-RPC)")
 	}
 
 	return nil

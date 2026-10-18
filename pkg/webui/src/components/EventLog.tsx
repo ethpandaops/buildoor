@@ -2,6 +2,7 @@ import React, { useState, useRef, useMemo, useEffect, useLayoutEffect } from 're
 import type { LogEvent } from '../types';
 import { getEventTypeClass, getEventCategory, formatEventTime, EVENT_CATEGORIES } from '../utils';
 import { CopyableHash } from './CopyableHash';
+import { InfoHint } from './InfoHint';
 
 const SCROLLBACK_KEY = 'buildoor.eventlog.scrollback';
 const DEFAULT_SCROLLBACK = 1000;
@@ -256,9 +257,11 @@ interface EventLogProps {
   // Definite pixel height for the panel so the inner list scrolls rather than
   // expanding the page. Computed by the parent from the available layout height.
   height?: number;
+  // Turns the title into a collapse button (the dashboard folds the log).
+  onCollapse?: () => void;
 }
 
-export const EventLog: React.FC<EventLogProps> = ({ events, onClear, height }) => {
+export const EventLog: React.FC<EventLogProps> = ({ events, onClear, height, onCollapse }) => {
   const [query, setQuery] = useState('');
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
   const [showFilter, setShowFilter] = useState(false);
@@ -347,7 +350,14 @@ export const EventLog: React.FC<EventLogProps> = ({ events, onClear, height }) =
       style={height ? { height: `${height}px`, flex: '0 0 auto' } : undefined}
     >
       <div className="card-header d-flex justify-content-between align-items-center">
-        <h5 className="mb-0">Recent Events</h5>
+        {onCollapse ? (
+          <button type="button" className="event-log-collapse" aria-expanded="true" onClick={onCollapse}>
+            <i className="fas fa-chevron-down" aria-hidden="true"></i>
+            Events
+          </button>
+        ) : (
+          <h5 className="mb-0">Recent Events</h5>
+        )}
         <div className="d-flex gap-1">
           <div className="event-filter-anchor" ref={filterRef}>
             <button
@@ -384,7 +394,13 @@ export const EventLog: React.FC<EventLogProps> = ({ events, onClear, height }) =
                 </div>
 
                 <div className="mb-2">
-                  <label className="form-label small text-secondary mb-1">Scrollback limit</label>
+                  <label className="form-label small text-secondary mb-1">
+                    Scrollback limit
+                    <InfoHint>
+                      Maximum number of matching log rows shown (10–{MAX_SCROLLBACK}). Remembered
+                      in this browser; the text and type filters reset on reload.
+                    </InfoHint>
+                  </label>
                   <input
                     type="number"
                     className="form-control form-control-sm"

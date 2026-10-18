@@ -1,7 +1,13 @@
 // Package config handles configuration loading and validation for buildoor.
 package config
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+)
 
 // ValidatorRangesConfig configures how to load validator index → client name mappings.
 // If both are set, URL takes precedence.
@@ -33,6 +39,7 @@ type Config struct {
 	ELEngineAPI       string            `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
 	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
 	ELRPC             string            `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
+	ELWS              string            `yaml:"el_ws" json:"el_ws,omitempty"`                   // Optional: EL websocket, follows the EL mempool live
 	WalletPrivkey     string            `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
 	APIPort           int               `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
 	AuthProviderURL   string            `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
@@ -42,17 +49,32 @@ type Config struct {
 	EPBSEnabled       bool              `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
 	BuilderAPIEnabled bool              `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
 	BuilderAPI        BuilderAPIConfig  `yaml:"builder_api" json:"builder_api"`                 // Builder API configuration
-	DepositAmount     uint64            `yaml:"deposit_amount" json:"deposit_amount"`           // Gwei, default 10 ETH
-	TopupThreshold    uint64            `yaml:"topup_threshold" json:"topup_threshold"`         // Gwei
-	TopupAmount       uint64            `yaml:"topup_amount" json:"topup_amount"`               // Gwei
-	DepositMaxFeeGwei uint64            `yaml:"deposit_max_fee" json:"deposit_max_fee"`
-	Schedule          ScheduleConfig    `yaml:"schedule" json:"schedule"`
-	EPBS              EPBSConfig        `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
-	Reveal            RevealConfig      `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
-	Build             BuildConfig       `yaml:"build" json:"build"`   // Payload build candidate policy
-	Debug             bool              `yaml:"debug" json:"debug"`
-	Pprof             bool              `yaml:"pprof" json:"pprof"`
-	PayloadBuildTime  uint64            `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
+	// DepositAmount is THE lifecycle amount in gwei: every deposit buildoor
+	// makes for a builder key — early onboarding, the builder deposit that
+	// registers it, and each top-up — sends exactly this much.
+	DepositAmount uint64 `yaml:"deposit_amount" json:"deposit_amount"`
+	// TopupThreshold is the effective balance in gwei below which a registered
+	// key is topped up (by DepositAmount).
+	TopupThreshold uint64 `yaml:"topup_threshold" json:"topup_threshold"`
+	// DepositMaxFeeGwei delays builder deposits and top-ups while the deposit
+	// contract's queue fee is above it (0 = no limit).
+	DepositMaxFeeGwei uint64 `yaml:"deposit_max_fee" json:"deposit_max_fee"`
+	// EarlyDepositTipGwei is the priority fee floor in gwei of the early
+	// onboarding deposit transactions (0 = the EL's suggestion).
+	EarlyDepositTipGwei uint64         `yaml:"early_deposit_tip" json:"early_deposit_tip"`
+	Schedule            ScheduleConfig `yaml:"schedule" json:"schedule"`
+	EPBS                EPBSConfig     `yaml:"epbs" json:"epbs"`     // Time-scheduled ePBS config
+	Reveal              RevealConfig   `yaml:"reveal" json:"reveal"` // Payload reveal config (shared by p2p bidder + Builder API)
+	Build               BuildConfig    `yaml:"build" json:"build"`   // Payload build candidate policy
+	// LocalBuild is the opt-in local block building extension: an additional
+	// payload per slot built through the EL's testing_buildBlockV1 from a
+	// chosen transaction source, and the selector deciding which payload
+	// (EL or local) feeds bids and reveals.
+	LocalBuild LocalBuildConfig `yaml:"local_build" json:"local_build"`
+	// TxPool is the opt-in owned transaction pool fed through the JSON-RPC
+	// ingress; the local build's txpool source selects from it.
+	TxPool           TxPoolConfig `yaml:"txpool" json:"txpool"`
+	PayloadBuildTime uint64       `yaml:"payload_build_time" json:"payload_build_time"` // The time given to the EL to build the payload after triggering the payload build via fcu (in ms)
 	// ExtraData is the prefix injected into the built payload's extra-data field
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
@@ -153,15 +175,27 @@ type BuilderAPIConfig struct {
 	// is always fully validated.
 	RequireRequestAuth bool `yaml:"require_request_auth" json:"require_request_auth"`
 
-	// BlockValueSubsidyGwei is added to the bid value so the proposer sees a higher bid:
-	// to the getHeader bid value in the Fulu Builder API, and to the block value that
-	// forms bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls.
-	BlockValueSubsidyGwei uint64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
+	// BlockValueSubsidyGwei is added to the block value of every served bid: the
+	// getHeader bid value before Gloas, the total that forms
+	// bid.ExecutionPayment/Value in Gloas getExecutionPayloadBid calls. Negative
+	// = the builder's margin, kept from the block value its own coinbase
+	// collects (Gloas only; a pre-Gloas bid never drops below the block value,
+	// which is the proposer's whole payment there).
+	BlockValueSubsidyGwei int64 `yaml:"block_value_subsidy_gwei" json:"block_value_subsidy_gwei"`
 
 	// ValueOverrideGwei, when non-zero, replaces the served bid's total value
 	// (block value + subsidy) with this absolute amount in gwei — an alternative
 	// to the subsidy for testing. Per-slot action plans override this per slot.
 	ValueOverrideGwei uint64 `yaml:"value_override_gwei" json:"value_override_gwei"`
+
+	// RespondAtMs holds bid responses until this many ms after the proposal
+	// slot start (negative = before it), then serves the best payload built
+	// by then: a timing game, the builder keeps collecting transactions while
+	// the proposer waits. 0 = respond immediately. A request arriving after
+	// the gate is answered at once. The proposer's client stops waiting after
+	// its own getHeader timeout, so a gate too far past its request loses the
+	// slot.
+	RespondAtMs int64 `yaml:"respond_at_ms" json:"respond_at_ms"`
 
 	// ExecutionPaymentGwei, when non-zero, claims this absolute portion of a
 	// served Gloas bid's total value as execution_payment (the trusted
@@ -257,8 +291,10 @@ type EPBSConfig struct {
 	BidInterval int64 `yaml:"bid_interval" json:"bid_interval"`
 
 	// BidSubsidy is added to every bid in gwei so the bid clears the proposer's
-	// local-EL threshold (the BN otherwise self-builds when its local EL value is higher).
-	BidSubsidy uint64 `yaml:"bid_subsidy" json:"bid_subsidy"`
+	// local-EL threshold (the BN otherwise self-builds when its local EL value is
+	// higher). Negative = the builder's margin, kept from the block value its
+	// own coinbase collects; BidMinAmount stays the floor.
+	BidSubsidy int64 `yaml:"bid_subsidy" json:"bid_subsidy"`
 
 	// BidValueOverride, when non-zero, replaces the bid base value
 	// (max(blockValue, BidMinAmount) + BidSubsidy) with this absolute amount in
@@ -347,6 +383,14 @@ type BuildConfig struct {
 	// CandidateGrandparentEmpty: reorg combined with a withheld grandparent
 	// payload. Gloas only.
 	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
+
+	// EngineEnabled runs the engine-API build (forkchoiceUpdated with
+	// attributes → getPayload; default true). Disabled, the EL builds no
+	// payload of its own: the testing build alone feeds the bids, whatever
+	// the payload source (only the head-pinning forkchoiceUpdated the
+	// testing call needs remains), and a target without a testing build is
+	// skipped.
+	EngineEnabled bool `yaml:"engine_enabled" json:"engine_enabled"`
 
 	// Parallel runs the selected candidate builds concurrently against the
 	// EL, each with its own payload ID (default). Disable it to serialize
@@ -472,6 +516,398 @@ func (c *RevealConfig) NormalizedBroadcastValidation() string {
 	default:
 		return BroadcastValidationGossip
 	}
+}
+
+// Payload sources: which built payload feeds the slot's bids and reveals when
+// the local build extension is enabled.
+const (
+	// PayloadSourceEL uses the engine-API payload (the EL's own mempool build);
+	// the local payload is built as an inspection-only shadow.
+	PayloadSourceEL = "el"
+	// PayloadSourceLocal uses the local payload; a failed or skipped local
+	// build leaves the slot without a payload.
+	PayloadSourceLocal = "local"
+	// PayloadSourceLocalOrEL uses the local payload when it succeeded and
+	// falls back to the engine payload otherwise.
+	PayloadSourceLocalOrEL = "local_or_el"
+	// PayloadSourceHigherValue builds both and uses the payload with the
+	// higher EL-reported block value (the engine payload on a tie, the one
+	// that exists when the other build failed).
+	PayloadSourceHigherValue = "higher_value"
+)
+
+// NormalizedPayloadSource returns the payload source, falling back to the
+// given default for unknown values (UI overrides are free-form strings).
+func NormalizedPayloadSource(source, fallback string) string {
+	switch source {
+	case PayloadSourceEL, PayloadSourceLocal, PayloadSourceLocalOrEL, PayloadSourceHigherValue:
+		return source
+	default:
+		return fallback
+	}
+}
+
+// Transaction sources for the local build: where the explicit transaction
+// list handed to testing_buildBlockV1 comes from.
+const (
+	// TxSourceTxPool selects from the owned transaction pool.
+	TxSourceTxPool = "txpool"
+	// TxSourceEmpty builds an empty block (transactions: []).
+	TxSourceEmpty = "empty"
+	// TxSourceELMempool lets the EL fill the block from its own mempool
+	// through the testing path (transactions: null).
+	TxSourceELMempool = "el_mempool"
+	// TxSourceTxPoolELFill selects from the owned pool first, then fills the
+	// remaining gas with the EL mempool's pending transactions (read through
+	// txpool_content, checked against the parent state like pool
+	// transactions; blob transactions are left out, their sidecars are not
+	// exposed).
+	TxSourceTxPoolELFill = "txpool_el_fill"
+	// TxSourceExplicit uses the exact transaction list of the slot's action
+	// plan; only reachable through a plan, never as a global default.
+	TxSourceExplicit = "explicit"
+	// TxSourceQueued uses an ordered list of transaction hashes that must be
+	// queued in the pool, exactly and in that order; only reachable through a
+	// plan. Any deviation fails the build, nothing is trimmed.
+	TxSourceQueued = "queued"
+)
+
+// NormalizedTxSource returns the transaction source, falling back to the given
+// default for unknown values. The explicit source is accepted so plan values
+// normalize, but it is meaningless as a global setting.
+func NormalizedTxSource(source, fallback string) string {
+	switch source {
+	case TxSourceTxPool, TxSourceTxPoolELFill, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
+		return source
+	default:
+		return fallback
+	}
+}
+
+// Blob transaction encodings handed to testing_buildBlockV1.
+const (
+	// BlobEncodingAuto picks the encoding from the EL client identity.
+	BlobEncodingAuto = "auto"
+	// BlobEncodingNetwork carries the sidecar (blobs, commitments, proofs)
+	// with each blob transaction — required by geth, besu and nethermind to
+	// produce the blobs bundle.
+	BlobEncodingNetwork = "network"
+	// BlobEncodingCanonical strips the sidecar — the only form reth and
+	// ethrex decode (their blobs bundle stays empty).
+	BlobEncodingCanonical = "canonical"
+)
+
+// NormalizedBlobEncoding returns the blob encoding, falling back to auto for
+// unknown values.
+func NormalizedBlobEncoding(encoding string) string {
+	switch encoding {
+	case BlobEncodingAuto, BlobEncodingNetwork, BlobEncodingCanonical:
+		return encoding
+	default:
+		return BlobEncodingAuto
+	}
+}
+
+// LocalBuildConfig configures the local block building extension. It is an
+// addition to the unchanged engine-API build, gated at runtime on the EL
+// actually exposing the testing namespace.
+type LocalBuildConfig struct {
+	// Enabled builds an additional local payload per slot through
+	// testing_buildBlockV1. Refused (and ineffective) while the EL does not
+	// expose the testing namespace.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// PayloadSource decides which payload feeds bids and reveals: el
+	// (default; the local payload is an inspection-only shadow), local,
+	// local_or_el (local when it succeeded, else the engine payload), or
+	// higher_value (whichever of the two is worth more).
+	PayloadSource string `yaml:"payload_source" json:"payload_source"`
+
+	// TxSource is where the local build's transaction list comes from:
+	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
+	// may also supply an explicit list.
+	TxSource string `yaml:"tx_source" json:"tx_source"`
+
+	// AllowBlobsWithoutBundle includes blob transactions in local builds on
+	// ELs whose testing endpoint returns an empty blobs bundle (reth, ethrex):
+	// the payload then commits to blobs buildoor cannot reveal — a deliberate
+	// "unavailable blobs" scenario. Default false skips those transactions.
+	AllowBlobsWithoutBundle bool `yaml:"allow_blobs_without_bundle" json:"allow_blobs_without_bundle"`
+
+	// BlobEncoding is the blob transaction encoding handed to the EL: auto
+	// (default; from the EL client identity), network or canonical.
+	// Startup-only.
+	BlobEncoding string `yaml:"blob_encoding" json:"blob_encoding"`
+
+	// MaxAttempts bounds the testing_buildBlockV1 calls per build for the
+	// txpool source: when the EL refuses the list, the refusal is attributed
+	// to the offending sender or position, those transactions are dropped
+	// from the attempt (and striked in the pool) and the build retries.
+	// Exact sources (explicit, queued) never retry: a refusal fails them.
+	MaxAttempts uint64 `yaml:"max_attempts" json:"max_attempts"`
+
+	// StartTimeMs / EndTimeMs bound the testing builds, in ms relative to the
+	// proposal slot start (negative = before it), independent of the engine
+	// build's window. 0 = auto (ApplySlotDefaults). The testing call builds
+	// once from the transactions known when it starts, so no build starts
+	// unless it is estimated to finish by EndTimeMs (observed selection time
+	// plus call cost per gas).
+	StartTimeMs int64 `yaml:"start_time_ms" json:"start_time_ms"`
+	EndTimeMs   int64 `yaml:"end_time_ms" json:"end_time_ms"`
+
+	// RebuildIntervalMs 0 = one testing build, timed to finish at EndTimeMs.
+	// > 0 (pool tx sources) = build at StartTimeMs and rebuild whenever the
+	// pool or the EL mempool got new transactions, at least this many ms
+	// after the previous build, until EndTimeMs. Consumers take the best
+	// payload at the hand-over (the engine build's getPayload); a later,
+	// better testing build replaces it for the next bid or getHeader. Each
+	// build costs the EL a full block execution.
+	RebuildIntervalMs uint64 `yaml:"rebuild_interval_ms" json:"rebuild_interval_ms"`
+}
+
+// NormalizedPayloadSource applies the config's own payload source with the
+// el fallback.
+func (c *LocalBuildConfig) NormalizedPayloadSource() string {
+	return NormalizedPayloadSource(c.PayloadSource, PayloadSourceEL)
+}
+
+// NormalizedTxSource applies the config's own transaction source with the
+// txpool fallback; the explicit source is not a valid global value and maps
+// to txpool as well.
+func (c *LocalBuildConfig) NormalizedTxSource() string {
+	source := NormalizedTxSource(c.TxSource, TxSourceTxPool)
+	if source == TxSourceExplicit || source == TxSourceQueued {
+		return TxSourceTxPool
+	}
+
+	return source
+}
+
+// Transaction orderings for the local pool's block selection.
+const (
+	// TxOrderingFIFO orders by arrival (per-sender nonce order preserved) —
+	// what a test scenario expects.
+	TxOrderingFIFO = "fifo"
+	// TxOrderingTip orders by effective priority fee, highest first — what a
+	// real builder does.
+	TxOrderingTip = "tip"
+	// TxOrderingRandom shuffles senders with a per-slot seed, for ordering
+	// and gossip tests.
+	TxOrderingRandom = "random"
+	// TxOrderingRoundRobin takes one transaction per sender per round, in
+	// sender arrival order, so every sender progresses evenly.
+	TxOrderingRoundRobin = "round_robin"
+)
+
+// NormalizedTxOrdering returns the ordering, falling back to the given
+// default for unknown values.
+func NormalizedTxOrdering(ordering, fallback string) string {
+	switch ordering {
+	case TxOrderingFIFO, TxOrderingTip, TxOrderingRandom, TxOrderingRoundRobin:
+		return ordering
+	default:
+		return fallback
+	}
+}
+
+// TxPoolConfig configures the owned transaction pool and its JSON-RPC ingress.
+type TxPoolConfig struct {
+	// Enabled admits transactions through the ingress and offers the pool to
+	// the local build. Runtime-toggleable; disabling keeps the queued
+	// transactions but stops admission and selection. Requires --el-rpc.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Auth decides who may call the /rpc ingress: open (anonymous callers
+	// too, rate-limited by RPCAnonRate) or api_key (an API key, the static
+	// AuthToken or a WebUI login is required). Authenticated callers are
+	// always accepted.
+	Auth string `yaml:"auth" json:"auth"`
+
+	// AuthToken is a static API key configured at startup, accepted next to
+	// the keys managed in the WebUI (rate limit RPCKeyRate). Startup-only;
+	// never serialized.
+	AuthToken string `yaml:"auth_token" json:"-"`
+
+	// StoreDir is where the queued transactions persist across restarts (a
+	// pebble database of its own; empty = memory only). Startup-only: pool
+	// transactions never go into the state-db.
+	StoreDir string `yaml:"store_dir" json:"store_dir,omitempty"`
+
+	// RPCAnonRate limits anonymous /rpc calls per second (0 = unlimited), per
+	// client IP or shared by all anonymous callers (RPCAnonScope).
+	RPCAnonRate uint64 `yaml:"rpc_anon_rate" json:"rpc_anon_rate"`
+
+	// RPCAnonScope is per_ip (each client IP its own limit and stats row) or
+	// shared (one limit and one stats row for every anonymous caller).
+	RPCAnonScope string `yaml:"rpc_anon_scope" json:"rpc_anon_scope"`
+
+	// RPCKeyRate is the default per-key limit of /rpc calls per second
+	// (0 = unlimited); a key may override it.
+	RPCKeyRate uint64 `yaml:"rpc_key_rate" json:"rpc_key_rate"`
+
+	// RPCProxyHops is the number of trusted reverse proxies in front of the
+	// ingress: the client IP is the X-Forwarded-For entry that many hops from
+	// the right (0 = the connection's address, headers ignored).
+	RPCProxyHops uint64 `yaml:"rpc_proxy_hops" json:"rpc_proxy_hops"`
+
+	// RPCUpstreams is the pool of RPC endpoints the ingress reads through:
+	// comma-separated "<target>@<priority>" entries, target "local" (the EL
+	// behind --el-rpc) or an http(s)/ws(s) URL. The lowest priority is tried
+	// first; endpoints of equal priority take turns (round robin), and a
+	// transport failure moves on to the next endpoint. JSON-RPC errors are
+	// answers, not failures.
+	RPCUpstreams string `yaml:"rpc_upstreams" json:"rpc_upstreams"`
+
+	// Ordering is the block selection order: fifo (default), tip or random.
+	Ordering string `yaml:"ordering" json:"ordering"`
+
+	// MaxTxsPerBlock caps how many pool transactions one local block takes
+	// (0 = unlimited).
+	MaxTxsPerBlock uint64 `yaml:"max_txs_per_block" json:"max_txs_per_block"`
+
+	// GasFillPct is the share of the block gas limit the selection fills
+	// (1-100, default 100).
+	GasFillPct uint64 `yaml:"gas_fill_pct" json:"gas_fill_pct"`
+
+	// MaxPoolTxs caps the total number of pooled transactions.
+	MaxPoolTxs uint64 `yaml:"max_pool_txs" json:"max_pool_txs"`
+
+	// MaxTxsPerSender caps the queued transactions of one sender.
+	MaxTxsPerSender uint64 `yaml:"max_txs_per_sender" json:"max_txs_per_sender"`
+
+	// TxTTLSlots expires queued transactions older than this many slots
+	// (0 = never). Pool transactions only land when buildoor wins a slot, so
+	// an expired transaction marks a stalled sender chain; it is dropped
+	// TOGETHER with the sender's higher nonces, which could never execute
+	// behind the gap it would leave, while fresh lower nonces stay. A
+	// generator tracking nonces locally (spamoor) recovers through the
+	// pool-aware "pending" nonce, which restarts at the chain nonce.
+	TxTTLSlots uint64 `yaml:"tx_ttl_slots" json:"tx_ttl_slots"`
+
+	// MaxStrikes drops a queued transaction after this many attributed build
+	// failures (0 = never drop).
+	MaxStrikes uint64 `yaml:"max_strikes" json:"max_strikes"`
+
+	// BaseFeeCeilingGwei, when non-zero, halves the fill to the EIP-1559 gas
+	// target once the next base fee exceeds it: every full block raises the
+	// base fee 12.5 percent, and a long max-fill run would otherwise price
+	// its own queued transactions out. A fill knob only: exact lists
+	// (explicit, queued) always get the whole block.
+	BaseFeeCeilingGwei uint64 `yaml:"base_fee_ceiling_gwei" json:"base_fee_ceiling_gwei"`
+
+	// ForwardToEL additionally submits every admitted transaction to the EL
+	// mempool (eth_sendRawTransaction) — a shadow mode for A/B comparisons
+	// that defeats the pool's purpose, hence off by default.
+	ForwardToEL bool `yaml:"forward_to_el" json:"forward_to_el"`
+}
+
+// Ingress authentication modes.
+const (
+	// TxPoolAuthOpen accepts anonymous callers (rate-limited) next to
+	// authenticated ones.
+	TxPoolAuthOpen = "open"
+	// TxPoolAuthAPIKey requires an API key, the static token or a WebUI login.
+	TxPoolAuthAPIKey = "api_key"
+)
+
+// NormalizedAuth returns the ingress auth mode, falling back to open for
+// unknown values.
+func (c *TxPoolConfig) NormalizedAuth() string {
+	switch NormalizeRetiredTxPoolAuth(c.Auth) {
+	case TxPoolAuthAPIKey:
+		return TxPoolAuthAPIKey
+	default:
+		return TxPoolAuthOpen
+	}
+}
+
+// NormalizeRetiredTxPoolAuth maps the retired ingress modes auth_token (WebUI
+// login only) and static (shared secret only) onto api_key, which accepts
+// both credentials; any other value is returned unchanged.
+func NormalizeRetiredTxPoolAuth(auth string) string {
+	if auth == "auth_token" || auth == "static" {
+		return TxPoolAuthAPIKey
+	}
+
+	return auth
+}
+
+// Anonymous rate-limit scopes of the /rpc ingress.
+const (
+	RPCAnonScopePerIP  = "per_ip"
+	RPCAnonScopeShared = "shared"
+)
+
+// RPCUpstreamLocal names the EL behind --el-rpc in RPCUpstreams.
+const RPCUpstreamLocal = "local"
+
+// RPCUpstream is one parsed RPCUpstreams entry.
+type RPCUpstream struct {
+	Target   string // "local" or the endpoint URL
+	Priority uint64 // lower is tried first
+}
+
+// ParseRPCUpstreams parses the RPCUpstreams list. An entry without
+// "@<priority>" has priority 0; an empty list is an error (the ingress needs
+// somewhere to read from).
+func ParseRPCUpstreams(spec string) ([]RPCUpstream, error) {
+	parts := strings.Split(spec, ",")
+	upstreams := make([]RPCUpstream, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		upstream := RPCUpstream{Target: part}
+
+		if at := strings.LastIndex(part, "@"); at > 0 && !strings.Contains(part[at:], "/") {
+			priority, err := strconv.ParseUint(strings.TrimSpace(part[at+1:]), 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid priority in upstream %q", part)
+			}
+
+			upstream.Target = strings.TrimSpace(part[:at])
+			upstream.Priority = priority
+		}
+
+		if upstream.Target != RPCUpstreamLocal {
+			u, err := url.Parse(upstream.Target)
+			if err != nil || u.Host == "" ||
+				(u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") {
+				return nil, fmt.Errorf("upstream %q must be %q or an http(s)/ws(s) URL", upstream.Target, RPCUpstreamLocal)
+			}
+		}
+
+		if seen[upstream.Target] {
+			return nil, fmt.Errorf("upstream %q listed twice", upstream.Target)
+		}
+
+		seen[upstream.Target] = true
+		upstreams = append(upstreams, upstream)
+	}
+
+	if len(upstreams) == 0 {
+		return nil, errors.New("at least one upstream is required (\"local\" for the EL behind --el-rpc)")
+	}
+
+	return upstreams, nil
+}
+
+// NormalizedOrdering applies the config's own ordering with the fifo fallback.
+func (c *TxPoolConfig) NormalizedOrdering() string {
+	return NormalizedTxOrdering(c.Ordering, TxOrderingFIFO)
+}
+
+// EffectiveGasFillPct clamps the fill percentage into 1..100 (0 = 100).
+func (c *TxPoolConfig) EffectiveGasFillPct() uint64 {
+	if c.GasFillPct == 0 || c.GasFillPct > 100 {
+		return 100
+	}
+
+	return c.GasFillPct
 }
 
 // BuilderState represents the current state of a builder in the beacon chain.

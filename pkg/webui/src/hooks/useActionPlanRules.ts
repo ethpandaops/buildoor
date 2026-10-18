@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { ActionPlanRulesResponse, SlotRule } from '../types';
 import { authStore } from '../stores/authStore';
+import { authHeaders, planRedacted, useLoggedIn } from './authFetch';
 import {
   onStreamEvent,
   getConnectionGeneration,
@@ -30,12 +31,18 @@ export function useActionPlanRules(): UseActionPlanRulesResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Reads with a login carry the explicit local build transactions; without
+  // one (and in every SSE event) they are redacted to a count.
+  const loggedIn = useLoggedIn();
+  const loggedInRef = useRef(loggedIn);
+  loggedInRef.current = loggedIn;
+
   const fetchRules = useCallback(async () => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await fetch('/api/buildoor/action-plan/rules');
+      const response = await fetch('/api/buildoor/action-plan/rules', { headers: await authHeaders() });
       if (!response.ok) {
         throw new Error(`Failed to fetch action plan rules: ${response.statusText}`);
       }
@@ -48,7 +55,8 @@ export function useActionPlanRules(): UseActionPlanRulesResult {
     } finally {
       setLoading(false);
     }
-  }, []);
+    // loggedIn: a login (or the auth client settling) unlocks redacted data.
+  }, [loggedIn]);
 
   useEffect(() => {
     fetchRules();
@@ -58,9 +66,17 @@ export function useActionPlanRules(): UseActionPlanRulesResult {
     () =>
       onStreamEvent('action_plan_rules_updated', (data) => {
         const change = data as { rules?: SlotRule[] };
-        if (change?.rules) setRules(change.rules);
+        if (!change?.rules) return;
+        // SSE bodies are always redacted: a logged-in reader refetches rather
+        // than adopt rules whose explicit transactions were hidden (saving the
+        // set back would then be refused).
+        if (loggedInRef.current && change.rules.some((r) => planRedacted(r))) {
+          fetchRules();
+          return;
+        }
+        setRules(change.rules);
       }),
-    []
+    [fetchRules]
   );
 
   // Refetch after an SSE reconnect (changes during the gap were never delivered).

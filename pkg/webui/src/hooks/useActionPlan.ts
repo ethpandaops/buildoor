@@ -8,6 +8,7 @@ import type {
   UpdateActionPlanResponse,
 } from '../types';
 import { authStore } from '../stores/authStore';
+import { authHeaders, planRedacted, useLoggedIn } from './authFetch';
 import {
   onStreamEvent,
   getConnectionGeneration,
@@ -31,7 +32,11 @@ export interface ApplyUpdatesResult {
 
 interface UseActionPlanResult {
   plans: Record<number, SlotPlan>;
+  // Compact per-slot records for the grid (view=summary).
   results: Record<number, SlotResult>;
+  // Full records of the slots opened in detail (loadDetail), kept live.
+  details: Record<number, SlotResult>;
+  loadDetail: (slot: number) => void;
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -46,12 +51,20 @@ interface UseActionPlanResult {
 export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanResult {
   const [plans, setPlans] = useState<Record<number, SlotPlan>>({});
   const [results, setResults] = useState<Record<number, SlotResult>>({});
+  const [details, setDetails] = useState<Record<number, SlotResult>>({});
+  const detailSlotsRef = useRef(new Set<number>());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Current range for the SSE patch handlers (no resubscribe on range change).
   const rangeRef = useRef({ min: minSlot, max: maxSlot });
   rangeRef.current = { min: minSlot, max: maxSlot };
+
+  // Reads with a login carry the explicit local build transactions; without
+  // one (and in every SSE event) they are redacted to a count.
+  const loggedIn = useLoggedIn();
+  const loggedInRef = useRef(loggedIn);
+  loggedInRef.current = loggedIn;
 
   const fetchAll = useCallback(async () => {
     if (maxSlot < minSlot) return;
@@ -61,9 +74,10 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
 
     try {
       const query = `min_slot=${minSlot}&max_slot=${maxSlot}`;
+      const headers = await authHeaders();
       const [planResp, resultResp] = await Promise.all([
-        fetch(`/api/buildoor/action-plan?${query}`),
-        fetch(`/api/buildoor/slot-results?${query}`),
+        fetch(`/api/buildoor/action-plan?${query}`, { headers }),
+        fetch(`/api/buildoor/slot-results?${query}&view=summary`, { headers }),
       ]);
 
       if (!planResp.ok) {
@@ -95,7 +109,8 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     } finally {
       setLoading(false);
     }
-  }, [minSlot, maxSlot]);
+    // loggedIn: a login (or the auth client settling) unlocks redacted data.
+  }, [minSlot, maxSlot, loggedIn]);
 
   // Stable handle for the SSE handlers, which must not resubscribe whenever
   // the visible range changes.
@@ -138,11 +153,61 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     fetchAll();
   }, [fetchAll]);
 
+  // Slots whose result is being refetched, and those invalidated again while
+  // their fetch was in flight (refetched once more when it completes).
+  const resultRefetchRef = useRef(new Set<number>());
+  const resultStaleRef = useRef(new Set<number>());
+
+  const refetchResult = useCallback(async (slot: number) => {
+    if (resultRefetchRef.current.has(slot)) {
+      resultStaleRef.current.add(slot);
+      return;
+    }
+    resultRefetchRef.current.add(slot);
+    try {
+      // An opened slot needs its full record; the grid needs the summary,
+      // which the full record covers too.
+      const full = detailSlotsRef.current.has(slot);
+      const response = await fetch(
+        `/api/buildoor/slot-results?min_slot=${slot}&max_slot=${slot}${full ? '' : '&view=summary'}`,
+        { headers: await authHeaders() },
+      );
+      if (!response.ok) return;
+      const data: SlotResultsResponse = await response.json();
+      const fresh = (data.results || []).find((r) => toSlotNumber(r.slot) === slot);
+      if (!fresh) return;
+      setResults((prev) => ({ ...prev, [slot]: fresh }));
+      if (full) setDetails((prev) => ({ ...prev, [slot]: fresh }));
+    } catch {
+      // The held record stays; the next range fetch heals it.
+    } finally {
+      resultRefetchRef.current.delete(slot);
+      if (resultStaleRef.current.delete(slot)) {
+        void refetchResultRef.current(slot);
+      }
+    }
+  }, []);
+  const refetchResultRef = useRef(refetchResult);
+  refetchResultRef.current = refetchResult;
+
+  // Opening a slot loads its full record; it then follows the live updates
+  // like the grid's summaries.
+  const loadDetail = useCallback((slot: number) => {
+    detailSlotsRef.current.add(slot);
+    void refetchResultRef.current(slot);
+  }, []);
+
   // Live updates through the shared SSE connection.
   useEffect(() => {
     const offPlan = onStreamEvent('action_plan_updated', (data) => {
       const change = data as { slots?: number[]; plans?: (SlotPlan | null)[] };
       if (!change?.slots?.length) return;
+      // SSE bodies are always redacted; a logged-in reader refetches instead of
+      // adopting a plan whose explicit transactions were hidden.
+      if (loggedInRef.current && (change.plans || []).some((p) => planRedacted(p))) {
+        fetchAllRef.current();
+        return;
+      }
       applyPlanChange(change.slots, change.plans || []);
     });
 
@@ -152,12 +217,13 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       fetchAllRef.current();
     });
 
+    // The stream only names the slot whose record changed; the record itself
+    // comes from REST (with the login, so explicit transactions stay intact).
     const offResult = onStreamEvent('slot_result_updated', (data) => {
-      const result = data as SlotResult;
-      const slot = toSlotNumber(result?.slot);
+      const slot = toSlotNumber((data as { slot?: number })?.slot);
       if (slot < 0) return;
       if (slot < rangeRef.current.min || slot > rangeRef.current.max) return;
-      setResults((prev) => ({ ...prev, [slot]: result }));
+      void refetchResult(slot);
     });
 
     return () => {
@@ -165,7 +231,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       offRules();
       offResult();
     };
-  }, [applyPlanChange]);
+  }, [applyPlanChange, refetchResult]);
 
   // Refetch the visible range after an SSE reconnect (updates during the gap
   // were never delivered).
@@ -216,5 +282,5 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
     [applyPlanChange]
   );
 
-  return { plans, results, loading, error, refetch: fetchAll, applyUpdates };
+  return { plans, results, details, loadDetail, loading, error, refetch: fetchAll, applyUpdates };
 }

@@ -1,6 +1,7 @@
 package action_plan
 
 import (
+	"context"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
@@ -89,10 +90,61 @@ type ResolvedBuildSettings struct {
 	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 
+	// EngineEnabled runs the engine-API build for the slot: the global
+	// build.engine_enabled, overridden by the plan's build.local
+	// build_el_payload.
+	EngineEnabled bool `json:"engine_enabled"`
+
 	// CandidateModes is the effective build-candidate policy for the slot:
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
 	CandidateModes map[string]string `json:"candidate_modes,omitempty"`
+
+	// Local is the effective local build (testing_buildBlockV1) instruction,
+	// merged from the global local_build/txpool settings and the plan's
+	// build.local overrides. Always non-nil; Enabled=false when the extension
+	// is off for the slot. The EL's runtime availability of the testing
+	// namespace is checked by the builder, not here.
+	Local *ResolvedLocalBuildSettings `json:"local,omitempty"`
+}
+
+// ResolvedLocalBuildSettings are the effective local build parameters for a
+// slot.
+type ResolvedLocalBuildSettings struct {
+	Enabled bool `json:"enabled"`
+	// PayloadSource: el | local | local_or_el | higher_value.
+	PayloadSource string `json:"payload_source"`
+	// TxSource: txpool | empty | el_mempool | explicit.
+	TxSource string `json:"tx_source"`
+	// Transactions is the explicit list (0x-hex) for the explicit source.
+	Transactions []string `json:"transactions,omitempty"`
+	// TransactionsRedacted is the length of Transactions when the list was
+	// hidden from a reader without a login (output only).
+	TransactionsRedacted int `json:"transactions_redacted,omitempty"`
+	// Queued is the exact ordered hash list for the queued source.
+	Queued []string `json:"queued,omitempty"`
+	// Pool selection parameters (tx source txpool).
+	MaxTxs     uint64 `json:"max_txs,omitempty"`
+	GasFillPct uint64 `json:"gas_fill_pct"`
+	Ordering   string `json:"ordering"`
+	// AllowBlobsWithoutBundle includes blob transactions on ELs whose testing
+	// path returns no blobs bundle.
+	AllowBlobsWithoutBundle bool `json:"allow_blobs_without_bundle,omitempty"`
+	// MaxAttempts / MaxStrikes are the retry policy of the txpool source
+	// (global-only).
+	MaxAttempts uint64 `json:"max_attempts,omitempty"`
+	MaxStrikes  uint64 `json:"max_strikes,omitempty"`
+	// StartTimeMs / EndTimeMs / RebuildIntervalMs time the testing builds
+	// (global-only; see config.LocalBuildConfig).
+	StartTimeMs       int64  `json:"start_time_ms,omitempty"`
+	EndTimeMs         int64  `json:"end_time_ms,omitempty"`
+	RebuildIntervalMs uint64 `json:"rebuild_interval_ms,omitempty"`
+	// BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
+	// 0 = off; exact lists are never reduced).
+	BaseFeeCeilingGwei uint64 `json:"base_fee_ceiling_gwei,omitempty"`
+	// Forced marks that the plan enabled the local build although it is
+	// globally disabled.
+	Forced bool `json:"forced,omitempty"`
 }
 
 // ResolvedBidSettings are the effective p2p bidding parameters for the slot.
@@ -102,7 +154,7 @@ type ResolvedBidSettings struct {
 	IntervalMs   int64  `json:"interval_ms"`
 	MinGwei      uint64 `json:"min_gwei"`
 	IncreaseGwei uint64 `json:"increase_gwei"`
-	SubsidyGwei  uint64 `json:"subsidy_gwei"`
+	SubsidyGwei  int64  `json:"subsidy_gwei"` // negative = margin
 
 	// ValueGwei, when set, is the absolute bid base value replacing the
 	// max(blockValue, min) + subsidy formula (IncreaseGwei still applies).
@@ -151,7 +203,7 @@ const maxKeysPerStep = 1024
 // ResolvedBuilderAPISettings are the effective Builder API bid-serving
 // parameters for the slot.
 type ResolvedBuilderAPISettings struct {
-	SubsidyGwei uint64 `json:"subsidy_gwei"`
+	SubsidyGwei int64 `json:"subsidy_gwei"` // negative = margin (Gloas only)
 
 	// TotalValueGwei, when set, is the absolute total proposer-visible bid
 	// value (before the Gloas execution-payment split).
@@ -168,6 +220,11 @@ type ResolvedBuilderAPISettings struct {
 	IgnorePreferenceLimit   bool   `json:"ignore_preference_limit,omitempty"`
 
 	DelayMs int64 `json:"delay_ms,omitempty"`
+
+	// RespondAtMs is the slot's response gate in ms after the slot start (0
+	// = respond immediately): bid responses wait for it and then serve the
+	// best payload built by then.
+	RespondAtMs int64 `json:"respond_at_ms,omitempty"`
 
 	// ServeCandidates is the effective serve-candidates policy for the slot
 	// (all, canonical_only, or a comma-separated candidate key list).
@@ -286,6 +343,13 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	}
 
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
+	build.Local = resolveLocalBuild(frozen.Plan, cfg)
+
+	build.EngineEnabled = cfg.Build.EngineEnabled
+	if frozen.Plan != nil && frozen.Plan.Build != nil && frozen.Plan.Build.Local != nil &&
+		frozen.Plan.Build.Local.BuildELPayload != nil {
+		build.EngineEnabled = *frozen.Plan.Build.Local.BuildELPayload
+	}
 
 	// A plan that explicitly activates (mode custom) an available consumer
 	// forces the build past the schedule. A merely-inherited active consumer
@@ -373,6 +437,70 @@ func resolveCandidateModes(plan *SlotPlan, cfg *config.Config) map[string]string
 	}
 
 	return modes
+}
+
+// resolveLocalBuild merges the global local_build/txpool settings with the
+// plan's build.local overrides into the slot's effective local build
+// instruction.
+func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSettings {
+	local := &ResolvedLocalBuildSettings{
+		Enabled:                 cfg.LocalBuild.Enabled,
+		PayloadSource:           cfg.LocalBuild.NormalizedPayloadSource(),
+		TxSource:                cfg.LocalBuild.NormalizedTxSource(),
+		MaxTxs:                  cfg.TxPool.MaxTxsPerBlock,
+		GasFillPct:              cfg.TxPool.EffectiveGasFillPct(),
+		Ordering:                cfg.TxPool.NormalizedOrdering(),
+		AllowBlobsWithoutBundle: cfg.LocalBuild.AllowBlobsWithoutBundle,
+		MaxAttempts:             cfg.LocalBuild.MaxAttempts,
+		MaxStrikes:              cfg.TxPool.MaxStrikes,
+		RebuildIntervalMs:       cfg.LocalBuild.RebuildIntervalMs,
+		StartTimeMs:             cfg.LocalBuild.StartTimeMs,
+		EndTimeMs:               cfg.LocalBuild.EndTimeMs,
+		BaseFeeCeilingGwei:      cfg.TxPool.BaseFeeCeilingGwei,
+	}
+
+	if plan == nil || plan.Build == nil || plan.Build.Local == nil {
+		return local
+	}
+
+	override := plan.Build.Local
+
+	if override.Enabled != nil {
+		local.Enabled = *override.Enabled
+		local.Forced = *override.Enabled && !cfg.LocalBuild.Enabled
+	}
+
+	if source := config.NormalizedPayloadSource(override.PayloadSource, ""); source != "" {
+		local.PayloadSource = source
+	}
+
+	if source := config.NormalizedTxSource(override.EffectiveTxSource(), ""); source != "" {
+		local.TxSource = source
+	}
+
+	if len(override.Transactions) > 0 {
+		local.Transactions = make([]string, len(override.Transactions))
+		copy(local.Transactions, override.Transactions)
+	}
+
+	if len(override.Queued) > 0 {
+		local.Queued = make([]string, len(override.Queued))
+		copy(local.Queued, override.Queued)
+	}
+
+	if override.MaxTxs != nil {
+		local.MaxTxs = *override.MaxTxs
+	}
+
+	if override.GasFillPct != nil && *override.GasFillPct > 0 && *override.GasFillPct <= 100 {
+		local.GasFillPct = *override.GasFillPct
+	}
+
+	if ordering := config.NormalizedTxOrdering(override.Ordering, ""); ordering != "" {
+		local.Ordering = ordering
+	}
+
+	return local
 }
 
 // planForcesConsumer reports whether the plan explicitly activates (mode
@@ -509,6 +637,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		ExecutionPaymentPercent: cfg.BuilderAPI.ExecutionPaymentPercent,
 		IgnorePreferenceLimit:   cfg.BuilderAPI.IgnorePreferenceLimit,
 		ServeCandidates:         cfg.BuilderAPI.ServeCandidates,
+		RespondAtMs:             cfg.BuilderAPI.RespondAtMs,
 		KeyStrategy:             builderAPIKeyStrategy(cfg),
 		Forced:                  forced,
 	}
@@ -525,6 +654,7 @@ func resolveBuilderAPI(plan *SlotPlan, cfg *config.Config) *ResolvedBuilderAPISe
 		applyOverride(&resolved.ExecutionPaymentPercent, api.ExecutionPaymentPercent)
 		applyOverride(&resolved.IgnorePreferenceLimit, api.IgnorePreferenceLimit)
 		applyOverride(&resolved.DelayMs, api.ResponseDelayMs)
+		applyOverride(&resolved.RespondAtMs, api.RespondAtMs)
 
 		if api.TotalValueOverrideGwei != nil {
 			resolved.TotalValueGwei = cloneScalar(api.TotalValueOverrideGwei)
@@ -588,5 +718,40 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 func applyOverride[T any](target *T, override *T) {
 	if override != nil {
 		*target = *override
+	}
+}
+
+// RespondGate returns when the slot's bid responses may go out (zero = at
+// once), given the proposal slot's start.
+func (s *ResolvedBuilderAPISettings) RespondGate(slotStart time.Time) time.Time {
+	if s == nil || s.RespondAtMs == 0 {
+		return time.Time{}
+	}
+
+	return slotStart.Add(time.Duration(s.RespondAtMs) * time.Millisecond)
+}
+
+// AwaitRespondGate holds a bid response until the slot's response gate; false
+// when ctx (the proposer's request) ended first. Without a gate, or once it
+// passed, it returns at once.
+func (s *ResolvedBuilderAPISettings) AwaitRespondGate(ctx context.Context, slotStart time.Time) bool {
+	gate := s.RespondGate(slotStart)
+	if gate.IsZero() {
+		return true
+	}
+
+	wait := time.Until(gate)
+	if wait <= 0 {
+		return true
+	}
+
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

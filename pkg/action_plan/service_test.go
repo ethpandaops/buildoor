@@ -305,11 +305,11 @@ func TestFreezeSnapshotsGlobalsAtFreezeTime(t *testing.T) {
 	svc := newTestService(chainSvc, cfg)
 
 	frozen := svc.Freeze(8000)
-	require.Equal(t, uint64(111), frozen.Bid.SubsidyGwei)
+	require.Equal(t, int64(111), frozen.Bid.SubsidyGwei)
 
 	// A later global change must not rewrite the frozen snapshot.
 	cfg.EPBS.BidSubsidy = 222
-	require.Equal(t, uint64(111), svc.Freeze(8000).Bid.SubsidyGwei)
+	require.Equal(t, int64(111), svc.Freeze(8000).Bid.SubsidyGwei)
 }
 
 func TestFreezeRevealSuppressionAndCustomTiming(t *testing.T) {
@@ -567,10 +567,16 @@ func TestOnSlotBuiltNextNAccounting(t *testing.T) {
 	svc.OnSlotBuilt(2003)
 	require.Equal(t, uint64(2), svc.GetSlotsBuilt(), "forced build must not consume the budget")
 
-	// Switching (back) to next_n via UpdateConfig resets the counter.
+	// An unrelated settings write keeps the budget.
+	cfg.EPBS.BidSubsidy++
+	svc.UpdateConfig()
+	require.Equal(t, uint64(2), svc.GetSlotsBuilt())
+
+	// A schedule change restarts it.
+	cfg.Schedule.NextN = 3
 	svc.UpdateConfig()
 	require.Equal(t, uint64(0), svc.GetSlotsBuilt())
-	require.Equal(t, 2, svc.GetSlotsRemaining())
+	require.Equal(t, 3, svc.GetSlotsRemaining())
 }
 
 func TestSubscribeChangesDeliversCommittedEvents(t *testing.T) {

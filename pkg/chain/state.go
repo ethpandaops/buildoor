@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	eth2client "github.com/ethpandaops/go-eth2-client"
-	"github.com/ethpandaops/go-eth2-client/api"
-	"github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
+
+	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // EpochStats holds cached statistics for an epoch computed from beacon state.
@@ -45,17 +44,21 @@ type EpochStats struct {
 	RandaoMix      phase0.Hash32
 	NextRandaoMix  phase0.Hash32
 	ProposerDuties []phase0.ValidatorIndex // [slot_index] -> validator index
-	AttesterDuties [][][]ActiveIndiceIndex // [slot_index][committee_index][member] -> active indice index
-	PtcDuties      [][]ActiveIndiceIndex   // [slot_index][ptc_member] -> active indice index (Gloas only)
+	// NextProposerDuties are the following epoch's proposers from the same
+	// lookahead (empty when the state does not carry them).
+	NextProposerDuties []phase0.ValidatorIndex
+	AttesterDuties     [][][]ActiveIndiceIndex // [slot_index][committee_index][member] -> active indice index
+	PtcDuties          [][]ActiveIndiceIndex   // [slot_index][ptc_member] -> active indice index (Gloas only)
 }
 
 // PendingDepositInfo is a single entry of the beacon state's pending_deposits queue,
 // reduced to the fields needed to model Electra deposit-queue draining and to
 // identify our own (early-onboarding) deposit after a restart.
 type PendingDepositInfo struct {
-	Pubkey phase0.BLSPubKey
-	Amount uint64 // gwei
-	Slot   phase0.Slot
+	Pubkey  phase0.BLSPubKey
+	Amount  uint64 // gwei
+	Slot    phase0.Slot
+	NoChurn bool // deposit for an exited validator: postponed or applied without consuming churn
 }
 
 // BuilderInfo represents information about a builder from the beacon state.
@@ -69,82 +72,56 @@ type BuilderInfo struct {
 	PendingPayments   uint64 // Sum of pending payments from BuilderPendingPayments in state
 }
 
-// fetchEpochStats fetches the beacon state and computes epoch statistics.
+// fetchEpochStats streams the beacon state (only the fields the chain view
+// reads, see beacon.StateSnapshot) and computes epoch statistics.
 func (s *service) fetchEpochStats(
 	ctx context.Context,
 	stateID string,
 	epoch phase0.Epoch,
 ) (*EpochStats, error) {
-	provider, ok := s.clClient.GetRawClient().(eth2client.BeaconStateProvider)
-	if !ok {
-		return nil, fmt.Errorf("client does not support beacon state provider")
-	}
-
-	resp, err := provider.AgnosticBeaconState(ctx, &api.BeaconStateOpts{
-		State: stateID,
-	})
+	snap, err := s.clClient.GetStateSnapshot(ctx, stateID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get beacon state: %w", err)
 	}
 
-	if resp.Data == nil {
-		return nil, fmt.Errorf("beacon state response is nil")
-	}
+	s.publishProposerPubkeys(snap.Validators.ProposerPubkeys)
 
-	s.publishValidatorIndexCache(resp.Data.Validators)
-
-	return s.computeEpochStats(resp.Data, epoch)
+	return s.computeEpochStats(snap, epoch)
 }
 
-// publishValidatorIndexCache replaces the published validator-pubkey cache
-// with a freshly built one for the given (index-ordered) validator set.
-//
-// Always builds a fresh backing array rather than reusing the previously
-// published one in place: GetValidatorPubkeyByIndex (service.go) reads
-// s.validatorIndexCache under RLock but never copies out more than the
-// single element it returns, on the documented contract that the backing
-// array itself is never mutated after publication — only swapped out
-// wholesale under cacheMu. Reusing the array in place (a stale optimization
-// for when its capacity already sufficed) broke that contract: it wrote new
-// pubkeys into the same memory a concurrent reader could be dereferencing,
-// unguarded by any lock, risking a torn 48-byte read.
-func (s *service) publishValidatorIndexCache(validators []*phase0.Validator) {
-	validatorPubkeys := make([]phase0.BLSPubKey, len(validators))
-
-	for i, v := range validators {
-		validatorPubkeys[i] = v.PublicKey
-	}
-
+// publishProposerPubkeys replaces the known proposer pubkeys (the latest
+// state's proposer lookahead). The published map is never written
+// afterwards: every state snapshot decodes its own.
+func (s *service) publishProposerPubkeys(pubkeys map[phase0.ValidatorIndex]phase0.BLSPubKey) {
 	s.cacheMu.Lock()
-	s.validatorIndexCache = validatorPubkeys
+	s.proposerPubkeys = pubkeys
 	s.cacheMu.Unlock()
 }
 
 // computeEpochStats extracts relevant statistics from the beacon state and computes duties.
-func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) (*EpochStats, error) {
+func (s *service) computeEpochStats(state *beacon.StateSnapshot, epoch phase0.Epoch) (*EpochStats, error) {
 	stats := &EpochStats{
 		Version:   state.Version,
 		Epoch:     epoch,
 		StateSlot: state.Slot,
 	}
 
-	if state.FinalizedCheckpoint != nil {
-		stats.FinalizedEpoch = state.FinalizedCheckpoint.Epoch
-	}
+	stats.FinalizedEpoch = state.FinalizedEpoch
 
 	// Build active indices and effective balances
-	validators := state.Validators
-	stats.ValidatorCount = uint64(len(validators))
-	stats.ActiveIndices = make([]phase0.ValidatorIndex, 0, len(validators))
-	stats.EffectiveBalances = make([]uint32, 0, len(validators))
+	validators := &state.Validators
+	stats.ValidatorCount = uint64(validators.Len())
+	stats.ActiveIndices = make([]phase0.ValidatorIndex, 0, validators.Len())
+	stats.EffectiveBalances = make([]uint32, 0, validators.Len())
 
 	var totalActiveBalance phase0.Gwei
 
-	for i, v := range validators {
-		if isActiveValidator(v, epoch) {
+	for i := range validators.Len() {
+		if validators.ActivationEpoch[i] <= epoch && epoch < validators.ExitEpoch[i] {
+			balance := validators.EffectiveBalance[i]
 			stats.ActiveIndices = append(stats.ActiveIndices, phase0.ValidatorIndex(i))
-			stats.EffectiveBalances = append(stats.EffectiveBalances, uint32(v.EffectiveBalance/EtherGweiFactor))
-			totalActiveBalance += v.EffectiveBalance
+			stats.EffectiveBalances = append(stats.EffectiveBalances, uint32(balance/EtherGweiFactor))
+			totalActiveBalance += balance
 		}
 	}
 
@@ -172,6 +149,10 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 
 	if len(state.ProposerLookahead) > 0 {
 		stats.ProposerDuties = state.ProposerLookahead[:s.chainSpec.SlotsPerEpoch]
+
+		if uint64(len(state.ProposerLookahead)) >= 2*s.chainSpec.SlotsPerEpoch {
+			stats.NextProposerDuties = state.ProposerLookahead[s.chainSpec.SlotsPerEpoch : 2*s.chainSpec.SlotsPerEpoch]
+		}
 	}
 
 	// Compute attester duties
@@ -220,17 +201,30 @@ func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) 
 		stats.DepositBalanceToConsume = uint64(state.DepositBalanceToConsume)
 		stats.Eth1DepositIndex = state.ETH1DepositIndex
 		stats.DepositRequestsStartIndex = state.DepositRequestsStartIndex
-		stats.PendingDeposits = extractPendingDeposits(state.PendingDeposits)
+		stats.PendingDeposits = extractPendingDeposits(state.PendingDeposits, validators)
 	}
 
 	return stats, nil
 }
 
 // extractPendingDeposits reduces the beacon state's pending_deposits queue to the
-// amount/slot pairs needed to model Electra deposit-queue draining.
-func extractPendingDeposits(deposits []*electra.PendingDeposit) []PendingDepositInfo {
+// fields needed to model Electra deposit-queue draining. Deposits for exited
+// validators are flagged: process_pending_deposits postpones them (or applies them
+// once withdrawn) without consuming churn.
+func extractPendingDeposits(deposits []*electra.PendingDeposit, validators *beacon.ValidatorSet) []PendingDepositInfo {
 	if len(deposits) == 0 {
 		return nil
+	}
+
+	queued := make(map[phase0.BLSPubKey]bool, len(deposits))
+	for _, deposit := range deposits {
+		if deposit != nil {
+			queued[deposit.Pubkey] = false
+		}
+	}
+
+	for pubkey := range queued {
+		queued[pubkey] = validators.HasExited(pubkey)
 	}
 
 	result := make([]PendingDepositInfo, 0, len(deposits))
@@ -240,18 +234,14 @@ func extractPendingDeposits(deposits []*electra.PendingDeposit) []PendingDeposit
 		}
 
 		result = append(result, PendingDepositInfo{
-			Pubkey: deposit.Pubkey,
-			Amount: uint64(deposit.Amount),
-			Slot:   deposit.Slot,
+			Pubkey:  deposit.Pubkey,
+			Amount:  uint64(deposit.Amount),
+			Slot:    deposit.Slot,
+			NoChurn: queued[deposit.Pubkey],
 		})
 	}
 
 	return result
-}
-
-// isActiveValidator checks if a validator is active at the given epoch.
-func isActiveValidator(validator *phase0.Validator, epoch phase0.Epoch) bool {
-	return validator.ActivationEpoch <= epoch && epoch < validator.ExitEpoch
 }
 
 // extractBuilders extracts builder information from the beacon state.

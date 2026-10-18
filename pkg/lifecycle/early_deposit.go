@@ -187,9 +187,10 @@ func (s *EarlyDepositService) earlyDepositRequest(
 	}).Info("Early builder deposit prepared (regular deposit contract)")
 
 	return wallet.TxRequest{
-		To:       depositContract,
-		Value:    value,
-		Data:     calldata,
-		GasLimit: depositGasLimit,
+		To:           depositContract,
+		Value:        value,
+		Data:         calldata,
+		GasLimit:     depositGasLimit,
+		MinGasTipCap: GweiToWei(s.cfg.EarlyDepositTipGwei),
 	}, nil
 }

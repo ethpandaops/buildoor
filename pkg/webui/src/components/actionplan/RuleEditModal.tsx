@@ -1,3 +1,4 @@
+import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
 import React, { useState } from 'react';
 import type { BidPlan, BuilderAPIPlan, RevealPlan, SlotRule } from '../../types';
 import { TransformEditor, type TransformState } from './TransformEditor';
@@ -5,13 +6,22 @@ import {
   BID_FIELDS,
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
+  BID_CATEGORY_HINT,
+  BUILDER_API_CATEGORY_HINT,
+  REVEAL_CATEGORY_HINT,
   BuildForm,
+  LocalBuildForm,
+  hiddenTransactionsError,
+  initLocalBuildState,
+  localBuildPlanFromState,
+  type LocalBuildFormState,
   CategoryForm,
   initCategoryState,
   resolveCategory,
   type BuildFlagMode,
   type CategoryFormState,
 } from './planForms';
+import { InfoHint } from '../InfoHint';
 
 // Ready-made scenarios; picking one fills the form, which stays editable.
 interface Preset {
@@ -137,6 +147,10 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(
     rule?.build?.reorg_parent_payload ? 'on' : 'off'
   );
+  const [localBuild, setLocalBuild] = useState<LocalBuildFormState>(() =>
+    initLocalBuildState(rule?.build?.local)
+  );
+  const { status: localBuildStatus } = useLocalBuildStatus();
   const [transforms, setTransforms] = useState<TransformState>({
     payload: rule?.transforms?.payload ?? '',
     bid: rule?.transforms?.bid ?? '',
@@ -157,6 +171,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     setApiState(initCategoryState(filled.builder_api, BUILDER_API_FIELDS, false));
     setRevealState(initCategoryState(filled.reveal, REVEAL_FIELDS, false));
     setBuildReorg(filled.build?.reorg_parent_payload ? 'on' : 'off');
+    setLocalBuild(initLocalBuildState(filled.build?.local));
     setTransforms({ payload: '', bid: '', envelope: '' });
     setFormError(null);
   };
@@ -210,6 +225,18 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       return;
     }
 
+    const localPlan = localBuildPlanFromState(localBuild);
+    const hiddenError = hiddenTransactionsError(localPlan);
+    if (hiddenError) {
+      setFormError(hiddenError);
+      return;
+    }
+    const buildPlan = {
+      ...(buildReorg === 'on' ? { reorg_parent_payload: true } : {}),
+      ...(localPlan ? { local: localPlan } : {}),
+    };
+    const hasBuildPlan = Object.keys(buildPlan).length > 0;
+
     const next: SlotRule = {
       id: id.trim(),
       enabled,
@@ -220,7 +247,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
       ...(bid.value ? { bid: bid.value } : {}),
       ...(api.value ? { builder_api: api.value } : {}),
       ...(reveal.value ? { reveal: reveal.value } : {}),
-      ...(buildReorg === 'on' ? { build: { reorg_parent_payload: true } } : {}),
+      ...(hasBuildPlan ? { build: buildPlan } : {}),
     };
 
     const transformPlan = {
@@ -252,7 +279,13 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
             <div className="modal-body">
               {!rule && (
                 <div className="mb-3">
-                  <div className="section-header mb-1">Scenario presets</div>
+                  <div className="section-header mb-1">
+                    Scenario presets
+                    <InfoHint>
+                      Fills the form with a ready-made scenario. Nothing is saved until you create
+                      the rule, and every field stays editable.
+                    </InfoHint>
+                  </div>
                   {PRESETS.map((preset) => (
                     <button
                       key={preset.id}
@@ -270,7 +303,15 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
 
               <div className="row g-2 mb-3">
                 <div className="col-12 col-md-6">
-                  <label className="form-label small mb-0">Rule id</label>
+                  <label className="form-label small mb-0">
+                    Rule id
+                    <InfoHint>
+                      Lowercase slug (<code>a-z</code>, <code>0-9</code>, <code>.</code>,{' '}
+                      <code>_</code>, <code>-</code>; up to 64 chars, starting with a letter or
+                      digit). Fixed once created. When several enabled rules match a slot, the
+                      lowest id wins; rules are never merged.
+                    </InfoHint>
+                  </label>
                   <input
                     type="text"
                     className="form-control form-control-sm"
@@ -284,7 +325,15 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                   </div>
                 </div>
                 <div className="col-12 col-md-6">
-                  <label className="form-label small mb-0">Slots in epoch</label>
+                  <label className="form-label small mb-0">
+                    Slots in epoch
+                    <InfoHint alignEnd>
+                      Slot positions within every epoch the rule applies to, 0-based (
+                      {slotsPerEpoch > 0 ? `0–${slotsPerEpoch - 1}` : '0 = first slot'}, so the
+                      last slot is {slotsPerEpoch > 0 ? slotsPerEpoch - 1 : 'slots per epoch − 1'}).
+                      Single indices, comma lists and inclusive ranges.
+                    </InfoHint>
+                  </label>
                   <input
                     type="text"
                     className="form-control form-control-sm"
@@ -299,7 +348,10 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                   </div>
                 </div>
                 <div className="col-12">
-                  <label className="form-label small mb-0">Description</label>
+                  <label className="form-label small mb-0">
+                    Description
+                    <InfoHint>Free text shown in the rules list; no effect on behavior.</InfoHint>
+                  </label>
                   <input
                     type="text"
                     className="form-control form-control-sm"
@@ -309,7 +361,12 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                   />
                 </div>
                 <div className="col-6 col-md-3">
-                  <label className="form-label small mb-0">From epoch</label>
+                  <label className="form-label small mb-0">
+                    From epoch
+                    <InfoHint>
+                      First epoch the rule applies in (inclusive). Empty = no lower bound.
+                    </InfoHint>
+                  </label>
                   <input
                     type="number"
                     className="form-control form-control-sm"
@@ -321,7 +378,12 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                   />
                 </div>
                 <div className="col-6 col-md-3">
-                  <label className="form-label small mb-0">To epoch</label>
+                  <label className="form-label small mb-0">
+                    To epoch
+                    <InfoHint>
+                      Last epoch the rule applies in (inclusive). Empty = no end.
+                    </InfoHint>
+                  </label>
                   <input
                     type="number"
                     className="form-control form-control-sm"
@@ -345,12 +407,17 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                     <label className="form-check-label small" htmlFor="ap-rule-enabled">
                       Enabled
                     </label>
+                    <InfoHint>
+                      A disabled rule stays in the list but matches no slot. Slots that already
+                      froze keep the plan they froze with either way.
+                    </InfoHint>
                   </div>
                 </div>
               </div>
 
               <CategoryForm
                 title="Bid (p2p)"
+                hint={BID_CATEGORY_HINT}
                 bulk={false}
                 state={bidState}
                 fields={BID_FIELDS}
@@ -360,6 +427,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
               />
               <CategoryForm
                 title="Builder API"
+                hint={BUILDER_API_CATEGORY_HINT}
                 bulk={false}
                 state={apiState}
                 fields={BUILDER_API_FIELDS}
@@ -368,6 +436,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
               />
               <CategoryForm
                 title="Reveal"
+                hint={REVEAL_CATEGORY_HINT}
                 bulk={false}
                 state={revealState}
                 fields={REVEAL_FIELDS}
@@ -375,6 +444,14 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 onChange={setRevealState}
               />
               <BuildForm bulk={false} value={buildReorg} disabled={disabled} onChange={setBuildReorg} />
+              <LocalBuildForm
+                bulk={false}
+                state={localBuild}
+                disabled={disabled}
+                available={localBuildStatus?.availability.available ?? false}
+                unavailableReason={localBuildStatus?.availability.reason}
+                onChange={setLocalBuild}
+              />
               <TransformEditor
                 bulk={false}
                 value={transforms}

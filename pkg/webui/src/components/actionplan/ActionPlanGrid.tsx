@@ -1,6 +1,6 @@
 import React from 'react';
 import type { SlotPlan, SlotResult } from '../../types';
-import { SlotCell } from './SlotCell';
+import { SlotCell, type CellClickModifiers } from './SlotCell';
 
 interface ActionPlanGridProps {
   startEpoch: number;
@@ -10,7 +10,7 @@ interface ActionPlanGridProps {
   plans: Record<number, SlotPlan>;
   results: Record<number, SlotResult>;
   selection: Set<number>;
-  onCellClick: (slot: number, shiftKey: boolean) => void;
+  onCellClick: (slot: number, modifiers: CellClickModifiers) => void;
 }
 
 export const ActionPlanGrid: React.FC<ActionPlanGridProps> = ({

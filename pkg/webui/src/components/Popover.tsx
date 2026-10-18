@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ArtifactButtons } from './ArtifactButtons';
 
 export interface PopoverItem {
   label: string;
@@ -45,22 +46,6 @@ const VIEWPORT_MARGIN = 8;
 // Last user-chosen size per popover title, so reopening the same popover
 // comes back at the size it was dragged to.
 const rememberedSizes = new Map<string, PopoverSize>();
-
-// downloadSSZ fetches an artifact with SSZ content negotiation and triggers a
-// browser download.
-export async function downloadSSZ(url: string, filename: string): Promise<void> {
-  const res = await fetch(url, { headers: { Accept: 'application/octet-stream' } });
-  if (!res.ok) {
-    throw new Error(`artifact download failed (${res.status})`);
-  }
-  const blob = await res.blob();
-  const objectUrl = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(objectUrl);
-}
 
 interface PopoverProps {
   data: PopoverData;
@@ -206,26 +191,11 @@ export const Popover: React.FC<PopoverProps> = ({ data, x, y, onClose, children 
         </tbody>
       </table>
       {artifact && (
-        <div className="popover-artifacts d-flex gap-1">
-          <a
-            href={artifact.url}
-            target="_blank"
-            rel="noreferrer"
-            className="btn btn-outline-secondary ap-artifact-btn"
-          >
-            JSON
-          </a>
-          <button
-            type="button"
-            className="btn btn-outline-secondary ap-artifact-btn"
-            onClick={() => {
-              downloadSSZ(artifact.url, artifact.filename)
-                .catch((err) => console.error('artifact download failed:', err));
-            }}
-          >
-            SSZ
-          </button>
-        </div>
+        <ArtifactButtons
+          url={artifact.url}
+          filename={artifact.filename}
+          className="popover-artifacts d-flex flex-wrap align-items-center gap-1"
+        />
       )}
       {children}
       {data.resizable && (

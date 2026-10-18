@@ -20,10 +20,10 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 )
 
-// earlyOnboardFinalizationMargin is the preferred minimum number of epochs before the
-// Gloas fork to submit an early-onboarding deposit, leaving time for it to finalize so
-// the fork transition converts it into a builder.
-const earlyOnboardFinalizationMargin = 4
+// earlyRegistrationWaitMargin is how many epochs past the Gloas fork the early
+// onboarding keeps waiting for its queued deposits to show up as builders before
+// handing over to the reconciler.
+const earlyRegistrationWaitMargin = 4
 
 // minEarlyOnboardSlots is the hard floor of slots remaining before the Gloas fork for an
 // early-onboarding deposit to be worthwhile. Closer than this we skip early onboarding
@@ -66,6 +66,10 @@ type Manager struct {
 	// wallet can cover a deposit again.
 	walletUnderfunded atomic.Bool
 	eventCallback     func(*LifecycleEvent)
+
+	// earlyWindowLoggedEpoch is the epoch (+1, 0 = none) whose predicted early
+	// onboarding window was last logged.
+	earlyWindowLoggedEpoch atomic.Uint64
 
 	// poke requests an immediate reconcile pass (cap 1).
 	poke chan struct{}
@@ -275,10 +279,10 @@ func (m *Manager) CheckAndTopup(ctx context.Context, key *builder_keys.Key) erro
 
 // TopupKey submits a top-up deposit for the key regardless of its current
 // balance — the operator asked for it explicitly. amountGwei of 0 uses the
-// configured top-up amount.
+// configured deposit amount.
 func (m *Manager) TopupKey(ctx context.Context, key *builder_keys.Key, amountGwei uint64) error {
 	if amountGwei == 0 {
-		amountGwei = m.cfg.TopupAmount
+		amountGwei = m.cfg.DepositAmount
 	}
 
 	if err := m.depositSvc.CreateTopup(ctx, key, amountGwei); err != nil {

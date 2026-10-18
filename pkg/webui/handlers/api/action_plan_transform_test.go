@@ -9,12 +9,25 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
+
+// openTransformHandler is an API handler in open mode (no auth provider),
+// where every request counts as logged in.
+func openTransformHandler(t *testing.T) *APIHandler {
+	t.Helper()
+
+	authHandler, err := auth.NewAuthHandler(t.Context(), "")
+	require.NoError(t, err)
+
+	return &APIHandler{authHandler: authHandler} // nil resultTracker → template sample path
+}
 
 func postTransform(t *testing.T, body string) *TestTransformResponse {
 	t.Helper()
 
-	h := &APIHandler{} // nil resultTracker → template sample path
+	h := openTransformHandler(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/buildoor/action-plan/test-transform",
 		bytes.NewBufferString(body))
@@ -71,7 +84,7 @@ func TestTestTransformEndpoint(t *testing.T) {
 }
 
 func TestTestTransformRejectsUnknownTarget(t *testing.T) {
-	h := &APIHandler{}
+	h := openTransformHandler(t)
 	req := httptest.NewRequest(http.MethodPost, "/x",
 		bytes.NewBufferString(`{"target":"nope","expression":"."}`))
 	rec := httptest.NewRecorder()

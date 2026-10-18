@@ -193,9 +193,14 @@ func parseArtifactSlot(w http.ResponseWriter, r *http.Request) (phase0.Slot, boo
 func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Request) {
 	idx := 0
 
-	// A slot may hold one payload per build-parent candidate; ?candidate=
-	// selects one of them, defaulting to the first stored payload.
-	if candidate := r.URL.Query().Get("candidate"); candidate != "" {
+	// A slot may hold one payload per build-parent candidate and, with the
+	// local build extension, one per source (el / local) on the same parent;
+	// ?candidate= and ?source= select one of them, defaulting to the first
+	// stored payload.
+	candidate := r.URL.Query().Get("candidate")
+	source := r.URL.Query().Get("source")
+
+	if candidate != "" || source != "" {
 		if h.resultTracker == nil {
 			writeError(w, http.StatusNotFound, "artifact not found")
 			return
@@ -206,9 +211,9 @@ func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		resolved, found := h.resultTracker.Artifacts().PayloadIndexForCandidate(slot, candidate)
+		resolved, found := h.resultTracker.Artifacts().PayloadIndexFor(slot, candidate, source)
 		if !found {
-			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate)
+			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate+" source "+source)
 			return
 		}
 
@@ -305,6 +310,20 @@ func (h *APIHandler) serveArtifact(w http.ResponseWriter, r *http.Request, kind 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load artifact: "+err.Error())
 		return
+	}
+
+	// A custom-built payload (and the envelope of a slot that has one) may
+	// carry transactions of the private pool: only logged-in readers get it.
+	private := slot_results.IsCustomPayloadArtifact(artifact) ||
+		(kind == slot_results.ArtifactKindEnvelope && h.resultTracker.Artifacts().HasCustomPayload(slot))
+
+	if private && h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+		writeError(w, http.StatusUnauthorized, "custom-built payloads may hold private transactions: log in to download")
+		return
+	}
+
+	if private {
+		w.Header().Set("Cache-Control", "private, no-store")
 	}
 
 	writeArtifact(w, r, artifact)

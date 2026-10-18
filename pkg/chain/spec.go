@@ -25,6 +25,10 @@ type ChainSpec struct {
 	SecondsPerSlot time.Duration
 	SlotsPerEpoch  uint64
 
+	// ConfigName is the network's CONFIG_NAME (e.g. "hoodi"; empty when the
+	// beacon node does not serve it).
+	ConfigName string
+
 	// Duty calculation parameters
 	ShuffleRoundCount          uint64
 	TargetCommitteeSize        uint64
@@ -66,6 +70,35 @@ type ChainSpec struct {
 
 	// Deposit contract
 	DepositContractAddress *common.Address
+}
+
+// MaxBlobsPerBlockAt returns the blob cap in force at the given epoch per the
+// BLOB_SCHEDULE (the entry with the highest activation epoch at or below it).
+// Networks without a schedule entry yet fall back to the Deneb cap of 6.
+func (s *ChainSpec) MaxBlobsPerBlockAt(epoch phase0.Epoch) uint64 {
+	const denebMaxBlobs = 6
+
+	best := uint64(0)
+	found := false
+
+	for _, entry := range s.BlobSchedule {
+		if phase0.Epoch(entry.Epoch) <= epoch && (!found || entry.Epoch >= best) {
+			best = entry.Epoch
+			found = true
+		}
+	}
+
+	if !found {
+		return denebMaxBlobs
+	}
+
+	for _, entry := range s.BlobSchedule {
+		if entry.Epoch == best {
+			return entry.MaxBlobsPerBlock
+		}
+	}
+
+	return denebMaxBlobs
 }
 
 // BlobScheduleEntry represents a single entry in the BLOB_SCHEDULE.
@@ -113,6 +146,8 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 
 		s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
 	}
+
+	s.ConfigName = specData["CONFIG_NAME"]
 
 	slotsPerEpochStr, ok := specData["SLOTS_PER_EPOCH"]
 	if !ok {
