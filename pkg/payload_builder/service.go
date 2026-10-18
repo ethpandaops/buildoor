@@ -843,6 +843,24 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 // parent tuple), applies the frozen plan's build tweaks and transform, and
 // emits the payload.
 func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
+	// The local build extension runs alongside the engine build when the
+	// slot's frozen plan enables it, the target is the canonical candidate
+	// and the EL exposes the testing namespace. With the engine builder off
+	// it is the only builder: a target without it has nothing to build.
+	localReq, localSkip := s.resolveLocalBuildRequest(slot, target.candidate)
+
+	if localReq == nil {
+		if frozen := s.planSvc.Freeze(slot); frozen.Build != nil && !frozen.Build.EngineEnabled {
+			s.log.WithFields(logrus.Fields{
+				"slot":       slot,
+				"candidate":  target.candidate,
+				"local_skip": localSkip,
+			}).Debug("Engine builder disabled and no testing build for the target, nothing to build")
+
+			return
+		}
+	}
+
 	s.scheduledBuildMu.Lock()
 	state := s.slotBuilds[slot]
 
@@ -899,11 +917,6 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		StartedAt: time.Now(),
 		BuildSeq:  build.seq,
 	})
-
-	// The local build extension runs alongside the engine build when the
-	// slot's frozen plan enables it, the target is the canonical candidate
-	// and the EL exposes the testing namespace.
-	localReq, localSkip := s.resolveLocalBuildRequest(slot, target.candidate)
 
 	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq)
 

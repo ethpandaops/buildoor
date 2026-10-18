@@ -124,6 +124,7 @@ func init() {
 	rootCmd.PersistentFlags().String("build-candidate-parent-empty", defaults.Build.CandidateParentEmpty, "Build the payload-miss candidate on the head block but its execution parent: auto, always or never")
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-full", defaults.Build.CandidateGrandparentFull, "Build the reorg candidate on the head block's parent: auto, always or never")
 	rootCmd.PersistentFlags().String("build-candidate-grandparent-empty", defaults.Build.CandidateGrandparentEmpty, "Build the reorg + payload-miss candidate: auto, always or never")
+	rootCmd.PersistentFlags().Bool("engine-build-enabled", defaults.Build.EngineEnabled, "Run the engine-API build (forkchoiceUpdated → getPayload); disabled, the testing build alone feeds the bids and slots without one are skipped")
 	rootCmd.PersistentFlags().Bool("build-parallel", defaults.Build.Parallel, "Build selected candidates concurrently against the EL instead of sequentially (canonical first, speculative after)")
 	rootCmd.PersistentFlags().Uint64("build-speculative-build-time", defaults.Build.SpeculativeBuildTimeMs, "EL build time in ms for speculative (non parent_full) candidates (0 = use payload-build-time)")
 	rootCmd.PersistentFlags().Uint64("build-auto-weak-head-pct", defaults.Build.AutoWeakHeadPct, "Head-vote participation in percent below which the head counts as contested and auto-mode reorg candidates build (0 = disabled)")
@@ -133,7 +134,6 @@ func init() {
 	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
 	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, local_or_el, or higher_value (whichever is worth more)")
 	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, txpool_el_fill (pool first, then the EL mempool's pending txs), empty or el_mempool")
-	rootCmd.PersistentFlags().Bool("local-build-el-payload", defaults.LocalBuild.BuildELPayload, "Keep running the engine-API build when the payload source is local (false skips it and its build wait)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
 	rootCmd.PersistentFlags().Uint64("local-build-rebuild-interval", defaults.LocalBuild.RebuildIntervalMs, "Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end (0 = one build, timed to finish at the window end)")
@@ -343,7 +343,6 @@ func initConfig(root *cobra.Command) error {
 			Enabled:                 v.GetBool("local-build-enabled"),
 			PayloadSource:           v.GetString("local-build-payload-source"),
 			TxSource:                v.GetString("local-build-tx-source"),
-			BuildELPayload:          v.GetBool("local-build-el-payload"),
 			AllowBlobsWithoutBundle: v.GetBool("local-build-allow-blobs-without-bundle"),
 			BlobEncoding:            v.GetString("local-build-blob-encoding"),
 			MaxAttempts:             v.GetUint64("local-build-max-attempts"),
@@ -386,6 +385,7 @@ func initConfig(root *cobra.Command) error {
 			CandidateParentEmpty:      v.GetString("build-candidate-parent-empty"),
 			CandidateGrandparentFull:  v.GetString("build-candidate-grandparent-full"),
 			CandidateGrandparentEmpty: v.GetString("build-candidate-grandparent-empty"),
+			EngineEnabled:             v.GetBool("engine-build-enabled"),
 			Parallel:                  v.GetBool("build-parallel"),
 			SpeculativeBuildTimeMs:    v.GetUint64("build-speculative-build-time"),
 			AutoWeakHeadPct:           v.GetUint64("build-auto-weak-head-pct"),

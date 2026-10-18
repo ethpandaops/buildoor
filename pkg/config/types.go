@@ -384,6 +384,14 @@ type BuildConfig struct {
 	// payload. Gloas only.
 	CandidateGrandparentEmpty string `yaml:"candidate_grandparent_empty" json:"candidate_grandparent_empty"`
 
+	// EngineEnabled runs the engine-API build (forkchoiceUpdated with
+	// attributes → getPayload; default true). Disabled, the EL builds no
+	// payload of its own: the testing build alone feeds the bids, whatever
+	// the payload source (only the head-pinning forkchoiceUpdated the
+	// testing call needs remains), and a target without a testing build is
+	// skipped.
+	EngineEnabled bool `yaml:"engine_enabled" json:"engine_enabled"`
+
 	// Parallel runs the selected candidate builds concurrently against the
 	// EL, each with its own payload ID (default). Disable it to serialize
 	// them — the canonical candidate builds first so it keeps its scheduled
@@ -619,13 +627,6 @@ type LocalBuildConfig struct {
 	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
 	// may also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
-
-	// BuildELPayload keeps the engine-API build running when PayloadSource is
-	// local (default true, so the EL payload stays available for
-	// comparison). Set to false to skip the engine build and its wait when
-	// only the local payload matters. Ignored for el, local_or_el and
-	// higher_value, which need the engine payload.
-	BuildELPayload bool `yaml:"build_el_payload" json:"build_el_payload"`
 
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on
 	// ELs whose testing endpoint returns an empty blobs bundle (reth, ethrex):

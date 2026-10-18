@@ -88,6 +88,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
     description:
       'Builds the slot payloads through the engine API (forkchoiceUpdated → getPayload): when to start, ' +
       'which parent candidates to build on, which slots to build, and how long slot history is kept.',
+    toggle: { key: 'build.engine_enabled' },
     tabs: [
       { id: 'timing', label: 'Timing', sections: [{ keys: ['epbs.build_start_time', 'payload_build_time', 'extra_data'] }] },
       {
@@ -165,6 +166,9 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
     ],
     status: (ctx) => {
+      if (raw('build.engine_enabled', ctx) === false) {
+        return { label: 'Off', tone: 'neutral', metric: 'the testing build alone feeds the bids' };
+      }
       const mode = raw('schedule.mode', ctx);
       const label = mode === 'every_nth' ? 'Every Nth slot' : mode === 'next_n' ? 'Next N slots' : 'Building';
       return {
@@ -200,7 +204,6 @@ export const FLOWS: Record<FlowId, FlowDef> = {
             keys: [
               'local_build.payload_source',
               'local_build.tx_source',
-              'local_build.build_el_payload',
               'local_build.allow_blobs_without_bundle',
               'local_build.rebuild_interval_ms',
               'local_build.start_time_ms',
@@ -226,7 +229,6 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       },
       { label: 'Bid with', keys: ['local_build.payload_source'] },
       { label: 'Transactions', keys: ['local_build.tx_source'] },
-      { label: 'Keep engine build', keys: ['local_build.build_el_payload'] },
       {
         label: 'Blob encoding',
         keys: [],

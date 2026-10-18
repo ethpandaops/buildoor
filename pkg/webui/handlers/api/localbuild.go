@@ -16,12 +16,12 @@ import (
 // LocalBuildStatusResponse is the local build extension's status: the probed
 // EL availability plus the effective global settings.
 type LocalBuildStatusResponse struct {
-	Availability   payload_builder.LocalBuildAvailability `json:"availability"`
-	Enabled        bool                                   `json:"enabled"`
-	PayloadSource  string                                 `json:"payload_source"`
-	TxSource       string                                 `json:"tx_source"`
-	BuildELPayload bool                                   `json:"build_el_payload"`
-	TxPool         TxPoolStatus                           `json:"txpool"`
+	Availability  payload_builder.LocalBuildAvailability `json:"availability"`
+	Enabled       bool                                   `json:"enabled"`
+	PayloadSource string                                 `json:"payload_source"`
+	TxSource      string                                 `json:"tx_source"`
+	EngineEnabled bool                                   `json:"engine_enabled"`
+	TxPool        TxPoolStatus                           `json:"txpool"`
 	// PlanChecks is the process-lifetime tally of post-inclusion checks of
 	// locally built blocks (nil without an EL RPC).
 	PlanChecks *tx_plan_verifier.Counters `json:"plan_checks,omitempty"`
@@ -88,12 +88,12 @@ func (h *APIHandler) GetLocalBuildStatus(w http.ResponseWriter, _ *http.Request)
 	cfg := h.builderSvc.GetConfig()
 
 	resp := LocalBuildStatusResponse{
-		Availability:   h.builderSvc.LocalBuildAvailability(),
-		Enabled:        cfg.LocalBuild.Enabled,
-		PayloadSource:  cfg.LocalBuild.NormalizedPayloadSource(),
-		TxSource:       cfg.LocalBuild.NormalizedTxSource(),
-		BuildELPayload: cfg.LocalBuild.BuildELPayload,
-		TxPool:         txPoolStatus(h.builderSvc),
+		Availability:  h.builderSvc.LocalBuildAvailability(),
+		Enabled:       cfg.LocalBuild.Enabled,
+		PayloadSource: cfg.LocalBuild.NormalizedPayloadSource(),
+		TxSource:      cfg.LocalBuild.NormalizedTxSource(),
+		EngineEnabled: cfg.Build.EngineEnabled,
+		TxPool:        txPoolStatus(h.builderSvc),
 	}
 
 	if h.planVerifier != nil {

@@ -872,10 +872,10 @@ export const LocalBuildForm: React.FC<{
           )}
           <div className="col-4">
             <label className="form-label small mb-0">
-              Keep engine build
+              Engine build
               <InfoHint>
-                When bidding with the custom block only: keep building the engine block for
-                comparison.
+                Runs (or skips) the engine-API build for this slot, overriding the engine builder
+                switch. Without it the testing build alone feeds the bids.
               </InfoHint>
             </label>
             <select

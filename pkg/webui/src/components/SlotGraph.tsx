@@ -422,7 +422,8 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
   // Build windows: the engine build collects transactions from its start for
   // payload_build_time; the testing builds have their own window.
-  const engineWindowMs = epbsConfig && typeof (config as unknown as Record<string, unknown>)?.payload_build_time === 'number'
+  const engineWindowMs = epbsConfig && config?.build?.engine_enabled !== false &&
+    typeof (config as unknown as Record<string, unknown>)?.payload_build_time === 'number'
     ? [epbsConfig.build_start_time, epbsConfig.build_start_time + ((config as unknown as Record<string, number>).payload_build_time)]
     : null;
   const localConfig = config?.local_build;

@@ -269,7 +269,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		b.collectLocal(buildCtx, result, localResultsSet, localDone, deadline)
 	}
 
-	result, err = b.selectPayload(result, local)
+	result, err = b.selectPayload(result, local.selectionRequest())
 
 	// ReadyAt marks the hand-over to the consumers. A selected local payload
 	// was built during the engine build's wait, so its build time would
@@ -291,7 +291,7 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 			upgrades := make(chan *BuildResult, 1)
 			result.Upgrades = upgrades
 
-			go b.followLocal(localCtx, *result, local, localResultsSet, localDone, upgrades)
+			go b.followLocal(localCtx, *result, local.selectionRequest(), localResultsSet, localDone, upgrades)
 		}
 	}
 

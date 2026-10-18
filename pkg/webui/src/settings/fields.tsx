@@ -410,6 +410,22 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       </>
     ),
   },
+  'build.engine_enabled': {
+    label: 'Engine builder',
+    kind: 'bool',
+    boolLabels: { on: 'on', off: 'off' },
+    hint: 'Off: the EL builds no payload of its own, the testing build alone feeds the bids.',
+    help: (
+      <>
+        Runs the engine-API build (<code>build.engine_enabled</code>, forkchoiceUpdated with
+        attributes → getPayload). Off gives the EL room to breathe: only the head-pinning
+        forkchoiceUpdated the testing call needs remains, the testing build alone feeds the bids
+        whatever the payload source says, and a slot without a testing build (testing builder off or
+        unavailable, speculative candidates) gets no payload. Per-slot action plans can switch it
+        for their slot.
+      </>
+    ),
+  },
   'build.parallel': {
     label: 'Build candidates in parallel',
     short: 'Engine builds',
@@ -1131,24 +1147,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
         The engine block always uses the EL mempool. Per-slot action plans can also hand an exact
         list (<em>explicit</em>, <em>queued</em>).
         {optionList(TX_SOURCES)}
-      </>
-    ),
-  },
-  'local_build.build_el_payload': {
-    label: 'Keep running the engine build when bidding with the custom block',
-    short: 'Keep engine build',
-    kind: 'bool',
-    boolLabels: { on: 'yes', off: 'no' },
-    hint: 'Off saves the EL the second build.',
-    inactiveWhen: (draft) =>
-      str(draft, 'local_build.payload_source') === 'local'
-        ? null
-        : 'Only matters when bidding with the custom block alone; the other choices always build the engine block.',
-    help: (
-      <>
-        Only matters for <em>Bid with: Custom block</em> (<code>local_build.build_el_payload</code>).
-        On, the engine block is still built for comparison. The other choices always build it. Off
-        saves the EL the second build.
       </>
     ),
   },

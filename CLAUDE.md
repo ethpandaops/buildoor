@@ -243,7 +243,7 @@ npm run clean
      every client, never on authrpc). It starts once the engine build's
      forkchoiceUpdated pinned the EL head to the parent (geth and ethrex require
      `parentHash == head`) and runs during the engine build's wait; without an
-     engine build (`local_build.build_el_payload=false` + payload source `local`) a
+     engine build (engine builder off, `build.engine_enabled=false`) a
      head-only FCU is issued first. Only the CANONICAL candidate (`parent_full`,
      or an unclassified tuple) builds locally: geth's testing call builds on the
      EL's current head, and a speculative parent (`parent_empty`,
@@ -255,7 +255,12 @@ npm run clean
      is an inspection-only SHADOW), `local` (strict — no payload when the local
      build fails), `local_or_el` (fallback, recorded), `higher_value` (both
      built, the higher EL-reported block value wins; engine on a tie, the
-     surviving one when a build fails). Tx source:
+     surviving one when a build fails). The ENGINE BUILDER switch
+     `build.engine_enabled` (`--engine-build-enabled`, default on; per-slot
+     plan `build.local.build_el_payload`; the toggle of the Engine builder
+     card) turns the engine build off: only the head-pinning FCU remains, the
+     testing build alone feeds the consumers whatever the payload source, and
+     a target without a testing build is skipped quietly. Tx source:
      `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
      pending txs fill the remaining gas — same parent-state checks, each
      sender continuing at the nonce/balance the pool left, highest tip first,
@@ -411,7 +416,7 @@ npm run clean
      blocks. `.hack/txgen` signs transfers into the pool and prints the hashes
      for an exact `build.local.queued` plan.
    - Per-slot: action plan `build.local` (`enabled`, `payload_source`, `tx_source`,
-     `transactions`, `queued`, `build_el_payload`, `max_txs`, `gas_fill_pct`, `ordering`)
+     `transactions`, `queued`, `build_el_payload` (the slot's engine build switch), `max_txs`, `gas_fill_pct`, `ordering`)
      resolves into `FrozenPlan.Build.Local` (rules carry it too). Slot results:
      `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
      artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),
@@ -833,7 +838,7 @@ Key config sections:
   build timing" in 0d),
   `--local-build-payload-source`
   (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
-  el_mempool), `--local-build-el-payload`, `--local-build-allow-blobs-without-bundle`,
+  el_mempool), `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
   `--txpool-store` (pool persistence directory, startup-only, empty = memory),

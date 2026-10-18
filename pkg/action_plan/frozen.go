@@ -90,6 +90,11 @@ type ResolvedBuildSettings struct {
 	// parent-payload reorg attempt (see BuildPlan.ReorgParentPayload).
 	ReorgParentPayload bool `json:"reorg_parent_payload,omitempty"`
 
+	// EngineEnabled runs the engine-API build for the slot: the global
+	// build.engine_enabled, overridden by the plan's build.local
+	// build_el_payload.
+	EngineEnabled bool `json:"engine_enabled"`
+
 	// CandidateModes is the effective build-candidate policy for the slot:
 	// candidate key -> auto/always/never, merged from the global config and
 	// the plan's build.candidates overrides.
@@ -118,8 +123,6 @@ type ResolvedLocalBuildSettings struct {
 	TransactionsRedacted int `json:"transactions_redacted,omitempty"`
 	// Queued is the exact ordered hash list for the queued source.
 	Queued []string `json:"queued,omitempty"`
-	// BuildELPayload keeps the engine build when the payload source is local.
-	BuildELPayload bool `json:"build_el_payload"`
 	// Pool selection parameters (tx source txpool).
 	MaxTxs     uint64 `json:"max_txs,omitempty"`
 	GasFillPct uint64 `json:"gas_fill_pct"`
@@ -342,6 +345,12 @@ func resolveBuild(frozen *FrozenPlan, cfg *config.Config, slotsBuilt uint64) *Re
 	build.CandidateModes = resolveCandidateModes(frozen.Plan, cfg)
 	build.Local = resolveLocalBuild(frozen.Plan, cfg)
 
+	build.EngineEnabled = cfg.Build.EngineEnabled
+	if frozen.Plan != nil && frozen.Plan.Build != nil && frozen.Plan.Build.Local != nil &&
+		frozen.Plan.Build.Local.BuildELPayload != nil {
+		build.EngineEnabled = *frozen.Plan.Build.Local.BuildELPayload
+	}
+
 	// A plan that explicitly activates (mode custom) an available consumer
 	// forces the build past the schedule. A merely-inherited active consumer
 	// never forces, and a custom category whose consumer is unavailable
@@ -438,7 +447,6 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 		Enabled:                 cfg.LocalBuild.Enabled,
 		PayloadSource:           cfg.LocalBuild.NormalizedPayloadSource(),
 		TxSource:                cfg.LocalBuild.NormalizedTxSource(),
-		BuildELPayload:          cfg.LocalBuild.BuildELPayload,
 		MaxTxs:                  cfg.TxPool.MaxTxsPerBlock,
 		GasFillPct:              cfg.TxPool.EffectiveGasFillPct(),
 		Ordering:                cfg.TxPool.NormalizedOrdering(),
@@ -478,10 +486,6 @@ func resolveLocalBuild(plan *SlotPlan, cfg *config.Config) *ResolvedLocalBuildSe
 	if len(override.Queued) > 0 {
 		local.Queued = make([]string, len(override.Queued))
 		copy(local.Queued, override.Queued)
-	}
-
-	if override.BuildELPayload != nil {
-		local.BuildELPayload = *override.BuildELPayload
 	}
 
 	if override.MaxTxs != nil {

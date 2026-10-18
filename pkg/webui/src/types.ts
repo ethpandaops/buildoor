@@ -62,6 +62,7 @@ export interface BuilderAPIConfig {
 // Build-candidate policy: which parent candidates a slot builds payloads for
 // (auto | always | never per candidate) and how the engine builds run.
 export interface BuildConfig {
+  engine_enabled?: boolean;
   candidate_parent_full?: string;
   candidate_parent_empty?: string;
   candidate_grandparent_full?: string;
@@ -79,7 +80,6 @@ export interface LocalBuildConfig {
   enabled: boolean;
   payload_source: string; // el | local | local_or_el | higher_value
   tx_source: string; // txpool | txpool_el_fill | empty | el_mempool
-  build_el_payload: boolean;
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
   max_attempts: number;
@@ -179,7 +179,7 @@ export interface LocalBuildStatus {
   enabled: boolean;
   payload_source: string;
   tx_source: string;
-  build_el_payload: boolean;
+  engine_enabled: boolean;
   txpool: TxPoolStatus;
   plan_checks?: {
     checked: number;
@@ -1157,7 +1157,6 @@ export interface ResolvedLocalBuildSettings {
   transactions?: string[];
   transactions_redacted?: number; // hidden explicit list length (no login)
   queued?: string[];
-  build_el_payload: boolean;
   max_txs?: number;
   gas_fill_pct: number;
   ordering: string;

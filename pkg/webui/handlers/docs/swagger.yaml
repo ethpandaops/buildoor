@@ -175,8 +175,9 @@ definitions:
   action_plan.LocalBuildPlan:
     properties:
       build_el_payload:
-        description: BuildELPayload keeps the engine build when the payload source
-          is local.
+        description: |-
+          BuildELPayload runs (or skips) the engine-API build for the slot,
+          overriding build.engine_enabled.
         type: boolean
       enabled:
         description: Enabled forces the local build on or off for the slot.
@@ -338,6 +339,12 @@ definitions:
           candidate key -> auto/always/never, merged from the global config and
           the plan's build.candidates overrides.
         type: object
+      engine_enabled:
+        description: |-
+          EngineEnabled runs the engine-API build for the slot: the global
+          build.engine_enabled, overridden by the plan's build.local
+          build_el_payload.
+        type: boolean
       forced:
         description: |-
           Forced marks builds the plan pushed past the schedule (they never
@@ -428,10 +435,6 @@ definitions:
           BaseFeeCeilingGwei halves the fill above this next base fee (global-only,
           0 = off; exact lists are never reduced).
         type: integer
-      build_el_payload:
-        description: BuildELPayload keeps the engine build when the payload source
-          is local.
-        type: boolean
       enabled:
         type: boolean
       end_time_ms:
@@ -834,9 +837,9 @@ definitions:
     properties:
       availability:
         $ref: '#/definitions/payload_builder.LocalBuildAvailability'
-      build_el_payload:
-        type: boolean
       enabled:
+        type: boolean
+      engine_enabled:
         type: boolean
       payload_source:
         type: string

@@ -384,7 +384,8 @@ type LocalBuildPlan struct {
 	// pool at build time and the order must respect each sender's nonces.
 	// Implies tx_source queued. Any deviation fails the build, never trims.
 	Queued []string `json:"queued,omitempty"`
-	// BuildELPayload keeps the engine build when the payload source is local.
+	// BuildELPayload runs (or skips) the engine-API build for the slot,
+	// overriding build.engine_enabled.
 	BuildELPayload *bool `json:"build_el_payload,omitempty"`
 	// Pool selection tweaks (tx source txpool).
 	MaxTxs     *uint64 `json:"max_txs,omitempty"`

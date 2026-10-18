@@ -29,13 +29,19 @@ import (
 
 func TestLocalBuildRequestRunEL(t *testing.T) {
 	require.True(t, (*LocalBuildRequest)(nil).RunEL(), "no local request = engine build only")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceEL}).RunEL())
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL, BuildELPayload: false}).RunEL(),
-		"local_or_el needs the engine payload as fallback")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue, BuildELPayload: false}).RunEL(),
-		"higher_value compares against the engine payload")
-	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: true}).RunEL())
-	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, BuildELPayload: false}).RunEL())
+	require.True(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceLocal, EngineEnabled: true}).RunEL())
+	require.False(t, (&LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}).RunEL(),
+		"the engine builder switch decides, not the payload source")
+
+	// Without the engine build every source picks the testing payload.
+	for _, source := range []string{config.PayloadSourceEL, config.PayloadSourceLocalOrEL, config.PayloadSourceHigherValue} {
+		req := &LocalBuildRequest{PayloadSource: source}
+		require.Equal(t, config.PayloadSourceLocal, req.selectionRequest().PayloadSource, source)
+		require.Equal(t, source, req.PayloadSource, "the request itself stays untouched")
+	}
+
+	enabled := &LocalBuildRequest{PayloadSource: config.PayloadSourceEL, EngineEnabled: true}
+	require.Same(t, enabled, enabled.selectionRequest())
 }
 
 func TestSelectPayload(t *testing.T) {

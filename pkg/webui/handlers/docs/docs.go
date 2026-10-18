@@ -2554,7 +2554,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "build_el_payload": {
-                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
+                    "description": "BuildELPayload runs (or skips) the engine-API build for the slot,\noverriding build.engine_enabled.",
                     "type": "boolean"
                 },
                 "enabled": {
@@ -2743,6 +2743,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "engine_enabled": {
+                    "description": "EngineEnabled runs the engine-API build for the slot: the global\nbuild.engine_enabled, overridden by the plan's build.local\nbuild_el_payload.",
+                    "type": "boolean"
+                },
                 "forced": {
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
                     "type": "boolean"
@@ -2821,10 +2825,6 @@ const docTemplate = `{
                 "base_fee_ceiling_gwei": {
                     "description": "BaseFeeCeilingGwei halves the fill above this next base fee (global-only,\n0 = off; exact lists are never reduced).",
                     "type": "integer"
-                },
-                "build_el_payload": {
-                    "description": "BuildELPayload keeps the engine build when the payload source is local.",
-                    "type": "boolean"
                 },
                 "enabled": {
                     "type": "boolean"
@@ -3382,10 +3382,10 @@ const docTemplate = `{
                 "availability": {
                     "$ref": "#/definitions/payload_builder.LocalBuildAvailability"
                 },
-                "build_el_payload": {
+                "enabled": {
                     "type": "boolean"
                 },
-                "enabled": {
+                "engine_enabled": {
                     "type": "boolean"
                 },
                 "payload_source": {

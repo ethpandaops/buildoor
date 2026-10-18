@@ -87,9 +87,10 @@ type LocalBuildRequest struct {
 	// PayloadSource decides which payload feeds consumers: el, local,
 	// local_or_el or higher_value.
 	PayloadSource string
-	// BuildELPayload keeps the engine build running when PayloadSource is
-	// local.
-	BuildELPayload bool
+	// EngineEnabled runs the engine-API build next to the testing builds
+	// (the slot's build.engine_enabled). Without it the testing build alone
+	// feeds the consumers, whatever PayloadSource says.
+	EngineEnabled bool
 
 	// Pool selection tweaks (tx source txpool).
 	MaxTxs     uint64
@@ -115,15 +116,25 @@ type LocalBuildRequest struct {
 	RebuildInterval time.Duration
 }
 
-// RunEL reports whether the engine-API build runs alongside the local build.
-// The el, local_or_el and higher_value payload sources need the engine
-// payload; local only keeps it when BuildELPayload is set.
+// RunEL reports whether the engine-API build runs alongside the local build
+// (a target without a local build only reaches the builder with the engine
+// build enabled).
 func (r *LocalBuildRequest) RunEL() bool {
-	if r == nil {
-		return true
+	return r == nil || r.EngineEnabled
+}
+
+// selectionRequest is the request the payload choice works with: without the
+// engine build there is only the testing payload to pick, whatever source the
+// settings name.
+func (r *LocalBuildRequest) selectionRequest() *LocalBuildRequest {
+	if r == nil || r.EngineEnabled {
+		return r
 	}
 
-	return r.PayloadSource != config.PayloadSourceLocal || r.BuildELPayload
+	local := *r
+	local.PayloadSource = config.PayloadSourceLocal
+
+	return &local
 }
 
 // LocalBuildInfo describes how a local payload was assembled.
@@ -558,7 +569,7 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 		Candidate:          string(candidate),
 		TxSource:           settings.TxSource,
 		PayloadSource:      settings.PayloadSource,
-		BuildELPayload:     settings.BuildELPayload,
+		EngineEnabled:      frozen.Build.EngineEnabled,
 		MaxTxs:             settings.MaxTxs,
 		GasFillPct:         settings.GasFillPct,
 		Ordering:           settings.Ordering,
