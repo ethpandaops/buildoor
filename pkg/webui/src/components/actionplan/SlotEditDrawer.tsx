@@ -28,6 +28,11 @@ import {
   resolveCategory,
   type BuildFlagMode,
   EMPTY_LOCAL_BUILD_STATE,
+  InclusionListForm,
+  initInclusionListState,
+  inclusionListPlanFromState,
+  inclusionListError,
+  type InclusionListFormState,
   type CategoryFormState,
   type CategoryOutcome,
 } from './planForms';
@@ -511,6 +516,30 @@ const ResultView: React.FC<{
                 </KV>
               )}
               <KV label="At">{formatDateTime(build.at)}</KV>
+              {build.inclusion_list && (
+                <KV
+                  label="Inclusion Lists"
+                  hint={
+                    <>
+                      FOCIL (Heze): the committee lists of slot {build.inclusion_list.slot} the payload was
+                      built against — the gossiped lists merged with the beacon node&apos;s attributes list.
+                      Omitted transactions were left out on purpose (omit mode or the plan&apos;s omit_txs).
+                    </>
+                  }
+                >
+                  {build.inclusion_list.lists} lists ({build.inclusion_list.timely} timely),{' '}
+                  {build.inclusion_list.transactions} txs
+                  {build.inclusion_list.omitted ? `, ${build.inclusion_list.omitted} omitted` : ''}
+                  {build.inclusion_list.mode === 'omit' && (
+                    <span className={`ms-1 ${badgeClass('danger')}`} title="Built without the inclusion lists">
+                      omitted
+                    </span>
+                  )}
+                  {build.inclusion_list.bits && (
+                    <span className="ms-1 font-monospace text-secondary">bits {build.inclusion_list.bits}</span>
+                  )}
+                </KV>
+              )}
               {build.local_build && (
                 <div className="col-12">
                   <div className="config-item">
@@ -1090,6 +1119,12 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
   );
   const { status: localBuildStatus } = useLocalBuildStatus();
 
+  // Inclusion list (FOCIL) overrides: bulk starts empty and only writes what
+  // is set, single mode edits the slot's own overrides.
+  const [inclusionList, setInclusionList] = useState<InclusionListFormState>(() =>
+    initInclusionListState(bulk ? undefined : effectivePlan?.build?.inclusion_list)
+  );
+
   // Per-candidate build policy overrides ('' = inherit the global policy).
   // Single-slot editing only: a bulk category replace would clobber unrelated
   // build settings on every targeted slot.
@@ -1116,7 +1151,7 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
 
   // Unsaved edits: the form state differs from the one it opened with.
   const formSnapshot = JSON.stringify([
-    bidState, apiState, revealState, buildReorg, localBuild, buildCandidates, transforms, ignoreRules,
+    bidState, apiState, revealState, buildReorg, localBuild, buildCandidates, inclusionList, transforms, ignoreRules,
   ]);
   const initialSnapshot = useMemo(() => formSnapshot, []); // eslint-disable-line react-hooks/exhaustive-deps
   const dirty = !isPastSingle && formSnapshot !== initialSnapshot;
@@ -1219,6 +1254,16 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
       ? localPlan !== undefined
       : JSON.stringify(localPlan ?? null) !== JSON.stringify(initialLocal ?? null);
 
+    const ilPlan = inclusionListPlanFromState(inclusionList);
+    const ilChanged = bulk
+      ? ilPlan !== undefined
+      : JSON.stringify(ilPlan ?? null) !== JSON.stringify(initialPlan?.build?.inclusion_list ?? null);
+    const ilError = ilChanged ? inclusionListError(inclusionList) : null;
+    if (ilError) {
+      setFormError(ilError);
+      return;
+    }
+
     // A hidden explicit list cannot be written back: the backend refuses it
     // rather than dropping the transactions.
     const hiddenError = (candidatesChanged || localChanged) ? hiddenTransactionsError(localPlan) : null;
@@ -1238,6 +1283,8 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
       }
 
       if (localPlan) buildObj.local = localPlan;
+      // The category is replaced whole: the inclusion list overrides go along.
+      if (ilPlan) buildObj.inclusion_list = ilPlan;
 
       updateRec['build'] = Object.keys(buildObj).length > 0 ? buildObj : null;
       hasChange = true;
@@ -1263,6 +1310,13 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
         setPaths['build.reorg_parent_payload'] = wantOn;
         hasChange = true;
       }
+    }
+
+    // Inclusion list overrides as one set path (null clears them), unless the
+    // whole build category was replaced above.
+    if (!candidatesChanged && ilChanged) {
+      setPaths['build.inclusion_list'] = ilPlan ?? null;
+      hasChange = true;
     }
 
     // Transforms (modeless jq expressions) as fine-grained set paths. Single
@@ -1320,7 +1374,11 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
   const tabs = isPastSingle
     ? [{ id: 'result' as PlanTab, label: 'Result' }]
     : [
-        { id: 'engine' as PlanTab, label: 'Engine builder', extra: marked(buildReorg === 'on' || candidatesSet) },
+        {
+          id: 'engine' as PlanTab,
+          label: 'Engine builder',
+          extra: marked(buildReorg === 'on' || candidatesSet || inclusionListPlanFromState(inclusionList) !== undefined),
+        },
         { id: 'testing' as PlanTab, label: 'Testing builder', extra: marked(localSet) },
         { id: 'bid' as PlanTab, label: 'ePBS bidder', extra: marked(customized(bidState.mode)) },
         { id: 'builder_api' as PlanTab, label: 'Builder API', extra: marked(customized(apiState.mode)) },
@@ -1460,6 +1518,12 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
                     ))}
                   </div>
                 )}
+                <InclusionListForm
+                  bulk={bulk}
+                  state={inclusionList}
+                  disabled={formDisabled}
+                  onChange={setInclusionList}
+                />
               </>
             )}
 

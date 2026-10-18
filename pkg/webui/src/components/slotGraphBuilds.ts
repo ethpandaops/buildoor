@@ -1,4 +1,10 @@
-import type { LocalBuildProgressEvent, LocalBuildRun, LocalBuildStreamEvent, SlotState } from '../types';
+import type {
+  InclusionListBuild,
+  LocalBuildProgressEvent,
+  LocalBuildRun,
+  LocalBuildStreamEvent,
+  SlotState,
+} from '../types';
 import { formatGwei } from '../utils';
 import type { PopoverData, PopoverItem } from './Popover';
 
@@ -9,6 +15,42 @@ import type { PopoverData, PopoverItem } from './Popover';
 const gwei = (wei: string | undefined) => formatGwei(Number(BigInt(wei || '0') / 1000000000n));
 
 const truncate = (hash: string, len = 16) => (hash.length <= len + 3 ? hash : `${hash.substring(0, len)}...`);
+
+// inclusionListItems describes the inclusion list view (FOCIL, Heze) a
+// payload was built against; placed/skipped are the testing build's
+// placement (absent for the engine build, which hands the list to the EL).
+export function inclusionListItems(
+  il: InclusionListBuild | undefined,
+  placed?: number,
+  skipped?: Record<string, number>,
+): PopoverItem[] {
+  if (!il) return [];
+
+  const items: PopoverItem[] = [
+    {
+      label: 'Inclusion Lists',
+      value: `${il.lists} lists (${il.timely} timely)${il.equivocators ? `, ${il.equivocators} equivocators ignored` : ''}`,
+    },
+    {
+      label: 'List Txs',
+      value:
+        `${il.transactions}` +
+        (il.omitted ? `, ${il.omitted} omitted (${il.mode === 'omit' ? 'omit mode' : 'omit_txs'})` : ''),
+    },
+  ];
+
+  if (placed !== undefined) {
+    const skips = Object.entries(skipped ?? {}).map(([reason, n]) => `${reason}: ${n}`);
+    items.push({
+      label: 'List Placement',
+      value: `${placed} placed${skips.length > 0 ? `, could not execute: ${skips.join(', ')}` : ''}`,
+    });
+  }
+
+  if (il.bits) items.push({ label: 'Committee Bits', value: il.bits });
+
+  return items;
+}
 
 // engineBuildRan reports whether the slot's primary target ran the engine-API
 // build: its payload carries the engine calls, or its build-started event says
@@ -165,6 +207,8 @@ function handedOverRun(lb: LocalBuildStreamEvent, slot: number, slotStartTime: n
     ...(lb.info?.fill_error ? [{ label: 'EL Mempool', value: `unreadable: ${lb.info.fill_error}` }] : []),
     ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
     ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
+    ...inclusionListItems(lb.info?.inclusion_list, lb.info?.selection?.inclusion_list_txs ?? lb.info?.inclusion_list_txs,
+      lb.info?.selection?.inclusion_list_skipped),
     ...(lb.el
       ? [
           { label: 'Engine Block Hash', value: truncate(lb.el.block_hash), copyValue: lb.el.block_hash },

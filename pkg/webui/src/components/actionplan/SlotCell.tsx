@@ -109,6 +109,10 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
 
   const reorgParent = plan?.build?.reorg_parent_payload === true;
   const candidateOverrides = Object.keys(plan?.build?.candidates ?? {}).length > 0;
+  // Inclusion list overrides; censoring ones (omit mode or omitted
+  // transactions) draw the disabled chip.
+  const il = plan?.build?.inclusion_list;
+  const ilCensors = !!il && (il.mode === 'omit' || (il.omit_txs?.length ?? 0) > 0);
   const t = plan?.transforms;
   const hasTransform = !!(t && (t.payload || t.bid || t.envelope));
 
@@ -122,6 +126,14 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
   if (plan?.reveal) titleParts.push(`reveal: ${plan.reveal.mode}`);
   if (reorgParent) titleParts.push('build: reorg parent (n-2)');
   if (candidateOverrides) titleParts.push('build: candidate overrides');
+  if (il) {
+    const parts = [
+      il.mode ? `mode ${il.mode}` : '',
+      il.bits ? `bits ${il.bits}` : '',
+      il.omit_txs?.length ? `${il.omit_txs.length} tx omitted` : '',
+    ].filter(Boolean);
+    titleParts.push(`inclusion list: ${parts.join(', ')}`);
+  }
   if (hasTransform) {
     const targets = ['payload', 'bid', 'envelope'].filter((k) => t?.[k as keyof typeof t]);
     titleParts.push(`jq transform: ${targets.join(', ')}`);
@@ -151,6 +163,11 @@ const SlotCellInner: React.FC<SlotCellProps> = ({
           {reorgParent && <span className="ap-chip ap-chip-reorg" title="Build on n-2 payload">P</span>}
           {candidateOverrides && <span className="ap-chip ap-chip-candidates" title="Candidate policy overrides">C</span>}
           {hasTransform && <span className="ap-chip ap-chip-transform" title="jq transform">jq</span>}
+          {il && (
+            <span className={`ap-chip ${ilCensors ? 'ap-chip-disabled' : 'ap-chip-custom'}`} title="Inclusion list override">
+              IL
+            </span>
+          )}
         </span>
         <span className="ap-dots">
           {bidStatus && <span className={`ap-dot ap-dot-${bidStatus}`}></span>}

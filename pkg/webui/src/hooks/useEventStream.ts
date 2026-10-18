@@ -489,6 +489,7 @@ function useEventStreamConnection(): UseEventStreamResult {
             base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
             num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
             engine_calls?: import('../types').EngineCalls;
+            inclusion_list?: import('../types').InclusionListBuild;
           };
           addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
           const detail = {
@@ -535,6 +536,7 @@ function useEventStreamConnection(): UseEventStreamResult {
                 payloadBlockHash: data.block_hash,
                 payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
                 payloadDetail: detail,
+                payloadInclusionList: data.inclusion_list,
                 payloadUpgrades: (state.payloadUpgrades ?? 0) + 1,
                 payloadUpgradedAt: data.ready_at,
               };
@@ -549,7 +551,8 @@ function useEventStreamConnection(): UseEventStreamResult {
             payloadEngineCalls: data.engine_calls,
             payloadBlockHash: data.block_hash,
             payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
-            payloadDetail: detail
+            payloadDetail: detail,
+            payloadInclusionList: data.inclusion_list
             };
           });
           break;

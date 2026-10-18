@@ -734,10 +734,36 @@ func (b *PayloadBuilder) buildEngine(
 	buildTimer := time.NewTimer(max(time.Until(deadline), 0))
 	defer buildTimer.Stop()
 
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("build aborted while waiting for payload: %w", ctx.Err())
-	case <-buildTimer.C:
+	// A list arriving during the wait restarts the EL's build with it: the
+	// payload ID changes, the deadline stays.
+	var ilTicks <-chan time.Time
+
+	ilVersion := uint64(0)
+
+	if prelude.inclusionList != nil && b.ilStore != nil {
+		ticker := time.NewTicker(inclusionListPollInterval)
+		defer ticker.Stop()
+
+		ilTicks = ticker.C
+		ilVersion = prelude.inclusionList.StoreVersion
+	}
+
+wait:
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("build aborted while waiting for payload: %w", ctx.Err())
+		case <-buildTimer.C:
+			break wait
+		case <-ilTicks:
+			if version := b.ilStore.Version(); version != ilVersion {
+				ilVersion = version
+
+				if restarted, id := b.restartWithInclusionList(ctx, attrs, prelude); restarted != nil {
+					prelude, payloadID = restarted, id
+				}
+			}
+		}
 	}
 
 	// Retrieve the built payload as the fork-agnostic union.
