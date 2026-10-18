@@ -1,14 +1,19 @@
 package payload_builder
 
 import (
+	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/trie"
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
 	"github.com/ethpandaops/go-eth-engine-client/spec/shanghai"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
+	"github.com/ethpandaops/go-eth2-client/spec/bellatrix"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/holiman/uint256"
@@ -75,5 +80,52 @@ func TestRehashBeaconPayload_Modified(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, want.Hash(), got)
+	assert.NotEqual(t, common.Hash(p.BlockHash), got)
+}
+
+func TestRawTransactionsRootMatchesTypedRoot(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	signer := types.LatestSignerForChainID(big.NewInt(1))
+	to := common.Address{0x42}
+
+	legacy, err := types.SignNewTx(key, signer, &types.LegacyTx{
+		Nonce: 0, GasPrice: big.NewInt(1), Gas: 21000, To: &to, Value: big.NewInt(1),
+	})
+	require.NoError(t, err)
+
+	dynamic, err := types.SignNewTx(key, signer, &types.DynamicFeeTx{
+		ChainID: big.NewInt(1), Nonce: 1, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
+		Gas: 21000, To: &to, Value: big.NewInt(1),
+	})
+	require.NoError(t, err)
+
+	typed := types.Transactions{legacy, dynamic}
+	raw := make(rawTransactions, len(typed))
+
+	for i, tx := range typed {
+		encoded, err := tx.MarshalBinary()
+		require.NoError(t, err)
+
+		raw[i] = encoded
+	}
+
+	assert.Equal(t,
+		types.DeriveSha(typed, trie.NewStackTrie(nil)),
+		types.DeriveSha(raw, trie.NewStackTrie(nil)),
+		"the raw-bytes root must equal the decoded transactions' root")
+}
+
+func TestRehashBeaconPayload_UndecodableTransaction(t *testing.T) {
+	p, requests, parentRoot := rehashTestPayload(t)
+
+	// A transform inserting garbage still yields a payload with a consistent
+	// hash, so the EL rejects the transaction rather than the block hash.
+	beacon := beaconPayloadFromEngine(p, version.DataVersionGloas)
+	beacon.Transactions = append(beacon.Transactions, bellatrix.Transaction{0x02, 0xde, 0xad})
+
+	got, err := RehashBeaconPayload(beacon, p.Version, requests, parentRoot)
+	require.NoError(t, err)
 	assert.NotEqual(t, common.Hash(p.BlockHash), got)
 }

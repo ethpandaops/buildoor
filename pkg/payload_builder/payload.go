@@ -35,7 +35,12 @@ type Payload struct {
 	// BlobsBundle holds the blobs/commitments/proofs (Deneb+), nil if none.
 	BlobsBundle *BlobsBundle
 	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
-	ExecutionRequests       *eth2all.ExecutionRequests
+	ExecutionRequests *eth2all.ExecutionRequests
+	// EngineExecutionRequests and EngineVersion are the engine-API forms the
+	// block hash is derived from: a payload transform recomputes the hash
+	// with them (RehashBeaconPayload). The requests are the build's own — a
+	// payload transform cannot change them, they are not part of the
+	// execution payload.
 	EngineExecutionRequests []prague.ExecutionRequest
 	EngineVersion           enginev.DataVersion
 
