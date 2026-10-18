@@ -9,10 +9,12 @@ export function formatEventTime(timestamp: number): string {
 }
 
 export function formatGwei(gwei: number): string {
-  if (gwei >= 1000000000) {
-    return (gwei / 1000000000).toFixed(4) + ' ETH';
-  } else if (gwei >= 1000000) {
-    return (gwei / 1000000).toFixed(2) + 'M gwei';
+  const sign = gwei < 0 ? '-' : '';
+  const abs = Math.abs(gwei);
+  if (abs >= 1000000000) {
+    return sign + (abs / 1000000000).toFixed(4) + ' ETH';
+  } else if (abs >= 1000000) {
+    return sign + (abs / 1000000).toFixed(2) + 'M gwei';
   }
   return gwei + ' gwei';
 }
@@ -48,6 +50,7 @@ export function getEventTypeClass(type: string): string {
   const classes: Record<string, string> = {
     // Errors → wider red block.
     'payload_build_failed': 'event-error',
+    'local_build_failed': 'event-error',
     'bid_failed': 'event-error',
     'reveal_failed': 'event-error',
     'lifecycle_error': 'event-error',
@@ -60,6 +63,7 @@ export function getEventTypeClass(type: string): string {
     'payload_attributes': 'event-color-payload-attributes', // payload-attributes dot
     'payload_build_started': 'event-color-build',          // build-delay line
     'payload_ready': 'event-color-build',                  // payload-created dot
+    'local_build': 'event-color-build',                    // local build outcome
     'bid_submitted': 'event-color-bid',                    // bid-submitted dot
     'bid_event': 'event-color-external-bid',               // external-bid dot
     'payload_available': 'event-color-payload-available',  // payload-available dot
@@ -86,6 +90,8 @@ const EVENT_TYPE_CATEGORY: Record<string, string> = {
   payload_attributes: 'attributes',
   payload_build_started: 'build',
   payload_ready: 'build',
+  local_build: 'build',
+  local_build_failed: 'error',
   bid_submitted: 'bid',
   bid_event: 'external_bid',
   payload_available: 'available',
@@ -126,7 +132,9 @@ export function calculateSlotTiming(
   const slotDuration = chainInfo?.seconds_per_slot || 12000;
   const genesisTime = chainInfo?.genesis_time || 0;
   const slotStartTime = genesisTime + (slot * slotDuration);
-  const rangeStart = -slotDuration * 0.25;
+  // A third of the slot before its start keeps the payload builds visible:
+  // they start ahead of the slot (default -28% of the slot time).
+  const rangeStart = -slotDuration / 3;
   const rangeEnd = slotDuration;
   const totalRange = rangeEnd - rangeStart;
 

@@ -16,6 +16,8 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
+	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
 	"github.com/ethpandaops/buildoor/pkg/validatorranges"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
@@ -41,6 +43,22 @@ type APIHandler struct {
 	payments         *payload_bidder.PaymentTracker   // May be nil (Gloas not scheduled)
 	planSvc          *action_plan.PlanService         // May be nil
 	resultTracker    *slot_results.Tracker            // May be nil
+	planVerifier     *tx_plan_verifier.Verifier       // May be nil (no --el-rpc)
+
+	// The /rpc ingress (nil without --el-rpc).
+	rpcIngress   *txpoolrpc.Server
+	rpcUpstreams *txpoolrpc.UpstreamPool
+	rpcKeys      *txpoolrpc.KeyStore
+}
+
+// SetPlanVerifier attaches the tx plan verifier whose counters the local
+// build status serves.
+func (h *APIHandler) SetPlanVerifier(v *tx_plan_verifier.Verifier) {
+	h.planVerifier = v
+
+	if h.eventStreamMgr != nil {
+		h.eventStreamMgr.planVerifier.Store(v)
+	}
 }
 
 // NewAPIHandler creates a new API handler.
@@ -91,6 +109,7 @@ func NewAPIHandler(
 			builderAPISvc, revealSvc, inclusionTracker, payments,
 			planSvc, resultTracker,
 		)
+		h.eventStreamMgr.AttachSources(settingsSvc, validatorStore, propPrefSvc, valRanges)
 		h.eventStreamMgr.Start()
 	}
 

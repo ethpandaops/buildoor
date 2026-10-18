@@ -1,0 +1,143 @@
+/* Validator registrations page: the shared list card of its three tabs. */
+
+.bd-reg-card {
+  overflow: hidden;
+}
+
+.bd-reg-head {
+  padding: 14px 16px 0;
+}
+
+.bd-reg-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--bd-border);
+}
+
+.bd-reg-search {
+  position: relative;
+  flex: 1 1 260px;
+  max-width: 460px;
+}
+
+.bd-reg-search > i {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: var(--bd-faint);
+  pointer-events: none;
+}
+
+.bd-reg-search .form-control {
+  padding-left: 30px;
+  background: var(--bd-surface-2);
+  border-color: var(--bd-border);
+  color: var(--bd-text);
+}
+
+.bd-reg-filter {
+  width: auto;
+  min-width: 140px;
+  background-color: var(--bd-surface-2);
+  border-color: var(--bd-border);
+  color: var(--bd-text);
+}
+
+.bd-reg-status {
+  margin-left: auto;
+}
+
+.bd-reg-scroll {
+  max-height: 65vh;
+  overflow: auto;
+}
+
+.bd-reg-table {
+  font-size: 13px;
+}
+
+.bd-reg-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bd-surface-2);
+  color: var(--bd-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--bd-border);
+  padding: 8px 12px;
+}
+
+.bd-reg-table tbody td {
+  padding: 7px 12px;
+  border-color: var(--bd-border);
+  vertical-align: middle;
+}
+
+.bd-reg-table tbody tr:hover td {
+  background: var(--bd-surface-2);
+}
+
+.bd-reg-table td.font-monospace {
+  font-size: 12px;
+}
+
+.bd-reg-hash {
+  word-break: break-all;
+  color: var(--bd-text);
+}
+
+.bd-reg-hash:hover {
+  color: var(--bd-accent);
+}
+
+.bd-reg-hash.text-success {
+  color: var(--bd-ok-fg) !important;
+}
+
+.bd-reg-state {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  padding: 36px 16px;
+  color: var(--bd-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.bd-reg-state > i {
+  margin-top: 3px;
+  color: var(--bd-faint);
+}
+
+.bd-reg-state-danger,
+.bd-reg-state-danger > i {
+  color: var(--bd-danger-fg);
+}
+
+.bd-reg-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--bd-danger-bg);
+  color: var(--bd-danger-fg);
+  font-size: 13px;
+}
+
+.bd-reg-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--bd-border);
+}

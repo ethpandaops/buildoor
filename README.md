@@ -31,7 +31,7 @@ The Builder API mode implements the traditional [MEV-Boost Builder API](https://
 - Publishes full blocks when a proposer submits a blinded block via `submitBlindedBlock`
 - Supports a configurable block value subsidy to make bids more attractive for testing
 
-Enable with `--builder-api-enabled --builder-api-port <port>`.
+Enable with `--builder-api-enabled --api-port <port>` (the Builder API is served on the WebUI/API port).
 
 ## Building
 
@@ -94,12 +94,16 @@ buildoor run \
   --el-engine-api http://localhost:8551 \
   --el-jwt-secret /path/to/jwt.hex \
   --builder-api-enabled \
-  --builder-api-port 18550
+  --api-port 18550
 ```
 
 ## Configuration Reference
 
-Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or an environment variables.
+Configuration can be provided via CLI flags, a YAML config file (`--config path/to/config.yaml`), or environment variables.
+
+- **Config file**: a flat YAML map keyed by the flag names without the leading dashes (`deposit-amount: 32000000000`). Any other key fails the start instead of being ignored.
+- **Environment**: `BUILDOOR_` + the flag name in upper case with dashes as underscores (`BUILDOOR_DEPOSIT_AMOUNT=32000000000`).
+- Values that a module would not act on (unknown modes, strategies, out-of-range percentages) fail the start as well.
 
 ### Core Flags
 
@@ -110,7 +114,8 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | `--el-engine-api` | *(required)* | Execution layer Engine API URL |
 | `--el-jwt-secret` | *(required)* | Path to JWT secret file |
 | `--el-rpc` | | Execution layer JSON-RPC URL (required for lifecycle) |
-| `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle) |
+| `--el-ws` | | EL websocket JSON-RPC URL (optional): the testing build's EL mempool mirror follows `newPendingTransactions` live instead of polling a filter |
+| `--wallet-privkey` | | Wallet ECDSA private key (required for lifecycle); from Gloas its address is the coinbase of the built payloads |
 | `--log-level` | `info` | Log level: `debug`, `info`, `warn`, `error` |
 | `--config` | | Path to YAML config file |
 
@@ -119,21 +124,22 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--builder-api-enabled` | `false` | Enable the Builder API at startup |
-| `--builder-api-port` | `0` | Builder API HTTP port (0 = disabled) |
-| `--builder-api-subsidy` | `100000` | Block value subsidy added to bids (Gwei) |
+| `--builder-api-subsidy` | `100000` | Block value subsidy added to served bids (Gwei; negative = the builder's margin on Gloas bids, ignored before Gloas) |
+| `--builder-api-respond-at` | `0` | Timing game: hold Builder API bid responses until this many ms after the slot start, then serve the best payload built by then (0 = respond immediately; keep it within the proposer's getHeader timeout) |
 
 ### ePBS Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--epbs-enabled` | `false` | Enable ePBS bidding/revealing at startup |
-| `--build-start-time` | `-4000` | Payload build start time in ms relative to slot start |
-| `--epbs-bid-start` | `-1000` | First bid time in ms relative to slot start |
-| `--epbs-bid-end` | `1000` | Last bid time in ms relative to slot start |
-| `--epbs-reveal-time` | `6000` | Payload reveal time in ms relative to slot start |
+| `--build-start-time` | `0` | Payload build start time in ms relative to slot start (0 = auto: -3400 ms @12s, scaled to slot time) |
+| `--epbs-bid-start` | `0` | First bid time in ms relative to slot start (0 = auto: -400 ms @12s) |
+| `--epbs-bid-end` | `0` | Last bid time in ms relative to slot start (0 = auto: -100 ms @12s) |
+| `--reveal-time` | `0` | Payload reveal time gate in ms relative to slot start (0 = auto: 5000 ms @12s) |
 | `--epbs-bid-min` | `1000000` | Minimum bid amount (Gwei) |
 | `--epbs-bid-increase` | `100000` | Bid increase per subsequent bid (Gwei) |
-| `--epbs-bid-interval` | `250` | Interval between bids in ms (0 = single bid) |
+| `--epbs-bid-subsidy` | `100000000` | Added to every bid (Gwei; negative = the builder's margin, the bid never drops below `--epbs-bid-min`) |
+| `--epbs-bid-interval` | `500` | Interval between bids in ms (0 = single bid) |
 
 ### Schedule Flags
 
@@ -149,9 +155,86 @@ Configuration can be provided via CLI flags, a YAML config file (`--config path/
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--lifecycle` | `false` | Enable builder lifecycle management (deposits, exits, top-ups) |
-| `--deposit-amount` | `10000000000` | Builder deposit amount (Gwei, default 10 ETH) |
-| `--topup-threshold` | `1000000000` | Balance threshold for auto top-up (Gwei, default 1 ETH) |
-| `--topup-amount` | `5000000000` | Top-up amount (Gwei, default 5 ETH) |
+| `--deposit-amount` | `50000000000` | Amount of every builder key deposit — early onboarding, registration and each top-up (Gwei, default 50 ETH). There is no separate top-up amount |
+| `--topup-threshold` | `10000000000` | Effective balance below which a key is topped up by `--deposit-amount` (Gwei, default 10 ETH) |
+| `--deposit-max-fee` | `1000000` | Max builder deposit queue fee; deposits and top-ups wait above it (Gwei, 0 = no limit) |
+| `--early-deposit-tip` | `50` | Priority fee floor of the early onboarding deposit transactions (Gwei, 0 = EL suggestion) |
+
+### Local Build & Transaction Pool Flags
+
+Buildoor can build an additional payload per slot through the EL's
+`testing_buildBlockV1` (execution-apis `testing` namespace, disabled by default
+on every client — enable it with `--http.api ...,testing` on geth/reth/erigon,
+`--rpc-http-api ...,TESTING` on besu, `--JsonRpc.EnabledModules ...,Testing` on
+nethermind) from a transaction source it controls, and choose whether bids use
+that payload or the EL's. Under the kurtosis ethereum-package the module flag
+can only be appended through `el_extra_params`: geth, besu, erigon and ethrex
+accept the repeated flag (the appended list wins), nethermind rejects it — expose
+the namespace on an additional endpoint instead
+(`--JsonRpc.AdditionalRpcUrls=http://0.0.0.0:8547|http|net;eth;web3;txpool;testing`
+and point `--el-rpc` at port 8547) — and reth rejects it without an alternative. Both extensions need `--el-rpc` and are off by
+default; the enable settings are refused while the EL does not expose the
+namespace (probed at startup and every 5 minutes, or on demand from the UI).
+Only the canonical build candidate (`parent_full`) builds locally: the testing
+call builds on the EL's current head, which a speculative parent (`parent_empty`,
+`grandparent_*`) is not — those targets skip with `speculative_candidate` and,
+with payload source `local`, produce no payload (`local_or_el` falls back).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--engine-build-enabled` | `true` | Run the engine-API build (forkchoiceUpdated → getPayload); off, the testing build alone feeds the bids and slots without one are skipped |
+| `--local-build-enabled` | `false` | Build the additional local payload per slot |
+| `--local-build-payload-source` | `el` | Which payload feeds bids/reveals: `el` (local is a shadow), `local`, `local_or_el`, `higher_value` (whichever block is worth more) |
+| `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `txpool_el_fill` (pool first, then the EL mempool's pending txs fill the block), `empty`, `el_mempool` (per-slot plans may set an explicit list) |
+| `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
+| `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
+| `--local-build-start-time` | `0` | Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it) |
+| `--local-build-end-time` | `0` | End of the testing build window: no testing build starts unless it is estimated to finish by then (0 = auto: 1/120 of the slot before the slot start) |
+| `--local-build-rebuild-interval` | `0` | Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end; consumers get the best payload at the engine build's hand-over and a better later one for their next request (0 = one build, timed to finish at the window end) |
+| `--local-build-max-attempts` | `3` | Build attempts for the `txpool` source: an attributed EL refusal drops the offending txs and retries (exact lists never retry) |
+| `--txpool-enabled` | `false` | Owned transaction pool + JSON-RPC ingress at `/rpc` on `--api-port` |
+| `--txpool-auth` | `open` | Who may call `/rpc`: `open` (anonymous callers too, rate-limited) or `api_key` (an API key, `--txpool-auth-token` or a WebUI login is required) |
+| `--txpool-auth-token` | | Static API key, accepted next to the keys managed in the WebUI |
+| `--txpool-store` | | Directory persisting the transaction pool across restarts (its own pebble database, never the state-db; empty = memory only) |
+| `--txpool-rpc-anon-rate` | `20` | Anonymous `/rpc` calls per second (0 = unlimited) |
+| `--txpool-rpc-anon-scope` | `per_ip` | Anonymous rate-limit scope: `per_ip` or `shared` |
+| `--txpool-rpc-key-rate` | `0` | Default `/rpc` calls per second per API key (0 = unlimited) |
+| `--txpool-rpc-proxy-hops` | `0` | Trusted reverse proxies in front of `/rpc` (client IP from `X-Forwarded-For`) |
+| `--txpool-rpc-upstreams` | `local` | Read endpoints: `<local\|url>@<priority>,…`, lowest priority first, equal priorities round robin |
+| `--txpool-ordering` | `fifo` | Block selection order: `fifo`, `tip`, `random`, `round_robin` |
+| `--txpool-block-max-txs` | `0` | Max pool txs per local block (0 = unlimited) |
+| `--txpool-gas-fill-pct` | `100` | Share of the block gas limit the selection fills |
+| `--txpool-max-txs` | `10000` | Pool capacity |
+| `--txpool-max-txs-per-sender` | `256` | Per-sender queue cap |
+| `--txpool-base-fee-ceiling-gwei` | `0` | Above this next base fee pool fills drop to the EIP-1559 gas target so a long max-fill run does not price its own txs out (exact lists are never reduced) |
+| `--txpool-max-strikes` | `3` | Drop a queued tx after this many attributed build failures (0 = never) |
+| `--txpool-tx-ttl-slots` | `64` | Expire queued txs older than this many slots; an expired tx goes together with its sender's higher nonces, so no gap is left (0 = never) |
+| `--txpool-forward-to-el` | `false` | Also submit admitted txs to the EL mempool (A/B shadow mode) |
+
+Point a generator at the pool as its ONLY host:
+
+```bash
+spamoor eoatx -h "name(buildoor)http://<buildoor>:8080/rpc" -p <privkey>
+```
+
+Every locally built block is verified twice: the built payload must hold exactly
+the submitted list before it is bid, and after inclusion the canonical block is
+re-read from the EL and compared with the plan (verdict on the slot result's
+`tx_plan`, the `buildoor_tx_plan_checks_total` metric, and a `TX PLAN CHECK
+FAILED` error log on any deviation). A per-slot plan can name an exact ordered
+list of queued transaction hashes (`build.local.queued`); `.hack/txgen` signs
+transfers into the pool and prints their hashes for that purpose, and
+`.hack/payloadcheck` builds a payload on an EL and validates it through
+`engine_newPayload` (on the builder and on an independent EL) to prove the
+EL's testing path yields chain-valid blocks.
+
+The ingress answers `eth_sendRawTransaction` (and `eth_chainId`,
+`eth_getTransactionCount` pool-aware for `pending`, `txpool_*`) locally and
+proxies read-only `eth_*`/`net_*`/`web3_*` calls to `--el-rpc`, so spamoor can
+follow the chain through it. Do not add the EL as a second host: spamoor fans
+every submission out to all of its hosts, which would put the transactions into
+the EL mempool as well. Pool transactions never enter the EL mempool: they land
+on chain only inside a local payload that won the slot.
 
 ### Other Flags
 
@@ -179,6 +262,9 @@ make devnet
 
 # Run buildoor against the devnet
 make devnet-run-docker
+
+# Feed the replacement's transaction pool with a one-shot spamoor
+make devnet-spam
 
 # Clean up the devnet
 make devnet-clean

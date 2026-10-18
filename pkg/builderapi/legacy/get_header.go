@@ -130,6 +130,17 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Timing game: hold the response until the slot's response gate, then
+	// serve the best payload built by then (testing-build upgrades included).
+	if !frozenSettings.AwaitRespondGate(r.Context(), h.chainSvc.SlotToTime(slot)) {
+		log.WithField("respond_at_ms", frozenSettings.RespondAtMs).Info(
+			"getHeader: request cancelled while held for the response gate")
+		h.recordBid(slot, fork.String(), "", nil, 0, bidStatusCancelled,
+			"request context cancelled while held for the response gate")
+
+		return
+	}
+
 	// The slot may hold several candidate payloads (reorg preparedness): serve
 	// whichever one matches the requested parent hash.
 	var event *payload_builder.Payload
@@ -155,8 +166,11 @@ func (h *Handler) HandleGetHeader(w http.ResponseWriter, r *http.Request) {
 
 	// Value resolution per the frozen settings: an absolute total value (when
 	// set) replaces blockValue+subsidy entirely; otherwise the (possibly
-	// per-slot overridden) subsidy is added to the block value.
-	subsidyGwei := frozenSettings.SubsidyGwei
+	// per-slot overridden) subsidy is added to the block value. A negative
+	// subsidy (a Gloas margin) does not apply: the payload pays the proposer's
+	// fee recipient, so the block value is its whole payment and a lower claim
+	// only loses to the proposer's local block.
+	subsidyGwei := uint64(max(frozenSettings.SubsidyGwei, 0))
 	totalValueGwei := frozenSettings.TotalValueGwei
 
 	log.Info("Subsidy Gwei: " + fmt.Sprintf("%d", subsidyGwei))

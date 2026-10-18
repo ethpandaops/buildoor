@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/sirupsen/logrus"
@@ -143,8 +144,25 @@ func (h *SPAHandler) serveStaticFile(w http.ResponseWriter, r *http.Request, url
 		return false
 	}
 
+	w.Header().Set("Cache-Control", staticCacheControl(urlPath))
 	http.ServeContent(w, r, urlPath, stat.ModTime(), rs)
+
 	return true
+}
+
+// contentHashedAsset matches the webpack asset names that carry their content
+// hash (fonts and images emitted next to the index, e.g. "/290d6f5ffd66f4a29be0.png").
+var contentHashedAsset = regexp.MustCompile(`^/[0-9a-f]{16,}\.[a-z0-9]+$`)
+
+// staticCacheControl lets browsers keep content-hashed build output forever:
+// a new build changes the file name, never the content behind an old name.
+// Everything else (favicon, ...) is revalidated hourly.
+func staticCacheControl(urlPath string) string {
+	if strings.HasPrefix(urlPath, "/bundle/") || contentHashedAsset.MatchString(urlPath) {
+		return "public, max-age=31536000, immutable"
+	}
+
+	return "public, max-age=3600"
 }
 
 // serveIndex serves the SPA index.html.

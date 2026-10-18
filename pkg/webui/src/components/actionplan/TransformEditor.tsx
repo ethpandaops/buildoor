@@ -1,5 +1,31 @@
 import React, { useState } from 'react';
 import { useTransformTest, type TransformTarget } from '../../hooks/useTransformTest';
+import { InfoHint } from '../InfoHint';
+
+// What each transform target rewrites and when (pkg/jqtransform via the
+// action plan's transforms category).
+const TARGET_HINTS: Record<TransformTarget, React.ReactNode> = {
+  payload: (
+    <>
+      Rewrites the built execution payload (as JSON) before it feeds both the bid commitment and
+      the reveal; the block hash is re-synced from the result. Use it to build deliberately
+      different or invalid payloads.
+    </>
+  ),
+  bid: (
+    <>
+      Rewrites the bid MESSAGE just before signing; the result is re-signed with the target
+      slot&apos;s fork, so it stays validly signed. A bid can deliberately commit to something the
+      revealed payload does not match.
+    </>
+  ),
+  envelope: (
+    <>
+      Rewrites the payload envelope MESSAGE just before signing; the result is re-signed, so the
+      reveal stays validly signed but customized.
+    </>
+  ),
+};
 
 interface TransformFieldProps {
   target: TransformTarget;
@@ -27,7 +53,17 @@ const TransformField: React.FC<TransformFieldProps> = ({
   return (
     <div className="ap-transform-field">
       <div className="d-flex align-items-center gap-2 mb-1">
-        <label className="form-label small mb-0 fw-semibold">{label}</label>
+        <label className="form-label small mb-0 fw-semibold">
+          {label}
+          <InfoHint>
+            {TARGET_HINTS[target]}
+            <br />
+            A jq expression (gojq, single output, no env access, 2 s timeout); empty = no transform.
+            Syntax is checked when the plan is saved; a failure at build time fails that object
+            (recorded). <strong>Test</strong> runs the expression against this slot&apos;s captured
+            object, else the latest one, else a template.
+          </InfoHint>
+        </label>
         <button
           type="button"
           className="btn btn-link btn-sm p-0 ms-auto"

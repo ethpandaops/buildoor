@@ -65,6 +65,8 @@ export const BidsWonTable: React.FC<BidsWonTableProps> = ({
                 <th>Slot</th>
                 <th>Block Hash</th>
                 <th className="text-end">Txs</th>
+                <th className="text-end" title="Transactions from buildoor's private mempool (or an action plan's list)">Private</th>
+                <th className="text-end" title="Transactions from the EL's public mempool">Public</th>
                 <th className="text-end">Blobs</th>
                 <th className="text-end">Value (ETH)</th>
                 <th className="text-end">Time</th>
@@ -87,6 +89,10 @@ export const BidsWonTable: React.FC<BidsWonTableProps> = ({
                     </button>
                   </td>
                   <td className="text-end">{bid.num_transactions}</td>
+                  <td className="text-end">{bid.num_private_txs ?? '—'}</td>
+                  <td className="text-end">
+                    {bid.num_private_txs === undefined ? '—' : bid.num_transactions - bid.num_private_txs}
+                  </td>
                   <td className="text-end">{bid.num_blobs}</td>
                   <td className="text-end font-monospace">
                     {parseFloat(bid.value_eth).toFixed(6)}

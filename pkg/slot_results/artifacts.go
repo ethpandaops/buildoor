@@ -160,7 +160,11 @@ type PayloadArtifactMeta struct {
 	Candidate       string `json:"candidate,omitempty"`
 	ParentBlockRoot string `json:"parent_block_root,omitempty"`
 	ParentBlockHash string `json:"parent_block_hash,omitempty"`
-	At              int64  `json:"at"` // unix milliseconds
+	// Source is the build that produced the payload: empty/el for the engine
+	// payload, local for the testing_buildBlockV1 payload. A local payload on
+	// the same parent tuple gets its own artifact index.
+	Source string `json:"source,omitempty"`
+	At     int64  `json:"at"` // unix milliseconds
 }
 
 // StorePayload captures one built execution payload and returns its per-slot
@@ -178,6 +182,9 @@ func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion,
 	}
 
 	tuple := meta.ParentBlockRoot + "/" + meta.ParentBlockHash
+	if meta.Source != "" && meta.Source != "el" {
+		tuple += "/" + meta.Source
+	}
 
 	s.mu.Lock()
 
@@ -430,10 +437,9 @@ func (s *ArtifactStore) ListBids(slot phase0.Slot) ([]db.SlotArtifact, error) {
 	return s.stateDB.GetSlotArtifactMetas(uint64(slot), ArtifactKindBid)
 }
 
-// PayloadIndexForCandidate returns the per-slot payload artifact index built
-// for the given candidate key, scanning the slot's payload artifact metadata.
-// Returns false when the slot has no payload artifact for that candidate.
-func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate string) (int, bool) {
+// payloadMetas returns the slot's payload artifacts without their data, from
+// the memory buffer or else the state-db.
+func (s *ArtifactStore) payloadMetas(slot phase0.Slot) []db.SlotArtifact {
 	s.mu.Lock()
 
 	metas := make([]db.SlotArtifact, 0, 4)
@@ -447,16 +453,68 @@ func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate str
 	}
 	s.mu.Unlock()
 
-	if len(metas) == 0 {
-		stored, err := s.stateDB.GetSlotArtifactMetas(uint64(slot), ArtifactKindPayload)
-		if err != nil {
-			s.log.WithError(err).WithField("slot", slot).
-				Debug("Failed to list payload artifact metas")
+	if len(metas) > 0 {
+		return metas
+	}
 
-			return 0, false
+	stored, err := s.stateDB.GetSlotArtifactMetas(uint64(slot), ArtifactKindPayload)
+	if err != nil {
+		s.log.WithError(err).WithField("slot", slot).
+			Debug("Failed to list payload artifact metas")
+
+		return nil
+	}
+
+	return stored
+}
+
+// IsCustomPayloadArtifact reports whether a payload artifact was built by the
+// custom build (testing_buildBlockV1): its transactions may come from the
+// private pool, so it must not be served to unauthenticated readers.
+func IsCustomPayloadArtifact(artifact *db.SlotArtifact) bool {
+	if artifact == nil || artifact.Kind != ArtifactKindPayload {
+		return false
+	}
+
+	var meta PayloadArtifactMeta
+	if err := json.Unmarshal([]byte(artifact.Meta), &meta); err != nil {
+		return false
+	}
+
+	return meta.Source != "" && meta.Source != "el"
+}
+
+// HasCustomPayload reports whether the slot holds a custom-built payload
+// artifact; the slot's envelope may then wrap private transactions.
+func (s *ArtifactStore) HasCustomPayload(slot phase0.Slot) bool {
+	for _, artifact := range s.payloadMetas(slot) {
+		if IsCustomPayloadArtifact(&artifact) {
+			return true
 		}
+	}
 
-		metas = stored
+	return false
+}
+
+// PayloadIndexForCandidate returns the per-slot index of the engine payload
+// artifact built for the given candidate key, scanning the slot's payload
+// artifact metadata. Returns false when the slot has no such artifact.
+func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate string) (int, bool) {
+	return s.PayloadIndexFor(slot, candidate, "")
+}
+
+// PayloadIndexFor returns the per-slot payload artifact index matching the
+// candidate key (empty = any) and source (empty = the engine payload, "local"
+// = the local build's payload), scanning the slot's payload artifact
+// metadata. Returns false when no artifact matches.
+func (s *ArtifactStore) PayloadIndexFor(slot phase0.Slot, candidate, source string) (int, bool) {
+	metas := s.payloadMetas(slot)
+	if len(metas) == 0 {
+		return 0, false
+	}
+
+	if source == "el" {
+		source = ""
 	}
 
 	for _, artifact := range metas {
@@ -465,9 +523,20 @@ func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate str
 			continue
 		}
 
-		if meta.Candidate == candidate {
-			return artifact.Idx, true
+		metaSource := meta.Source
+		if metaSource == "el" {
+			metaSource = ""
 		}
+
+		if candidate != "" && meta.Candidate != candidate {
+			continue
+		}
+
+		if metaSource != source {
+			continue
+		}
+
+		return artifact.Idx, true
 	}
 
 	return 0, false

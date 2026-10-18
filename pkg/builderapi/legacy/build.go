@@ -1,6 +1,8 @@
 package legacy
 
 import (
+	"errors"
+
 	apiv1all "github.com/ethpandaops/go-eth2-client/api/v1/all"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/capella"
@@ -255,8 +257,12 @@ func UnblindSignedBlindedBeaconBlock(
 		},
 	}
 	if event.BlobsBundle != nil {
-		contents.KZGProofs = event.BlobsBundle.Proofs
-		contents.Blobs = event.BlobsBundle.Blobs
+		if event.BlobsBundle.Released() {
+			return nil, errors.New("the payload's blobs were already released (too old to unblind)")
+		}
+
+		contents.KZGProofs = event.BlobsBundle.Proofs()
+		contents.Blobs = event.BlobsBundle.Blobs()
 	}
 
 	return contents, nil

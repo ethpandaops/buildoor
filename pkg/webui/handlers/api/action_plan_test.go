@@ -500,13 +500,13 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	// Partial update of two unrelated settings in one call.
 	rec := post(`{"epbs.bid_subsidy": 12345, "schedule.mode": "every_nth"}`)
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, uint64(12345), cfg.EPBS.BidSubsidy)
+	assert.Equal(t, int64(12345), cfg.EPBS.BidSubsidy)
 	assert.Equal(t, config.ScheduleModeEveryN, cfg.Schedule.Mode)
 
 	// Unknown key → 400, nothing applied.
 	rec = post(`{"epbs.bid_subsidy": 1, "no.such.key": 2}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Equal(t, uint64(12345), cfg.EPBS.BidSubsidy, "atomic: nothing applied on unknown key")
+	assert.Equal(t, int64(12345), cfg.EPBS.BidSubsidy, "atomic: nothing applied on unknown key")
 
 	// Invalid value → 400.
 	rec = post(`{"slot_result_retention_epochs": 0}`)

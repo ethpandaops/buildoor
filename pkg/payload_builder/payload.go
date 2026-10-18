@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
@@ -34,18 +36,48 @@ type Payload struct {
 	BlobsBundle *BlobsBundle
 	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
 	ExecutionRequests *eth2all.ExecutionRequests
+	// EngineExecutionRequests and EngineVersion are the engine-API forms the
+	// block hash is derived from: a payload transform recomputes the hash
+	// with them (RehashBeaconPayload). The requests are the build's own — a
+	// payload transform cannot change them, they are not part of the
+	// execution payload.
+	EngineExecutionRequests []prague.ExecutionRequest
+	EngineVersion           enginev.DataVersion
+
+	// Source records how the payload was built: el (engine API, the EL's
+	// mempool) or local (testing_buildBlockV1 from a buildoor-chosen list).
+	Source string
+	// Local describes the local build's transaction assembly (nil for engine
+	// payloads).
+	Local *LocalBuildInfo
 
 	// Metadata not carried by the objects above.
 	BlockHash    phase0.Hash32  // block hash after extra-data injection
-	FeeRecipient common.Address // resolved proposer fee recipient for the bid
-	BlockValue   *big.Int       // EL-reported block value (wei)
-	ReadyAt      time.Time      // when the payload became ready
-	BuildSeq     uint64         // see PayloadBuildStartedEvent.BuildSeq
+	FeeRecipient common.Address // the payload's coinbase, which receives the block value
+	// ProposerFeeRecipient is the proposer's resolved fee recipient: the
+	// bid.fee_recipient a Gloas bid pays its value to. Before Gloas it equals
+	// FeeRecipient (the block value itself is the proposer's payment).
+	ProposerFeeRecipient common.Address
+	BlockValue           *big.Int // EL-reported block value (wei)
+	// EngineCalls times the engine build's two calls (nil without an engine
+	// build): the build itself is the wait in between.
+	EngineCalls *EngineCallTimes
+	ReadyAt     time.Time // when the payload became ready
+	BuildSeq    uint64    // see PayloadBuildStartedEvent.BuildSeq
 
 	// activity is the bid/reveal log, appended by the payload_bidder and read by
 	// the WebUI. The mutex also makes Payload copy-unsafe, enforcing the
 	// pass-by-pointer rule.
 	activity payloadActivity
+}
+
+// EngineCallTimes are the engine build's calls: forkchoiceUpdated starts the
+// EL's payload construction, getPayload fetches the result.
+type EngineCallTimes struct {
+	ForkchoiceStart time.Time
+	ForkchoiceEnd   time.Time
+	GetPayloadStart time.Time
+	GetPayloadEnd   time.Time
 }
 
 // BidTransport identifies which submitter produced a bid or reveal.

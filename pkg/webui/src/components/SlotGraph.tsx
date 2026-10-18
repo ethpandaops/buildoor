@@ -6,9 +6,21 @@ import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
+import { engineBuildRan, testingRuns } from './slotGraphBuilds';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
+
+// slotGraphHeight is the pixel height of a slot graph under a service status:
+// rows from top to bottom are chain+payload (always), ePBS and Builder API;
+// both builder rows active = 3 rows, otherwise 2 (one active, or an empty
+// row below the chain row).
+export function slotGraphHeight(status: ServiceStatus | null): number {
+  const epbsActive = status?.epbs_enabled ?? true;
+  const builderApiActive = status?.builder_api_enabled ?? false;
+  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
+  return activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+}
 
 interface SlotGraphProps {
   slot: number;
@@ -187,10 +199,14 @@ const buildHeadVotesPaths = (
 };
 
 
+// Height of the build and bid window strips: as tall as their lines' dots.
+const WINDOW_STRIP_HEIGHT = 12;
+
 // One fixed color per build-parent candidate key, consistent across the UI
-// (parent_full keeps the classic build color).
+// (parent_full is the engine build's blue, apart from the testing builds'
+// cyan).
 const CANDIDATE_COLORS: Record<string, string> = {
-  parent_full: '#61e392',
+  parent_full: '#4d8dff',
   parent_empty: '#e6a23c',
   grandparent_full: '#a78bfa',
   grandparent_empty: '#8a8f98'
@@ -324,7 +340,7 @@ const parentRows = (
 const truncateHashStr = (hash: string, len = 16): string =>
   hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
 
-export const SlotGraph: React.FC<SlotGraphProps> = ({
+const SlotGraphView: React.FC<SlotGraphProps> = ({
   slot,
   state,
   originalConfig,
@@ -364,11 +380,11 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   const epbsActive = effectiveServiceStatus?.epbs_enabled ?? true;
   const builderApiActive = effectiveServiceStatus?.builder_api_enabled ?? false;
 
-  // Rows from top to bottom:
-  //   chain+payload (always) | ePBS (if active) | Builder API (if active)
-  // When both active: 3 rows. When one active: 2 rows. When none: 2 rows (chain + empty).
-  const activeRows = 2 + (epbsActive && builderApiActive ? 1 : 0);
-  const graphHeight = activeRows * ROW_HEIGHT + 2 * ROW_PAD;
+  const graphHeight = slotGraphHeight(effectiveServiceStatus);
+
+  // The testing build only runs for the canonical candidate; when its block
+  // feeds the bids, the "payload created" event describes that block.
+  const testingBlockBids = !!state.localBuild?.selected && state.localBuild.status === 'ready';
 
   // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
@@ -378,13 +394,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   if (!epbsActive && !builderApiActive) rowIdx++; // empty second row
   const chainRowBottom = (rowIdx++) * ROW_HEIGHT + ROW_PAD;
 
-  // Slot label
-  let slotLabel = `Slot ${slot}`;
-  if (slot === currentDisplaySlot) {
-    slotLabel += ' (now)';
-  } else if (slot === currentDisplaySlot + 1) {
-    slotLabel += ' (next)';
-  }
+  // The now/next tag goes on its own line: the label column is too narrow for both.
+  const slotTag = slot === currentDisplaySlot ? 'now' : slot === currentDisplaySlot + 1 ? 'next' : null;
 
   const showPopover = useCallback((e: React.MouseEvent, data: PopoverData,
     extra?: Omit<PopoverState, 'data' | 'x' | 'y'>) => {
@@ -403,15 +414,43 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
   }, []);
 
   // Calculate marker positions
+  const pctMinus25X = calculatePosition(-slotDuration * 0.25, rangeStart, totalRange);
   const slotStartX = calculatePosition(0, rangeStart, totalRange);
   const pct25X = calculatePosition(slotDuration * 0.25, rangeStart, totalRange);
   const pct50X = calculatePosition(slotDuration * 0.50, rangeStart, totalRange);
   const pct75X = calculatePosition(slotDuration * 0.75, rangeStart, totalRange);
   const slotEndX = calculatePosition(slotDuration, rangeStart, totalRange);
 
+  // The engine lane (build line + payload dot) only exists when the target ran
+  // the engine-API build; the testing lane is drawn from its own builds.
+  const engineRan = engineBuildRan(state);
+
+  // Build windows: the engine build collects transactions from its start for
+  // payload_build_time; the testing builds have their own window.
+  const engineWindowMs = epbsConfig && config?.build?.engine_enabled !== false &&
+    typeof (config as unknown as Record<string, unknown>)?.payload_build_time === 'number'
+    ? [epbsConfig.build_start_time, epbsConfig.build_start_time + ((config as unknown as Record<string, number>).payload_build_time)]
+    : null;
+  const localConfig = config?.local_build;
+  const testingWindowMs = localConfig?.enabled && localConfig.start_time_ms !== undefined && localConfig.end_time_ms !== undefined
+    ? [localConfig.start_time_ms, localConfig.end_time_ms]
+    : null;
+  const windowBand = (window: number[] | null) => {
+    if (!window) return null;
+    const left = calculatePosition(window[0], rangeStart, totalRange);
+    const right = calculatePosition(window[1], rangeStart, totalRange);
+    if (left >= 100 || right <= 0 || right <= left) return null;
+    return { left: Math.max(0, left), width: Math.min(100, right) - Math.max(0, left) };
+  };
+  const engineBand = windowBand(engineWindowMs);
+  const testingBand = windowBand(testingWindowMs);
+
   // Bid window and reveal marker
   const bidStartX = epbsConfig ? calculatePosition(epbsConfig.bid_start_time, rangeStart, totalRange) : 0;
   const bidEndX = epbsConfig ? calculatePosition(epbsConfig.bid_end_time, rangeStart, totalRange) : 0;
+  // Builder API response gate (timing game): bid responses are held until it.
+  const respondAtMs = config?.builder_api?.respond_at_ms ?? 0;
+  const respondGateX = respondAtMs !== 0 ? calculatePosition(respondAtMs, rangeStart, totalRange) : -1;
   // The reveal marker shows the time gate; a pure vote-gated reveal has no
   // fixed time to mark.
   const revealConfig = config?.reveal;
@@ -479,10 +518,44 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     );
   };
 
+  // A bid request (getHeader / getExecutionPayloadBid): a line from the
+  // request to our response (growing live while the response is held, e.g.
+  // by the response gate), the green dot where we responded; an unanswered
+  // request keeps its amber dot at the request.
+  const renderHeldCall = (receivedAt: number, deliveredAt: number | undefined, data: PopoverData, key: string) => {
+    const startX = calculatePosition(receivedAt - slotStartTime, rangeStart, totalRange);
+    const heldMs = deliveredAt ? deliveredAt - receivedAt : undefined;
+    const holdCap = respondAtMs !== 0 ? slotStartTime + respondAtMs + 500 : receivedAt + 2000;
+
+    return (
+      <React.Fragment key={key}>
+        {startX < 100 && (heldMs === undefined || heldMs > 0) && (
+          <BuildDelayLine
+            className="builder-api-call-line"
+            leftPct={startX}
+            slotStartTime={slotStartTime}
+            rangeStart={rangeStart}
+            totalRange={totalRange}
+            endAt={deliveredAt}
+            endGapPx={6}
+            expectedEndAt={Math.max(holdCap, receivedAt + 200)}
+            onClick={(e) => showPopover(e, data)}
+          />
+        )}
+        {deliveredAt
+          ? renderEventDot('builder-api-call delivered', deliveredAt - slotStartTime, data, `${key}-delivered`)
+          : renderEventDot('builder-api-call pending', receivedAt - slotStartTime, data, `${key}-pending`)}
+      </React.Fragment>
+    );
+  };
+
   return (
     <div className="slot-graph" style={{ height: `${graphHeight}px` }} onClick={closePopover}>
       <div className="slot-graph-label">
-        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>{slotLabel}</span>
+        <span className="slot-graph-slot-label" style={{ bottom: `${chainRowBottom}px`, height: `${ROW_HEIGHT}px` }}>
+          <span className="slot-graph-slot-number">Slot {slot}</span>
+          {slotTag && <span className="slot-graph-slot-tag">{slotTag}</span>}
+        </span>
         {epbsActive && epbsRowBottom >= 0 && (
           <span className="slot-graph-row-label" style={{ bottom: `${epbsRowBottom}px`, height: `${ROW_HEIGHT}px` }}>ePBS</span>
         )}
@@ -493,6 +566,9 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
       <div className="slot-graph-area">
         <div className="slot-graph-bg">
           {/* Slot markers */}
+          <div className="slot-marker pct-marker" style={{ left: `${pctMinus25X}%` }}>
+            <span className="marker-label">-25%</span>
+          </div>
           <div className="slot-marker slot-start-marker" style={{ left: `${slotStartX}%` }}>
             <span className="marker-label">0%</span>
           </div>
@@ -509,20 +585,48 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             <span className="marker-label">100%</span>
           </div>
 
+          {/* Build windows - a strip around each build line in the chain row,
+              tall enough for the line's dot: the engine line runs through the
+              row's middle, the testing builds' line below it. */}
+          {engineBand && engineWindowMs && (
+            <div
+              className="build-window-bg build-window-engine"
+              style={{ left: `${engineBand.left}%`, width: `${engineBand.width}%`, bottom: `${chainRowBottom + 8}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Engine build: ${engineWindowMs[0]} – ${engineWindowMs[1]} ms`}>engine</span>
+            </div>
+          )}
+          {testingBand && testingWindowMs && (
+            <div
+              className="build-window-bg build-window-testing"
+              style={{ left: `${testingBand.left}%`, width: `${testingBand.width}%`, bottom: `${chainRowBottom - 4}px`, height: `${WINDOW_STRIP_HEIGHT}px` }}
+            >
+              <span className="duty-label build-window-label" title={`Testing builds: ${testingWindowMs[0]} – ${testingWindowMs[1]} ms`}>testing</span>
+            </div>
+          )}
+
           {/* Bid window - spans ePBS row only */}
           {epbsActive && epbsRowBottom >= 0 && epbsConfig && bidStartX < 100 && bidEndX > 0 && (
             <div
               className={`bid-window-bg ${!isScheduled ? 'bid-window-disabled' : ''}`}
               style={{
-                bottom: `${epbsRowBottom}px`,
-                height: `${ROW_HEIGHT}px`,
+                bottom: `${epbsRowBottom + (ROW_HEIGHT - WINDOW_STRIP_HEIGHT) / 2}px`,
+                height: `${WINDOW_STRIP_HEIGHT}px`,
                 left: `${Math.max(0, bidStartX)}%`,
                 width: `${Math.min(100, bidEndX) - Math.max(0, bidStartX)}%`
               }}
             >
-              <span className="duty-label bid-label">
-                Bid: {epbsConfig.bid_start_time} - {epbsConfig.bid_end_time}ms
-              </span>
+              <span className="duty-label bid-label" title={`Bid window: ${epbsConfig.bid_start_time} – ${epbsConfig.bid_end_time} ms`}>bid</span>
+            </div>
+          )}
+
+          {/* Builder API response gate - spans the Builder API row only */}
+          {builderApiActive && builderApiRowBottom >= 0 && respondGateX >= 0 && respondGateX <= 100 && (
+            <div
+              className="respond-gate-marker"
+              style={{ bottom: `${builderApiRowBottom}px`, height: `${ROW_HEIGHT}px`, left: `${respondGateX}%` }}
+            >
+              <span className="duty-label respond-gate-label" title={`Builder API responses held until ${respondAtMs} ms`}>respond</span>
             </div>
           )}
 
@@ -571,12 +675,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             : null;
           const lineStroke = metOffset !== null ? `url(#hvline-${slot})` : '#00bcd4';
 
+          const estimatePrefix = maxVote.estimated ? '~' : '';
           const popoverItems = [
-            { label: 'Max Participation', value: `${maxVote.pct.toFixed(1)}%` },
-            { label: 'Participating ETH', value: `${maxVote.eth.toLocaleString()} ETH` }
+            { label: 'Max Participation', value: `${estimatePrefix}${maxVote.pct.toFixed(1)}%` },
+            { label: 'Participating ETH', value: `${estimatePrefix}${maxVote.eth.toLocaleString()} ETH` }
           ];
           if (maxVote.voteCount !== undefined) {
             popoverItems.push({ label: 'Votes', value: maxVote.voteCount.toLocaleString() });
+          }
+          if (maxVote.estimated && maxVote.sampledPct !== undefined) {
+            popoverItems.push({
+              label: 'Estimated from',
+              value: `${maxVote.sampledPct.toFixed(0)}% sampled subnets`
+            });
           }
           if (thresholdPct > 0) {
             popoverItems.push({ label: 'Threshold', value: `${thresholdPct.toFixed(0)}%` });
@@ -679,21 +790,42 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
           {/* Build delay line: from build start to payload ready (animates live while building).
               On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
-          {epbsConfig && buildActive && !buildFailed && genesisTime > 0 && buildStartX < 100 && (
+          {epbsConfig && buildActive && !buildFailed && engineRan && genesisTime > 0 && buildStartX < 100 && (
             <BuildDelayLine
               leftPct={buildStartX}
               slotStartTime={slotStartTime}
               rangeStart={rangeStart}
               totalRange={totalRange}
               endAt={buildEndAt}
+              endGapPx={6}
               expectedEndAt={expectedBuildEndAt}
               lineColor={candidateColor(primaryCandidate)}
+              dashed
+              calls={state.payloadEngineCalls
+                ? [
+                    { start: state.payloadEngineCalls.fcu_start, end: state.payloadEngineCalls.fcu_end },
+                    { start: state.payloadEngineCalls.get_payload_start, end: state.payloadEngineCalls.get_payload_end }
+                  ]
+                : undefined}
               onClick={(e) => showPopover(e, {
-                title: `Build Delay${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
+                title: `Engine Build${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
                 items: state.payloadCreatedAt
                   ? [
                       { label: 'Build Start', value: `${buildStartMs}ms` },
+                      ...(state.payloadEngineCalls
+                        ? (() => {
+                            const calls = state.payloadEngineCalls;
+                            return [
+                              { label: 'forkchoiceUpdated', value: `${calls.fcu_start - slotStartTime}ms, took ${calls.fcu_end - calls.fcu_start}ms` },
+                              { label: 'EL building', value: `${calls.get_payload_start - calls.fcu_end}ms (waiting for getPayload)` },
+                              { label: 'getPayload', value: `${calls.get_payload_start - slotStartTime}ms, took ${calls.get_payload_end - calls.get_payload_start}ms` }
+                            ];
+                          })()
+                        : []),
                       { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                      ...(state.payloadUpgrades && state.payloadUpgradedAt
+                        ? [{ label: 'Upgraded', value: `${state.payloadUpgrades}× by testing builds, latest at ${state.payloadUpgradedAt - slotStartTime}ms` }]
+                        : []),
                       { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
                     ]
                   : [
@@ -704,6 +836,36 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             />
           )}
 
+
+          {/* Testing lane: every testing build of the primary target, the handed-over one
+              highlighted (green ring when it feeds the bids), the others dimmed. */}
+          {genesisTime > 0 && epbsConfig && testingRuns(state, slot, slotStartTime).map((run) => {
+            const startX = calculatePosition(run.startedAt - slotStartTime, rangeStart, totalRange);
+            if (startX >= 100) return null;
+            const other = run.dimmed ? ' local-build-run-other' : '';
+            const dotClass = run.status === 'ready'
+              ? `local-build-created${run.selected ? ' local-build-selected' : ''}`
+              : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+
+            return (
+              <React.Fragment key={`local-build-${run.run}`}>
+                {run.status !== 'skipped' && (
+                  <BuildDelayLine
+                    leftPct={startX}
+                    slotStartTime={slotStartTime}
+                    rangeStart={rangeStart}
+                    totalRange={totalRange}
+                    endGapPx={4}
+                    endAt={run.endAt}
+                    className={`local-build-line${other}`}
+                    onClick={(e) => showPopover(e, run.data)}
+                  />
+                )}
+                {run.endAt !== undefined &&
+                  renderEventDot(`${dotClass}${other}`, run.endAt - slotStartTime, run.data, `local-build-dot-${run.run}`)}
+              </React.Fragment>
+            );
+          })}
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
@@ -772,11 +934,13 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           ))}
 
           {/* Payload created — one tab per built candidate payload */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+          {state.payloadCreatedAt && engineRan && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {
-              title: multiCandidate ? 'Payloads Created' : 'Payload Created',
+              title: multiCandidate
+                ? 'Payloads Created'
+                : testingBlockBids ? 'Payload Created (testing block)' : 'Payload Created',
               wide: true,
               artifact: {
                 url: `/api/buildoor/slot-results/${slot}/payload`,
@@ -800,6 +964,14 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 : undefined,
               items: [
                 { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
+                // payload_ready carries the payload the bids use: with a testing
+                // build in front that is the testing block, not the engine's.
+                ...(state.localBuild ? [{
+                  label: 'Built By',
+                  value: testingBlockBids
+                    ? 'testing build (testing_buildBlockV1), used for bids'
+                    : 'engine build, used for bids'
+                }] : []),
                 ...(state.payloadBlockHash ? [{
                   label: 'Block Hash',
                   value: truncateHash(state.payloadBlockHash),
@@ -846,7 +1018,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                   label: 'Contents',
                   value: `${state.payloadDetail.numTransactions ?? 0} txs, ${state.payloadDetail.numBlobs ?? 0} blobs, ` +
                     `${state.payloadDetail.numWithdrawals ?? 0} wdrls, ${state.payloadDetail.numExecRequests ?? 0} reqs`
-                }] : [])
+                }] : []),
+                ...(testingBlockBids && state.localBuild?.el ? [
+                  {
+                    label: 'Engine Block Hash',
+                    value: truncateHash(state.localBuild.el.block_hash),
+                    copyValue: state.localBuild.el.block_hash
+                  },
+                  {
+                    label: 'Engine Block',
+                    value: `${state.localBuild.el.num_transactions} txs, ` +
+                      formatGwei(Number(BigInt(state.localBuild.el.block_value_wei || '0') / 1000000000n))
+                  }
+                ] : [])
               ]
             },
             'payload'
@@ -1218,16 +1402,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
                 the popover names the call and carries both timestamps. */}
 
             {/* getHeader (Fulu) */}
-            {state.getHeaderReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getHeaderDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getHeaderReceivedAt - slotStartTime,
+            {state.getHeaderReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getHeaderReceivedAt,
+              state.getHeaderDeliveredAt,
               {
                 title: 'getHeader (Fulu)',
                 items: [
                   { label: 'Received', value: `${state.getHeaderReceivedAt - slotStartTime}ms` },
-                  state.getHeaderDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getHeaderDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getHeaderDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getHeaderDeliveredAt - state.getHeaderReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getHeaderBlockValue ? [{
                     label: 'Block Value',
                     value: state.getHeaderBlockValue + ' wei'
@@ -1265,16 +1452,19 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
             )}
 
             {/* getExecutionPayloadBid (Gloas) */}
-            {state.getBidReceivedAt && genesisTime > 0 && renderEventDot(
-              `builder-api-call ${state.getBidDeliveredAt ? 'delivered' : 'pending'}`,
-              state.getBidReceivedAt - slotStartTime,
+            {state.getBidReceivedAt && genesisTime > 0 && renderHeldCall(
+              state.getBidReceivedAt,
+              state.getBidDeliveredAt,
               {
                 title: 'getExecutionPayloadBid (Gloas)',
                 items: [
                   { label: 'Received', value: `${state.getBidReceivedAt - slotStartTime}ms` },
-                  state.getBidDeliveredAt
-                    ? { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` }
-                    : { label: 'Status', value: 'no response' },
+                  ...(state.getBidDeliveredAt
+                    ? [
+                        { label: 'Delivered', value: `${state.getBidDeliveredAt - slotStartTime}ms` },
+                        { label: 'Held', value: `${state.getBidDeliveredAt - state.getBidReceivedAt}ms` }
+                      ]
+                    : [{ label: 'Status', value: 'no response' }]),
                   ...(state.getBidBlockValue ? [{
                     label: 'Bid Value',
                     value: state.getBidBlockValue + ' gwei'
@@ -1313,7 +1503,7 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
           </div>
         )}
 
-        {/* Current time indicator - animated via requestAnimationFrame */}
+        {/* Current time indicator - a compositor animation, no per-frame script */}
         <CurrentTimeIndicator
           slotStartTime={slotStartTime}
           rangeStart={rangeStart}
@@ -1339,3 +1529,8 @@ export const SlotGraph: React.FC<SlotGraphProps> = ({
     </div>
   );
 };
+
+// SlotGraph re-renders only when its own slot's state (or the config/status
+// it shows) changes; the stream updates one slot at a time, and the time
+// based parts (now-line, growing build lines) are compositor animations.
+export const SlotGraph = React.memo(SlotGraphView);

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { CopyableHash } from './CopyableHash';
+import { InfoHint } from './InfoHint';
 import type { BuilderKeyState, BuilderKeyStatus } from '../types';
 
 interface BuilderKeysTableProps {
@@ -67,16 +68,89 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
         <table className="table table-sm table-hover align-middle mb-0">
           <thead>
             <tr>
-              <th style={{ width: '4rem' }}>#</th>
+              <th style={{ width: '4rem' }}>
+                #
+                <InfoHint>
+                  Derivation index of the key. 0 is the entry key (<code>--builder-privkey</code> or
+                  the mnemonic key); n &ge; 1 is derived from it. Stable forever, unlike the builder
+                  index.
+                </InfoHint>
+              </th>
               <th>Pubkey</th>
-              <th>Status</th>
-              <th className="text-end">Builder index</th>
-              <th className="text-end">Balance</th>
-              <th className="text-end">Pending</th>
-              <th className="text-end">Effective</th>
-              <th className="text-end">Used</th>
-              <th className="text-end">Bids / Won</th>
-              {isLoggedIn && <th className="text-end">Actions</th>}
+              <th>
+                Status
+                <InfoHint>
+                  <dl>
+                    <dt>Unused</dt>
+                    <dd>derived, never deposited</dd>
+                    <dt>Depositing</dt>
+                    <dd>deposit submitted, not in the builder registry yet</dd>
+                    <dt>Pending</dt>
+                    <dd>registered, deposit epoch not finalized: may not bid yet</dd>
+                    <dt>Active</dt>
+                    <dd>registered, finalized, not exiting: bids</dd>
+                    <dt>Exiting</dt>
+                    <dd>exit initiated, withdrawable epoch not reached; can never be reactivated</dd>
+                    <dt>Exited</dt>
+                    <dd>withdrawable epoch passed, entry still in the registry</dd>
+                    <dt>Withdrawn</dt>
+                    <dd>pubkey has left the registry: depositable again</dd>
+                  </dl>
+                </InfoHint>
+              </th>
+              <th className="text-end">
+                Builder index
+                <InfoHint>
+                  On-chain builder registry index, assigned at deposit. Reused by other builders
+                  after an exit, so it is not tied to the key forever. — = not registered.
+                </InfoHint>
+              </th>
+              <th className="text-end">
+                Balance
+                <InfoHint>Builder balance in the beacon state, in ETH.</InfoHint>
+              </th>
+              <th className="text-end">
+                Pending
+                <InfoHint>
+                  Payments (ETH) owed for won bids that the chain has not settled yet; they are
+                  deducted from the effective balance.
+                </InfoHint>
+              </th>
+              <th className="text-end">
+                Effective
+                <InfoHint alignEnd>
+                  What the key can still bid against (ETH): balance plus local adjustments minus
+                  pending payments. Keys that cannot cover a bid are picked last.
+                </InfoHint>
+              </th>
+              <th className="text-end">
+                Used
+                <InfoHint alignEnd>
+                  Number of deposit generations the key has gone through. <code>(wN)</code> = the
+                  key&apos;s withdrawable epoch N after an exit.
+                </InfoHint>
+              </th>
+              <th className="text-end">
+                Bids / Won
+                <InfoHint alignEnd>
+                  Bids signed with this key / bids won, counted since buildoor started.
+                </InfoHint>
+              </th>
+              {isLoggedIn && (
+                <th className="text-end">
+                  Actions
+                  <InfoHint alignEnd>
+                    <dl>
+                      <dt>Deposit</dt>
+                      <dd>register the key with a deposit of <code>deposit_amount</code></dd>
+                      <dt>Top up</dt>
+                      <dd>add another <code>deposit_amount</code> to its balance</dd>
+                      <dt>Exit</dt>
+                      <dd>initiate the builder exit (irreversible)</dd>
+                    </dl>
+                  </InfoHint>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>

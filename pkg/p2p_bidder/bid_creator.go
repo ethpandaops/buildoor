@@ -63,9 +63,11 @@ func (c *BidCreator) CreateAndSubmitBid(
 		return nil, fmt.Errorf("builder key %s is not registered on chain", key)
 	}
 
+	// The bid pays the proposer's fee recipient; the payload's own coinbase
+	// collects the block value for the builder.
 	var feeRecipient bellatrix.ExecutionAddress
 
-	copy(feeRecipient[:], payload.FeeRecipient[:])
+	copy(feeRecipient[:], payload.ProposerFeeRecipient[:])
 
 	// Sign for the bid's target slot, not the current fork: a bid built during
 	// the last pre-Gloas slot for the first Gloas slot must use the Gloas fork
@@ -96,7 +98,8 @@ func (c *BidCreator) CreateAndSubmitBid(
 		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"key":               key.String(),
 		"builder_index":     builderIndex,
-		"fee_recipient":     payload.FeeRecipient.Hex(),
+		"fee_recipient":     payload.ProposerFeeRecipient.Hex(),
+		"coinbase":          payload.FeeRecipient.Hex(),
 		"gas_limit":         payload.ExecutionPayload.GasLimit,
 		"parent_block_hash": fmt.Sprintf("%x", payload.Attributes.ParentBlockHash[:8]),
 		"parent_block_root": fmt.Sprintf("%x", payload.Attributes.ParentBlockRoot[:8]),

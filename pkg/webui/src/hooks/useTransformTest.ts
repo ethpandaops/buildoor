@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { authHeaders } from './authFetch';
 
 export type TransformTarget = 'payload' | 'bid' | 'envelope';
 
@@ -44,7 +45,7 @@ export function useTransformTest(
     try {
       const res = await fetch('/api/buildoor/action-plan/test-transform', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           target,
           expression,

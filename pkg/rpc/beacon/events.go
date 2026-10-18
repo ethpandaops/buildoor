@@ -100,6 +100,15 @@ type PayloadAvailableEvent struct {
 // PayloadAttributesEvent represents a payload_attributes event from the beacon node.
 // This is emitted when a validator is scheduled to propose and contains all parameters
 // needed for building an execution payload.
+//
+// The struct is the flattened superset of the engine API PayloadAttributesV1
+// to V5 the event carries per fork: bellatrix V1, capella V2 (+ withdrawals),
+// deneb/electra/fulu V3 (+ parent_beacon_block_root), gloas V4 (+ slot_number,
+// target_gas_limit), heze V5 (+ inclusion_list_transactions). Fields a fork
+// does not carry stay zero. slot_number has no field of its own: it always
+// equals ProposalSlot, which the parser enforces. ParentBlockNumber is not
+// part of the event from gloas onwards and is zero unless the node still
+// sends it.
 type PayloadAttributesEvent struct {
 	Version                   string
 	ProposalSlot              phase0.Slot
@@ -180,6 +189,7 @@ type payloadAttributesEventJSON struct {
 				Amount         string `json:"amount"`
 			} `json:"withdrawals"`
 			ParentBeaconBlockRoot     string   `json:"parent_beacon_block_root"`
+			SlotNumber                string   `json:"slot_number"`
 			TargetGasLimit            string   `json:"target_gas_limit"`
 			InclusionListTransactions []string `json:"inclusion_list_transactions"`
 		} `json:"payload_attributes"`
@@ -1107,6 +1117,19 @@ func parsePayloadAttributesEvent(raw *payloadAttributesEventJSON) (*PayloadAttri
 		parentBeaconBlockRoot, err = parseRoot(raw.Data.PayloadAttributes.ParentBeaconBlockRoot)
 		if err != nil {
 			return nil, fmt.Errorf("invalid parent_beacon_block_root: %w", err)
+		}
+	}
+
+	// slot_number is a Gloas+ field naming the slot of the payload to build. The
+	// builder derives it from the proposal slot, so the two must agree.
+	if rawSlotNumber := raw.Data.PayloadAttributes.SlotNumber; rawSlotNumber != "" {
+		slotNumber, err := strconv.ParseUint(rawSlotNumber, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slot_number: %w", err)
+		}
+
+		if slotNumber != slot {
+			return nil, fmt.Errorf("slot_number %d does not match proposal_slot %d", slotNumber, slot)
 		}
 	}
 

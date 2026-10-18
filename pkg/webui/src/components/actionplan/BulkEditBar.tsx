@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { InfoHint } from '../InfoHint';
 
 // Backend cap on the number of slots one update may target
 // (action_plan.MaxSlotsPerUpdate).
@@ -57,6 +58,10 @@ export const BulkEditBar: React.FC<BulkEditBarProps> = ({
       {selectionCount > 0 && (
         <>
           <span className="badge bg-primary">{selectionCount} slots selected</span>
+          <InfoHint>
+            Shift-click cells to select future slots, then edit them together. The update is
+            all-or-nothing: if any selected slot has already frozen, nothing is saved.
+          </InfoHint>
           <button
             type="button"
             className="btn btn-sm btn-primary"
@@ -75,7 +80,15 @@ export const BulkEditBar: React.FC<BulkEditBarProps> = ({
       )}
 
       <form className="d-flex flex-wrap align-items-center gap-2" onSubmit={handleEditRange}>
-        <span className="text-muted small">Range:</span>
+        <span className="text-muted small">
+          Range:
+          <InfoHint>
+            Edit an inclusive range of absolute slot numbers, also beyond the visible grid (max{' '}
+            {MAX_SLOTS_PER_UPDATE.toLocaleString()} slots). Plans freeze about one slot ahead, so start
+            at least two slots after the current one: a range touching a past or frozen slot is
+            rejected as a whole.
+          </InfoHint>
+        </span>
         <input
           type="number"
           className="form-control form-control-sm ap-range-input"

@@ -1,0 +1,209 @@
+/* Operator dashboard (db-) and the slot timeline viewport. */
+
+.db-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+.db-stats {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.db-main {
+  display: grid;
+  grid-template-columns: minmax(0, 2.3fr) minmax(280px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.db-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.db-card,
+.db-timeline {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.db-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-next {
+  flex: 1;
+}
+
+.db-next-link {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+.db-alert {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bd-warn-bg);
+  color: var(--bd-warn-fg);
+  font-size: 12px;
+}
+
+.db-money {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--bd-border);
+}
+
+.db-money-value {
+  font-size: 18px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.db-events {
+  flex-direction: row;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 8px 14px;
+}
+
+.db-events-toggle,
+.event-log-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bd-text);
+  cursor: pointer;
+}
+
+.db-events-latest {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-flows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.db-flows-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.db-flows-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.db-flows-legend {
+  margin-left: auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--bd-muted);
+}
+
+.db-flows-legend .bd-src {
+  margin: 0 4px 0 0;
+}
+
+.db-flow-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+/* Slot timeline window */
+
+.slot-timeline {
+  position: relative;
+}
+
+/* Fixed height so the page layout never shifts while slots fill in. The
+   browser's scroll anchoring is off: SlotTimeline shifts the scroll position
+   itself when slots are added on top, and the two would add up. */
+.slot-timeline-viewport {
+  overflow-y: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.slot-graph-spacer {
+  flex: none;
+}
+
+.slot-timeline-now {
+  position: absolute;
+  top: 8px;
+  right: 18px;
+  z-index: 70;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+@media (max-width: 1399.98px) {
+  .db-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1199.98px) {
+  .db-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .db-side {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .db-flow-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767.98px) {
+  .db-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .db-side,
+  .db-flow-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .db-flows-legend {
+    margin-left: 0;
+  }
+}

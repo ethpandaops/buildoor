@@ -13,6 +13,7 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
 // BuildStatus is the lifecycle state of a slot's payload build.
@@ -136,8 +137,67 @@ type BuildOutcome struct {
 	// Attributes is the payload_attributes snapshot the build ran on.
 	Attributes *AttributesSnapshot `json:"attributes,omitempty"`
 
+	// Source records which build produced the payload feeding the consumers:
+	// el (engine API) or local (testing_buildBlockV1). Empty pre-ready.
+	Source string `json:"source,omitempty"`
+	// Fallback marks that the local payload was wanted but the engine payload
+	// was used (local build failed or skipped).
+	Fallback bool `json:"fallback,omitempty"`
+	// LocalBuild is the local build's outcome for this target when the
+	// extension was requested for the slot (ready, failed or skipped).
+	LocalBuild *LocalBuildOutcome `json:"local_build,omitempty"`
+
 	Error string    `json:"error,omitempty"`
 	At    time.Time `json:"at"`
+}
+
+// LocalBuildOutcome records the local build (testing_buildBlockV1) of one
+// build target: its status, how the transaction list was assembled and the
+// resulting payload's headline properties. The local payload is captured as
+// its own artifact so the shadow build stays inspectable even when the engine
+// payload fed the bids.
+type LocalBuildOutcome struct {
+	Status     string `json:"status"` // ready | failed | skipped
+	SkipReason string `json:"skip_reason,omitempty"`
+	Error      string `json:"error,omitempty"`
+
+	TxSource      string `json:"tx_source,omitempty"`
+	PayloadSource string `json:"payload_source,omitempty"`
+	// Selected marks that the local payload fed the consumers.
+	Selected bool `json:"selected"`
+
+	BlockHash       string `json:"block_hash,omitempty"`
+	BlockValueWei   string `json:"block_value_wei,omitempty"`
+	NumTransactions int    `json:"num_transactions,omitempty"`
+	NumBlobs        int    `json:"num_blobs,omitempty"`
+	GasUsed         uint64 `json:"gas_used,omitempty"`
+	GasLimit        uint64 `json:"gas_limit,omitempty"`
+	// ArtifactIdx is the per-slot payload artifact index of the local payload.
+	ArtifactIdx *int `json:"artifact_idx,omitempty"`
+
+	// Info is the transaction assembly detail (selection summary, explicit
+	// list size, inclusion-list handling, EL drops).
+	Info *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+
+	At time.Time `json:"at"`
+}
+
+func (o *LocalBuildOutcome) clone() *LocalBuildOutcome {
+	if o == nil {
+		return nil
+	}
+
+	c := *o
+
+	if o.ArtifactIdx != nil {
+		idx := *o.ArtifactIdx
+		c.ArtifactIdx = &idx
+	}
+
+	// Info is written once by the builder and never mutated afterwards;
+	// sharing the pointer is safe.
+
+	return &c
 }
 
 // AttributesSnapshot captures the payload_attributes a build ran on (list
@@ -219,13 +279,16 @@ type RevealAttempt struct {
 // InclusionResult records that the slot's payload was seen included at the
 // head. Field semantics match the WonBlock wire shape (minus the slot).
 type InclusionResult struct {
-	Source          string    `json:"source"` // "epbs" | "builder_api"
-	BlockHash       string    `json:"block_hash"`
-	NumTransactions int       `json:"num_transactions"`
-	NumBlobs        int       `json:"num_blobs"`
-	ValueWei        string    `json:"value_wei"`
-	ValueETH        string    `json:"value_eth"`
-	Timestamp       time.Time `json:"timestamp"`
+	Source          string `json:"source"` // "epbs" | "builder_api"
+	BlockHash       string `json:"block_hash"`
+	NumTransactions int    `json:"num_transactions"`
+	// NumPrivateTxs counts the transactions buildoor supplied itself (own
+	// mempool or plan list); absent on records from before it was tracked.
+	NumPrivateTxs *int      `json:"num_private_txs,omitempty"`
+	NumBlobs      int       `json:"num_blobs"`
+	ValueWei      string    `json:"value_wei"`
+	ValueETH      string    `json:"value_eth"`
+	Timestamp     time.Time `json:"timestamp"`
 
 	// PayloadStatus is the canonical verdict for the won payload: pending
 	// until the first follow-up block is seen, then canonical or missed based
@@ -244,6 +307,10 @@ type SlotResult struct {
 	Epoch uint64      `json:"epoch"`
 	Fork  string      `json:"fork"`
 
+	// resident marks the in-memory summary of a record whose full version
+	// lives in the state-db (see Tracker.compactBefore).
+	resident bool
+
 	// AppliedPlan is the frozen plan snapshot the slot executed under.
 	AppliedPlan *action_plan.FrozenPlan `json:"applied_plan,omitempty"`
 
@@ -257,11 +324,140 @@ type SlotResult struct {
 	RevealAttempts   []RevealAttempt   `json:"reveal_attempts,omitempty"`
 	Inclusion        *InclusionResult  `json:"inclusion,omitempty"`
 
+	// TxPlan is the post-inclusion verdict of a locally built payload: whether
+	// the canonical block holds exactly the transactions buildoor submitted,
+	// in order. Only set for included slots whose payload came from an
+	// explicit list (local build with a txpool/explicit/queued source).
+	TxPlan *TxPlanResult `json:"tx_plan,omitempty"`
+
 	// DroppedAttempts counts attempts beyond the per-kind retention cap,
 	// keyed by kind ("bids", "block_submissions", "reveal_attempts").
 	DroppedAttempts map[string]int `json:"dropped_attempts,omitempty"`
 
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// TxPlanStatus is the verdict of a tx plan check.
+type TxPlanStatus string
+
+const (
+	// TxPlanPending: the payload was included, the EL check has not run yet.
+	TxPlanPending TxPlanStatus = "pending"
+	// TxPlanMatch: the canonical block holds exactly the plan, in order.
+	TxPlanMatch TxPlanStatus = "match"
+	// TxPlanMismatch: the block's transaction list differs from the plan.
+	TxPlanMismatch TxPlanStatus = "mismatch"
+	// TxPlanBlockNotFound: the EL did not serve the included block in time.
+	TxPlanBlockNotFound TxPlanStatus = "block_not_found"
+	// TxPlanNotIncluded: the slot passed without the payload reaching the chain.
+	TxPlanNotIncluded TxPlanStatus = "not_included"
+	// TxPlanMissed: the payload was won but the next block built on an older one.
+	TxPlanMissed TxPlanStatus = "missed"
+	// TxPlanOrphaned: the won block was reorged out.
+	TxPlanOrphaned TxPlanStatus = "orphaned"
+)
+
+// maxTxPlanHashes bounds the expected-hash list stored per slot; the exact
+// list is in the payload artifact.
+const maxTxPlanHashes = 4096
+
+// TxPlanResult is the plan a local payload was built from and its
+// post-inclusion verdict.
+type TxPlanResult struct {
+	TxSource       string   `json:"tx_source"`
+	ExpectedCount  int      `json:"expected_count"`
+	ExpectedHashes []string `json:"expected_hashes,omitempty"`
+	Truncated      bool     `json:"truncated,omitempty"`
+
+	Status        TxPlanStatus `json:"status"`
+	IncludedCount int          `json:"included_count,omitempty"`
+	FirstMismatch int          `json:"first_mismatch,omitempty"`
+	Detail        string       `json:"detail,omitempty"`
+	VerifiedAt    *time.Time   `json:"verified_at,omitempty"`
+
+	// awaitingSeed marks a verdict recorded before the inclusion seeded the
+	// plan (the verifier and the tracker consume the same inclusion event
+	// independently); the seed adopts it instead of resetting it to pending.
+	awaitingSeed bool
+}
+
+// adoptVerdict copies an early verdict onto a freshly seeded plan.
+func (p *TxPlanResult) adoptVerdict(verdict *TxPlanResult) {
+	p.Status = verdict.Status
+	p.IncludedCount = verdict.IncludedCount
+	p.FirstMismatch = verdict.FirstMismatch
+	p.Detail = verdict.Detail
+	p.VerifiedAt = verdict.VerifiedAt
+}
+
+func (p *TxPlanResult) clone() *TxPlanResult {
+	if p == nil {
+		return nil
+	}
+
+	c := *p
+	c.ExpectedHashes = append([]string(nil), p.ExpectedHashes...)
+
+	if p.VerifiedAt != nil {
+		at := *p.VerifiedAt
+		c.VerifiedAt = &at
+	}
+
+	return &c
+}
+
+// Redacted returns the result for readers without a login: the applied
+// plan loses its raw explicit transactions (see action_plan.SlotPlan.Redacted)
+// and the custom builds and the tx plan lose their transaction hashes (see
+// payload_builder.LocalBuildInfo.Public).
+func (r *SlotResult) Redacted() *SlotResult {
+	if r == nil {
+		return nil
+	}
+
+	out := *r
+	out.AppliedPlan = r.AppliedPlan.Redacted()
+	out.Build = r.Build.public()
+
+	if len(r.Builds) > 0 {
+		out.Builds = make([]*BuildOutcome, len(r.Builds))
+		for i, build := range r.Builds {
+			out.Builds[i] = build.public()
+		}
+	}
+
+	if r.TxPlan != nil && r.TxPlan.ExpectedHashes != nil {
+		plan := *r.TxPlan
+		plan.ExpectedHashes = nil
+		out.TxPlan = &plan
+	}
+
+	return &out
+}
+
+// public returns the outcome with its custom build info stripped of
+// transaction hashes.
+func (b *BuildOutcome) public() *BuildOutcome {
+	if b == nil || b.LocalBuild == nil || b.LocalBuild.Info.Public() == b.LocalBuild.Info {
+		return b
+	}
+
+	out := *b
+	local := *b.LocalBuild
+	local.Info = b.LocalBuild.Info.Public()
+	out.LocalBuild = &local
+
+	return &out
+}
+
+// RedactedResults returns the results without raw explicit transactions.
+func RedactedResults(results []*SlotResult) []*SlotResult {
+	out := make([]*SlotResult, len(results))
+	for i, result := range results {
+		out[i] = result.Redacted()
+	}
+
+	return out
 }
 
 // Clone returns a deep copy of the result.
@@ -279,6 +475,8 @@ func (r *SlotResult) Clone() *SlotResult {
 			build.ArtifactIdx = &idx
 		}
 
+		build.LocalBuild = r.Build.LocalBuild.clone()
+
 		c.Build = &build
 	}
 
@@ -291,6 +489,8 @@ func (r *SlotResult) Clone() *SlotResult {
 				clone.ArtifactIdx = &idx
 			}
 
+			clone.LocalBuild = build.LocalBuild.clone()
+
 			c.Builds[i] = &clone
 		}
 	}
@@ -299,6 +499,8 @@ func (r *SlotResult) Clone() *SlotResult {
 		inclusion := *r.Inclusion
 		c.Inclusion = &inclusion
 	}
+
+	c.TxPlan = r.TxPlan.clone()
 
 	if r.Bids != nil {
 		c.Bids = make([]BidAttempt, len(r.Bids))
@@ -334,4 +536,46 @@ func (r *SlotResult) Clone() *SlotResult {
 	// The frozen plan is immutable by contract; sharing the pointer is safe.
 
 	return &c
+}
+
+// Summary returns the result trimmed to what an overview (the action plan
+// grid) shows: the build's status and headline payload fields, the attempts,
+// the inclusion and the tx plan verdict. The applied plan, the candidate
+// builds, the attributes and the testing build details — most of a record's
+// size — are left out; the full record is a per-slot request away.
+func (r *SlotResult) Summary() *SlotResult {
+	if r == nil {
+		return nil
+	}
+
+	s := &SlotResult{
+		Slot:             r.Slot,
+		Epoch:            r.Epoch,
+		Fork:             r.Fork,
+		Bids:             r.Bids,
+		BlockSubmissions: r.BlockSubmissions,
+		RevealAttempts:   r.RevealAttempts,
+		Inclusion:        r.Inclusion,
+		TxPlan:           r.TxPlan,
+		DroppedAttempts:  r.DroppedAttempts,
+		UpdatedAt:        r.UpdatedAt,
+	}
+
+	if b := r.Build; b != nil {
+		s.Build = &BuildOutcome{
+			Status:          b.Status,
+			SkipReason:      b.SkipReason,
+			Candidate:       b.Candidate,
+			BlockHash:       b.BlockHash,
+			BlockValueWei:   b.BlockValueWei,
+			NumTransactions: b.NumTransactions,
+			NumBlobs:        b.NumBlobs,
+			Source:          b.Source,
+			Fallback:        b.Fallback,
+			Error:           b.Error,
+			At:              b.At,
+		}
+	}
+
+	return s
 }

@@ -72,10 +72,15 @@ type service struct {
 	log       logrus.FieldLogger
 
 	// State cache (keeps latest 2 epochs)
-	stateCache          map[phase0.Epoch]*EpochStats
-	validatorIndexCache []phase0.BLSPubKey
-	currentEpoch        phase0.Epoch
-	cacheMu             sync.RWMutex
+	stateCache   map[phase0.Epoch]*EpochStats
+	currentEpoch phase0.Epoch
+	cacheMu      sync.RWMutex
+	// proposerPubkeys are the latest state's proposer lookahead pubkeys;
+	// pubkeyLookups the pubkeys of other indices fetched on demand (a
+	// validator index never changes its pubkey), bounded by
+	// pubkeyLookupLimit.
+	proposerPubkeys map[phase0.ValidatorIndex]phase0.BLSPubKey
+	pubkeyLookups   map[phase0.ValidatorIndex]phase0.BLSPubKey
 
 	// Duty dependent root each cached epoch's state was fetched under. A head
 	// event whose dependent root differs proves the cached state came from a
@@ -242,20 +247,51 @@ func (s *service) GetBuilders() []*BuilderInfo {
 	return stats.Builders
 }
 
-// GetValidatorPubkeyByIndex returns the public key for a validator by index from the current epoch stats.
+// GetValidatorPubkeyByIndex returns a validator's public key: a proposer of
+// the state's lookahead from memory, any other validator from the beacon
+// node (cached). Nil when the beacon node cannot tell.
 func (s *service) GetValidatorPubkeyByIndex(index phase0.ValidatorIndex) *phase0.BLSPubKey {
 	s.cacheMu.RLock()
-	defer s.cacheMu.RUnlock()
+	pubkey, ok := s.proposerPubkeys[index]
+	if !ok {
+		pubkey, ok = s.pubkeyLookups[index]
+	}
+	s.cacheMu.RUnlock()
 
-	if index >= phase0.ValidatorIndex(len(s.validatorIndexCache)) {
+	if ok {
+		return &pubkey
+	}
+
+	if s.clClient == nil {
 		return nil
 	}
 
-	// Return a copy: the backing slice is swapped out on each epoch refresh.
-	pubkey := s.validatorIndexCache[index]
+	ctx, cancel := context.WithTimeout(context.Background(), pubkeyLookupTimeout)
+	defer cancel()
 
-	return &pubkey
+	fetched, err := s.clClient.GetValidatorPubkey(ctx, index)
+	if err != nil {
+		s.log.WithError(err).WithField("index", index).Debug("Cannot look up a validator pubkey")
+
+		return nil
+	}
+
+	s.cacheMu.Lock()
+	if s.pubkeyLookups == nil || len(s.pubkeyLookups) >= pubkeyLookupLimit {
+		s.pubkeyLookups = make(map[phase0.ValidatorIndex]phase0.BLSPubKey, 64)
+	}
+	s.pubkeyLookups[index] = fetched
+	s.cacheMu.Unlock()
+
+	return &fetched
 }
+
+const (
+	// pubkeyLookupTimeout bounds an on-demand pubkey lookup.
+	pubkeyLookupTimeout = 2 * time.Second
+	// pubkeyLookupLimit bounds the on-demand pubkey cache (cleared when full).
+	pubkeyLookupLimit = 4096
+)
 
 // GetChainSpec returns the chain specification.
 func (s *service) GetChainSpec() *ChainSpec {

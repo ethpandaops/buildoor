@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { BuilderKeysTable } from './BuilderKeysTable';
+import { InfoHint } from './InfoHint';
 import { useBuilderKeyActions, useBuilderKeys } from '../hooks/useBuilderKeys';
+import { openSettings } from '../stores/settingsDrawerStore';
 import type { BuilderKeysAggregate } from '../types';
 
 interface BuilderKeysViewProps {
@@ -25,16 +27,8 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
   );
   const actions = useBuilderKeyActions();
 
-  const [targetInput, setTargetInput] = useState('');
-  const [editingTarget, setEditingTarget] = useState(false);
   const [busyKey, setBusyKey] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!editingTarget) {
-      setTargetInput(String(settings.target_count));
-    }
-  }, [settings.target_count, editingTarget]);
 
   const runAction = async (keyIndex: number, action: () => Promise<{ ok: boolean; error?: string }>) => {
     setBusyKey(keyIndex);
@@ -49,26 +43,6 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
     refetch();
   };
 
-  const saveTarget = async () => {
-    const target = parseInt(targetInput, 10);
-    if (!Number.isFinite(target) || target < 1) {
-      setActionError('target must be at least 1');
-      return;
-    }
-
-    setActionError(null);
-
-    const result = await actions.setTarget(target);
-    if (!result.ok) {
-      setActionError(result.error ?? 'failed to set target');
-    }
-
-    setEditingTarget(false);
-    refetch();
-  };
-
-  const lowering = editingTarget && parseInt(targetInput, 10) < settings.target_count;
-
   return (
     <div className="card">
       <div className="card-header d-flex align-items-center flex-wrap gap-2">
@@ -76,6 +50,21 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
         <span className="badge bg-success">{aggregate.active} active</span>
         <span className="badge bg-secondary">{aggregate.managed} managed</span>
         <span className="badge bg-info">target {settings.target_count}</span>
+        <InfoHint>
+          <dl>
+            <dt>active</dt>
+            <dd>registered on chain with a finalized deposit and not exiting: may bid</dd>
+            <dt>managed</dt>
+            <dd>keys counting toward the target: depositing, pending or active (exiting and exited
+              keys never bid again and are replaced)</dd>
+            <dt>target</dt>
+            <dd><code>builder_keys.target_count</code>: keys the lifecycle manager keeps registered
+              and funded (at least 1, at most max key index + 1). Key 0 is the entry key; key n is
+              derived from it. Raising it deposits new keys (auto-deposit), lowering it exits the
+              highest-index surplus keys (auto-exit, irreversible).</dd>
+          </dl>
+          Deposits, exits and top-ups only run with the lifecycle manager (<code>--lifecycle</code>).
+        </InfoHint>
         {aggregate.depositing > 0 && (
           <span className="badge bg-warning text-dark">
             <i className="fas fa-spinner fa-spin me-1"></i>
@@ -86,50 +75,22 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
         {!settings.auto_exit && <span className="badge bg-dark">auto-exit off</span>}
 
         <div className="ms-auto d-flex align-items-center gap-2">
-          <span className="text-muted small">Total effective:</span>
+          <span className="text-muted small">
+            Total effective:
+            <InfoHint alignEnd>
+              Sum over all registered keys of the effective balance: the chain balance plus local
+              adjustments minus pending (not yet settled) bid payments, i.e. what the fleet can
+              still bid against.
+            </InfoHint>
+          </span>
           <span className="fw-bold">{formatGwei(aggregate.total_effective_gwei)} ETH</span>
 
-          {actions.isLoggedIn && !editingTarget && (
-            <button
-              className="btn btn-sm btn-outline-primary"
-              onClick={() => {
-                setTargetInput(String(settings.target_count));
-                setEditingTarget(true);
-              }}
-            >
-              <i className="fas fa-pencil-alt me-1"></i>Target
-            </button>
-          )}
-
-          {actions.isLoggedIn && editingTarget && (
-            <>
-              <input
-                type="number"
-                min={1}
-                max={settings.max_index + 1}
-                className="form-control form-control-sm"
-                style={{ width: '6rem' }}
-                value={targetInput}
-                onChange={(e) => setTargetInput(e.target.value)}
-              />
-              <button className="btn btn-sm btn-primary" onClick={saveTarget}>
-                Save
-              </button>
-              <button className="btn btn-sm btn-secondary" onClick={() => setEditingTarget(false)}>
-                Cancel
-              </button>
-            </>
-          )}
+          <button type="button" className="bd-btn bd-btn-sm" onClick={() => openSettings('lifecycle', 'fleet')}>
+            <i className={`fas ${actions.isLoggedIn ? 'fa-sliders-h' : 'fa-eye'}`} aria-hidden="true"></i>
+            Fleet settings
+          </button>
         </div>
       </div>
-
-      {lowering && (
-        <div className="alert alert-warning rounded-0 mb-0 py-2 small">
-          <i className="fas fa-exclamation-triangle me-1"></i>
-          Lowering the target exits surplus keys, highest index first. An exited builder key can
-          never be reactivated.
-        </div>
-      )}
 
       <div className="card-body p-2">
         <BuilderKeysTable
