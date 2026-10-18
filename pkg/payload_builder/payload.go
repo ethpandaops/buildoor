@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethpandaops/go-eth-engine-client/spec/prague"
+	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
 	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
@@ -34,6 +36,13 @@ type Payload struct {
 	BlobsBundle *BlobsBundle
 	// ExecutionRequests are the parsed execution requests (Electra+), versioned for the active fork.
 	ExecutionRequests *eth2all.ExecutionRequests
+	// EngineExecutionRequests and EngineVersion are the engine-API forms the
+	// block hash is derived from: a payload transform recomputes the hash
+	// with them (RehashBeaconPayload). The requests are the build's own — a
+	// payload transform cannot change them, they are not part of the
+	// execution payload.
+	EngineExecutionRequests []prague.ExecutionRequest
+	EngineVersion           enginev.DataVersion
 
 	// InclusionList is the inclusion list view (FOCIL, Heze) the payload was
 	// built against; nil before Heze.
