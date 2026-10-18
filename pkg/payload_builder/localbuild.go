@@ -139,10 +139,12 @@ type LocalBuildInfo struct {
 	// payload is checked against this list before it is used, and the
 	// included block after inclusion.
 	ExpectedHashes []string `json:"expected_hashes,omitempty"`
-	// InclusionListTxs is how many inclusion-list transactions were prepended.
+	// InclusionListTxs is how many inclusion-list transactions the slot had
+	// (prepended to the list, or ignored by the el_mempool source).
 	InclusionListTxs int `json:"inclusion_list_txs,omitempty"`
-	// InclusionListDropped marks that the build only succeeded after the
-	// inclusion list was dropped (a spec-violating payload, for testing).
+	// InclusionListDropped marks a payload without the slot's inclusion list
+	// (a spec-violating payload): the build only succeeded after dropping it,
+	// or the el_mempool source never carried it.
 	InclusionListDropped bool `json:"inclusion_list_dropped,omitempty"`
 	// DroppedByEL counts submitted transactions the EL left out of the payload
 	// (ELs that silently filter instead of failing the call).

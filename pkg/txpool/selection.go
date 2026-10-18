@@ -27,6 +27,10 @@ const (
 	SkipBlobFull            = "blob_full"
 	SkipMaxTxs              = "max_txs"
 	SkipBlobUnsupported     = "blob_unsupported"
+	// SkipBlobSidecarVersion marks a blob transaction whose sidecar has the
+	// other proof format than the block's fork needs (admitted across the
+	// Osaka transition).
+	SkipBlobSidecarVersion = "blob_sidecar_version"
 	// SkipBlobUnavailable marks an EL mempool blob transaction whose blobs the
 	// EL's blob pool could not supply; the sender's later fill transactions
 	// follow it out.
@@ -69,6 +73,9 @@ type SelectParams struct {
 	IncludeBlobTxs bool
 	// BlobEncoding is network (sidecar carried) or canonical.
 	BlobEncoding string
+	// CellProofs marks an Osaka+ block: the network encoding then needs
+	// version 1 (cell proof) sidecars, before it version 0 ones.
+	CellProofs bool
 	// Fill holds the EL mempool's pending transactions (each sender's in
 	// nonce order). They fill the gas and blobs the pool selection left,
 	// after it: each sender continues at the nonce and balance the pool
@@ -473,6 +480,11 @@ func (p *Pool) SelectQueued(ctx context.Context, hashes []common.Hash, params *S
 				return nil, fmt.Errorf("select queued: tx %d (%s) is a blob transaction the EL cannot bundle", i, tx.Hash.Hex())
 			}
 
+			if params.BlobEncoding != config.BlobEncodingCanonical && !sidecarFits(tx.Tx, params.CellProofs) {
+				return nil, fmt.Errorf("select queued: tx %d (%s) has a blob sidecar of the wrong proof format for this fork",
+					i, tx.Hash.Hex())
+			}
+
 			if sel.BlobBaseFee != nil && tx.Tx.BlobGasFeeCap().Cmp(sel.BlobBaseFee) < 0 {
 				return nil, fmt.Errorf("select queued: tx %d (%s) does not clear the blob base fee", i, tx.Hash.Hex())
 			}
@@ -544,6 +556,8 @@ func (p *Pool) readyRun(
 			reason = SkipFeeBelowBase
 		case tx.Tx.Type() == types.BlobTxType && !params.IncludeBlobTxs:
 			reason = SkipBlobUnsupported
+		case params.BlobEncoding != config.BlobEncodingCanonical && !sidecarFits(tx.Tx, params.CellProofs):
+			reason = SkipBlobSidecarVersion
 		case tx.Tx.Type() == types.BlobTxType && sel.BlobBaseFee != nil &&
 			tx.Tx.BlobGasFeeCap().Cmp(sel.BlobBaseFee) < 0:
 			reason = SkipBlobFeeBelowBase

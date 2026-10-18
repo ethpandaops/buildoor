@@ -45,6 +45,9 @@ var (
 	// ErrBlobNoSidecar rejects canonical-form blob transactions: without the
 	// sidecar the blobs bundle cannot be produced.
 	ErrBlobNoSidecar = errors.New("blob transaction without sidecar")
+	// ErrBlobSidecar rejects a sidecar that does not match the transaction's
+	// versioned hashes or cannot be converted to cell proofs.
+	ErrBlobSidecar = errors.New("invalid blob sidecar")
 	// ErrOversized rejects transactions above the canonical size cap.
 	ErrOversized = errors.New("oversized transaction")
 	// ErrIntrinsicGas rejects transactions below the minimum gas.
@@ -306,6 +309,15 @@ func (p *Pool) AddFrom(raw []byte, submitter string) (common.Hash, error) {
 
 		return common.Hash{}, fmt.Errorf("invalid transaction encoding: %w", err)
 	}
+
+	normalized, err := p.normalizeSidecar(tx)
+	if err != nil {
+		p.reject("blob_sidecar")
+
+		return tx.Hash(), err
+	}
+
+	tx = normalized
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

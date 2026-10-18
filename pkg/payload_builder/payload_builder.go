@@ -679,6 +679,7 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
+			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("queued list: %w", err)}
@@ -694,6 +695,13 @@ func (b *PayloadBuilder) buildLocal(
 
 	case config.TxSourceELMempool:
 		txs = nil
+
+		// The EL builds from its own mempool and the testing call carries no
+		// inclusion list: a slot with one gets a payload that ignores it.
+		if il := attrs.InclusionListTransactions; len(il) > 0 {
+			info.InclusionListTxs = len(il)
+			info.InclusionListDropped = true
+		}
 
 	default: // txpool, txpool_el_fill
 		if b.txPool == nil {
@@ -739,6 +747,7 @@ func (b *PayloadBuilder) buildLocal(
 			InclusionList:  attrs.InclusionListTransactions,
 			IncludeBlobTxs: req.IncludeBlobTxs,
 			BlobEncoding:   req.BlobEncoding,
+			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
 			Fill:           fill,
 			FillSidecars:   fillSidecars,
 		})
@@ -886,6 +895,13 @@ func (b *PayloadBuilder) buildLocal(
 	payload.Local = info
 	info.BuiltAt = payload.ReadyAt
 
+	// geth checks the parent against its head and then builds on whatever
+	// the head is by then: a head that moved in between yields a block on
+	// another parent, which no bid for this target may carry.
+	if err := verifyBuiltParent(payload, attrs); err != nil {
+		return localOutcome{info: info, err: err}
+	}
+
 	// The submitted list is a contract: the payload must hold exactly these
 	// transactions in this order. ELs that silently filter (erigon) or
 	// reorder would otherwise bid a block that is not the plan; the bid is
@@ -929,6 +945,25 @@ func txHashes(txs [][]byte) []string {
 	}
 
 	return out
+}
+
+// verifyBuiltParent checks that the payload extends the requested parent.
+func verifyBuiltParent(payload *Payload, attrs *beacon.PayloadAttributesEvent) error {
+	if payload.ExecutionPayload == nil {
+		return errors.New("local payload carries no execution payload")
+	}
+
+	if payload.ExecutionPayload.ParentHash != attrs.ParentBlockHash {
+		return fmt.Errorf("local payload built on parent %#x, requested %#x",
+			payload.ExecutionPayload.ParentHash, attrs.ParentBlockHash)
+	}
+
+	if attrs.ParentBlockNumber > 0 && payload.ExecutionPayload.BlockNumber != attrs.ParentBlockNumber+1 {
+		return fmt.Errorf("local payload has block number %d, the parent is %d",
+			payload.ExecutionPayload.BlockNumber, attrs.ParentBlockNumber)
+	}
+
+	return nil
 }
 
 // verifyBuiltPayload checks that the payload holds exactly the expected

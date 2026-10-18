@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
+	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
@@ -26,9 +27,14 @@ var testChainID = big.NewInt(1234)
 type stubChainService struct {
 	chain.Service
 	slot phase0.Slot
+	fork version.DataVersion
 }
 
 func (s *stubChainService) GetCurrentSlot() phase0.Slot { return s.slot }
+func (s *stubChainService) GetEpochOfSlot(slot phase0.Slot) phase0.Epoch {
+	return phase0.Epoch(slot / 32)
+}
+func (s *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion { return s.fork }
 func (s *stubChainService) GetHeadTracker() *chain.HeadTracker {
 	return nil
 }

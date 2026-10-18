@@ -271,6 +271,7 @@ func (h *APIHandler) GetTxPoolPreview(w http.ResponseWriter, r *http.Request) {
 		Seed:           uint64(slot),
 		IncludeBlobTxs: availability.BlobBundle || cfg.LocalBuild.AllowBlobsWithoutBundle,
 		BlobEncoding:   availability.BlobEncoding,
+		CellProofs:     pool.CellProofsActive(),
 	}
 
 	selection, err := pool.Select(r.Context(), params)
