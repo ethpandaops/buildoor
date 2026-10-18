@@ -134,6 +134,9 @@ type PayloadBuildStartedStreamEvent struct {
 	Slot      uint64 `json:"slot"`
 	Candidate string `json:"candidate,omitempty"`
 	StartedAt int64  `json:"started_at"`
+	// Engine is set when the build runs the engine-API build (the graph's
+	// engine lane); without it only testing builds run.
+	Engine bool `json:"engine"`
 }
 
 // PayloadAttributesStreamEvent is sent when a payload_attributes event is
@@ -1311,6 +1314,7 @@ func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.Pa
 			Slot:      uint64(event.Slot),
 			Candidate: event.Candidate,
 			StartedAt: event.StartedAt.UnixMilli(),
+			Engine:    event.Engine,
 		},
 	})
 }

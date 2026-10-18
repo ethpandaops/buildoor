@@ -915,6 +915,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 		Slot:      slot,
 		Candidate: string(target.candidate),
 		StartedAt: time.Now(),
+		Engine:    localReq.RunEL(),
 		BuildSeq:  build.seq,
 	})
 

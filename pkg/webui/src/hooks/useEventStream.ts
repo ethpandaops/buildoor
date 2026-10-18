@@ -436,11 +436,11 @@ function useEventStreamConnection(): UseEventStreamResult {
         }
 
         case 'payload_build_started': {
-          const data = event.data as { slot: number; candidate?: string; started_at: number };
+          const data = event.data as { slot: number; candidate?: string; started_at: number; engine?: boolean };
           addEvent('payload_build_started',
             `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
             event.timestamp);
-          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at },
+          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at, engine: data.engine },
             state => (
               // The primary line spans the primary candidate's own build; the
               // first start seeds it until a payload becomes primary.

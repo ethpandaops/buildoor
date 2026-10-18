@@ -6,6 +6,7 @@ import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
+import { engineBuildRan, testingRuns } from './slotGraphBuilds';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -420,6 +421,10 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   const pct75X = calculatePosition(slotDuration * 0.75, rangeStart, totalRange);
   const slotEndX = calculatePosition(slotDuration, rangeStart, totalRange);
 
+  // The engine lane (build line + payload dot) only exists when the target ran
+  // the engine-API build; the testing lane is drawn from its own builds.
+  const engineRan = engineBuildRan(state);
+
   // Build windows: the engine build collects transactions from its start for
   // payload_build_time; the testing builds have their own window.
   const engineWindowMs = epbsConfig && config?.build?.engine_enabled !== false &&
@@ -785,7 +790,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
           {/* Build delay line: from build start to payload ready (animates live while building).
               On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
-          {epbsConfig && buildActive && !buildFailed && genesisTime > 0 && buildStartX < 100 && (
+          {epbsConfig && buildActive && !buildFailed && engineRan && genesisTime > 0 && buildStartX < 100 && (
             <BuildDelayLine
               leftPct={buildStartX}
               slotStartTime={slotStartTime}
@@ -832,201 +837,35 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           )}
 
 
-          {/* Testing builds, live: one bar per build of the target (rebuilds run when new
-              transactions arrived), until the final local_build event (which waits for the
-              engine build and the bid choice) takes over below. */}
-          {state.localBuildLive && !state.localBuild && genesisTime > 0 && epbsConfig &&
-            Object.values(state.localBuildLive)
-              .sort((a, b) => (a.run ?? 1) - (b.run ?? 1))
-              .map((live) => {
-                const run = live.run ?? 1;
-                const startX = calculatePosition(live.started_at - slotStartTime, rangeStart, totalRange);
-                if (startX >= 100) return null;
-
-                const items = [
-                  { label: 'Build', value: `#${run}` },
-                  { label: 'Started', value: `${live.started_at - slotStartTime}ms` },
-                  ...(live.phase === 'building'
-                    ? [{ label: 'Status', value: 'building…' }]
-                    : [
-                        {
-                          label: live.phase === 'ready' ? 'Built At' : live.phase === 'failed' ? 'Failed At' : 'Skipped At',
-                          value: `${live.at - slotStartTime}ms`
-                        },
-                        { label: 'Duration', value: `${live.at - live.started_at}ms` },
-                        { label: 'Status', value: `${live.phase}${live.skip_reason ? ` (${live.skip_reason})` : ''}` }
-                      ]),
-                  ...(live.error ? [{ label: 'Error', value: live.error }] : []),
-                  { label: 'Tx Source', value: live.tx_source || '—' },
-                  ...(live.phase === 'ready'
-                    ? [
-                        { label: 'Contents', value: `${live.num_transactions ?? 0} txs` },
-                        { label: 'Block Value', value: formatGwei(Number(BigInt(live.block_value_wei || '0') / 1000000000n)) },
-                        { label: 'Bids With', value: 'decided once the engine build finishes' }
-                      ]
-                    : [])
-                ];
-                const data = { title: 'Testing Build (testing_buildBlockV1)', items };
-                const dotClass = live.phase === 'ready'
-                  ? 'local-build-created'
-                  : live.phase === 'failed' ? 'local-build-failed' : 'local-build-skipped';
-
-                return (
-                  <React.Fragment key={`local-build-live-${run}`}>
-                    {live.phase !== 'skipped' && (
-                      <BuildDelayLine
-                        leftPct={startX}
-                        slotStartTime={slotStartTime}
-                        rangeStart={rangeStart}
-                        totalRange={totalRange}
-                        endGapPx={4}
-                        endAt={live.phase === 'building' ? undefined : live.at}
-                        className="local-build-line"
-                        onClick={(e) => showPopover(e, data)}
-                      />
-                    )}
-                    {live.phase !== 'building' && renderEventDot(dotClass, live.at - slotStartTime, data, `local-build-live-dot-${run}`)}
-                  </React.Fragment>
-                );
-              })}
-
-          {/* The target's other testing builds (rebuilds), dimmed: the handed-over one is
-              drawn in full below. */}
-          {state.localBuild?.info?.runs && state.localBuild.info.runs.length > 1 && genesisTime > 0 && epbsConfig &&
-            state.localBuild.info.runs
-              .filter((run) => run.run !== state.localBuild?.info?.run)
-              .map((run) => {
-                const startedMs = Date.parse(run.started_at) - slotStartTime;
-                const atMs = Date.parse(run.at) - slotStartTime;
-                const startX = calculatePosition(startedMs, rangeStart, totalRange);
-                if (startX >= 100) return null;
-
-                const data = {
-                  title: `Testing Build #${run.run} (not handed over)`,
-                  items: [
-                    { label: 'Started', value: `${startedMs}ms` },
-                    ...(run.selected_at ? [{ label: 'Selection', value: `${Date.parse(run.selected_at) - Date.parse(run.started_at)}ms` }] : []),
-                    { label: run.status === 'ready' ? 'Built At' : run.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${atMs}ms` },
-                    { label: 'Duration', value: `${atMs - startedMs}ms` },
-                    { label: 'Status', value: run.status },
-                    ...(run.error ? [{ label: 'Error', value: run.error }] : []),
-                    ...(run.status === 'ready'
-                      ? [
-                          { label: 'Contents', value: `${run.num_transactions ?? 0} txs, gas ${(run.gas_used ?? 0).toLocaleString()}` },
-                          { label: 'Block Value', value: formatGwei(Number(BigInt(run.block_value_wei || '0') / 1000000000n)) }
-                        ]
-                      : [])
-                  ]
-                };
-                const dotClass = run.status === 'ready'
-                  ? 'local-build-created'
-                  : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
-
-                return (
-                  <React.Fragment key={`local-build-run-${run.run}`}>
-                    {run.status === 'ready' && (
-                      <BuildDelayLine
-                        leftPct={startX}
-                        slotStartTime={slotStartTime}
-                        rangeStart={rangeStart}
-                        totalRange={totalRange}
-                        endGapPx={4}
-                        endAt={Date.parse(run.at)}
-                        className="local-build-line local-build-run-other"
-                        onClick={(e) => showPopover(e, data)}
-                      />
-                    )}
-                    {renderEventDot(`${dotClass} local-build-run-other`, atMs, data, `local-build-run-dot-${run.run}`)}
-                  </React.Fragment>
-                );
-              })}
-
-          {/* Local build (testing_buildBlockV1): its own span + dot below the regular build
-              line. Shown when it ran next to an engine build (two distinct builds) or when it
-              did not produce a payload; a local-only build is already the primary line. */}
-          {(() => {
-            const lb = state.localBuild;
-            if (!lb || genesisTime <= 0 || !epbsConfig) return null;
-            if (lb.status === 'ready' && !lb.el) return null;
-
-            const endAt = lb.status === 'ready' ? (lb.built_at || lb.at) : lb.at;
-            // The final testing build is timed to finish just before the
-            // hand-over, so it usually starts after the engine build.
-            const localStartMs = lb.started_at ? lb.started_at - slotStartTime : buildStartMs;
-            const selectionMs = lb.info?.selected_at && lb.started_at
-              ? Date.parse(lb.info.selected_at) - lb.started_at
-              : null;
-            const localStartX = calculatePosition(localStartMs, rangeStart, totalRange);
-            const items = [
-              ...(lb.info?.builds && lb.info.builds > 1
-                ? [{ label: 'Build', value: `#${lb.info.run ?? '?'} of ${lb.info.builds} (the most valuable)` }]
-                : []),
-              { label: 'Build Start', value: `${localStartMs}ms` },
-              ...(localStartMs !== buildStartMs
-                ? [{ label: 'Started', value: `${localStartMs - buildStartMs}ms after the engine build` }]
-                : []),
-              ...(selectionMs !== null ? [{ label: 'Selection', value: `${selectionMs}ms` }] : []),
-              ...(lb.status === 'ready' && lb.built_at
-                ? [
-                    { label: 'Built At', value: `${lb.built_at - slotStartTime}ms` },
-                    { label: 'Duration', value: `${(lb.built_at - slotStartTime) - localStartMs}ms` }
-                  ]
-                : [{ label: lb.status === 'failed' ? 'Failed At' : 'Skipped At', value: `${lb.at - slotStartTime}ms` }]),
-              { label: 'Status', value: `${lb.status}${lb.skip_reason ? ` (${lb.skip_reason})` : ''}` },
-              ...(lb.error ? [{ label: 'Error', value: lb.error }] : []),
-              { label: 'Tx Source', value: lb.tx_source || '—' },
-              { label: 'Payload Source', value: lb.payload_source || '—' },
-              { label: 'Bids With', value: lb.selected
-                ? (lb.payload_source === 'higher_value' ? 'custom block (worth more)' : 'custom block')
-                : lb.fallback ? 'engine block (fallback)'
-                  : lb.payload_source === 'higher_value' ? 'engine block (worth at least as much)'
-                    : 'engine block (custom is compare-only)' },
-              ...(lb.local ? [
-                { label: 'Block Hash', value: truncateHash(lb.local.block_hash), copyValue: lb.local.block_hash },
-                { label: 'Block Value', value: formatGwei(Number(BigInt(lb.local.block_value_wei || '0') / 1000000000n)) },
-                { label: 'Contents', value: `${lb.local.num_transactions} txs, ${lb.local.num_blobs} blobs` },
-                { label: 'Gas', value: `${lb.local.gas_used.toLocaleString()} / ${lb.local.gas_limit.toLocaleString()}` }
-              ] : []),
-              ...(lb.info?.selection ? [
-                { label: 'Pool Selection', value: `${lb.info.selection.selected} of ${lb.info.selection.pool_size} pooled (gas ${lb.info.selection.gas_sum.toLocaleString()})` },
-                ...(lb.info.selection.fill_candidates
-                  ? [{ label: 'EL Mempool Fill', value: `${lb.info.selection.fill_selected ?? 0} of ${lb.info.selection.fill_candidates} pending (gas ${(lb.info.selection.fill_gas_sum ?? 0).toLocaleString()}${lb.info.selection.fill_blobs ? `, ${lb.info.selection.fill_blobs} blobs` : ''})${lb.info.fill_dropped ? ', dropped after an EL refusal' : lb.info.fill_blobs_dropped ? ', blob transactions dropped after an EL refusal' : ''}` }]
-                  : []),
-                ...(lb.info.selection.skipped && Object.keys(lb.info.selection.skipped).length > 0
-                  ? [{ label: 'Skipped', value: Object.entries(lb.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ') }]
-                  : [])
-              ] : []),
-              ...(lb.info?.fill_error ? [{ label: 'EL Mempool', value: `unreadable: ${lb.info.fill_error}` }] : []),
-              ...(lb.info?.dropped_by_el ? [{ label: 'Dropped by EL', value: `${lb.info.dropped_by_el}` }] : []),
-              ...(lb.info?.inclusion_list_dropped ? [{ label: 'Inclusion List', value: 'dropped on retry' }] : []),
-              ...(lb.el ? [
-                { label: 'Engine Block Hash', value: truncateHash(lb.el.block_hash), copyValue: lb.el.block_hash },
-                { label: 'Engine Block', value: `${lb.el.num_transactions} txs, ${formatGwei(Number(BigInt(lb.el.block_value_wei || '0') / 1000000000n))}` }
-              ] : [])
-            ];
-            const data = { title: 'Testing Build (testing_buildBlockV1)', items };
-            const dotClass = lb.status === 'ready'
-              ? `local-build-created${lb.selected ? ' local-build-selected' : ''}`
-              : lb.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
+          {/* Testing lane: every testing build of the primary target, the handed-over one
+              highlighted (green ring when it feeds the bids), the others dimmed. */}
+          {genesisTime > 0 && epbsConfig && testingRuns(state, slot, slotStartTime).map((run) => {
+            const startX = calculatePosition(run.startedAt - slotStartTime, rangeStart, totalRange);
+            if (startX >= 100) return null;
+            const other = run.dimmed ? ' local-build-run-other' : '';
+            const dotClass = run.status === 'ready'
+              ? `local-build-created${run.selected ? ' local-build-selected' : ''}`
+              : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
             return (
-              <>
-                {lb.status === 'ready' && localStartX < 100 && (
+              <React.Fragment key={`local-build-${run.run}`}>
+                {run.status !== 'skipped' && (
                   <BuildDelayLine
-                    leftPct={localStartX}
+                    leftPct={startX}
                     slotStartTime={slotStartTime}
                     rangeStart={rangeStart}
                     totalRange={totalRange}
                     endGapPx={4}
-                    endAt={endAt}
-                    className="local-build-line"
-                    onClick={(e) => showPopover(e, data)}
+                    endAt={run.endAt}
+                    className={`local-build-line${other}`}
+                    onClick={(e) => showPopover(e, run.data)}
                   />
                 )}
-                {renderEventDot(dotClass, endAt - slotStartTime, data, 'local-build')}
-              </>
+                {run.endAt !== undefined &&
+                  renderEventDot(`${dotClass}${other}`, run.endAt - slotStartTime, run.data, `local-build-dot-${run.run}`)}
+              </React.Fragment>
             );
-          })()}
+          })}
 
           {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
           {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
@@ -1095,7 +934,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
           ))}
 
           {/* Payload created — one tab per built candidate payload */}
-          {state.payloadCreatedAt && genesisTime > 0 && renderEventDot(
+          {state.payloadCreatedAt && engineRan && genesisTime > 0 && renderEventDot(
             'payload-created',
             state.payloadCreatedAt - slotStartTime,
             {

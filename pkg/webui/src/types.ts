@@ -762,6 +762,8 @@ export type CandidateKey =
 export interface CandidateBuild {
   candidate: CandidateKey;
   startedAt?: number;
+  // The build runs the engine-API build (absent from older events).
+  engine?: boolean;
   readyAt?: number;
   failedAt?: number;
   failed?: boolean;
