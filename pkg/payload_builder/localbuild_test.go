@@ -45,75 +45,75 @@ func TestLocalBuildRequestRunEL(t *testing.T) {
 }
 
 func TestSelectPayload(t *testing.T) {
-	el := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{1}}
-	local := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{2}}
-	richEL := &Payload{Source: SourceEL, BlockHash: phase0.Hash32{3}, BlockValue: big.NewInt(500)}
-	richLocal := &Payload{Source: SourceLocal, BlockHash: phase0.Hash32{4}, BlockValue: big.NewInt(500)}
-	b := &PayloadBuilder{}
+	engine, testRun := BuildRef{Kind: BuildKindEngine}, BuildRef{Kind: BuildKindTesting, Run: 1}
+	el := &Payload{Build: engine, BlockHash: phase0.Hash32{1}}
+	local := &Payload{Build: testRun, BlockHash: phase0.Hash32{2}}
+	richEL := &Payload{Build: engine, BlockHash: phase0.Hash32{3}, BlockValue: big.NewInt(500)}
+	richLocal := &Payload{Build: testRun, BlockHash: phase0.Hash32{4}, BlockValue: big.NewInt(500)}
 
 	tests := []struct {
 		name       string
-		result     BuildResult
+		result     buildState
 		req        *LocalBuildRequest
-		wantSource string
+		wantSource BuildRef
 		wantHash   phase0.Hash32
 		wantErr    string
 		fallback   bool
 	}{
 		{
-			name: "no local request uses el", result: BuildResult{EL: el},
-			wantSource: SourceEL, wantHash: el.BlockHash,
+			name: "no local request uses el", result: buildState{EL: el},
+			wantSource: engine, wantHash: el.BlockHash,
 		},
 		{
-			name: "el failure without local request errors", result: BuildResult{ELErr: errors.New("boom")},
+			name: "el failure without local request errors", result: buildState{ELErr: errors.New("boom")},
 			wantErr: "boom",
 		},
 		{
-			name: "source el keeps el even when local succeeded", result: BuildResult{EL: el, Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceEL}, wantSource: SourceEL, wantHash: el.BlockHash,
+			name: "source el keeps el even when local succeeded", result: buildState{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceEL}, wantSource: engine, wantHash: el.BlockHash,
 		},
 		{
-			name: "source local uses local", result: BuildResult{EL: el, Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantSource: SourceLocal, wantHash: local.BlockHash,
+			name: "source local uses local", result: buildState{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantSource: testRun, wantHash: local.BlockHash,
 		},
 		{
-			name: "source local strict fails without local", result: BuildResult{EL: el, LocalErr: errors.New("nonce too low")},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantErr: "local build failed: nonce too low",
+			name: "source local strict fails without local", result: buildState{EL: el, LocalErr: errors.New("nonce too low")},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantErr: "testing build failed: nonce too low",
 		},
 		{
-			name: "source local strict reports skip reason", result: BuildResult{EL: el, LocalSkipReason: LocalSkipTxPoolDisabled},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantErr: "local build skipped: txpool_disabled",
+			name: "source local strict reports skip reason", result: buildState{EL: el, LocalSkipReason: LocalSkipTxPoolDisabled},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocal}, wantErr: "testing build skipped: txpool_disabled",
 		},
 		{
-			name: "local_or_el prefers local", result: BuildResult{EL: el, Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: SourceLocal, wantHash: local.BlockHash,
+			name: "local_or_el prefers local", result: buildState{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: testRun, wantHash: local.BlockHash,
 		},
 		{
-			name: "local_or_el falls back to el", result: BuildResult{EL: el, LocalErr: errors.New("x")},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: SourceEL, wantHash: el.BlockHash, fallback: true,
+			name: "local_or_el falls back to el", result: buildState{EL: el, LocalErr: errors.New("x")},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantSource: engine, wantHash: el.BlockHash, fallback: true,
 		},
 		{
-			name: "higher_value takes the more valuable local payload", result: BuildResult{EL: el, Local: richLocal},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: richLocal.BlockHash,
+			name: "higher_value takes the more valuable local payload", result: buildState{EL: el, Local: richLocal},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: testRun, wantHash: richLocal.BlockHash,
 		},
 		{
-			name: "higher_value takes the more valuable el payload", result: BuildResult{EL: richEL, Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: richEL.BlockHash,
+			name: "higher_value takes the more valuable el payload", result: buildState{EL: richEL, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: engine, wantHash: richEL.BlockHash,
 		},
 		{
-			name: "higher_value prefers el on a tie", result: BuildResult{EL: el, Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+			name: "higher_value prefers el on a tie", result: buildState{EL: el, Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: engine, wantHash: el.BlockHash,
 		},
 		{
-			name: "higher_value uses el when local failed", result: BuildResult{EL: el, LocalErr: errors.New("x")},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceEL, wantHash: el.BlockHash,
+			name: "higher_value uses el when local failed", result: buildState{EL: el, LocalErr: errors.New("x")},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: engine, wantHash: el.BlockHash,
 		},
 		{
-			name: "higher_value uses local when el failed", result: BuildResult{ELErr: errors.New("el down"), Local: local},
-			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: SourceLocal, wantHash: local.BlockHash,
+			name: "higher_value uses local when el failed", result: buildState{ELErr: errors.New("el down"), Local: local},
+			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}, wantSource: testRun, wantHash: local.BlockHash,
 		},
 		{
-			name: "local_or_el with both failed errors", result: BuildResult{ELErr: errors.New("el down"), LocalErr: errors.New("x")},
+			name: "local_or_el with both failed errors", result: buildState{ELErr: errors.New("el down"), LocalErr: errors.New("x")},
 			req: &LocalBuildRequest{PayloadSource: config.PayloadSourceLocalOrEL}, wantErr: "el down",
 		},
 	}
@@ -121,19 +121,18 @@ func TestSelectPayload(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := tc.result
-			out, err := b.selectPayload(&result, tc.req)
-			require.NotNil(t, out, "the result is always returned for inspection")
+			out, err := selectPayload(&result, tc.req)
 
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tc.wantErr)
-				require.Nil(t, out.Payload)
+				require.Nil(t, out)
 
 				return
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, tc.wantSource, out.Source)
+			require.Equal(t, tc.wantSource, out.Payload.Build)
 			require.Equal(t, tc.wantHash, out.Payload.BlockHash)
 			require.Equal(t, tc.fallback, out.Fallback)
 		})
@@ -280,7 +279,7 @@ func TestBuildLocalTxSources(t *testing.T) {
 		require.NoError(t, out.err)
 		require.Empty(t, out.skipReason)
 		require.NotNil(t, out.payload)
-		require.Equal(t, SourceLocal, out.payload.Source)
+		require.Equal(t, BuildKindTesting, out.payload.Build.Kind)
 		require.Len(t, client.calls, 1)
 		require.Equal(t, txs, client.calls[0])
 		require.Equal(t, 2, out.info.SubmittedTxs)
@@ -638,37 +637,41 @@ func TestBuildLocalELFill(t *testing.T) {
 	})
 }
 
-// TestFireLocalProgress reports the custom build live: building at the start,
-// then its own outcome without waiting for the engine build.
-func TestFireLocalProgress(t *testing.T) {
-	b, attrs, _ := newLocalTestBuilder(&fakeLocalClient{})
-	sub := b.localProgress.Subscribe(8, false)
+// TestRunLocalBuildReportsItsOutcome reports each run live: building at the
+// start, then its own outcome without waiting for the engine build. A
+// transform failure fails the run: its payload is never reported.
+func TestRunLocalBuildReportsItsOutcome(t *testing.T) {
+	b, attrs, prelude := newLocalTestBuilder(&fakeLocalClient{})
+	deadline := time.Now().Add(time.Second)
 
-	defer sub.Unsubscribe()
+	reporter := &recordingReporter{}
+	skipped := b.runLocalBuild(context.Background(),
+		testingRequest(attrs, &LocalBuildRequest{TxSource: config.TxSourceTxPool}, reporter), prelude, deadline, 3)
+	require.Equal(t, LocalSkipTxPoolUnavailable, skipped.skipReason)
 
-	req := &LocalBuildRequest{Candidate: "parent_full", TxSource: config.TxSourceTxPool}
-	started := time.Now()
+	events := reporter.testingEvents()
+	require.Len(t, events, 2)
+	require.Equal(t, LocalStatusBuilding, events[0].Status)
+	require.Equal(t, attrs.ProposalSlot, events[0].Slot)
+	require.Equal(t, chain.CandidateParentFull, events[0].Candidate)
+	require.Equal(t, LocalStatusSkipped, events[1].Status)
+	require.Equal(t, LocalSkipTxPoolUnavailable, events[1].SkipReason)
+	require.Equal(t, 3, events[1].Run)
+	require.Equal(t, events[0].StartedAt, events[1].StartedAt)
 
-	b.fireLocalProgress(attrs, req, 1, started, nil)
-	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{payload: &Payload{BlockValue: big.NewInt(7)}})
-	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{skipReason: LocalSkipTxPoolDisabled})
-	b.fireLocalProgress(attrs, req, 1, started, &localOutcome{err: errors.New("boom")})
+	reporter = &recordingReporter{}
+	req := testingRequest(attrs, &LocalBuildRequest{TxSource: config.TxSourceEmpty}, reporter)
+	req.Transform = ".transactions | ("
 
-	phases := make([]*LocalBuildProgressEvent, 0, 4)
-	for range 4 {
-		phases = append(phases, <-sub.Channel())
-	}
+	failed := b.runLocalBuild(context.Background(), req, prelude, deadline, 1)
+	require.Nil(t, failed.payload)
+	require.ErrorContains(t, failed.err, "payload transform failed")
 
-	require.Equal(t, LocalStatusBuilding, phases[0].Phase)
-	require.Equal(t, "parent_full", phases[0].Candidate)
-	require.Equal(t, attrs.ProposalSlot, phases[0].Slot)
-	require.Equal(t, LocalStatusReady, phases[1].Phase)
-	require.Equal(t, big.NewInt(7), phases[1].BlockValue)
-	require.Equal(t, started, phases[1].StartedAt)
-	require.Equal(t, LocalStatusSkipped, phases[2].Phase)
-	require.Equal(t, LocalSkipTxPoolDisabled, phases[2].SkipReason)
-	require.Equal(t, LocalStatusFailed, phases[3].Phase)
-	require.Equal(t, "boom", phases[3].Error)
+	events = reporter.testingEvents()
+	require.Len(t, events, 2)
+	require.Equal(t, LocalStatusFailed, events[1].Status)
+	require.Nil(t, events[1].Payload)
+	require.Contains(t, events[1].Error, "payload transform failed")
 }
 
 // TestLocalBuildInfoPublicDropsTransactionHashes checks that the public copy

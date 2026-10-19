@@ -47,10 +47,10 @@ var (
 		Name: "buildoor_local_build_outcomes_total",
 		Help: "Local build outcomes, by status (ready, failed, skipped) and reason.",
 	}, []string{"status", "reason"})
-	LocalBuildSelected = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "buildoor_local_build_payload_source_total",
-		Help: "Which payload fed the bids per build target: el or local.",
-	}, []string{"source"})
+	PayloadSelections = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "buildoor_payload_selections_total",
+		Help: "Payload selections of the build targets, by the selected payload's build (engine, testing) and reason (handover, upgrade).",
+	}, []string{"build", "reason"})
 	TxPlanChecks = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "buildoor_tx_plan_checks_total",
 		Help: "Post-inclusion checks of locally built blocks against their plan, by verdict.",

@@ -25,7 +25,7 @@ func TestPayloadCacheReleasesOldBlobs(t *testing.T) {
 	cache.Store(old)
 
 	replaced := blobPayload(100, 2)
-	cache.Store(replaced) // supersedes old
+	cache.Store(replaced) // another build of the slot
 
 	recent := blobPayload(105, 3)
 	cache.Store(recent)

@@ -182,11 +182,11 @@ func TestPayloadCacheCandidatePriority(t *testing.T) {
 	}
 
 	empty := makePayload(chain.CandidateParentEmpty, phase0.Hash32{0x02})
-	cache.Store(empty)
+	cache.Select(empty)
 	assert.Same(t, empty, cache.Get(10), "only candidate wins")
 
 	full := makePayload(chain.CandidateParentFull, phase0.Hash32{0x01})
-	cache.Store(full)
+	cache.Select(full)
 	assert.Same(t, full, cache.Get(10), "parent_full outranks parent_empty")
 
 	assert.Same(t, empty, cache.GetCandidate(10, chain.CandidateParentEmpty))

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
 	"github.com/ethpandaops/buildoor/pkg/utils"
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
@@ -318,23 +320,26 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 		Version:     version.DataVersionFulu,
 		BlockNumber: 42,
 		GasLimit:    30_000_000,
+		BlockHash:   phase0.Hash32{0x42},
 	}
-	_, storeErr := env.tracker.Artifacts().StorePayload(
-		2000, version.DataVersionFulu, payload, slot_results.PayloadArtifactMeta{})
+	blockHash := fmt.Sprintf("%#x", payload.BlockHash)
+
+	storeErr := env.tracker.Artifacts().StorePayload(2000, version.DataVersionFulu, payload,
+		slot_results.PayloadArtifactMeta{BlockHash: blockHash, Build: payload_builder.BuildKindEngine})
 	require.NoError(t, storeErr)
 
 	newRequest := func(accept string) *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payload", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payloads/"+blockHash, nil)
 		if accept != "" {
 			req.Header.Set("Accept", accept)
 		}
 
-		return mux.SetURLVars(req, map[string]string{"slot": "2000"})
+		return mux.SetURLVars(req, map[string]string{"slot": "2000", "blockHash": blockHash})
 	}
 
 	// Default (no Accept) → JSON envelope with version + headers.
 	rec := httptest.NewRecorder()
-	env.handler.GetSlotPayloadArtifact(rec, newRequest(""))
+	env.handler.GetSlotPayloadArtifactByHash(rec, newRequest(""))
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "fulu", rec.Header().Get("Eth-Consensus-Version"))
 	assert.Equal(t, "Accept", rec.Header().Get("Vary"))
@@ -352,33 +357,56 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 	require.NoError(t, err)
 
 	rec = httptest.NewRecorder()
-	env.handler.GetSlotPayloadArtifact(rec, newRequest("application/octet-stream"))
+	env.handler.GetSlotPayloadArtifactByHash(rec, newRequest("application/octet-stream"))
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
 	assert.True(t, bytes.Equal(expectedSSZ, rec.Body.Bytes()), "SSZ body must be byte-exact")
 
 	// q-weighted preference: octet-stream wins at higher quality.
 	rec = httptest.NewRecorder()
-	env.handler.GetSlotPayloadArtifact(rec, newRequest("application/json;q=0.5, application/octet-stream"))
+	env.handler.GetSlotPayloadArtifactByHash(rec, newRequest("application/json;q=0.5, application/octet-stream"))
 	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
 
 	// Wildcard prefers JSON.
 	rec = httptest.NewRecorder()
-	env.handler.GetSlotPayloadArtifact(rec, newRequest("*/*"))
+	env.handler.GetSlotPayloadArtifactByHash(rec, newRequest("*/*"))
 	assert.True(t, strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json"))
 
 	// Unsupported types → 406.
 	rec = httptest.NewRecorder()
-	env.handler.GetSlotPayloadArtifact(rec, newRequest("text/html"))
+	env.handler.GetSlotPayloadArtifactByHash(rec, newRequest("text/html"))
 	assert.Equal(t, http.StatusNotAcceptable, rec.Code)
 
 	// Missing artifact → 404.
 	rec = httptest.NewRecorder()
 	req := mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/999/payload", nil),
-		map[string]string{"slot": "999"})
+		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/999/payloads/"+blockHash, nil),
+		map[string]string{"slot": "999", "blockHash": blockHash})
+	env.handler.GetSlotPayloadArtifactByHash(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// No selection recorded for the slot → the selected payload is 404.
+	rec = httptest.NewRecorder()
+	req = mux.SetURLVars(
+		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payload", nil),
+		map[string]string{"slot": "2000"})
 	env.handler.GetSlotPayloadArtifact(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// A testing build's payload is private (a login; the test's open auth
+	// mode authorizes every reader).
+	custom := &eth2all.ExecutionPayload{Version: version.DataVersionFulu, BlockHash: phase0.Hash32{0x77}}
+	customHash := fmt.Sprintf("%#x", custom.BlockHash)
+	require.NoError(t, env.tracker.Artifacts().StorePayload(2000, version.DataVersionFulu, custom,
+		slot_results.PayloadArtifactMeta{BlockHash: customHash, Build: payload_builder.BuildKindTesting, Run: 1}))
+
+	rec = httptest.NewRecorder()
+	req = mux.SetURLVars(
+		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payloads/"+customHash, nil),
+		map[string]string{"slot": "2000", "blockHash": customHash})
+	env.handler.GetSlotPayloadArtifactByHash(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "private, no-store", rec.Header().Get("Cache-Control"))
 }
 
 func TestBidArtifactListingAndFetch(t *testing.T) {

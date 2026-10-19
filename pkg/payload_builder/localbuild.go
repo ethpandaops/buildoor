@@ -3,7 +3,6 @@ package payload_builder
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -19,20 +18,10 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
-	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
-// Payload sources recorded on a built payload.
-const (
-	// SourceEL marks a payload built by the EL from its own mempool through
-	// the engine API (forkchoiceUpdated + getPayload).
-	SourceEL = "el"
-	// SourceLocal marks a payload built through testing_buildBlockV1 from a
-	// buildoor-chosen transaction list.
-	SourceLocal = "local"
-)
-
-// Local build skip reasons (LocalBuildEvent.SkipReason).
+// Testing build skip reasons (TestingBuildEvent.SkipReason,
+// BuildTargetEvent.TestingSkipReason).
 const (
 	// LocalSkipUnavailable: the EL does not expose the testing namespace.
 	LocalSkipUnavailable = "unavailable"
@@ -52,8 +41,7 @@ const (
 	LocalSkipSpeculativeCandidate = "speculative_candidate"
 )
 
-// Local build statuses (LocalBuildEvent.Status; LocalBuildProgressEvent.Phase
-// also uses building).
+// Testing build run statuses (TestingBuildEvent.Status).
 const (
 	LocalStatusBuilding = "building"
 	LocalStatusReady    = "ready"
@@ -76,8 +64,6 @@ var _ LocalBuildClient = (*execution.Client)(nil)
 // LocalBuildRequest is a slot's resolved local-build instruction handed to the
 // payload builder alongside the engine build.
 type LocalBuildRequest struct {
-	// Candidate is the build target's candidate key (for progress events).
-	Candidate string
 	// TxSource is txpool, empty, el_mempool or explicit.
 	TxSource string
 	// Transactions is the explicit transaction list (tx source explicit).
@@ -185,32 +171,13 @@ type LocalBuildInfo struct {
 	// SelectedAt when the list was assembled and the testing call started.
 	StartedAt  time.Time `json:"started_at"`
 	SelectedAt time.Time `json:"selected_at,omitempty"`
-	// BuiltAt is when testing_buildBlockV1 returned the payload. The local
-	// build runs during the engine build's wait, so this is usually before
-	// the payload's ReadyAt (the hand-over to the consumers).
+	// BuiltAt is when testing_buildBlockV1 returned the payload.
 	BuiltAt time.Time `json:"built_at"`
-	// Builds is how many testing builds the target ran (rebuilds); this
-	// record describes the one handed over, Run is its number and Runs
-	// summarizes every build up to the hand-over.
-	Builds int             `json:"builds,omitempty"`
-	Run    int             `json:"run,omitempty"`
-	Runs   []LocalBuildRun `json:"runs,omitempty"`
+	// Run is the run's number within its target (1-based).
+	Run int `json:"run,omitempty"`
 	// MirrorStarted marks a selection that started the EL mempool mirror
 	// (a full read): untypically slow, so it does not train the timing model.
 	MirrorStarted bool `json:"mirror_started,omitempty"`
-}
-
-// LocalBuildRun summarizes one testing build of a target.
-type LocalBuildRun struct {
-	Run             int       `json:"run"`
-	Status          string    `json:"status"` // ready | failed | skipped
-	StartedAt       time.Time `json:"started_at"`
-	SelectedAt      time.Time `json:"selected_at,omitempty"`
-	At              time.Time `json:"at"` // built, failed or skipped
-	NumTransactions int       `json:"num_transactions,omitempty"`
-	GasUsed         uint64    `json:"gas_used,omitempty"`
-	BlockValueWei   string    `json:"block_value_wei,omitempty"`
-	Error           string    `json:"error,omitempty"`
 }
 
 // DroppedTx is a pool transaction removed from a build attempt after the EL
@@ -248,61 +215,23 @@ func (i *LocalBuildInfo) Public() *LocalBuildInfo {
 	return &out
 }
 
-// BuildResult is the outcome of one build target: the payload feeding the
-// consumers plus both underlying builds for inspection.
-type BuildResult struct {
-	// Payload feeds bids and reveals (nil when the target produced none).
-	Payload *Payload
-	// Source is the Payload's source (el | local).
-	Source string
-	// Fallback marks that the local payload was wanted but the engine payload
-	// was used instead.
-	Fallback bool
-
-	// EL is the engine-API payload (nil when skipped or failed).
+// buildState is a target's builds as they stand, the input of the payload
+// source's rule (selectPayload).
+type buildState struct {
+	// EL is the engine build's payload (nil when not run, running or failed).
 	EL    *Payload
 	ELErr error
 
-	// Local is the local payload (nil when skipped or failed).
+	// Local is the best testing run's payload so far (nil when none).
 	Local           *Payload
 	LocalErr        error
 	LocalSkipReason string
-	LocalInfo       *LocalBuildInfo
-
-	// Upgrades delivers the picks of testing builds that finish after the
-	// hand-over and beat the payload published last (nil without testing
-	// builds still running), then a final report whose Payload is the pick
-	// already published and whose local fields carry every run. It closes
-	// when the testing window ends.
-	Upgrades <-chan *BuildResult
 }
 
-// LocalBuildEvent reports a slot's local build outcome (one per build target
-// where the local build was requested), for the slot results tracker and the
-// WebUI.
-type LocalBuildEvent struct {
-	Slot      phase0.Slot
-	Candidate string
-	// Status is ready, failed or skipped.
-	Status     string
-	SkipReason string
-	Error      string
-
-	TxSource      string
-	PayloadSource string
-	// Selected marks that the local payload is the one feeding the consumers.
-	Selected bool
-	// Fallback marks that the engine payload was used because the local build
-	// failed or was skipped.
+// selection is one pick of the payload source among a target's payloads.
+type selection struct {
+	Payload  *Payload
 	Fallback bool
-
-	// Payload is the local payload (nil unless ready).
-	Payload *Payload
-	// ELPayload is the engine payload of the same target (nil when skipped or
-	// failed).
-	ELPayload *Payload
-	Info      *LocalBuildInfo
-	At        time.Time
 }
 
 // LocalBuildAvailability is the probed state of the EL's testing namespace
@@ -518,36 +447,6 @@ func (s *Service) GuardSetting(key string, value any) error {
 	return nil
 }
 
-// LocalBuildProgressEvent reports a custom build live: building when it
-// starts, then ready / failed / skipped the moment testing_buildBlockV1
-// returned. The authoritative LocalBuildEvent follows once the engine build
-// finished and the payload feeding bids was selected.
-type LocalBuildProgressEvent struct {
-	Slot            phase0.Slot
-	Candidate       string
-	Run             int    // the target's build number (rebuilds count up)
-	Phase           string // building | ready | failed | skipped
-	TxSource        string
-	StartedAt       time.Time
-	At              time.Time
-	NumTransactions int
-	BlockValue      *big.Int
-	SkipReason      string
-	Error           string
-}
-
-// SubscribeLocalBuildProgress subscribes to the live custom build progress
-// (display only, never blocking the build).
-func (s *Service) SubscribeLocalBuildProgress(capacity int) *utils.Subscription[*LocalBuildProgressEvent] {
-	return s.localProgress.Subscribe(capacity, false)
-}
-
-// SubscribeLocalBuild subscribes to local build outcome events. Authoritative
-// consumers (the slot results tracker) should pass blocking=true.
-func (s *Service) SubscribeLocalBuild(capacity int, blocking bool) *utils.Subscription[*LocalBuildEvent] {
-	return s.localBuildDispatcher.Subscribe(capacity, blocking)
-}
-
 // resolveLocalBuildRequest turns the slot's frozen local-build settings into
 // the builder request for one candidate, applying the runtime gates the plan
 // cannot know: the candidate (only the canonical parent_full candidate — or
@@ -576,7 +475,6 @@ func (s *Service) resolveLocalBuildRequest(slot phase0.Slot, candidate chain.Can
 	}
 
 	req := &LocalBuildRequest{
-		Candidate:          string(candidate),
 		TxSource:           settings.TxSource,
 		PayloadSource:      settings.PayloadSource,
 		EngineEnabled:      frozen.Build.EngineEnabled,

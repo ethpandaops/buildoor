@@ -48,11 +48,11 @@ type Payload struct {
 	// built against; nil before Heze.
 	InclusionList *InclusionListBuild
 
-	// Source records how the payload was built: el (engine API, the EL's
-	// mempool) or local (testing_buildBlockV1 from a buildoor-chosen list).
-	Source string
-	// Local describes the local build's transaction assembly (nil for engine
-	// payloads).
+	// Build is the build that produced the payload: the engine build of its
+	// target or one testing build run. A payload has exactly one build.
+	Build BuildRef
+	// Local describes the testing build's transaction assembly (nil for
+	// engine payloads).
 	Local *LocalBuildInfo
 
 	// Metadata not carried by the objects above.
@@ -63,16 +63,38 @@ type Payload struct {
 	// FeeRecipient (the block value itself is the proposer's payment).
 	ProposerFeeRecipient common.Address
 	BlockValue           *big.Int // EL-reported block value (wei)
-	// EngineCalls times the engine build's two calls (nil without an engine
-	// build): the build itself is the wait in between.
+	// EngineCalls times the engine build's two calls (engine payloads only):
+	// the build itself is the wait in between.
 	EngineCalls *EngineCallTimes
-	ReadyAt     time.Time // when the payload became ready
-	BuildSeq    uint64    // see PayloadBuildStartedEvent.BuildSeq
+	ReadyAt     time.Time // when the payload's own build finished
+	BuildSeq    uint64    // the build target's seq (BuildTargetEvent.Seq)
 
 	// activity is the bid/reveal log, appended by the payload_bidder and read by
 	// the WebUI. The mutex also makes Payload copy-unsafe, enforcing the
 	// pass-by-pointer rule.
 	activity payloadActivity
+}
+
+// Build kinds (BuildRef.Kind).
+const (
+	// BuildKindEngine is the engine-API build (forkchoiceUpdated +
+	// getPayload): the EL fills the block from its own mempool.
+	BuildKindEngine = "engine"
+	// BuildKindTesting is a testing_buildBlockV1 build from a buildoor-chosen
+	// transaction list; a target may run several (Run counts them).
+	BuildKindTesting = "testing"
+)
+
+// BuildRef names one build of a target: the engine build, or testing run
+// Run (1-based).
+type BuildRef struct {
+	Kind string `json:"kind"`
+	Run  int    `json:"run,omitempty"`
+}
+
+// IsTesting reports whether the build is a testing build.
+func (r BuildRef) IsTesting() bool {
+	return r.Kind == BuildKindTesting
 }
 
 // EngineCallTimes are the engine build's calls: forkchoiceUpdated starts the

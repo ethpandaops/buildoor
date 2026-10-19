@@ -38,9 +38,10 @@ const (
 	EventTypeStatus                      EventType = "status"
 	EventTypeSlotStart                   EventType = "slot_start"
 	EventTypePayloadAttributes           EventType = "payload_attributes"
-	EventTypePayloadBuildStarted         EventType = "payload_build_started"
-	EventTypePayloadBuildFailed          EventType = "payload_build_failed"
-	EventTypePayloadReady                EventType = "payload_ready"
+	EventTypeBuildTarget                 EventType = "build_target"
+	EventTypeEngineBuild                 EventType = "engine_build"
+	EventTypeTestingBuild                EventType = "testing_build"
+	EventTypePayloadSelected             EventType = "payload_selected"
 	EventTypeBidSubmitted                EventType = "bid_submitted"
 	EventTypeHeadReceived                EventType = "head_received"
 	EventTypeReveal                      EventType = "reveal"
@@ -64,8 +65,6 @@ const (
 	EventTypeBuilderAPISubmitBlockRcvd   EventType = "builder_api_submit_block_received"
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
-	EventTypeLocalBuild                  EventType = "local_build"
-	EventTypeLocalBuildProgress          EventType = "local_build_progress"
 	EventTypeTxPoolStats                 EventType = "txpool_stats"
 	EventTypeLocalBuildStatus            EventType = "local_build_status"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
@@ -132,15 +131,70 @@ type SlotStartEvent struct {
 	SlotStartTime int64  `json:"slot_start_time"`
 }
 
-// PayloadBuildStartedStreamEvent is sent when payload building begins, before
-// the payload is ready, so the WebUI can render the build as in-progress.
-type PayloadBuildStartedStreamEvent struct {
+// BuildTargetStreamEvent reports a build target's lifecycle (SSE
+// build_target): started, no_payload or superseded.
+type BuildTargetStreamEvent struct {
 	Slot      uint64 `json:"slot"`
 	Candidate string `json:"candidate,omitempty"`
-	StartedAt int64  `json:"started_at"`
-	// Engine is set when the build runs the engine-API build (the graph's
-	// engine lane); without it only testing builds run.
-	Engine bool `json:"engine"`
+	Seq       uint64 `json:"seq"`
+	Status    string `json:"status"`
+	// Engine / Testing tell which builds run (started).
+	Engine            bool   `json:"engine,omitempty"`
+	Testing           bool   `json:"testing,omitempty"`
+	TestingSkipReason string `json:"testing_skip_reason,omitempty"`
+	TxSource          string `json:"tx_source,omitempty"`
+	PayloadSource     string `json:"payload_source,omitempty"`
+	// The parent tuple the target builds on (started).
+	ParentBlockHash string `json:"parent_block_hash,omitempty"`
+	ParentBlockRoot string `json:"parent_block_root,omitempty"`
+	Error           string `json:"error,omitempty"`
+	At              int64  `json:"at"`
+}
+
+// EngineBuildStreamEvent reports a target's engine build (SSE
+// engine_build): started, then ready with the build's own payload, or
+// failed.
+type EngineBuildStreamEvent struct {
+	Slot      uint64             `json:"slot"`
+	Candidate string             `json:"candidate,omitempty"`
+	Seq       uint64             `json:"seq"`
+	Status    string             `json:"status"`
+	StartedAt int64              `json:"started_at"`
+	Calls     *EngineCallsStream `json:"calls,omitempty"`
+	Payload   *StreamPayload     `json:"payload,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	At        int64              `json:"at"`
+}
+
+// TestingBuildStreamEvent reports one testing run (SSE testing_build):
+// building, then ready with the run's own payload, failed or skipped.
+type TestingBuildStreamEvent struct {
+	Slot       uint64                          `json:"slot"`
+	Candidate  string                          `json:"candidate,omitempty"`
+	Seq        uint64                          `json:"seq"`
+	Run        int                             `json:"run"`
+	Status     string                          `json:"status"`
+	TxSource   string                          `json:"tx_source,omitempty"`
+	Payload    *StreamPayload                  `json:"payload,omitempty"`
+	Info       *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+	SkipReason string                          `json:"skip_reason,omitempty"`
+	Error      string                          `json:"error,omitempty"`
+	StartedAt  int64                           `json:"started_at"`
+	At         int64                           `json:"at"`
+}
+
+// PayloadSelectedStreamEvent names the payload feeding a target's bids from
+// now on (SSE payload_selected): the payload itself arrived with its build's
+// event under the same block hash.
+type PayloadSelectedStreamEvent struct {
+	Slot      uint64                   `json:"slot"`
+	Candidate string                   `json:"candidate,omitempty"`
+	Seq       uint64                   `json:"seq"`
+	Build     payload_builder.BuildRef `json:"build"`
+	BlockHash string                   `json:"block_hash"`
+	Reason    string                   `json:"reason"`
+	Fallback  bool                     `json:"fallback,omitempty"`
+	At        int64                    `json:"at"`
 }
 
 // PayloadAttributesStreamEvent is sent when a payload_attributes event is
@@ -162,16 +216,6 @@ type PayloadAttributesStreamEvent struct {
 	InclusionListCount    int    `json:"inclusion_list_count"`
 }
 
-// PayloadBuildFailedStreamEvent is sent when a payload build fails, so the WebUI
-// can mark the in-progress build as failed.
-type PayloadBuildFailedStreamEvent struct {
-	Slot      uint64 `json:"slot"`
-	Candidate string `json:"candidate,omitempty"`
-	Error     string `json:"error"`
-	FailedAt  int64  `json:"failed_at"`
-}
-
-// PayloadReadyStreamEvent is sent when a payload becomes available.
 // EngineCallsStream times the engine build's two calls (unix ms): the build
 // line draws them solid and the wait in between dashed.
 type EngineCallsStream struct {
@@ -181,15 +225,17 @@ type EngineCallsStream struct {
 	GetPayloadEnd   int64 `json:"get_payload_end"`
 }
 
-type PayloadReadyStreamEvent struct {
-	Slot uint64 `json:"slot"`
+// StreamPayload is one built payload as the UI keeps it under its block
+// hash: the build that produced it and its properties (list fields
+// aggregated to counts).
+type StreamPayload struct {
+	BlockHash string                   `json:"block_hash"`
+	Build     payload_builder.BuildRef `json:"build"`
+	Candidate string                   `json:"candidate,omitempty"`
+	BuiltAt   int64                    `json:"built_at"`
 	// InclusionList is the inclusion list view the payload was built
 	// against (Heze; absent before).
 	InclusionList *payload_builder.InclusionListBuild `json:"inclusion_list,omitempty"`
-	// EngineCalls times the engine build's calls (absent without one).
-	EngineCalls *EngineCallsStream `json:"engine_calls,omitempty"`
-	Candidate   string             `json:"candidate,omitempty"`
-	BlockHash   string             `json:"block_hash"`
 	// Parent tuple this payload was built on: the execution parent (hash and,
 	// where known, its block number) and the beacon parent (root and its
 	// slot), so the UI can show what the payload actually extends.
@@ -198,9 +244,7 @@ type PayloadReadyStreamEvent struct {
 	ParentBlockRoot   string `json:"parent_block_root,omitempty"`
 	ParentSlot        uint64 `json:"parent_slot,omitempty"`
 	BlockValue        string `json:"block_value"`
-	ReadyAt           int64  `json:"ready_at"`
 
-	// Full built-payload properties (list fields aggregated to counts).
 	BlockNumber     uint64 `json:"block_number,omitempty"`
 	FeeRecipient    string `json:"fee_recipient,omitempty"`
 	GasLimit        uint64 `json:"gas_limit,omitempty"`
@@ -297,15 +341,15 @@ type BidStreamEvent struct {
 
 // SlotStateEvent represents the current state of a slot.
 type SlotStateEvent struct {
-	Slot           uint64 `json:"slot"`
-	PayloadReady   bool   `json:"payload_ready"`
-	BidCount       int    `json:"bid_count"`
-	BidsClosed     bool   `json:"bids_closed"`
-	BidIncluded    bool   `json:"bid_included"`
-	Revealed       bool   `json:"revealed"`
-	HighestBidOurs bool   `json:"highest_bid_ours"`
-	HighestBid     uint64 `json:"highest_bid"`
-	OurBid         uint64 `json:"our_bid"`
+	Slot            uint64 `json:"slot"`
+	PayloadSelected bool   `json:"payload_selected"`
+	BidCount        int    `json:"bid_count"`
+	BidsClosed      bool   `json:"bids_closed"`
+	BidIncluded     bool   `json:"bid_included"`
+	Revealed        bool   `json:"revealed"`
+	HighestBidOurs  bool   `json:"highest_bid_ours"`
+	HighestBid      uint64 `json:"highest_bid"`
+	OurBid          uint64 `json:"our_bid"`
 }
 
 // PayloadAvailableStreamEvent is sent when a payload becomes available.
@@ -514,65 +558,6 @@ type ServiceStatusEvent struct {
 	TxPoolEnabled   bool `json:"txpool_enabled"`
 }
 
-// LocalBuildStreamEvent reports one target's local build outcome (SSE
-// local_build, slot-scoped).
-type LocalBuildStreamEvent struct {
-	Slot          uint64                          `json:"slot"`
-	Candidate     string                          `json:"candidate,omitempty"`
-	Status        string                          `json:"status"`
-	SkipReason    string                          `json:"skip_reason,omitempty"`
-	Error         string                          `json:"error,omitempty"`
-	TxSource      string                          `json:"tx_source,omitempty"`
-	PayloadSource string                          `json:"payload_source,omitempty"`
-	Selected      bool                            `json:"selected"`
-	Fallback      bool                            `json:"fallback"`
-	Local         *StreamPayloadSummary           `json:"local,omitempty"`
-	EL            *StreamPayloadSummary           `json:"el,omitempty"`
-	Info          *payload_builder.LocalBuildInfo `json:"info,omitempty"`
-	// StartedAt is when the handed-over testing build began (unix ms, 0 when
-	// it never started).
-	StartedAt int64 `json:"started_at,omitempty"`
-	// BuiltAt is when testing_buildBlockV1 returned (unix ms, 0 unless ready);
-	// ELReadyAt is when the engine payload of the same target was ready.
-	BuiltAt   int64 `json:"built_at,omitempty"`
-	ELReadyAt int64 `json:"el_ready_at,omitempty"`
-	At        int64 `json:"at"`
-}
-
-// StreamPayloadSummary is a built payload's headline properties for the UI.
-type StreamPayloadSummary struct {
-	BlockHash       string `json:"block_hash"`
-	BlockValueWei   string `json:"block_value_wei"`
-	NumTransactions int    `json:"num_transactions"`
-	NumBlobs        int    `json:"num_blobs"`
-	GasUsed         uint64 `json:"gas_used"`
-	GasLimit        uint64 `json:"gas_limit"`
-}
-
-func streamPayloadSummary(p *payload_builder.Payload) *StreamPayloadSummary {
-	if p == nil {
-		return nil
-	}
-
-	out := &StreamPayloadSummary{BlockHash: fmt.Sprintf("%#x", p.BlockHash)}
-
-	if p.BlockValue != nil {
-		out.BlockValueWei = p.BlockValue.String()
-	}
-
-	if ep := p.ExecutionPayload; ep != nil {
-		out.NumTransactions = len(ep.Transactions)
-		out.GasUsed = ep.GasUsed
-		out.GasLimit = ep.GasLimit
-	}
-
-	if p.BlobsBundle != nil {
-		out.NumBlobs = len(p.BlobsBundle.Commitments)
-	}
-
-	return out
-}
-
 // LifecycleStreamEvent is sent when a lifecycle action occurs (deposit, topup, exit, state change).
 type LifecycleStreamEvent struct {
 	Action  string `json:"action"`  // "deposit", "topup", "exit", "state_change", "waiting_gloas", "balance_topup"
@@ -750,18 +735,9 @@ func NewEventStreamManager(
 
 // Start begins the event stream manager.
 func (m *EventStreamManager) Start() {
-	// Subscribe to payload ready events
-	payloadSub := m.builderSvc.SubscribePayloadReady(16, false)
-
-	// Subscribe to payload build started events (in-progress rendering)
-	buildStartedSub := m.builderSvc.SubscribePayloadBuildStarted(16, false)
-
-	// Subscribe to payload build failed events (mark builds as failed)
-	buildFailedSub := m.builderSvc.SubscribePayloadBuildFailed(16, false)
-
-	// Subscribe to local build outcomes (testing_buildBlockV1 extension)
-	localBuildSub := m.builderSvc.SubscribeLocalBuild(16, false)
-	localProgressSub := m.builderSvc.SubscribeLocalBuildProgress(16)
+	// Subscribe to the build targets' events (targets, engine builds,
+	// testing runs, selections), in the order they happened.
+	buildSub := m.builderSvc.SubscribeBuildEvents(256, false)
 
 	// Subscribe to beacon events
 	headSub := m.builderSvc.GetCLClient().Events().SubscribeHead()
@@ -882,11 +858,7 @@ func (m *EventStreamManager) Start() {
 
 	go func() {
 		defer m.wg.Done()
-		defer payloadSub.Unsubscribe()
-		defer buildStartedSub.Unsubscribe()
-		defer buildFailedSub.Unsubscribe()
-		defer localBuildSub.Unsubscribe()
-		defer localProgressSub.Unsubscribe()
+		defer buildSub.Unsubscribe()
 		defer headSub.Unsubscribe()
 		defer bidSub.Unsubscribe()
 		defer payloadAvailSub.Unsubscribe()
@@ -952,20 +924,8 @@ func (m *EventStreamManager) Start() {
 			case <-m.ctx.Done():
 				return
 
-			case event := <-payloadSub.Channel():
-				m.handlePayloadReady(event)
-
-			case event := <-buildStartedSub.Channel():
-				m.handlePayloadBuildStarted(event)
-
-			case event := <-buildFailedSub.Channel():
-				m.handlePayloadBuildFailed(event)
-
-			case event := <-localBuildSub.Channel():
-				m.handleLocalBuild(event)
-
-			case event := <-localProgressSub.Channel():
-				m.handleLocalBuildProgress(event)
+			case event := <-buildSub.Channel():
+				m.handleBuildEvent(event)
 
 			case event := <-headSub.Channel():
 				m.handleHeadEvent(event)
@@ -1320,19 +1280,6 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	m.pruneEventCache(slot)
 }
 
-func (m *EventStreamManager) handlePayloadBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
-	m.broadcastForSlot(event.Slot, &StreamEvent{
-		Type:      EventTypePayloadBuildStarted,
-		Timestamp: time.Now().UnixMilli(),
-		Data: PayloadBuildStartedStreamEvent{
-			Slot:      uint64(event.Slot),
-			Candidate: event.Candidate,
-			StartedAt: event.StartedAt.UnixMilli(),
-			Engine:    event.Engine,
-		},
-	})
-}
-
 func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadAttributesEvent) {
 	m.broadcastForSlot(event.ProposalSlot, &StreamEvent{
 		Type:      EventTypePayloadAttributes,
@@ -1355,65 +1302,155 @@ func (m *EventStreamManager) handlePayloadAttributesEvent(event *beacon.PayloadA
 	})
 }
 
-func (m *EventStreamManager) handlePayloadBuildFailed(event *payload_builder.PayloadBuildFailedEvent) {
-	m.broadcastForSlot(event.Slot, &StreamEvent{
-		Type:      EventTypePayloadBuildFailed,
-		Timestamp: time.Now().UnixMilli(),
-		Data: PayloadBuildFailedStreamEvent{
-			Slot:      uint64(event.Slot),
-			Candidate: event.Candidate,
-			Error:     event.Error,
-			FailedAt:  event.FailedAt.UnixMilli(),
-		},
-	})
+// handleBuildEvent forwards a build target event as its own slot-scoped
+// event type.
+func (m *EventStreamManager) handleBuildEvent(event payload_builder.BuildEvent) {
+	switch e := event.(type) {
+	case *payload_builder.BuildTargetEvent:
+		data := BuildTargetStreamEvent{
+			Slot:              uint64(e.Slot),
+			Candidate:         string(e.Candidate),
+			Seq:               e.Seq,
+			Status:            e.Status,
+			Engine:            e.Engine,
+			Testing:           e.Testing,
+			TestingSkipReason: e.TestingSkipReason,
+			TxSource:          e.TxSource,
+			PayloadSource:     e.PayloadSource,
+			Error:             e.Error,
+			At:                e.At.UnixMilli(),
+		}
+
+		if e.Attributes != nil {
+			data.ParentBlockHash = fmt.Sprintf("%#x", e.Attributes.ParentBlockHash)
+			data.ParentBlockRoot = fmt.Sprintf("%#x", e.Attributes.ParentBlockRoot)
+		}
+
+		m.broadcastForSlot(e.Slot, &StreamEvent{Type: EventTypeBuildTarget, Timestamp: time.Now().UnixMilli(), Data: data})
+
+	case *payload_builder.EngineBuildEvent:
+		data := EngineBuildStreamEvent{
+			Slot:      uint64(e.Slot),
+			Candidate: string(e.Candidate),
+			Seq:       e.Seq,
+			Status:    e.Status,
+			StartedAt: e.StartedAt.UnixMilli(),
+			Payload:   m.streamPayload(e.Payload),
+			Error:     e.Error,
+			At:        e.At.UnixMilli(),
+		}
+
+		if calls := e.Calls; calls != nil {
+			data.Calls = &EngineCallsStream{
+				ForkchoiceStart: calls.ForkchoiceStart.UnixMilli(),
+				ForkchoiceEnd:   calls.ForkchoiceEnd.UnixMilli(),
+				GetPayloadStart: calls.GetPayloadStart.UnixMilli(),
+				GetPayloadEnd:   calls.GetPayloadEnd.UnixMilli(),
+			}
+		}
+
+		m.broadcastForSlot(e.Slot, &StreamEvent{Type: EventTypeEngineBuild, Timestamp: time.Now().UnixMilli(), Data: data})
+
+	case *payload_builder.TestingBuildEvent:
+		m.broadcastForSlot(e.Slot, &StreamEvent{
+			Type:      EventTypeTestingBuild,
+			Timestamp: time.Now().UnixMilli(),
+			Data: TestingBuildStreamEvent{
+				Slot:       uint64(e.Slot),
+				Candidate:  string(e.Candidate),
+				Seq:        e.Seq,
+				Run:        e.Run,
+				Status:     e.Status,
+				TxSource:   e.TxSource,
+				Payload:    m.streamPayload(e.Payload),
+				Info:       e.Info.Public(),
+				SkipReason: e.SkipReason,
+				Error:      e.Error,
+				StartedAt:  e.StartedAt.UnixMilli(),
+				At:         e.At.UnixMilli(),
+			},
+		})
+
+	case *payload_builder.PayloadSelectedEvent:
+		m.broadcastForSlot(e.Slot, &StreamEvent{
+			Type:      EventTypePayloadSelected,
+			Timestamp: time.Now().UnixMilli(),
+			Data: PayloadSelectedStreamEvent{
+				Slot:      uint64(e.Slot),
+				Candidate: string(e.Candidate),
+				Seq:       e.Seq,
+				Build:     e.Build,
+				BlockHash: fmt.Sprintf("%#x", e.BlockHash),
+				Reason:    e.Reason,
+				Fallback:  e.Fallback,
+				At:        e.At.UnixMilli(),
+			},
+		})
+
+		m.markPayloadSelected(e.Slot)
+	}
 }
 
-// payloadReadyStreamEvent assembles the full payload_ready wire event from a
-// built payload (list fields aggregated to counts).
-func (m *EventStreamManager) payloadReadyStreamEvent(
-	slot phase0.Slot, event *payload_builder.Payload,
-) PayloadReadyStreamEvent {
-	data := PayloadReadyStreamEvent{
-		Slot:              uint64(slot),
-		Candidate:         string(event.Candidate),
-		BlockHash:         fmt.Sprintf("0x%x", event.BlockHash[:]),
-		ParentBlockHash:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockHash[:]),
-		ParentBlockNumber: event.Attributes.ParentBlockNumber,
-		ParentBlockRoot:   fmt.Sprintf("0x%x", event.Attributes.ParentBlockRoot[:]),
-		BlockValue:        event.BlockValue.String(),
-		ReadyAt:           event.ReadyAt.UnixMilli(),
-		FeeRecipient:      event.FeeRecipient.Hex(),
+// markPayloadSelected notes the slot's first selection on its slot state.
+func (m *EventStreamManager) markPayloadSelected(slot phase0.Slot) {
+	m.slotStatesMu.Lock()
+	if state, ok := m.slotStates[slot]; ok {
+		state.PayloadSelected = true
+	} else {
+		m.slotStates[slot] = &SlotStateEvent{
+			Slot:            uint64(slot),
+			PayloadSelected: true,
+		}
+	}
+	m.slotStatesMu.Unlock()
+
+	m.broadcastSlotState(slot)
+}
+
+// streamPayload assembles a built payload's wire form (list fields
+// aggregated to counts); nil without a payload.
+func (m *EventStreamManager) streamPayload(payload *payload_builder.Payload) *StreamPayload {
+	if payload == nil {
+		return nil
 	}
 
-	if calls := event.EngineCalls; calls != nil {
-		data.EngineCalls = &EngineCallsStream{
-			ForkchoiceStart: calls.ForkchoiceStart.UnixMilli(),
-			ForkchoiceEnd:   calls.ForkchoiceEnd.UnixMilli(),
-			GetPayloadStart: calls.GetPayloadStart.UnixMilli(),
-			GetPayloadEnd:   calls.GetPayloadEnd.UnixMilli(),
-		}
+	data := &StreamPayload{
+		BlockHash:         fmt.Sprintf("%#x", payload.BlockHash),
+		Build:             payload.Build,
+		Candidate:         string(payload.Candidate),
+		BuiltAt:           payload.ReadyAt.UnixMilli(),
+		InclusionList:     payload.InclusionList,
+		ParentBlockHash:   fmt.Sprintf("%#x", payload.Attributes.ParentBlockHash),
+		ParentBlockNumber: payload.Attributes.ParentBlockNumber,
+		ParentBlockRoot:   fmt.Sprintf("%#x", payload.Attributes.ParentBlockRoot),
+		BlockValue:        "0",
+		FeeRecipient:      payload.FeeRecipient.Hex(),
+	}
+
+	if payload.BlockValue != nil {
+		data.BlockValue = payload.BlockValue.String()
 	}
 
 	// The beacon parent's slot makes the payload's position in the chain
 	// readable; cache-only so event assembly never blocks.
 	if m.chainSvc != nil {
 		if tracker := m.chainSvc.GetHeadTracker(); tracker != nil {
-			if parent, ok := tracker.LookupBlock(event.Attributes.ParentBlockRoot); ok {
+			if parent, ok := tracker.LookupBlock(payload.Attributes.ParentBlockRoot); ok {
 				data.ParentSlot = uint64(parent.Slot)
 
 				if data.ParentBlockNumber == 0 &&
-					parent.ExecutionBlockHash == event.Attributes.ParentBlockHash {
+					parent.ExecutionBlockHash == payload.Attributes.ParentBlockHash {
 					data.ParentBlockNumber = parent.ExecutionBlockNumber
 				}
 			}
 		}
 	}
 
-	if ep := event.ExecutionPayload; ep != nil {
+	if ep := payload.ExecutionPayload; ep != nil {
 		data.BlockNumber = ep.BlockNumber
 		data.GasLimit = ep.GasLimit
 		data.GasUsed = ep.GasUsed
-		data.ExtraData = fmt.Sprintf("0x%x", ep.ExtraData)
+		data.ExtraData = fmt.Sprintf("%#x", ep.ExtraData)
 		data.BlobGasUsed = ep.BlobGasUsed
 		data.ExcessBlobGas = ep.ExcessBlobGas
 		data.NumTransactions = len(ep.Transactions)
@@ -1424,42 +1461,16 @@ func (m *EventStreamManager) payloadReadyStreamEvent(
 		}
 	}
 
-	if event.BlobsBundle != nil {
-		data.NumBlobs = len(event.BlobsBundle.Commitments)
+	if payload.BlobsBundle != nil {
+		data.NumBlobs = len(payload.BlobsBundle.Commitments)
 	}
 
-	data.InclusionList = event.InclusionList
-
-	if reqs := event.ExecutionRequests; reqs != nil {
+	if reqs := payload.ExecutionRequests; reqs != nil {
 		data.NumExecRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
 			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
 	}
 
 	return data
-}
-
-func (m *EventStreamManager) handlePayloadReady(event *payload_builder.Payload) {
-	slot := event.Attributes.ProposalSlot
-
-	m.broadcastForSlot(slot, &StreamEvent{
-		Type:      EventTypePayloadReady,
-		Timestamp: time.Now().UnixMilli(),
-		Data:      m.payloadReadyStreamEvent(slot, event),
-	})
-
-	// Update slot state
-	m.slotStatesMu.Lock()
-	if state, ok := m.slotStates[slot]; ok {
-		state.PayloadReady = true
-	} else {
-		m.slotStates[slot] = &SlotStateEvent{
-			Slot:         uint64(slot),
-			PayloadReady: true,
-		}
-	}
-	m.slotStatesMu.Unlock()
-
-	m.broadcastSlotState(slot)
 }
 
 func (m *EventStreamManager) handleBidSubmissionEvent(event *p2p_bidder.BidSubmissionEvent) {
@@ -1932,95 +1943,6 @@ func (m *EventStreamManager) getServiceStatus() ServiceStatusEvent {
 	fillLocalBuildStatus(&status, m.builderSvc)
 
 	return status
-}
-
-// handleLocalBuild forwards a local build outcome as a slot-scoped event.
-func (m *EventStreamManager) handleLocalBuild(event *payload_builder.LocalBuildEvent) {
-	if event == nil {
-		return
-	}
-
-	var startedAt, builtAt, elReadyAt int64
-
-	if event.Info != nil && !event.Info.StartedAt.IsZero() {
-		startedAt = event.Info.StartedAt.UnixMilli()
-	}
-
-	if event.Info != nil && !event.Info.BuiltAt.IsZero() {
-		builtAt = event.Info.BuiltAt.UnixMilli()
-	}
-
-	if event.ELPayload != nil {
-		elReadyAt = event.ELPayload.ReadyAt.UnixMilli()
-	}
-
-	m.broadcastForSlot(event.Slot, &StreamEvent{
-		Type:      EventTypeLocalBuild,
-		Timestamp: time.Now().UnixMilli(),
-		Data: LocalBuildStreamEvent{
-			Slot:          uint64(event.Slot),
-			Candidate:     event.Candidate,
-			Status:        event.Status,
-			SkipReason:    event.SkipReason,
-			Error:         event.Error,
-			TxSource:      event.TxSource,
-			PayloadSource: event.PayloadSource,
-			Selected:      event.Selected,
-			Fallback:      event.Fallback,
-			Local:         streamPayloadSummary(event.Payload),
-			EL:            streamPayloadSummary(event.ELPayload),
-			Info:          event.Info.Public(),
-			StartedAt:     startedAt,
-			BuiltAt:       builtAt,
-			ELReadyAt:     elReadyAt,
-			At:            event.At.UnixMilli(),
-		},
-	})
-}
-
-// LocalBuildProgressStreamEvent is the live state of one custom build
-// (testing_buildBlockV1), sent ahead of the final local_build event.
-type LocalBuildProgressStreamEvent struct {
-	Slot            uint64 `json:"slot"`
-	Candidate       string `json:"candidate,omitempty"`
-	Run             int    `json:"run,omitempty"` // the target's build number
-	Phase           string `json:"phase"`         // building | ready | failed | skipped
-	TxSource        string `json:"tx_source,omitempty"`
-	StartedAt       int64  `json:"started_at"`
-	At              int64  `json:"at"`
-	NumTransactions int    `json:"num_transactions,omitempty"`
-	BlockValueWei   string `json:"block_value_wei,omitempty"`
-	SkipReason      string `json:"skip_reason,omitempty"`
-	Error           string `json:"error,omitempty"`
-}
-
-func (m *EventStreamManager) handleLocalBuildProgress(event *payload_builder.LocalBuildProgressEvent) {
-	if event == nil {
-		return
-	}
-
-	data := LocalBuildProgressStreamEvent{
-		Slot:            uint64(event.Slot),
-		Candidate:       event.Candidate,
-		Run:             event.Run,
-		Phase:           event.Phase,
-		TxSource:        event.TxSource,
-		StartedAt:       event.StartedAt.UnixMilli(),
-		At:              event.At.UnixMilli(),
-		NumTransactions: event.NumTransactions,
-		SkipReason:      event.SkipReason,
-		Error:           event.Error,
-	}
-
-	if event.BlockValue != nil {
-		data.BlockValueWei = event.BlockValue.String()
-	}
-
-	m.broadcastForSlot(event.Slot, &StreamEvent{
-		Type:      EventTypeLocalBuildProgress,
-		Timestamp: time.Now().UnixMilli(),
-		Data:      data,
-	})
 }
 
 // sendTxPoolStats broadcasts the pool stats when the pool changed since the

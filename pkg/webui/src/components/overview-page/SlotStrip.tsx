@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { STRIP_SLOTS } from './useOverviewData';
 import type { BidWonEntry, SlotResult, SlotState } from '../../types';
+import { slotHasSelection } from '../../buildTargets';
 
 type SlotKind = 'won' | 'built' | 'none';
 
@@ -18,8 +19,8 @@ function classify(
   wonSlots: Set<number>,
 ): SlotKind {
   if (wonSlots.has(slot) || state?.bidWon || result?.inclusion) return 'won';
-  if (state?.payloadReady) return 'built';
-  if (result?.build?.status === 'ready' || result?.builds?.some((b) => b.status === 'ready')) return 'built';
+  if (slotHasSelection(state)) return 'built';
+  if (result?.build?.targets?.some((t) => (t.selections?.length ?? 0) > 0)) return 'built';
   return 'none';
 }
 

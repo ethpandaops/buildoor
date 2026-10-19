@@ -249,7 +249,7 @@ func seedGloasPayload(h *Handler, slot phase0.Slot, blockHash phase0.Hash32) *pa
 		BlockValue: big.NewInt(2_000_000_000_000),
 		ReadyAt:    time.Now(),
 	}
-	h.payloadCache.Store(payload)
+	h.payloadCache.Select(payload)
 
 	return payload
 }

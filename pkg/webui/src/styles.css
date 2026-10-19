@@ -441,13 +441,12 @@
   border: 1px solid #0aa2c0;
 }
 
-.local-build-selected {
-  box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45);
-}
-
-/* A rebuild that was not handed over: same element, dimmed. */
-.local-build-run-other {
-  opacity: 0.45;
+/* The build whose payload is the target's current pick: an outline drawn
+   inside its own dot (the dot keeps its size) in the page's text colour,
+   which contrasts with every dot fill in both themes. */
+.payload-selected {
+  outline: 2px solid var(--bs-body-color);
+  outline-offset: -2px;
 }
 
 .local-build-failed {
@@ -464,7 +463,7 @@
 .bg-local-build-skipped { background: #adb5bd; width: 8px; height: 8px; }
 
 /* Legend swatches for the non-dot graph elements. */
-.legend-dot-selected { box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45); }
+.legend-dot-selected { outline: 2px solid var(--bs-body-color); outline-offset: -2px; }
 .legend-line-build { height: 3px; background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8)); }
 .legend-crown { color: #ffc107; font-size: 9px; margin-right: 3px; }
 .legend-window {

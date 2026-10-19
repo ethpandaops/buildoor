@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 
@@ -45,33 +47,59 @@ func TestBuildTimingModel(t *testing.T) {
 	require.LessOrEqual(t, estimate, mean+20)
 }
 
-func TestLocalResultsHandsOverTheBest(t *testing.T) {
-	built := func(value int64) localOutcome {
-		return localOutcome{payload: &Payload{BlockValue: big.NewInt(value)}, info: &LocalBuildInfo{}}
-	}
+// recordedPick is one pick change a reporter saw.
+type recordedPick struct {
+	payload  *Payload
+	fallback bool
+	reason   string
+}
 
-	var results localResults
+// recordingReporter collects a target's build events and picks.
+type recordingReporter struct {
+	mu        sync.Mutex
+	engine    []*EngineBuildEvent
+	testing   []*TestingBuildEvent
+	picks     []recordedPick
+	noPayload []error
+}
 
-	_, ok := results.result()
-	require.False(t, ok, "nothing finished yet")
+func (r *recordingReporter) reportPick(payload *Payload, fallback bool, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	results.add(localOutcome{err: errors.New("refused"), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
+	r.picks = append(r.picks, recordedPick{payload: payload, fallback: fallback, reason: reason})
+}
 
-	outcome, ok := results.result()
-	require.True(t, ok)
-	require.Error(t, outcome.err, "without a success the latest failure is handed over")
+func (r *recordingReporter) reportNoPayload(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	low, high, tie := built(5), built(9), built(9)
-	results.add(low, LocalBuildRun{Run: 2})
-	results.add(high, LocalBuildRun{Run: 3})
-	results.add(tie, LocalBuildRun{Run: 4})
-	results.add(localOutcome{err: errors.New("late refusal"), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 5})
+	r.noPayload = append(r.noPayload, err)
+}
 
-	outcome, ok = results.result()
-	require.True(t, ok)
-	require.Same(t, tie.payload, outcome.payload, "the highest value wins, the later build a tie")
-	require.Equal(t, 5, outcome.info.Builds)
-	require.Len(t, outcome.info.Runs, 5, "every build is summarized")
+func (r *recordingReporter) reportEngine(event *EngineBuildEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.engine = append(r.engine, event)
+}
+
+func (r *recordingReporter) reportTesting(event *TestingBuildEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.testing = append(r.testing, event)
+}
+
+func (r *recordingReporter) testingEvents() []*TestingBuildEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]*TestingBuildEvent(nil), r.testing...)
+}
+
+func testingRequest(attrs *beacon.PayloadAttributesEvent, local *LocalBuildRequest, reporter buildReporter) *BuildRequest {
+	return &BuildRequest{Attrs: attrs, Seq: 7, Candidate: chain.CandidateParentFull, Local: local, reporter: reporter}
 }
 
 func TestRunLocalBuildsTimesTheSingleBuild(t *testing.T) {
@@ -81,29 +109,41 @@ func TestRunLocalBuildsTimesTheSingleBuild(t *testing.T) {
 	// Without a rebuild interval: one build, timed by the seeded estimate
 	// (370 ms) to end at the window end.
 	windowEnd := time.Now().Add(600 * time.Millisecond)
-	req := &LocalBuildRequest{TxSource: config.TxSourceEmpty}
+	reporter := &recordingReporter{}
+	req := testingRequest(attrs, &LocalBuildRequest{TxSource: config.TxSourceEmpty}, reporter)
 
-	results := newLocalResults()
-
-	b.runLocalBuilds(context.Background(), attrs, prelude, req, time.Now(), windowEnd, results)
+	b.runLocalBuilds(context.Background(), req, prelude, time.Now(), windowEnd, newTargetPicker(req))
 	require.Len(t, client.calls, 1)
 
-	outcome, ok := results.result()
-	require.True(t, ok)
-	require.NoError(t, outcome.err)
-	require.Equal(t, 1, outcome.info.Run)
-	require.WithinDuration(t, windowEnd.Add(-370*time.Millisecond), outcome.info.StartedAt, 60*time.Millisecond)
+	events := reporter.testingEvents()
+	require.Len(t, events, 2, "building, then the run's outcome")
+	require.Equal(t, LocalStatusBuilding, events[0].Status)
+	require.Equal(t, LocalStatusReady, events[1].Status)
+	require.NotNil(t, events[1].Payload, "the run reports its own payload")
+	require.Len(t, reporter.picks, 1, "a testing-only target picks its run at once")
+	require.Same(t, events[1].Payload, reporter.picks[0].payload)
+	require.Equal(t, 1, events[1].Run)
+	require.Equal(t, uint64(7), events[1].Seq)
+	require.WithinDuration(t, windowEnd.Add(-370*time.Millisecond), events[1].StartedAt, 60*time.Millisecond)
+
+	payload := events[1].Payload
+	require.Equal(t, BuildRef{Kind: BuildKindTesting, Run: 1}, payload.Build)
+	require.Equal(t, uint64(7), payload.BuildSeq)
+	require.Equal(t, chain.CandidateParentFull, payload.Candidate)
+	require.Nil(t, payload.EngineCalls, "a testing payload has no engine calls")
+	require.Equal(t, payload.Local.BuiltAt, payload.ReadyAt, "ready when its own build finished")
 
 	// A window opening later than that holds the build back to its start.
 	client.calls = nil
 	windowStart := time.Now().Add(400 * time.Millisecond)
+	reporter = &recordingReporter{}
+	req = testingRequest(attrs, &LocalBuildRequest{TxSource: config.TxSourceEmpty}, reporter)
 
-	results = newLocalResults()
-	b.runLocalBuilds(context.Background(), attrs, prelude, req, windowStart, windowStart.Add(100*time.Millisecond), results)
+	b.runLocalBuilds(context.Background(), req, prelude, windowStart, windowStart.Add(100*time.Millisecond), newTargetPicker(req))
 
-	outcome, ok = results.result()
-	require.True(t, ok)
-	require.False(t, outcome.info.StartedAt.Before(windowStart))
+	events = reporter.testingEvents()
+	require.NotEmpty(t, events)
+	require.False(t, events[0].StartedAt.Before(windowStart))
 }
 
 func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
@@ -119,11 +159,12 @@ func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
 	b, attrs, prelude := newLocalTestBuilder(client)
 	b.txPool = pool
 
-	req := &LocalBuildRequest{
+	reporter := &recordingReporter{}
+	req := testingRequest(attrs, &LocalBuildRequest{
 		TxSource:        config.TxSourceTxPool,
 		RebuildInterval: 100 * time.Millisecond,
 		GasFillPct:      100,
-	}
+	}, reporter)
 
 	// A transaction arrives after the first build: one rebuild, then quiet.
 	go func() {
@@ -137,101 +178,168 @@ func TestRunLocalBuildsRebuildsOnNewTransactions(t *testing.T) {
 		_, _ = pool.Add(raw)
 	}()
 
-	results := newLocalResults()
-
 	started := time.Now()
-	b.runLocalBuilds(context.Background(), attrs, prelude, req, started, started.Add(time.Second), results)
+	b.runLocalBuilds(context.Background(), req, prelude, started, started.Add(time.Second), newTargetPicker(req))
 
 	require.Len(t, client.calls, 2, "the first build at once, a rebuild for the arrival, none without news")
 	require.Empty(t, client.calls[0])
 	require.Len(t, client.calls[1], 1)
 
-	outcome, ok := results.result()
-	require.True(t, ok)
-	require.Equal(t, 2, outcome.info.Run, "the later build wins the tie")
-	require.Len(t, outcome.info.Runs, 2)
-	require.Less(t, outcome.info.Runs[0].StartedAt.Sub(started), 50*time.Millisecond, "the first build starts at once")
-}
+	var ready []*TestingBuildEvent
 
-func TestCollectLocalStopsAtTheDeadline(t *testing.T) {
-	b, _, _ := newLocalTestBuilder(&fakeLocalClient{})
-
-	result := &BuildResult{}
-	b.collectLocal(context.Background(), result, &localResults{}, make(chan struct{}), time.Now())
-	require.EqualError(t, result.LocalErr, "local build not ready at the hand-over")
-
-	// An earlier build is handed over while a later one still runs.
-	results := &localResults{}
-	results.add(localOutcome{payload: &Payload{BlockValue: big.NewInt(1)}, info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
-
-	result = &BuildResult{}
-	b.collectLocal(context.Background(), result, results, make(chan struct{}), time.Now())
-	require.NoError(t, result.LocalErr)
-	require.NotNil(t, result.Local)
-}
-
-func TestFollowLocalUpgradesOnlyBetterPicks(t *testing.T) {
-	b, attrs, _ := newLocalTestBuilder(&fakeLocalClient{})
-
-	payload := func(value int64, hash byte) *Payload {
-		return &Payload{Attributes: attrs, BlockValue: big.NewInt(value), BlockHash: [32]byte{hash}}
+	for _, event := range reporter.testingEvents() {
+		if event.Status == LocalStatusReady {
+			ready = append(ready, event)
+		}
 	}
 
-	engine := payload(10, 0xe1)
-	handedOver := BuildResult{EL: engine, Payload: engine, Source: SourceEL}
-	req := &LocalBuildRequest{PayloadSource: config.PayloadSourceHigherValue}
+	require.Len(t, ready, 2, "every run reports itself")
+	require.Equal(t, []int{1, 2}, []int{ready[0].Run, ready[1].Run})
+	require.NotSame(t, ready[0].Payload, ready[1].Payload, "each run has its own payload")
+	require.Equal(t, 2, ready[1].Payload.Build.Run)
+	require.Less(t, ready[0].StartedAt.Sub(started), 50*time.Millisecond, "the first build starts at once")
 
-	results := newLocalResults()
-	done := make(chan struct{})
-	upgrades := make(chan *BuildResult, 4)
-
-	go b.followLocal(context.Background(), handedOver, req, results, done, upgrades)
-
-	// Worth less than the engine block: the published pick stays.
-	results.add(localOutcome{payload: payload(5, 0x01), info: &LocalBuildInfo{}}, LocalBuildRun{Run: 1})
-
-	// Worth more: published as an upgrade.
-	better := payload(20, 0x02)
-	results.add(localOutcome{payload: better, info: &LocalBuildInfo{}}, LocalBuildRun{Run: 2})
-
-	select {
-	case upgrade := <-upgrades:
-		require.Same(t, better, upgrade.Payload)
-		require.Equal(t, SourceLocal, upgrade.Source)
-		require.Equal(t, 2, upgrade.LocalInfo.Builds)
-	case <-time.After(time.Second):
-		t.Fatal("no upgrade")
-	}
-
-	close(done)
-
-	// A final report with every run follows, re-sending the published pick.
-	report, open := <-upgrades
-	require.True(t, open)
-	require.Same(t, better, report.Payload)
-	require.Len(t, report.LocalInfo.Runs, 2)
-
-	_, open = <-upgrades
-	require.False(t, open, "the upgrades end with the builds")
+	require.Len(t, reporter.picks, 2, "each run's different block is picked as it finishes")
+	require.Same(t, ready[1].Payload, reporter.picks[1].payload, "the later build wins the tie")
+	require.Equal(t, SelectionBetter, reporter.picks[1].reason)
 }
 
-func TestPayloadCacheKeepsSupersededPayloads(t *testing.T) {
+// pickerFor returns a picker of a target with the given payload source
+// (engine build on) and its reporter.
+func pickerFor(source string) (*targetPicker, *recordingReporter) {
+	reporter := &recordingReporter{}
+	req := &BuildRequest{
+		Attrs:    &beacon.PayloadAttributesEvent{ProposalSlot: 5},
+		Local:    &LocalBuildRequest{PayloadSource: source, EngineEnabled: true},
+		reporter: reporter,
+	}
+
+	return newTargetPicker(req), reporter
+}
+
+func built(value int64, hash byte, ref BuildRef) *Payload {
+	return &Payload{BlockValue: big.NewInt(value), BlockHash: [32]byte{hash}, Build: ref}
+}
+
+var (
+	engineRef = BuildRef{Kind: BuildKindEngine}
+	run1      = BuildRef{Kind: BuildKindTesting, Run: 1}
+	run2      = BuildRef{Kind: BuildKindTesting, Run: 2}
+)
+
+// TestPickerPicksAsBuildsFinish: the pick follows the payload source over the
+// builds finished so far, the moment each one finishes — no build waits for
+// another.
+func TestPickerPicksAsBuildsFinish(t *testing.T) {
+	t.Run("local picks a testing run before the engine build ends", func(t *testing.T) {
+		picker, reporter := pickerFor(config.PayloadSourceLocal)
+
+		testing1 := built(5, 0x01, run1)
+		picker.testingRun(localOutcome{payload: testing1})
+		require.Len(t, reporter.picks, 1)
+		require.Same(t, testing1, reporter.picks[0].payload)
+		require.Equal(t, SelectionFirst, reporter.picks[0].reason)
+
+		picker.engineEnded(built(50, 0xe1, engineRef), nil)
+		require.Len(t, reporter.picks, 1, "the engine payload is no testing payload")
+	})
+
+	t.Run("el ignores the testing runs", func(t *testing.T) {
+		picker, reporter := pickerFor(config.PayloadSourceEL)
+
+		picker.testingRun(localOutcome{payload: built(50, 0x01, run1)})
+		require.Empty(t, reporter.picks)
+
+		engine := built(5, 0xe1, engineRef)
+		picker.engineEnded(engine, nil)
+		require.Len(t, reporter.picks, 1)
+		require.Same(t, engine, reporter.picks[0].payload)
+	})
+
+	t.Run("higher_value moves only to a more valuable block", func(t *testing.T) {
+		picker, reporter := pickerFor(config.PayloadSourceHigherValue)
+
+		cheap := built(5, 0x01, run1)
+		picker.testingRun(localOutcome{payload: cheap})
+
+		engine := built(10, 0xe1, engineRef)
+		picker.engineEnded(engine, nil)
+
+		// The same block again, and an equally valuable other block: no change.
+		picker.testingRun(localOutcome{payload: built(10, 0xe1, run2)})
+		picker.testingRun(localOutcome{payload: built(10, 0x03, BuildRef{Kind: BuildKindTesting, Run: 3})})
+
+		rich := built(20, 0x04, BuildRef{Kind: BuildKindTesting, Run: 4})
+		picker.testingRun(localOutcome{payload: rich})
+
+		require.Len(t, reporter.picks, 3)
+		require.Same(t, cheap, reporter.picks[0].payload)
+		require.Equal(t, SelectionFirst, reporter.picks[0].reason)
+		require.Same(t, engine, reporter.picks[1].payload)
+		require.Equal(t, SelectionBetter, reporter.picks[1].reason)
+		require.Same(t, rich, reporter.picks[2].payload)
+	})
+
+	t.Run("local_or_el takes the engine payload until a testing run exists", func(t *testing.T) {
+		picker, reporter := pickerFor(config.PayloadSourceLocalOrEL)
+
+		engine := built(10, 0xe1, engineRef)
+		picker.engineEnded(engine, nil)
+
+		testing1 := built(5, 0x01, run1)
+		picker.testingRun(localOutcome{payload: testing1})
+
+		require.Len(t, reporter.picks, 2)
+		require.Same(t, engine, reporter.picks[0].payload)
+		require.True(t, reporter.picks[0].fallback)
+		require.Same(t, testing1, reporter.picks[1].payload)
+		require.False(t, reporter.picks[1].fallback)
+
+		picker.testingEnded()
+		require.Empty(t, reporter.noPayload)
+	})
+
+	t.Run("no payload once every build ended without one", func(t *testing.T) {
+		picker, reporter := pickerFor(config.PayloadSourceLocal)
+
+		picker.engineEnded(built(10, 0xe1, engineRef), nil)
+		picker.testingRun(localOutcome{err: errors.New("nonce too low")})
+		require.Empty(t, reporter.noPayload, "the testing runs are not over yet")
+
+		picker.testingEnded()
+		require.Len(t, reporter.noPayload, 1)
+		require.ErrorContains(t, reporter.noPayload[0], "nonce too low")
+
+		picker.testingEnded()
+		require.Len(t, reporter.noPayload, 1, "reported once")
+	})
+}
+
+func TestPayloadCacheKeepsEveryBuiltPayload(t *testing.T) {
 	cache := NewPayloadCache(8)
 	attrs := &beacon.PayloadAttributesEvent{ProposalSlot: 5, ParentBlockHash: [32]byte{0xaa}}
 
-	first := &Payload{Attributes: attrs, BlockHash: [32]byte{1}}
-	second := &Payload{Attributes: attrs, BlockHash: [32]byte{2}}
+	engine := &Payload{Attributes: attrs, BlockHash: [32]byte{1}, Build: BuildRef{Kind: BuildKindEngine}}
+	testRun := &Payload{Attributes: attrs, BlockHash: [32]byte{2}, Build: BuildRef{Kind: BuildKindTesting, Run: 1}}
 
-	cache.Store(first)
-	cache.Store(second)
+	cache.Store(engine)
+	cache.Store(testRun)
+	require.Nil(t, cache.Get(5), "stored is not selected")
+	require.Same(t, engine, cache.GetByBlockHash([32]byte{1}))
 
-	require.Same(t, second, cache.Get(5), "the newer payload is the tuple's payload")
-	require.Len(t, cache.GetSlotPayloads(5), 1)
-	require.Same(t, first, cache.GetByBlockHash([32]byte{1}), "a bid on the old payload still finds it")
+	cache.Select(engine)
+	require.Same(t, engine, cache.Get(5))
 
-	require.False(t, cache.Remove(first), "the tuple's payload did not change")
-	require.Nil(t, cache.GetByBlockHash([32]byte{1}), "but the old payload is gone")
+	cache.Select(testRun)
+	require.Same(t, testRun, cache.Get(5), "the newer selection feeds the next bid")
+	require.Len(t, cache.GetSlotPayloads(5), 1, "one selection per target")
+	require.Same(t, engine, cache.GetByBlockHash([32]byte{1}), "a bid on the engine payload still finds it")
 
+	cache.Withdraw(5, []phase0.Hash32{{1}, {2}})
+	require.Nil(t, cache.Get(5))
+	require.Nil(t, cache.GetByBlockHash([32]byte{1}))
+
+	cache.Store(engine)
 	cache.Cleanup(6)
-	require.Nil(t, cache.GetByBlockHash([32]byte{2}))
+	require.Nil(t, cache.GetByBlockHash([32]byte{1}))
 }

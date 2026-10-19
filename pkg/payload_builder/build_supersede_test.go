@@ -80,9 +80,9 @@ func synthesizedAttrs() *beacon.PayloadAttributesEvent {
 	}
 }
 
-// registerBuild registers a started build for the event's tuple the way
-// executeCandidateBuild does, returning the build and the context it would
-// run the engine build with.
+// registerBuild registers a started target for the event's tuple the way
+// executeCandidateBuild does, returning it and the context it would run the
+// engine build with.
 func registerBuild(
 	svc *Service, attrs *beacon.PayloadAttributesEvent, synthesized bool,
 ) (*candidateBuild, context.Context) {
@@ -98,7 +98,15 @@ func registerBuild(
 		svc.slotBuilds[attrs.ProposalSlot] = state
 	}
 
-	build := &candidateBuild{attrs: attrs, synthesized: synthesized, cancel: cancel}
+	build := &candidateBuild{
+		svc:         svc,
+		slot:        attrs.ProposalSlot,
+		candidate:   chain.CandidateParentFull,
+		seq:         svc.buildSeq.Add(1),
+		attrs:       attrs,
+		synthesized: synthesized,
+		cancel:      cancel,
+	}
 	state.started[beacon.AttrParentKeyOf(attrs)] = build
 
 	return build, ctx
@@ -115,6 +123,16 @@ func (s *Service) startedBuild(slot phase0.Slot, key beacon.AttrParentKey) *cand
 	return nil
 }
 
+// nodeAttrs returns the node's attributes for the synthesized ones, with the
+// post-transition withdrawal amounts.
+func nodeAttrs(synthesized *beacon.PayloadAttributesEvent) *beacon.PayloadAttributesEvent {
+	real := *synthesized
+	real.Synthesized = false
+	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
+
+	return &real
+}
+
 func TestSupersedeSynthesizedBuild_AbortsInFlightBuild(t *testing.T) {
 	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
@@ -122,29 +140,27 @@ func TestSupersedeSynthesizedBuild_AbortsInFlightBuild(t *testing.T) {
 	synthesized := synthesizedAttrs()
 	build, ctx := registerBuild(svc, synthesized, true)
 
-	failedSub := svc.SubscribePayloadBuildFailed(4, false)
-	defer failedSub.Unsubscribe()
+	events := svc.SubscribeBuildEvents(4, false)
+	defer events.Unsubscribe()
 
-	// The node's attributes carry the post-transition withdrawal amounts.
-	real := *synthesized
-	real.Synthesized = false
-	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
-
-	require.True(t, svc.supersedeSynthesizedBuild(&real))
+	real := nodeAttrs(synthesized)
+	require.True(t, svc.supersedeSynthesizedBuild(real))
 
 	assert.Error(t, ctx.Err(), "the in-flight engine build is cancelled")
-	assert.True(t, svc.buildAborted(build))
-	assert.Nil(t, svc.startedBuild(133, beacon.AttrParentKeyOf(&real)),
-		"tuple released for the rebuild")
+	assert.True(t, build.isAborted())
+	assert.Nil(t, svc.startedBuild(133, beacon.AttrParentKeyOf(real)), "tuple released for the rebuild")
 
 	select {
-	case <-failedSub.Channel():
-		t.Fatal("a running build reports its own abort, supersede must not report it")
+	case event := <-events.Channel():
+		target, ok := event.(*BuildTargetEvent)
+		require.True(t, ok)
+		assert.Equal(t, TargetStatusSuperseded, target.Status)
+		assert.Equal(t, build.seq, target.Seq)
 	default:
+		t.Fatal("the superseded target must be reported")
 	}
 
-	// The build goroutine finishing after the abort never emits its payload.
-	require.False(t, svc.supersedeSynthesizedBuild(&real), "nothing left to supersede")
+	require.False(t, svc.supersedeSynthesizedBuild(real), "nothing left to supersede")
 }
 
 func TestSupersedeSynthesizedBuild_KeepsEqualInputs(t *testing.T) {
@@ -192,120 +208,63 @@ func TestSupersedeSynthesizedBuild_IgnoresNodeBuilds(t *testing.T) {
 	require.False(t, svc.supersedeSynthesizedBuild(&other))
 }
 
-func TestSupersedeSynthesizedBuild_WithdrawsEmittedPayload(t *testing.T) {
+// TestSupersedeSynthesizedBuild_WithdrawsEveryPayload covers a target that
+// already built and selected: the engine payload and the testing run's
+// upgrade both leave the cache, the superseded report is the last event and
+// nothing of the target is reported or selected afterwards.
+func TestSupersedeSynthesizedBuild_WithdrawsEveryPayload(t *testing.T) {
 	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 
 	synthesized := synthesizedAttrs()
 	build, _ := registerBuild(svc, synthesized, true)
 
-	// The build already finished: its payload is cached and was dispatched.
-	payload := &Payload{
-		Attributes: synthesized,
-		BlockHash:  phase0.Hash32{0xb0, 0xd7},
-		Candidate:  chain.CandidateParentFull,
-		ReadyAt:    time.Now(),
-	}
+	engine := &Payload{Attributes: synthesized, BlockHash: phase0.Hash32{0xe0}, Build: BuildRef{Kind: BuildKindEngine}}
+	upgrade := &Payload{Attributes: synthesized, BlockHash: phase0.Hash32{0x70}, Build: BuildRef{Kind: BuildKindTesting, Run: 1}}
 
-	svc.scheduledBuildMu.Lock()
-	build.seq = 7
-	build.payload = payload
-	build.readyFired = true
-	svc.payloadCache.Store(payload)
-	svc.scheduledBuildMu.Unlock()
+	build.reportEngine(&EngineBuildEvent{Status: EngineStatusReady, Payload: engine})
+	require.True(t, build.selectPayload(engine, SelectionFirst, false))
+	build.reportTesting(&TestingBuildEvent{Run: 1, Status: LocalStatusReady, Payload: upgrade})
+	require.True(t, build.selectPayload(upgrade, SelectionBetter, false))
+	require.Same(t, upgrade, svc.payloadCache.Get(133))
 
-	failedSub := svc.SubscribePayloadBuildFailed(4, false)
-	defer failedSub.Unsubscribe()
+	events := svc.SubscribeBuildEvents(4, false)
+	defer events.Unsubscribe()
 
-	real := *synthesized
-	real.Synthesized = false
-	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
+	require.True(t, svc.supersedeSynthesizedBuild(nodeAttrs(synthesized)))
 
-	require.True(t, svc.supersedeSynthesizedBuild(&real))
-
-	assert.Nil(t, svc.payloadCache.Get(133), "the stale payload must never be bid")
-	assert.Nil(t, svc.payloadCache.GetByBlockHash(payload.BlockHash))
+	assert.Nil(t, svc.payloadCache.Get(133), "the stale payloads must never be bid")
+	assert.Nil(t, svc.payloadCache.GetByBlockHash(engine.BlockHash))
+	assert.Nil(t, svc.payloadCache.GetByBlockHash(upgrade.BlockHash))
 
 	select {
-	case event := <-failedSub.Channel():
-		assert.Equal(t, phase0.Slot(133), event.Slot)
-		assert.Equal(t, string(chain.CandidateParentFull), event.Candidate)
-		assert.Equal(t, errBuildSuperseded, event.Error)
-		assert.Equal(t, uint64(7), event.BuildSeq, "the failure carries the superseded build's seq")
+	case event := <-events.Channel():
+		target, ok := event.(*BuildTargetEvent)
+		require.True(t, ok)
+		assert.Equal(t, TargetStatusSuperseded, target.Status)
+		assert.Equal(t, errBuildSuperseded, target.Error)
+		assert.Equal(t, build.seq, target.Seq, "the report carries the superseded target's seq")
 	default:
-		t.Fatal("a finished build must be reported as superseded")
-	}
-}
-
-// TestSupersedeSynthesizedBuild_FailureFollowsInFlightReady covers the window
-// between caching the payload and finishing its ready dispatch: the supersede
-// withdraws the payload but leaves the failure report to the build goroutine,
-// so consumers always see the ready event before the superseded failure.
-func TestSupersedeSynthesizedBuild_FailureFollowsInFlightReady(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
-	svc := supersedeTestService(t, &stubChainService{spec: spec})
-
-	synthesized := synthesizedAttrs()
-	build, _ := registerBuild(svc, synthesized, true)
-
-	payload := &Payload{
-		Attributes: synthesized,
-		BlockHash:  phase0.Hash32{0xb0, 0xd7},
-		Candidate:  chain.CandidateParentFull,
-		ReadyAt:    time.Now(),
+		t.Fatal("a selected target must be reported as superseded")
 	}
 
-	// Cached, ready event still being dispatched (readyFired not yet set).
-	svc.scheduledBuildMu.Lock()
-	build.seq = 3
-	build.payload = payload
-	svc.payloadCache.Store(payload)
-	svc.scheduledBuildMu.Unlock()
-
-	failedSub := svc.SubscribePayloadBuildFailed(4, false)
-	defer failedSub.Unsubscribe()
-
-	real := *synthesized
-	real.Synthesized = false
-	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
-
-	require.True(t, svc.supersedeSynthesizedBuild(&real))
-	assert.Nil(t, svc.payloadCache.Get(133), "withdrawn immediately")
+	// The cancelled engine build's failure and a late run's pick stay silent.
+	build.reportEngine(&EngineBuildEvent{Status: EngineStatusFailed, Error: "context canceled"})
+	assert.False(t, build.selectPayload(upgrade, SelectionBetter, false))
+	build.fireTarget(&BuildTargetEvent{Status: TargetStatusNoPayload})
 
 	select {
-	case <-failedSub.Channel():
-		t.Fatal("the failure must wait for the build's ready dispatch to finish")
+	case event := <-events.Channel():
+		t.Fatalf("the superseded report is the target's last event, got %T", event)
 	default:
 	}
 
-	// The build goroutine finishes its ready dispatch and reports the abort.
-	svc.completeBuild(build)
-
-	select {
-	case event := <-failedSub.Channel():
-		assert.Equal(t, errBuildSuperseded, event.Error)
-		assert.Equal(t, uint64(3), event.BuildSeq)
-	default:
-		t.Fatal("the finished ready dispatch must be followed by the superseded failure")
-	}
-
-	// A build that was never aborted reports nothing on completion.
-	other := synthesizedAttrs()
-	other.ParentBlockHash = phase0.Hash32{0xbb}
-	otherBuild, _ := registerBuild(svc, other, false)
-	otherBuild.payload = &Payload{Attributes: other, Candidate: chain.CandidateParentEmpty}
-	svc.completeBuild(otherBuild)
-
-	select {
-	case <-failedSub.Channel():
-		t.Fatal("an unaborted build must not report a failure")
-	default:
-	}
+	assert.Nil(t, svc.payloadCache.Get(133))
 }
 
 // TestHandlePayloadAttributes_RebuildsAfterSupersede drives the whole path
-// through the attributes handler: the fallback's synthesized build is
-// aborted by the node's differing event and a fresh build starts from the
+// through the attributes handler: the fallback's synthesized target is
+// aborted by the node's differing event and a fresh target starts from the
 // node's attributes on the same parent tuple.
 func TestHandlePayloadAttributes_RebuildsAfterSupersede(t *testing.T) {
 	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
@@ -318,52 +277,40 @@ func TestHandlePayloadAttributes_RebuildsAfterSupersede(t *testing.T) {
 	stale, ctx := registerBuild(svc, synthesized, true)
 	key := beacon.AttrParentKeyOf(synthesized)
 
-	failedSub := svc.SubscribePayloadBuildFailed(4, false)
-	defer failedSub.Unsubscribe()
+	events := svc.SubscribeBuildEvents(8, false)
+	defer events.Unsubscribe()
 
-	real := *synthesized
-	real.Synthesized = false
-	real.Withdrawals = []*capella.Withdrawal{{Index: 1, ValidatorIndex: 10, Amount: 104426}}
+	svc.handlePayloadAttributesEvent(nodeAttrs(synthesized))
 
-	svc.handlePayloadAttributesEvent(&real)
+	assert.Error(t, ctx.Err(), "synthesized target aborted")
+	assert.True(t, stale.isAborted())
 
-	assert.Error(t, ctx.Err(), "synthesized build aborted")
-	assert.True(t, svc.buildAborted(stale))
-
-	// The late-build path starts a fresh build from the node's attributes
+	// The late-build path starts a fresh target from the node's attributes
 	// (it fails against the offline clients, which is fine: it ran).
 	require.Eventually(t, func() bool {
 		build := svc.startedBuild(133, key)
 		return build != nil && build != stale && !build.synthesized && build.seq > stale.seq
-	}, 2*time.Second, 10*time.Millisecond, "a new build from the node's attributes must start")
+	}, 2*time.Second, 10*time.Millisecond, "a new target from the node's attributes must start")
 
-	select {
-	case event := <-failedSub.Channel():
-		assert.NotEqual(t, errBuildSuperseded, event.Error, "the rebuild fails for its own reason")
-	case <-time.After(2 * time.Second):
-		t.Fatal("the rebuild must report its outcome")
+	var statuses []string
+
+	timeout := time.After(2 * time.Second)
+
+	for len(statuses) < 3 {
+		select {
+		case event := <-events.Channel():
+			if target, ok := event.(*BuildTargetEvent); ok {
+				statuses = append(statuses, target.Status)
+			}
+		case <-timeout:
+			t.Fatalf("the rebuild must report its outcome, got %v", statuses)
+		}
 	}
+
+	assert.Equal(t, []string{TargetStatusSuperseded, TargetStatusStarted, TargetStatusNoPayload}, statuses)
 
 	// A synthesized event never supersedes anything.
 	again := *synthesized
 	svc.handlePayloadAttributesEvent(&again)
 	assert.NotNil(t, svc.startedBuild(133, key))
-}
-
-func TestPayloadCacheRemove(t *testing.T) {
-	cache := NewPayloadCache(4)
-	attrs := synthesizedAttrs()
-
-	first := &Payload{Attributes: attrs, BlockHash: phase0.Hash32{0x01}}
-	cache.Store(first)
-
-	replacement := &Payload{Attributes: attrs, BlockHash: phase0.Hash32{0x02}}
-	cache.Store(replacement)
-
-	assert.False(t, cache.Remove(first), "a newer build on the tuple stays")
-	assert.Same(t, replacement, cache.Get(133))
-
-	assert.True(t, cache.Remove(replacement))
-	assert.Nil(t, cache.Get(133))
-	assert.Equal(t, 0, cache.Size())
 }

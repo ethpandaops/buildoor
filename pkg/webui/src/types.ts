@@ -345,11 +345,10 @@ export interface LocalBuildInfo {
   submitted_txs: number;
   attempts?: number;
   dropped?: { hash?: string; reason: string }[];
+  started_at?: string;
   built_at?: string;
   selected_at?: string;
-  builds?: number; // testing builds the target ran; this record is the handed-over one
-  run?: number; // the handed-over build's number
-  runs?: LocalBuildRun[]; // every build of the target up to the hand-over
+  run?: number; // the run's number within its target
   mirror_started?: boolean;
   fill_txs?: number;
   fill_error?: string;
@@ -363,65 +362,6 @@ export interface EngineCalls {
   fcu_end: number;
   get_payload_start: number;
   get_payload_end: number;
-}
-
-// One testing build of a target (rebuilds run when new transactions arrived).
-export interface LocalBuildRun {
-  run: number;
-  status: 'ready' | 'failed' | 'skipped';
-  started_at: string;
-  selected_at?: string;
-  at: string;
-  num_transactions?: number;
-  gas_used?: number;
-  block_value_wei?: string;
-  error?: string;
-}
-
-// SSE local_build_progress event: the live state of one testing build
-// (building, then ready / failed / skipped the moment testing_buildBlockV1
-// returned), ahead of the final local_build event.
-export interface LocalBuildProgressEvent {
-  slot: number;
-  candidate?: string;
-  phase: 'building' | 'ready' | 'failed' | 'skipped';
-  run?: number; // the target's build number
-  tx_source?: string;
-  started_at: number;
-  at: number;
-  num_transactions?: number;
-  block_value_wei?: string;
-  skip_reason?: string;
-  error?: string;
-}
-
-// SSE local_build event (slot-scoped): one build target's local outcome.
-export interface LocalBuildStreamEvent {
-  slot: number;
-  candidate?: string;
-  status: string; // ready | failed | skipped
-  skip_reason?: string;
-  error?: string;
-  tx_source?: string;
-  payload_source?: string;
-  selected: boolean;
-  fallback: boolean;
-  local?: StreamPayloadSummary;
-  el?: StreamPayloadSummary;
-  info?: LocalBuildInfo;
-  started_at?: number; // unix ms, when the handed-over testing build began
-  built_at?: number; // unix ms, when testing_buildBlockV1 returned (ready only)
-  el_ready_at?: number; // unix ms, when the engine payload of the target was ready
-  at: number;
-}
-
-export interface StreamPayloadSummary {
-  block_hash: string;
-  block_value_wei: string;
-  num_transactions: number;
-  num_blobs: number;
-  gas_used: number;
-  gas_limit: number;
 }
 
 // Payload reveal config (own section, shared by the p2p bidder and Builder
@@ -585,14 +525,6 @@ export interface SlotStartEvent {
   slot_start_time: number;
 }
 
-export interface PayloadReadyEvent {
-  slot: number;
-  block_hash: string;
-  parent_block_hash: string;
-  block_value: string;
-  ready_at: number;
-}
-
 export interface BidSubmittedEvent {
   slot: number;
   block_hash: string;
@@ -753,23 +685,6 @@ export interface BlockDetail {
   };
 }
 
-// Full built-payload properties from the payload_ready event (transactions,
-// withdrawals, blobs, execution requests aggregated to counts).
-export interface PayloadDetail {
-  blockNumber?: number;
-  feeRecipient?: string;
-  gasLimit?: number;
-  gasUsed?: number;
-  baseFeePerGas?: string; // wei
-  extraData?: string; // 0x-hex
-  blobGasUsed?: number;
-  excessBlobGas?: number;
-  numTransactions?: number;
-  numWithdrawals?: number;
-  numBlobs?: number;
-  numExecRequests?: number;
-}
-
 // Build-parent candidate keys: which beacon block / execution payload a
 // candidate payload extends (see the backend chain.CandidateKey).
 export type CandidateKey =
@@ -779,25 +694,95 @@ export type CandidateKey =
   | 'grandparent_empty'
   | '';
 
-// CandidateBuild tracks one candidate payload build of a slot (a slot may
-// build several payloads on different parents for reorg preparedness).
-export interface CandidateBuild {
-  candidate: CandidateKey;
-  startedAt?: number;
-  // The build runs the engine-API build (absent from older events).
-  engine?: boolean;
-  readyAt?: number;
-  failedAt?: number;
-  failed?: boolean;
+// The build that produced a payload: a target's engine build, or one of its
+// testing runs.
+export interface BuildRef {
+  kind: 'engine' | 'testing';
+  run?: number;
+}
+
+// A built payload as the stream reports it with its build's event, kept once
+// per block hash (SlotState.payloads). List fields are aggregated to counts.
+export interface PayloadInfo {
+  block_hash: string;
+  build: BuildRef;
+  candidate?: CandidateKey;
+  built_at: number; // unix ms, when its own build finished
+  inclusion_list?: InclusionListBuild;
+  parent_block_hash: string;
+  parent_block_number?: number;
+  parent_block_root?: string;
+  parent_slot?: number;
+  block_value: string; // wei
+  block_number?: number;
+  fee_recipient?: string;
+  gas_limit?: number;
+  gas_used?: number;
+  base_fee_per_gas?: string; // wei
+  extra_data?: string; // 0x-hex
+  blob_gas_used?: number;
+  excess_blob_gas?: number;
+  num_transactions: number;
+  num_withdrawals: number;
+  num_blobs: number;
+  num_exec_requests: number;
+}
+
+// A target's engine build (forkchoiceUpdated, wait, getPayload).
+export interface EngineBuildState {
+  status: 'started' | 'ready' | 'failed';
+  startedAt: number;
+  at: number;
+  calls?: EngineCalls;
+  payloadHash?: string; // ready: its own payload (SlotState.payloads)
   error?: string;
-  blockHash?: string;
-  blockValueGwei?: number;
-  // Parent tuple this candidate payload extends.
+}
+
+// One testing run (testing_buildBlockV1 call) of a target.
+export interface TestingRunState {
+  run: number;
+  status: 'building' | 'ready' | 'failed' | 'skipped';
+  startedAt: number;
+  at: number;
+  txSource?: string;
+  payloadHash?: string; // ready: its own payload (SlotState.payloads)
+  info?: LocalBuildInfo;
+  skipReason?: string;
+  error?: string;
+}
+
+// One change of a target's pick: the payload the cache hands to the
+// consumers from `at` on (first, then each better one). What a consumer used
+// is its own record (a bid's block hash).
+export interface SelectionState {
+  at: number;
+  payloadHash: string;
+  build: BuildRef;
+  reason: 'first' | 'better';
+  fallback?: boolean;
+}
+
+export type TargetStatus = 'building' | 'selected' | 'no_payload' | 'superseded';
+
+// One build target of a slot (a parent tuple): its builds and the
+// selections among their payloads.
+export interface TargetState {
+  seq: number;
+  candidate: CandidateKey;
+  status: TargetStatus;
+  engine: boolean; // the engine build runs
+  testing: boolean; // testing runs build
+  testingSkipReason?: string;
+  txSource?: string;
+  payloadSource?: string;
   parentBlockHash?: string;
-  parentBlockNumber?: number;
   parentBlockRoot?: string;
-  parentSlot?: number;
-  detail?: PayloadDetail;
+  startedAt: number;
+  at: number;
+  error?: string;
+  engineBuild?: EngineBuildState;
+  testingRuns: Record<number, TestingRunState>;
+  selections: SelectionState[];
 }
 
 // UI State types
@@ -805,25 +790,11 @@ export interface SlotState {
   slot: number;
   scheduled?: boolean;
   slotStartTime?: number;
-  payloadBuildStartedAt?: number;
-  payloadBuildFailed?: boolean;
-  payloadBuildFailedAt?: number;
-  payloadBuildError?: string;
-  payloadReady?: boolean;
-  payloadCreatedAt?: number;
-  // The engine build's calls (unix ms): forkchoiceUpdated and getPayload;
-  // the build itself is the wait in between.
-  payloadEngineCalls?: EngineCalls;
-  // Testing builds that replaced the handed-over payload after it (count and
-  // the latest replacement's time); payloadCreatedAt stays the hand-over.
-  payloadUpgrades?: number;
-  payloadUpgradedAt?: number;
-  payloadBlockHash?: string;
-  payloadBlockValue?: number;
-  // Candidate of the primary payload (the most canonical ready build).
-  payloadCandidate?: CandidateKey;
-  // Every candidate build of the slot (present when candidates ran).
-  candidateBuilds?: CandidateBuild[];
+  // Every payload built for the slot, by block hash.
+  payloads?: Record<string, PayloadInfo>;
+  // The slot's build targets, by candidate key (a newer target of the same
+  // candidate replaces a superseded one).
+  targets?: Record<string, TargetState>;
   blockReceivedAt?: number;
   blockRoot?: string;
   bidsClosed?: boolean;
@@ -841,10 +812,6 @@ export interface SlotState {
   // Set while a reveal attempt's submit call is in flight (cleared by the
   // completion event); drives the live-growing call span.
   revealInFlight?: { attempt: number; startedAt: number };
-  // Full built-payload properties (list fields aggregated to counts).
-  payloadDetail?: PayloadDetail;
-  // The inclusion list view the primary payload was built against (Heze).
-  payloadInclusionList?: InclusionListBuild;
   // Imported block summary (from the block_detail event).
   blockDetail?: BlockDetail;
   // Envelope summary attached to the payload_available event.
@@ -867,10 +834,6 @@ export interface SlotState {
   submitBlockReceivedAt?: number;
   submitBlockDeliveredAt?: number;
   submitBlockBlockHash?: string;
-  // Local build extension outcome for the slot's primary target.
-  localBuild?: LocalBuildStreamEvent;
-  // Live testing build state, until the final localBuild event arrives.
-  localBuildLive?: Record<number, LocalBuildProgressEvent>; // by build number
   // payload_attributes events targeting the NEXT slot (this.slot + 1). They
   // arrive before the slot they target (the CL re-emits one per head update),
   // so they are rendered on this (parent) slot's graph — one dot each.
@@ -1258,7 +1221,7 @@ export interface FrozenPlan {
 export type BuildStatus =
   | 'waiting_attributes'
   | 'no_attributes'
-  | 'started'
+  | 'building'
   | 'ready'
   | 'failed'
   | 'skipped';
@@ -1275,17 +1238,70 @@ export type BlockSubmissionStatus = 'received' | 'accepted' | 'failed';
 
 export type RevealAttemptStatus = 'suppressed' | 'published' | 'failed' | 'skipped';
 
-export interface BuildOutcome {
+// The slot's build lifecycle (slot result): the baseline before any target
+// ran, then the targets the builder ran.
+export interface SlotBuild {
   status: BuildStatus;
   skip_reason?: string;
+  error?: string; // the primary target's, when the slot failed
+  targets?: BuildTargetRecord[];
+  at: string;
+}
+
+// One build target of a slot result: its builds and selections; builds and
+// selections name payloads by block hash (SlotResult.payloads).
+export interface BuildTargetRecord {
   candidate?: string; // build-parent candidate key ("" / absent = unclassified)
-  artifact_idx?: number; // payload artifact index of this build
-  block_hash?: string;
+  status: TargetStatus;
+  error?: string;
+  attributes?: AttributesSnapshot;
+  tx_source?: string;
+  payload_source?: string;
+  testing_skip_reason?: string;
+  engine?: BuildRecord;
+  testing?: BuildRecord[];
+  selections?: SelectionRecord[];
+  started_at: string;
+  at: string;
+}
+
+// One build of a target: the engine build or a testing run.
+export interface BuildRecord {
+  kind: 'engine' | 'testing';
+  run?: number;
+  status: string; // started/building, ready, failed, skipped
+  skip_reason?: string;
+  error?: string;
+  payload_hash?: string;
+  calls?: {
+    forkchoice_start: string;
+    forkchoice_end: string;
+    get_payload_start: string;
+    get_payload_end: string;
+  };
+  info?: LocalBuildInfo;
+  started_at: string;
+  at: string;
+}
+
+export interface SelectionRecord {
+  payload_hash: string;
+  build: BuildRef;
+  reason: 'first' | 'better';
+  fallback?: boolean;
+  at: string;
+}
+
+// One payload built for the slot, recorded once under its block hash.
+export interface PayloadRecord {
+  block_hash: string;
+  build: BuildRef;
+  candidate?: string;
+  captured?: boolean; // downloadable as an artifact
   block_value_wei?: string;
-  num_transactions?: number;
+  num_transactions: number;
   num_blobs?: number;
   fee_recipient?: string;
-  // Full built-payload properties (list fields aggregated to counts).
   block_number?: number;
   parent_hash?: string;
   state_root?: string;
@@ -1300,34 +1316,8 @@ export interface BuildOutcome {
   excess_blob_gas?: number;
   num_withdrawals?: number;
   num_execution_requests?: number;
-  attributes?: AttributesSnapshot;
-  // Which build produced the payload feeding the consumers (el | local).
-  source?: string;
-  // The local payload was wanted but the engine payload was used.
-  fallback?: boolean;
   inclusion_list?: InclusionListBuild;
-  local_build?: LocalBuildOutcome;
-  error?: string;
-  at: string;
-}
-
-// The local build's outcome for one build target.
-export interface LocalBuildOutcome {
-  status: string; // ready | failed | skipped
-  skip_reason?: string;
-  error?: string;
-  tx_source?: string;
-  payload_source?: string;
-  selected: boolean;
-  block_hash?: string;
-  block_value_wei?: string;
-  num_transactions?: number;
-  num_blobs?: number;
-  gas_used?: number;
-  gas_limit?: number;
-  artifact_idx?: number;
-  info?: LocalBuildInfo;
-  at: string;
+  built_at: string;
 }
 
 // The payload_attributes snapshot a build ran on (list fields aggregated).
@@ -1420,10 +1410,9 @@ export interface SlotResult {
   epoch: number;
   fork: string;
   applied_plan?: FrozenPlan;
-  build?: BuildOutcome;
-  // Every candidate build of the slot (present when more than one ran);
-  // build stays the primary outcome.
-  builds?: BuildOutcome[];
+  build?: SlotBuild;
+  // Every payload the slot built, by block hash.
+  payloads?: Record<string, PayloadRecord>;
   bids?: SlotBidAttempt[];
   block_submissions?: SlotBlockSubmission[];
   reveal_attempts?: SlotRevealAttempt[];

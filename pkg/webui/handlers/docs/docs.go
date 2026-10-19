@@ -1336,7 +1336,7 @@ const docTemplate = `{
         },
         "/api/buildoor/slot-results/{slot}/payload": {
             "get": {
-                "description": "Returns the exact execution payload built for the slot. With\n\"Accept: application/octet-stream\" the raw SSZ bytes are\nserved; otherwise a {\"version\", \"data\"} JSON envelope. The\nEth-Consensus-Version response header carries the fork name.",
+                "description": "Returns the payload the slot's primary build target selected\nlast (the one that fed the bids), or with ?candidate= the\nselection of that target. Every other payload the slot built\nis served by block hash (payloads/{blockHash}). With\n\"Accept: application/octet-stream\" the raw SSZ bytes are\nserved; otherwise a {\"version\", \"data\"} JSON envelope. The\nEth-Consensus-Version response header carries the fork name.",
                 "produces": [
                     "application/json",
                     "application/octet-stream"
@@ -1344,7 +1344,7 @@ const docTemplate = `{
                 "tags": [
                     "ActionPlan"
                 ],
-                "summary": "Get the built execution payload of a slot",
+                "summary": "Get the selected execution payload of a slot",
                 "operationId": "getSlotPayloadArtifact",
                 "parameters": [
                     {
@@ -1399,9 +1399,9 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/payload/{index}": {
+        "/api/buildoor/slot-results/{slot}/payloads/{blockHash}": {
             "get": {
-                "description": "Returns one of the execution payloads built for the slot by\nartifact index (a slot may build several candidate payloads on\ndifferent parents; the slot result's build entries carry each\nbuild's artifact index). Content negotiation as with the\ndefault payload artifact endpoint.",
+                "description": "Returns one execution payload built for the slot, addressed by\nits block hash (the slot result's payloads, builds and\nselections name payloads by it). The engine payload and every\nselected payload are captured; a testing run's payload nobody\nselected is not. Content negotiation as with the selected\npayload endpoint.",
                 "produces": [
                     "application/json",
                     "application/octet-stream"
@@ -1409,8 +1409,8 @@ const docTemplate = `{
                 "tags": [
                     "ActionPlan"
                 ],
-                "summary": "Get one of a slot's built candidate payloads",
-                "operationId": "getSlotPayloadArtifactByIndex",
+                "summary": "Get one of a slot's built payloads by block hash",
+                "operationId": "getSlotPayloadArtifactByHash",
                 "parameters": [
                     {
                         "type": "integer",
@@ -1420,9 +1420,9 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "integer",
-                        "description": "Payload artifact index",
-                        "name": "index",
+                        "type": "string",
+                        "description": "Payload block hash (0x-hex)",
+                        "name": "blockHash",
                         "in": "path",
                         "required": true
                     }
@@ -1445,7 +1445,7 @@ const docTemplate = `{
                         }
                     },
                     "404": {
-                        "description": "No artifact for this slot/index",
+                        "description": "No artifact for this block hash",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2445,6 +2445,14 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "inclusion_list": {
+                    "description": "InclusionList overrides the inclusion list (FOCIL, Heze) handling for\nthis slot; absent = inherit build.inclusion_list_mode/_bits.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.InclusionListPlan"
+                        }
+                    ]
+                },
                 "local": {
                     "description": "Local overrides the local build extension (testing_buildBlockV1) for\nthis slot; absent = inherit the global local_build settings. The EL's\navailability of the testing namespace still wins at build time.",
                     "allOf": [
@@ -2553,6 +2561,26 @@ const docTemplate = `{
                             "$ref": "#/definitions/action_plan.ResolvedTransforms"
                         }
                     ]
+                }
+            }
+        },
+        "action_plan.InclusionListPlan": {
+            "type": "object",
+            "properties": {
+                "bits": {
+                    "description": "Bits: view, all or none (see config.InclusionListBitsView).",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode: include or omit (see config.InclusionListInclude).",
+                    "type": "string"
+                },
+                "omit_txs": {
+                    "description": "OmitTxs leaves these transactions (0x hashes) out of the slot's\nbuilds even in include mode: a payload censoring exactly them.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2757,6 +2785,14 @@ const docTemplate = `{
                     "description": "Forced marks builds the plan pushed past the schedule (they never\nconsume the next_n budget).",
                     "type": "boolean"
                 },
+                "inclusion_list": {
+                    "description": "InclusionList is the effective inclusion list (FOCIL, Heze) handling:\nthe global build.inclusion_list_mode/_bits, overridden by the plan's\nbuild.inclusion_list. Always non-nil.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/action_plan.ResolvedInclusionList"
+                        }
+                    ]
+                },
                 "local": {
                     "description": "Local is the effective local build (testing_buildBlockV1) instruction,\nmerged from the global local_build/txpool settings and the plan's\nbuild.local overrides. Always non-nil; Enabled=false when the extension\nis off for the slot. The EL's runtime availability of the testing\nnamespace is checked by the builder, not here.",
                     "allOf": [
@@ -2818,6 +2854,26 @@ const docTemplate = `{
                 "total_value_gwei": {
                     "description": "TotalValueGwei, when set, is the absolute total proposer-visible bid\nvalue (before the Gloas execution-payment split).",
                     "type": "integer"
+                }
+            }
+        },
+        "action_plan.ResolvedInclusionList": {
+            "type": "object",
+            "properties": {
+                "bits": {
+                    "description": "Bits: view, all or none.",
+                    "type": "string"
+                },
+                "mode": {
+                    "description": "Mode: include or omit.",
+                    "type": "string"
+                },
+                "omit_txs": {
+                    "description": "OmitTxs are left out of the builds (0x hashes).",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -4208,6 +4264,17 @@ const docTemplate = `{
                 }
             }
         },
+        "payload_builder.BuildRef": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string"
+                },
+                "run": {
+                    "type": "integer"
+                }
+            }
+        },
         "payload_builder.DroppedTx": {
             "type": "object",
             "properties": {
@@ -4216,6 +4283,48 @@ const docTemplate = `{
                 },
                 "reason": {
                     "type": "string"
+                }
+            }
+        },
+        "payload_builder.InclusionListBuild": {
+            "type": "object",
+            "properties": {
+                "bits": {
+                    "description": "Bits are the committee bits of the view (hex in JSON).",
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "dependent_root": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "equivocators": {
+                    "type": "integer"
+                },
+                "lists": {
+                    "description": "Lists are the committee lists in the view (Timely of them on time);\nEquivocators the members whose lists were ignored.",
+                    "type": "integer"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "omitted": {
+                    "type": "integer"
+                },
+                "slot": {
+                    "description": "Slot is the inclusion list slot (the payload's slot - 1).",
+                    "type": "integer"
+                },
+                "timely": {
+                    "type": "integer"
+                },
+                "transactions": {
+                    "description": "Transactions is the size of the view; Omitted those left out on\npurpose (mode omit, or the plan's omit_txs).",
+                    "type": "integer"
                 }
             }
         },
@@ -4263,12 +4372,8 @@ const docTemplate = `{
                     "description": "Attempts is how many testing_buildBlockV1 calls the build took.",
                     "type": "integer"
                 },
-                "builds": {
-                    "description": "Builds is how many testing builds the target ran (rebuilds); this\nrecord describes the one handed over, Run is its number and Runs\nsummarizes every build up to the hand-over.",
-                    "type": "integer"
-                },
                 "built_at": {
-                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload. The local\nbuild runs during the engine build's wait, so this is usually before\nthe payload's ReadyAt (the hand-over to the consumers).",
+                    "description": "BuiltAt is when testing_buildBlockV1 returned the payload.",
                     "type": "string"
                 },
                 "dropped": {
@@ -4306,6 +4411,14 @@ const docTemplate = `{
                     "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
                     "type": "integer"
                 },
+                "inclusion_list": {
+                    "description": "InclusionList is the inclusion list view this build carried (nil\nbefore Heze).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/payload_builder.InclusionListBuild"
+                        }
+                    ]
+                },
                 "inclusion_list_dropped": {
                     "description": "InclusionListDropped marks a payload without the slot's inclusion list\n(a spec-violating payload): the build only succeeded after dropping it,\nor the el_mempool source never carried it.",
                     "type": "boolean"
@@ -4319,13 +4432,8 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "run": {
+                    "description": "Run is the run's number within its target (1-based).",
                     "type": "integer"
-                },
-                "runs": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/payload_builder.LocalBuildRun"
-                    }
                 },
                 "selected_at": {
                     "type": "string"
@@ -4347,40 +4455,6 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "tx_source": {
-                    "type": "string"
-                }
-            }
-        },
-        "payload_builder.LocalBuildRun": {
-            "type": "object",
-            "properties": {
-                "at": {
-                    "description": "built, failed or skipped",
-                    "type": "string"
-                },
-                "block_value_wei": {
-                    "type": "string"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "gas_used": {
-                    "type": "integer"
-                },
-                "num_transactions": {
-                    "type": "integer"
-                },
-                "run": {
-                    "type": "integer"
-                },
-                "selected_at": {
-                    "type": "string"
-                },
-                "started_at": {
-                    "type": "string"
-                },
-                "status": {
-                    "description": "ready | failed | skipped",
                     "type": "string"
                 }
             }
@@ -4496,7 +4570,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "block_hash": {
-                    "description": "Full bid message properties (Gloas+ bids; blob commitments aggregated\nto a count). Empty for legacy Builder API bids and pre-construction\nfailures.",
+                    "description": "Full bid message properties (blob commitments aggregated to a count;\npre-Gloas header bids carry block hash, parent hash, fee recipient and\ngas limit). Empty for pre-construction failures.",
                     "type": "string"
                 },
                 "builder_index": {
@@ -4583,113 +4657,51 @@ const docTemplate = `{
                 }
             }
         },
-        "slot_results.BuildOutcome": {
+        "slot_results.BuildRecord": {
             "type": "object",
             "properties": {
-                "artifact_idx": {
-                    "description": "ArtifactIdx is the per-slot payload artifact index of this build's\ncaptured payload (nil when no artifact was captured).",
-                    "type": "integer"
-                },
                 "at": {
                     "type": "string"
                 },
-                "attributes": {
-                    "description": "Attributes is the payload_attributes snapshot the build ran on.",
+                "calls": {
+                    "description": "Calls times the engine build's calls.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/slot_results.AttributesSnapshot"
+                            "$ref": "#/definitions/slot_results.EngineCalls"
                         }
                     ]
-                },
-                "base_fee_per_gas": {
-                    "description": "wei",
-                    "type": "string"
-                },
-                "blob_gas_used": {
-                    "type": "integer"
-                },
-                "block_hash": {
-                    "type": "string"
-                },
-                "block_number": {
-                    "description": "Full built-payload properties; the list fields (transactions, blobs,\nwithdrawals, execution requests) are aggregated to counts above/below.",
-                    "type": "integer"
-                },
-                "block_value_wei": {
-                    "type": "string"
-                },
-                "candidate": {
-                    "description": "Candidate classifies which build-parent candidate this outcome belongs\nto (parent_full, parent_empty, grandparent_full, grandparent_empty;\nempty = unclassified or single-build slot).",
-                    "type": "string"
                 },
                 "error": {
                     "type": "string"
                 },
-                "excess_blob_gas": {
-                    "type": "integer"
-                },
-                "extra_data": {
-                    "description": "0x-hex",
-                    "type": "string"
-                },
-                "fallback": {
-                    "description": "Fallback marks that the local payload was wanted but the engine payload\nwas used (local build failed or skipped).",
-                    "type": "boolean"
-                },
-                "fee_recipient": {
-                    "type": "string"
-                },
-                "gas_limit": {
-                    "type": "integer"
-                },
-                "gas_used": {
-                    "type": "integer"
-                },
-                "local_build": {
-                    "description": "LocalBuild is the local build's outcome for this target when the\nextension was requested for the slot (ready, failed or skipped).",
+                "info": {
+                    "description": "Info is the testing run's transaction assembly.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/slot_results.LocalBuildOutcome"
+                            "$ref": "#/definitions/payload_builder.LocalBuildInfo"
                         }
                     ]
                 },
-                "num_blobs": {
-                    "type": "integer"
-                },
-                "num_execution_requests": {
-                    "type": "integer"
-                },
-                "num_transactions": {
-                    "type": "integer"
-                },
-                "num_withdrawals": {
-                    "type": "integer"
-                },
-                "parent_hash": {
+                "kind": {
+                    "description": "payload_builder.BuildKind*",
                     "type": "string"
                 },
-                "prev_randao": {
+                "payload_hash": {
+                    "description": "PayloadHash names the build's own payload (ready).",
                     "type": "string"
                 },
-                "receipts_root": {
-                    "type": "string"
+                "run": {
+                    "type": "integer"
                 },
                 "skip_reason": {
-                    "description": "action_plan.BuildSkipReason* when skipped",
                     "type": "string"
                 },
-                "source": {
-                    "description": "Source records which build produced the payload feeding the consumers:\nel (engine API) or local (testing_buildBlockV1). Empty pre-ready.",
-                    "type": "string"
-                },
-                "state_root": {
+                "started_at": {
                     "type": "string"
                 },
                 "status": {
-                    "$ref": "#/definitions/slot_results.BuildStatus"
-                },
-                "timestamp": {
-                    "type": "integer"
+                    "description": "started/building, ready, failed, skipped",
+                    "type": "string"
                 }
             }
         },
@@ -4698,19 +4710,90 @@ const docTemplate = `{
             "enum": [
                 "waiting_attributes",
                 "no_attributes",
-                "started",
+                "skipped",
+                "building",
                 "ready",
-                "failed",
-                "skipped"
+                "failed"
             ],
             "x-enum-varnames": [
                 "BuildStatusWaitingAttributes",
                 "BuildStatusNoAttributes",
-                "BuildStatusStarted",
+                "BuildStatusSkipped",
+                "BuildStatusBuilding",
                 "BuildStatusReady",
-                "BuildStatusFailed",
-                "BuildStatusSkipped"
+                "BuildStatusFailed"
             ]
+        },
+        "slot_results.BuildTarget": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "attributes": {
+                    "description": "Attributes is the payload_attributes snapshot the target built from.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/slot_results.AttributesSnapshot"
+                        }
+                    ]
+                },
+                "candidate": {
+                    "description": "Candidate classifies the parent tuple (parent_full, parent_empty,\ngrandparent_full, grandparent_empty; empty = unclassified).",
+                    "type": "string"
+                },
+                "engine": {
+                    "$ref": "#/definitions/slot_results.BuildRecord"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "payload_source": {
+                    "type": "string"
+                },
+                "selections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.Selection"
+                    }
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.TargetStatus"
+                },
+                "testing": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.BuildRecord"
+                    }
+                },
+                "testing_skip_reason": {
+                    "type": "string"
+                },
+                "tx_source": {
+                    "description": "Testing request: the testing builds' tx and payload source, or why\nnone ran although the slot asked for them.",
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.EngineCalls": {
+            "type": "object",
+            "properties": {
+                "forkchoice_end": {
+                    "type": "string"
+                },
+                "forkchoice_start": {
+                    "type": "string"
+                },
+                "get_payload_end": {
+                    "type": "string"
+                },
+                "get_payload_start": {
+                    "type": "string"
+                }
+            }
         },
         "slot_results.InclusionResult": {
             "type": "object",
@@ -4755,23 +4838,46 @@ const docTemplate = `{
                 }
             }
         },
-        "slot_results.LocalBuildOutcome": {
+        "slot_results.PayloadRecord": {
             "type": "object",
             "properties": {
-                "artifact_idx": {
-                    "description": "ArtifactIdx is the per-slot payload artifact index of the local payload.",
-                    "type": "integer"
-                },
-                "at": {
+                "base_fee_per_gas": {
+                    "description": "wei",
                     "type": "string"
+                },
+                "blob_gas_used": {
+                    "type": "integer"
                 },
                 "block_hash": {
                     "type": "string"
                 },
+                "block_number": {
+                    "type": "integer"
+                },
                 "block_value_wei": {
                     "type": "string"
                 },
-                "error": {
+                "build": {
+                    "$ref": "#/definitions/payload_builder.BuildRef"
+                },
+                "built_at": {
+                    "type": "string"
+                },
+                "candidate": {
+                    "type": "string"
+                },
+                "captured": {
+                    "description": "Captured marks that the payload is stored as an artifact (the engine\npayload and every selected one).",
+                    "type": "boolean"
+                },
+                "excess_blob_gas": {
+                    "type": "integer"
+                },
+                "extra_data": {
+                    "description": "0x-hex",
+                    "type": "string"
+                },
+                "fee_recipient": {
                     "type": "string"
                 },
                 "gas_limit": {
@@ -4780,36 +4886,40 @@ const docTemplate = `{
                 "gas_used": {
                     "type": "integer"
                 },
-                "info": {
-                    "description": "Info is the transaction assembly detail (selection summary, explicit\nlist size, inclusion-list handling, EL drops).",
+                "inclusion_list": {
+                    "description": "InclusionList is the inclusion list view (FOCIL, Heze) the payload\nwas built against.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/payload_builder.LocalBuildInfo"
+                            "$ref": "#/definitions/payload_builder.InclusionListBuild"
                         }
                     ]
                 },
                 "num_blobs": {
                     "type": "integer"
                 },
+                "num_execution_requests": {
+                    "type": "integer"
+                },
                 "num_transactions": {
                     "type": "integer"
                 },
-                "payload_source": {
+                "num_withdrawals": {
+                    "type": "integer"
+                },
+                "parent_hash": {
                     "type": "string"
                 },
-                "selected": {
-                    "description": "Selected marks that the local payload fed the consumers.",
-                    "type": "boolean"
-                },
-                "skip_reason": {
+                "prev_randao": {
                     "type": "string"
                 },
-                "status": {
-                    "description": "ready | failed | skipped",
+                "receipts_root": {
                     "type": "string"
                 },
-                "tx_source": {
+                "state_root": {
                     "type": "string"
+                },
+                "timestamp": {
+                    "type": "integer"
                 }
             }
         },
@@ -4871,6 +4981,53 @@ const docTemplate = `{
                 "RevealStatusSkipped"
             ]
         },
+        "slot_results.Selection": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "build": {
+                    "$ref": "#/definitions/payload_builder.BuildRef"
+                },
+                "fallback": {
+                    "description": "Fallback marks an engine payload picked because no testing payload the\npayload source asked for existed (yet).",
+                    "type": "boolean"
+                },
+                "payload_hash": {
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "first | better",
+                    "type": "string"
+                }
+            }
+        },
+        "slot_results.SlotBuild": {
+            "type": "object",
+            "properties": {
+                "at": {
+                    "type": "string"
+                },
+                "error": {
+                    "description": "Error is the primary target's error when the slot failed.",
+                    "type": "string"
+                },
+                "skip_reason": {
+                    "description": "action_plan.BuildSkipReason* when skipped",
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/slot_results.BuildStatus"
+                },
+                "targets": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/slot_results.BuildTarget"
+                    }
+                }
+            }
+        },
         "slot_results.SlotResult": {
             "type": "object",
             "properties": {
@@ -4895,18 +5052,12 @@ const docTemplate = `{
                     }
                 },
                 "build": {
-                    "description": "Build is the slot's primary build outcome (the most canonical ready\ncandidate, or the single lifecycle record). Builds lists every\ncandidate build the slot produced when more than one ran.",
+                    "description": "Build is the slot's build lifecycle with every target it ran.",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/slot_results.BuildOutcome"
+                            "$ref": "#/definitions/slot_results.SlotBuild"
                         }
                     ]
-                },
-                "builds": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/slot_results.BuildOutcome"
-                    }
                 },
                 "dropped_attempts": {
                     "description": "DroppedAttempts counts attempts beyond the per-kind retention cap,\nkeyed by kind (\"bids\", \"block_submissions\", \"reveal_attempts\").",
@@ -4923,6 +5074,13 @@ const docTemplate = `{
                 },
                 "inclusion": {
                     "$ref": "#/definitions/slot_results.InclusionResult"
+                },
+                "payloads": {
+                    "description": "Payloads holds every payload built for the slot, by block hash.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/slot_results.PayloadRecord"
+                    }
                 },
                 "reveal_attempts": {
                     "type": "array",
@@ -4957,6 +5115,21 @@ const docTemplate = `{
                 "SubmissionStatusReceived",
                 "SubmissionStatusAccepted",
                 "SubmissionStatusFailed"
+            ]
+        },
+        "slot_results.TargetStatus": {
+            "type": "string",
+            "enum": [
+                "building",
+                "selected",
+                "no_payload",
+                "superseded"
+            ],
+            "x-enum-varnames": [
+                "TargetBuilding",
+                "TargetSelected",
+                "TargetNoPayload",
+                "TargetSuperseded"
             ]
         },
         "slot_results.TxPlanResult": {
@@ -5100,6 +5273,10 @@ const docTemplate = `{
                 "blob_txs": {
                     "type": "integer"
                 },
+                "cold_txs": {
+                    "description": "ColdTxs are far below the base fee: only their facts are kept, the\nbody is refetched from the EL once the base fee comes close.",
+                    "type": "integer"
+                },
                 "gas_sum": {
                     "type": "integer"
                 },
@@ -5137,6 +5314,10 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "cleared": {
+                    "type": "integer"
+                },
+                "cold": {
+                    "description": "Cold counts the transactions far below the base fee whose bodies wait\nin the store instead of memory.",
                     "type": "integer"
                 },
                 "enabled": {
@@ -5238,6 +5419,13 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "inclusion_list_skipped": {
+                    "description": "InclusionListSkipped counts the list's transactions that could not\nexecute, by reason.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer"
+                    }
+                },
                 "inclusion_list_txs": {
                     "type": "integer"
                 },
@@ -5266,6 +5454,9 @@ const docTemplate = `{
                 },
                 "blobs": {
                     "type": "integer"
+                },
+                "cold": {
+                    "type": "boolean"
                 },
                 "gas": {
                     "type": "integer"

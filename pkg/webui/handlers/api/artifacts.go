@@ -176,78 +176,109 @@ func parseArtifactSlot(w http.ResponseWriter, r *http.Request) (phase0.Slot, boo
 
 // GetSlotPayloadArtifact godoc
 // @Id getSlotPayloadArtifact
-// @Summary Get the built execution payload of a slot
+// @Summary Get the selected execution payload of a slot
 // @Tags ActionPlan
-// @Description Returns the exact execution payload built for the slot. With
+// @Description Returns the payload the slot's primary build target selected
+// @Description last (the one that fed the bids), or with ?candidate= the
+// @Description selection of that target. Every other payload the slot built
+// @Description is served by block hash (payloads/{blockHash}). With
 // @Description "Accept: application/octet-stream" the raw SSZ bytes are
 // @Description served; otherwise a {"version", "data"} JSON envelope. The
 // @Description Eth-Consensus-Version response header carries the fork name.
 // @Produce json,application/octet-stream
 // @Param slot path int true "Slot"
+// @Param candidate query string false "Build-parent candidate key (parent_full, parent_empty, grandparent_full, grandparent_empty)"
 // @Success 200 {object} map[string]any "Versioned payload (or raw SSZ)"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this slot"
 // @Failure 406 {object} map[string]string "No acceptable content type"
-// @Param candidate query string false "Build-parent candidate key (parent_full, parent_empty, grandparent_full, grandparent_empty)"
 // @Router /api/buildoor/slot-results/{slot}/payload [get]
 func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Request) {
-	idx := 0
-
-	// A slot may hold one payload per build-parent candidate and, with the
-	// local build extension, one per source (el / local) on the same parent;
-	// ?candidate= and ?source= select one of them, defaulting to the first
-	// stored payload.
-	candidate := r.URL.Query().Get("candidate")
-	source := r.URL.Query().Get("source")
-
-	if candidate != "" || source != "" {
-		if h.resultTracker == nil {
-			writeError(w, http.StatusNotFound, "artifact not found")
-			return
-		}
-
-		slot, ok := parseArtifactSlot(w, r)
-		if !ok {
-			return
-		}
-
-		resolved, found := h.resultTracker.Artifacts().PayloadIndexFor(slot, candidate, source)
-		if !found {
-			writeError(w, http.StatusNotFound, "no payload artifact for candidate "+candidate+" source "+source)
-			return
-		}
-
-		idx = resolved
-	}
-
-	h.serveArtifact(w, r, slot_results.ArtifactKindPayload, idx)
-}
-
-// GetSlotPayloadArtifactByIndex godoc
-// @Id getSlotPayloadArtifactByIndex
-// @Summary Get one of a slot's built candidate payloads
-// @Tags ActionPlan
-// @Description Returns one of the execution payloads built for the slot by
-// @Description artifact index (a slot may build several candidate payloads on
-// @Description different parents; the slot result's build entries carry each
-// @Description build's artifact index). Content negotiation as with the
-// @Description default payload artifact endpoint.
-// @Produce json,application/octet-stream
-// @Param slot path int true "Slot"
-// @Param index path int true "Payload artifact index"
-// @Success 200 {object} map[string]any "Versioned payload (or raw SSZ)"
-// @Failure 400 {object} map[string]string "Bad Request"
-// @Failure 404 {object} map[string]string "No artifact for this slot/index"
-// @Failure 406 {object} map[string]string "No acceptable content type"
-// @Router /api/buildoor/slot-results/{slot}/payload/{index} [get]
-func (h *APIHandler) GetSlotPayloadArtifactByIndex(w http.ResponseWriter, r *http.Request) {
-	idx, err := strconv.Atoi(mux.Vars(r)["index"])
-	if err != nil || idx < 0 {
-		writeError(w, http.StatusBadRequest, "invalid index: must be a non-negative number")
+	if h.resultTracker == nil {
+		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")
 		return
 	}
 
-	h.serveArtifact(w, r, slot_results.ArtifactKindPayload, idx)
+	slot, ok := parseArtifactSlot(w, r)
+	if !ok {
+		return
+	}
+
+	candidate := r.URL.Query().Get("candidate")
+
+	var selection *slot_results.Selection
+
+	if result := h.resultTracker.Get(slot); result != nil && result.Build != nil {
+		target := result.Build.Primary()
+
+		if candidate != "" {
+			target = nil
+
+			for _, t := range result.Build.Targets {
+				if t.Candidate == candidate && t.Status != slot_results.TargetSuperseded {
+					target = t
+				}
+			}
+		}
+
+		selection = target.LastSelection()
+	}
+
+	if selection == nil {
+		writeError(w, http.StatusNotFound, "no payload selected for this slot")
+		return
+	}
+
+	h.servePayloadByHash(w, r, slot, selection.PayloadHash)
+}
+
+// GetSlotPayloadArtifactByHash godoc
+// @Id getSlotPayloadArtifactByHash
+// @Summary Get one of a slot's built payloads by block hash
+// @Tags ActionPlan
+// @Description Returns one execution payload built for the slot, addressed by
+// @Description its block hash (the slot result's payloads, builds and
+// @Description selections name payloads by it). The engine payload and every
+// @Description selected payload are captured; a testing run's payload nobody
+// @Description selected is not. Content negotiation as with the selected
+// @Description payload endpoint.
+// @Produce json,application/octet-stream
+// @Param slot path int true "Slot"
+// @Param blockHash path string true "Payload block hash (0x-hex)"
+// @Success 200 {object} map[string]any "Versioned payload (or raw SSZ)"
+// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 404 {object} map[string]string "No artifact for this block hash"
+// @Failure 406 {object} map[string]string "No acceptable content type"
+// @Router /api/buildoor/slot-results/{slot}/payloads/{blockHash} [get]
+func (h *APIHandler) GetSlotPayloadArtifactByHash(w http.ResponseWriter, r *http.Request) {
+	if h.resultTracker == nil {
+		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")
+		return
+	}
+
+	slot, ok := parseArtifactSlot(w, r)
+	if !ok {
+		return
+	}
+
+	blockHash := strings.ToLower(mux.Vars(r)["blockHash"])
+	if len(blockHash) != 66 || !strings.HasPrefix(blockHash, "0x") {
+		writeError(w, http.StatusBadRequest, "invalid block hash: must be 0x-prefixed 32 bytes")
+		return
+	}
+
+	h.servePayloadByHash(w, r, slot, blockHash)
+}
+
+// servePayloadByHash serves the slot's payload artifact with the block hash.
+func (h *APIHandler) servePayloadByHash(w http.ResponseWriter, r *http.Request, slot phase0.Slot, blockHash string) {
+	artifact, err := h.resultTracker.Artifacts().PayloadByHash(slot, blockHash)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load artifact: "+err.Error())
+		return
+	}
+
+	h.writeGuardedArtifact(w, r, artifact, slot_results.IsCustomPayloadArtifact(artifact))
 }
 
 // GetSlotEnvelopeArtifact godoc
@@ -312,11 +343,17 @@ func (h *APIHandler) serveArtifact(w http.ResponseWriter, r *http.Request, kind 
 		return
 	}
 
-	// A custom-built payload (and the envelope of a slot that has one) may
-	// carry transactions of the private pool: only logged-in readers get it.
-	private := slot_results.IsCustomPayloadArtifact(artifact) ||
-		(kind == slot_results.ArtifactKindEnvelope && h.resultTracker.Artifacts().HasCustomPayload(slot))
+	// The envelope of a testing build's payload carries its transactions,
+	// which may come from the private pool.
+	private := kind == slot_results.ArtifactKindEnvelope &&
+		h.resultTracker.Artifacts().EnvelopeIsPrivate(slot, artifact)
 
+	h.writeGuardedArtifact(w, r, artifact, private)
+}
+
+// writeGuardedArtifact serves an artifact; a private one (a testing build's
+// payload, the envelope revealing one) only to logged-in readers.
+func (h *APIHandler) writeGuardedArtifact(w http.ResponseWriter, r *http.Request, artifact *db.SlotArtifact, private bool) {
 	if private && h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
 		writeError(w, http.StatusUnauthorized, "custom-built payloads may hold private transactions: log in to download")
 		return

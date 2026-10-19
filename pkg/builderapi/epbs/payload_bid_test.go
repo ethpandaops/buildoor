@@ -650,7 +650,7 @@ func TestResponseGateServesTheBestPayloadAtTheGate(t *testing.T) {
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 
-		env.handler.payloadCache.Store(&payload_builder.Payload{
+		env.handler.payloadCache.Select(&payload_builder.Payload{
 			Attributes: &beacon.PayloadAttributesEvent{ProposalSlot: 1},
 			ExecutionPayload: &eth2all.ExecutionPayload{
 				Version:       version.DataVersionGloas,

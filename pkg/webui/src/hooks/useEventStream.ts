@@ -1,5 +1,6 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, LocalBuildStreamEvent, LocalBuildProgressEvent, SlotOutlook } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, SlotOutlook, PayloadInfo, TargetState, EngineCalls, LocalBuildInfo, BuildRef, CandidateKey } from '../types';
+import { buildLabel } from '../buildTargets';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -205,39 +206,30 @@ function useEventStreamConnection(): UseEventStreamResult {
       }));
     };
 
-    // Candidate builds: rank for primary selection (most canonical first;
-    // unclassified last) and per-candidate list upsert.
-    const candidateRank = (candidate?: string): number => {
-      switch (candidate) {
-        case 'parent_full': return 0;
-        case 'parent_empty': return 1;
-        case 'grandparent_full': return 2;
-        case 'grandparent_empty': return 3;
-        default: return 4;
-      }
-    };
-
-    const updateCandidateBuild = (
+    // A slot's build targets are kept apart, by candidate: each event only
+    // touches its own target (by seq; a newer target replaces an older one of
+    // the same candidate) and a payload is stored once, under its hash.
+    const updateTarget = (
       slot: number,
       candidate: string,
-      patch: Partial<import('../types').CandidateBuild>,
-      primaryUpdates?: (state: SlotState) => Partial<SlotState>
+      seq: number,
+      update: (target: TargetState) => TargetState,
+      payload?: PayloadInfo
     ) => {
       setSlotStates(prev => {
         const state = prev[slot] || { slot };
-        const list = state.candidateBuilds ? [...state.candidateBuilds] : [];
-        const idx = list.findIndex(b => b.candidate === candidate);
+        const target = state.targets?.[candidate];
+        if (!target || target.seq !== seq) return prev;
 
-        if (idx >= 0) {
-          list[idx] = { ...list[idx], ...patch, candidate: candidate as import('../types').CandidateKey };
-        } else {
-          list.push({ candidate: candidate as import('../types').CandidateKey, ...patch });
-        }
-
-        const merged: SlotState = { ...state, slot, candidateBuilds: list };
-        const extra = primaryUpdates ? primaryUpdates(merged) : undefined;
-
-        return { ...prev, [slot]: extra ? { ...merged, ...extra } : merged };
+        return {
+          ...prev,
+          [slot]: {
+            ...state,
+            slot,
+            targets: { ...state.targets, [candidate]: update(target) },
+            payloads: payload ? { ...state.payloads, [payload.block_hash]: payload } : state.payloads,
+          },
+        };
       });
     };
 
@@ -307,58 +299,155 @@ function useEventStreamConnection(): UseEventStreamResult {
           setTxPoolStats(event.data as TxPoolStats);
           break;
 
-        case 'local_build': {
-          const data = event.data as LocalBuildStreamEvent;
-          const where = data.candidate ? ` (${data.candidate})` : '';
+        case 'build_target': {
+          const data = event.data as {
+            slot: number; candidate?: string; seq: number; status: 'started' | 'no_payload' | 'superseded';
+            engine?: boolean; testing?: boolean; testing_skip_reason?: string; tx_source?: string;
+            payload_source?: string; parent_block_hash?: string; parent_block_root?: string; error?: string; at: number;
+          };
+          const candidate = data.candidate ?? '';
+          const where = candidate ? ` (${candidate})` : '';
 
-          if (data.status === 'ready') {
-            const txs = data.local?.num_transactions ?? 0;
-            const role = data.selected
-              ? (data.payload_source === 'higher_value' ? 'bids with it, worth more' : 'bids with it')
-              : data.payload_source === 'higher_value'
-                ? 'engine block worth at least as much, bids use it'
-                : 'compare only, bids use the engine block';
-            addEvent('local_build',
-              `Testing build ready for slot ${data.slot}${where}: ${txs} txs from ${data.tx_source ?? '?'} (${role})`,
-              event.timestamp);
-          } else if (data.status === 'skipped') {
-            addEvent('local_build',
-              `Testing build skipped for slot ${data.slot}${where}: ${data.skip_reason ?? 'unknown'}${data.fallback ? ' (engine block used)' : ''}`,
-              event.timestamp);
+          if (data.status === 'started') {
+            addEvent('build_target', `Build started for slot ${data.slot}${where}: ` +
+              `${[data.engine && 'engine', data.testing && 'testing'].filter(Boolean).join(' + ') || 'nothing'}` +
+              `${data.testing_skip_reason ? `, no testing build (${data.testing_skip_reason})` : ''}`, event.timestamp);
+
+            setSlotStates(prev => {
+              const state = prev[data.slot] || { slot: data.slot };
+              const existing = state.targets?.[candidate];
+              if (existing && existing.seq >= data.seq) return prev;
+
+              const target: TargetState = {
+                seq: data.seq,
+                candidate: candidate as CandidateKey,
+                status: 'building',
+                engine: !!data.engine,
+                testing: !!data.testing,
+                testingSkipReason: data.testing_skip_reason,
+                txSource: data.tx_source,
+                payloadSource: data.payload_source,
+                parentBlockHash: data.parent_block_hash,
+                parentBlockRoot: data.parent_block_root,
+                startedAt: data.at,
+                at: data.at,
+                testingRuns: {},
+                selections: [],
+              };
+
+              return { ...prev, [data.slot]: { ...state, targets: { ...state.targets, [candidate]: target } } };
+            });
           } else {
-            addEvent('local_build_failed',
-              `Testing build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}${data.fallback ? ' (engine block used)' : ''}`,
-              event.timestamp);
-          }
+            addEvent(data.status === 'superseded' ? 'build_target' : 'build_failed',
+              `Build ${data.status === 'superseded' ? 'superseded' : 'produced no payload'} for slot ${data.slot}${where}` +
+              `${data.error ? `: ${data.error}` : ''}`, event.timestamp);
 
-          setSlotStates(prev => {
-            const state = prev[data.slot] || { slot: data.slot };
-            // The primary target's outcome wins; secondary candidates only fill
-            // an empty slot entry.
-            if (state.localBuild && data.candidate && data.candidate !== 'parent_full' &&
-                state.localBuild.candidate === 'parent_full') {
-              return prev;
-            }
-            return { ...prev, [data.slot]: { ...state, localBuild: data } };
-          });
+            updateTarget(data.slot, candidate, data.seq, target => (
+              target.status === 'superseded'
+                ? target
+                : { ...target, status: data.status === 'superseded' ? 'superseded' : 'no_payload', error: data.error, at: data.at }
+            ));
+          }
           break;
         }
 
-        case 'local_build_progress': {
-          const data = event.data as LocalBuildProgressEvent;
-          setSlotStates(prev => {
-            const state = prev[data.slot] || { slot: data.slot };
-            // Display only, one entry per build of the target: the primary
-            // target wins, and the final event (if already there) is
-            // authoritative.
-            const runs = state.localBuildLive ?? {};
-            const shown = Object.values(runs)[0];
-            if (shown && data.candidate !== shown.candidate) {
-              if (shown.candidate === 'parent_full' || data.candidate !== 'parent_full') return prev;
-              return { ...prev, [data.slot]: { ...state, localBuildLive: { [data.run ?? 1]: data } } };
-            }
-            return { ...prev, [data.slot]: { ...state, localBuildLive: { ...runs, [data.run ?? 1]: data } } };
-          });
+        case 'engine_build': {
+          const data = event.data as {
+            slot: number; candidate?: string; seq: number; status: 'started' | 'ready' | 'failed';
+            started_at: number; calls?: EngineCalls; payload?: PayloadInfo; error?: string; at: number;
+          };
+          const where = data.candidate ? ` (${data.candidate})` : '';
+
+          if (data.status === 'ready' && data.payload) {
+            addEvent('engine_build', `Engine build ready for slot ${data.slot}${where}: ${data.payload.num_transactions} txs ` +
+              `(hash: ${data.payload.block_hash})`, event.timestamp);
+          } else if (data.status === 'failed') {
+            addEvent('build_failed', `Engine build failed for slot ${data.slot}${where}: ${data.error ?? 'unknown error'}`,
+              event.timestamp);
+          }
+
+          updateTarget(data.slot, data.candidate ?? '', data.seq, target => ({
+            ...target,
+            engineBuild: {
+              status: data.status,
+              startedAt: data.started_at,
+              at: data.at,
+              calls: data.calls,
+              payloadHash: data.payload?.block_hash,
+              error: data.error,
+            },
+          }), data.payload);
+          break;
+        }
+
+        case 'testing_build': {
+          const data = event.data as {
+            slot: number; candidate?: string; seq: number; run: number;
+            status: 'building' | 'ready' | 'failed' | 'skipped'; tx_source?: string; payload?: PayloadInfo;
+            info?: LocalBuildInfo; skip_reason?: string; error?: string; started_at: number; at: number;
+          };
+          const where = data.candidate ? ` (${data.candidate})` : '';
+
+          if (data.status === 'ready' && data.payload) {
+            addEvent('testing_build', `Testing build #${data.run} ready for slot ${data.slot}${where}: ` +
+              `${data.payload.num_transactions} txs from ${data.tx_source ?? '?'} (hash: ${data.payload.block_hash})`,
+              event.timestamp);
+          } else if (data.status === 'skipped') {
+            addEvent('testing_build', `Testing build #${data.run} skipped for slot ${data.slot}${where}: ` +
+              `${data.skip_reason ?? 'unknown'}`, event.timestamp);
+          } else if (data.status === 'failed') {
+            addEvent('testing_build_failed', `Testing build #${data.run} failed for slot ${data.slot}${where}: ` +
+              `${data.error ?? 'unknown error'}`, event.timestamp);
+          }
+
+          updateTarget(data.slot, data.candidate ?? '', data.seq, target => ({
+            ...target,
+            testingRuns: {
+              ...target.testingRuns,
+              [data.run]: {
+                run: data.run,
+                status: data.status,
+                startedAt: data.started_at,
+                at: data.at,
+                txSource: data.tx_source,
+                payloadHash: data.payload?.block_hash,
+                info: data.info,
+                skipReason: data.skip_reason,
+                error: data.error,
+              },
+            },
+          }), data.payload);
+          break;
+        }
+
+        case 'payload_selected': {
+          const data = event.data as {
+            slot: number; candidate?: string; seq: number; build: BuildRef; block_hash: string;
+            reason: 'first' | 'better'; fallback?: boolean; at: number;
+          };
+          const where = data.candidate ? ` (${data.candidate})` : '';
+
+          addEvent('payload_selected', `${data.reason === 'better' ? 'Better pick' : 'First pick'} for slot ${data.slot}${where}: ` +
+            `the ${buildLabel(data.build)} payload${data.fallback ? ' (fallback)' : ''} (hash: ${data.block_hash})`,
+            event.timestamp);
+
+          updateTarget(data.slot, data.candidate ?? '', data.seq, target => (
+            target.status === 'superseded'
+              ? target
+              : {
+                  ...target,
+                  status: 'selected',
+                  error: undefined,
+                  at: data.at,
+                  selections: [...target.selections, {
+                    at: data.at,
+                    payloadHash: data.block_hash,
+                    build: data.build,
+                    reason: data.reason,
+                    fallback: data.fallback,
+                  }],
+                }
+          ));
           break;
         }
 
@@ -441,120 +530,6 @@ function useEventStreamConnection(): UseEventStreamResult {
               return { ...prev, [parentSlot]: { ...state, slot: parentSlot, nextSlotAttributes: list } };
             });
           }
-          break;
-        }
-
-        case 'payload_build_started': {
-          const data = event.data as { slot: number; candidate?: string; started_at: number; engine?: boolean };
-          addEvent('payload_build_started',
-            `Payload build started for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}`,
-            event.timestamp);
-          updateCandidateBuild(data.slot, data.candidate ?? '', { startedAt: data.started_at, engine: data.engine },
-            state => (
-              // The primary line spans the primary candidate's own build; the
-              // first start seeds it until a payload becomes primary.
-              state.payloadBuildStartedAt === undefined
-                ? { payloadBuildStartedAt: data.started_at }
-                : {}
-            ));
-          break;
-        }
-
-        case 'payload_build_failed': {
-          const data = event.data as { slot: number; candidate?: string; error: string; failed_at: number };
-          addEvent('payload_build_failed',
-            `Payload build failed for slot ${data.slot}${data.candidate ? ` (${data.candidate})` : ''}: ${data.error}`,
-            event.timestamp);
-          updateCandidateBuild(data.slot, data.candidate ?? '',
-            { failed: true, failedAt: data.failed_at, error: data.error },
-            state => (state.payloadReady
-              // Another candidate already delivered — keep the primary intact.
-              ? {}
-              : {
-                  payloadBuildFailed: true,
-                  payloadBuildFailedAt: data.failed_at,
-                  payloadBuildError: data.error
-                }));
-          break;
-        }
-
-        case 'payload_ready': {
-          // block_value is the EL's MEV value as a wei decimal string; convert to
-          // gwei so it matches the gwei-based formatGwei display used elsewhere.
-          const data = event.data as {
-            slot: number; candidate?: string; block_hash: string; block_value: string; ready_at: number;
-            parent_block_hash?: string; parent_block_number?: number;
-            parent_block_root?: string; parent_slot?: number;
-            block_number?: number; fee_recipient?: string; gas_limit?: number; gas_used?: number;
-            base_fee_per_gas?: string; extra_data?: string; blob_gas_used?: number; excess_blob_gas?: number;
-            num_transactions?: number; num_withdrawals?: number; num_blobs?: number; num_exec_requests?: number;
-            engine_calls?: import('../types').EngineCalls;
-            inclusion_list?: import('../types').InclusionListBuild;
-          };
-          addEvent('payload_ready', `Payload ready for slot ${data.slot} (hash: ${data.block_hash})`, event.timestamp);
-          const detail = {
-            blockNumber: data.block_number,
-            feeRecipient: data.fee_recipient,
-            gasLimit: data.gas_limit,
-            gasUsed: data.gas_used,
-            baseFeePerGas: data.base_fee_per_gas,
-            extraData: data.extra_data,
-            blobGasUsed: data.blob_gas_used,
-            excessBlobGas: data.excess_blob_gas,
-            numTransactions: data.num_transactions,
-            numWithdrawals: data.num_withdrawals,
-            numBlobs: data.num_blobs,
-            numExecRequests: data.num_exec_requests
-          };
-
-          updateCandidateBuild(data.slot, data.candidate ?? '', {
-            readyAt: data.ready_at,
-            failed: false,
-            blockHash: data.block_hash,
-            blockValueGwei: data.block_value ? Number(data.block_value) / 1e9 : 0,
-            parentBlockHash: data.parent_block_hash,
-            parentBlockNumber: data.parent_block_number,
-            parentBlockRoot: data.parent_block_root,
-            parentSlot: data.parent_slot,
-            detail
-          }, state => {
-            // A less canonical candidate never displaces the primary payload.
-            if (state.payloadReady &&
-                candidateRank(data.candidate) > candidateRank(state.payloadCandidate)) {
-              return {};
-            }
-
-            // The primary line spans this candidate's own build, so the start
-            // moves with the primary rather than covering every candidate.
-            const own = state.candidateBuilds?.find(b => b.candidate === (data.candidate ?? ''));
-
-            // A testing build replacing the payload after the hand-over: the
-            // build line keeps ending at the hand-over.
-            if (state.payloadReady && state.payloadCandidate === (data.candidate ?? '') &&
-                state.payloadBlockHash && state.payloadBlockHash !== data.block_hash) {
-              return {
-                payloadBlockHash: data.block_hash,
-                payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
-                payloadDetail: detail,
-                payloadInclusionList: data.inclusion_list,
-                payloadUpgrades: (state.payloadUpgrades ?? 0) + 1,
-                payloadUpgradedAt: data.ready_at,
-              };
-            }
-
-            return {
-            payloadReady: true,
-            payloadBuildFailed: false,
-            payloadCandidate: (data.candidate ?? '') as import('../types').CandidateKey,
-            payloadBuildStartedAt: own?.startedAt ?? state.payloadBuildStartedAt,
-            payloadCreatedAt: data.ready_at,
-            payloadEngineCalls: data.engine_calls,
-            payloadBlockHash: data.block_hash,
-            payloadBlockValue: data.block_value ? Number(data.block_value) / 1e9 : 0,
-            payloadDetail: detail,
-            payloadInclusionList: data.inclusion_list
-            };
-          });
           break;
         }
 
