@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
@@ -224,6 +225,34 @@ func TestRecordBidCaptureDisabled(t *testing.T) {
 	metas, err := env.tracker.Artifacts().ListBids(2000)
 	require.NoError(t, err)
 	require.Empty(t, metas)
+}
+
+// TestRecordLegacyHeaderBidPayload: a pre-Gloas header bid records the block
+// hash it committed to, so the payload it used is known.
+func TestRecordLegacyHeaderBidPayload(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+	env.cfg.SlotArtifactCaptureEnabled = false
+
+	bid := &legacytypes.SignedBuilderBid{
+		Version: version.DataVersionFulu,
+		Message: &legacytypes.BuilderBid{
+			Version: version.DataVersionFulu,
+			Header: &eth2all.ExecutionPayloadHeader{
+				Version:      version.DataVersionFulu,
+				BlockHash:    phase0.Hash32{0xab},
+				ParentHash:   phase0.Hash32{0xaa},
+				FeeRecipient: [20]byte{0x01},
+				GasLimit:     36_000_000,
+			},
+		},
+	}
+	env.tracker.RecordBuilderAPIBid(5, "fulu", bid, 7000, 0, string(BidStatusServed), "")
+
+	result := env.tracker.Get(5)
+	require.Len(t, result.Bids, 1)
+	require.Equal(t, hashHex(0xab), result.Bids[0].BlockHash)
+	require.Equal(t, hashHex(0xaa), result.Bids[0].ParentBlockHash)
+	require.Equal(t, uint64(36_000_000), result.Bids[0].GasLimit)
 }
 
 func TestAttemptCapAndDroppedCounter(t *testing.T) {
