@@ -13,11 +13,14 @@
   gap: 10px;
 }
 
+/* The slot timeline takes every pixel the side column does not need: the
+   side column is as wide as its cards' rows, not a share of the screen, and
+   its cards are as tall as their content. */
 .db-main {
   display: grid;
-  grid-template-columns: minmax(0, 2.3fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 17vw, 380px);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .db-side {
@@ -43,13 +46,8 @@
   gap: 8px;
 }
 
-.db-next {
-  flex: 1;
-}
-
 .db-next-link {
   align-self: flex-start;
-  margin-top: auto;
 }
 
 .db-alert {
@@ -142,6 +140,12 @@
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
+}
+
+@media (max-width: 1699.98px) {
+  .db-flow-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 /* Slot timeline window */

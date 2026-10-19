@@ -290,10 +290,13 @@ samp {
 
 /* --------------------------------------------------------- key/value -- */
 
+/* Labels keep their natural width (wrapping between words past 60% of the
+   row); the value takes the rest and ends in an ellipsis when it is longer,
+   its full text in the title. */
 .bd-kv {
   margin: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: fit-content(60%) minmax(0, 1fr);
   row-gap: 8px;
   column-gap: 12px;
   font-size: 13px;
@@ -303,6 +306,7 @@ samp {
   color: var(--bd-muted);
   font-weight: 400;
   min-width: 0;
+  overflow-wrap: normal;
 }
 
 .bd-kv dd {

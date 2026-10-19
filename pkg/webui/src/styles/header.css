@@ -12,6 +12,7 @@ header.header-bar .header-nav-button.nav-link {
   font-weight: 500;
   border-bottom: 2px solid transparent;
   border-radius: 0;
+  white-space: nowrap;
 }
 
 header.header-bar .header-nav-button.nav-link:hover {
@@ -74,8 +75,22 @@ header.header-bar .header-nav-button.nav-link.active {
   color: #9aa7b8;
 }
 
-@media (max-width: 1199.98px) {
+/* The operator bar between its expand breakpoint and a wide screen: every
+   page link stays on one line once the epoch, the brand name and some link
+   padding make room. */
+@media (max-width: 1699.98px) {
   .hdr-live-epoch {
+    display: none;
+  }
+
+  header.header-bar .navbar-expand-xxl .header-nav-button.nav-link {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
+@media (min-width: 1400px) and (max-width: 1599.98px) {
+  header.header-bar .navbar-expand-xxl .page-brand-title {
     display: none;
   }
 }
