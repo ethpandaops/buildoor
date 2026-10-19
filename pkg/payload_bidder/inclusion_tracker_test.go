@@ -112,7 +112,7 @@ func TestInclusionTracker_PayloadVerdicts(t *testing.T) {
 			defer statusSub.Unsubscribe()
 
 			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
-			builderSvc.GetPayloadCache().Store(payload)
+			builderSvc.GetPayloadCache().Select(payload)
 
 			tracker.processBlockInfo(winBlock)
 			require.Contains(t, tracker.trackedWins, phase0.Slot(5), "win must be tracked")
@@ -155,7 +155,7 @@ func TestInclusionTracker_ReorgRevisesVerdict(t *testing.T) {
 	defer statusSub.Unsubscribe()
 
 	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
-	builderSvc.GetPayloadCache().Store(payload)
+	builderSvc.GetPayloadCache().Select(payload)
 
 	// Win at slot 5, canonical follow-up at slot 6.
 	tracker.processBlockInfo(winBlock)
@@ -208,7 +208,7 @@ func TestInclusionTracker_PaymentStateLogging(t *testing.T) {
 			tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, nil, logger)
 
 			payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
-			builderSvc.GetPayloadCache().Store(payload)
+			builderSvc.GetPayloadCache().Select(payload)
 
 			tracker.processBlockInfo(winBlock)
 
@@ -263,7 +263,7 @@ func TestInclusionTracker_GloasGatingAndInclusion(t *testing.T) {
 
 			blockHash := phase0.Hash32{0xab}
 			payload := newTestPayload(7, blockHash, big.NewInt(3_000_000_000_000)) // 3000 gwei
-			builderSvc.GetPayloadCache().Store(payload)
+			builderSvc.GetPayloadCache().Select(payload)
 
 			blockInfo := &beacon.BlockInfo{Slot: 7, ExecutionBlockHash: blockHash}
 			tracker.processBlockInfo(blockInfo)
@@ -413,7 +413,7 @@ func TestInclusionTracker_OrphanDisputesPaymentAndUnmarksWin(t *testing.T) {
 	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, newTestKeyRegistry(t, 1), nil, payments, logger)
 
 	payload := newTestPayload(5, ourHash, big.NewInt(1_000_000_000_000))
-	builderSvc.GetPayloadCache().Store(payload)
+	builderSvc.GetPayloadCache().Select(payload)
 
 	// Win at slot 5: pending payment recorded... (payments require revealSvc
 	// too in checkForOurPayload, so record directly).
@@ -461,7 +461,7 @@ func TestInclusionTracker_BindsWinToTheBiddingKey(t *testing.T) {
 
 	blockHash := phase0.Hash32{0xab}
 	payload := newTestPayload(7, blockHash, big.NewInt(3_000_000_000_000)) // 3000 gwei
-	builderSvc.GetPayloadCache().Store(payload)
+	builderSvc.GetPayloadCache().Select(payload)
 
 	tracker.processBlockInfo(&beacon.BlockInfo{
 		Slot:               7,
@@ -497,7 +497,7 @@ func TestInclusionTracker_RejectsForeignBuilderIndex(t *testing.T) {
 	tracker := NewInclusionTracker(nil, chainSvc, builderSvc, registry, revealSvc, payments, logger)
 
 	blockHash := phase0.Hash32{0xcd}
-	builderSvc.GetPayloadCache().Store(newTestPayload(8, blockHash, big.NewInt(1_000_000_000_000)))
+	builderSvc.GetPayloadCache().Select(newTestPayload(8, blockHash, big.NewInt(1_000_000_000_000)))
 
 	tracker.processBlockInfo(&beacon.BlockInfo{
 		Slot:               8,

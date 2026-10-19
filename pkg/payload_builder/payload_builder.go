@@ -13,6 +13,7 @@ import (
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	enginev "github.com/ethpandaops/go-eth-engine-client/spec/version"
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
@@ -20,10 +21,10 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
+	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
-	"github.com/ethpandaops/buildoor/pkg/utils"
 )
 
 // PayloadBuilder handles execution payload building via the Engine API and,
@@ -45,18 +46,14 @@ type PayloadBuilder struct {
 
 	// Active build tracking: multiple candidate builds may run for the same
 	// slot (one per parent tuple); builds for older slots are cancelled when
-	// a newer slot starts. The testing builds outlive the hand-over (their
+	// a newer slot starts. The testing builds outlive the engine build (their
 	// own window) and are tracked apart under the same rules.
 	activeBuilds map[activeBuildKey]*activeBuild
 	localLoops   map[activeBuildKey]*activeBuild
 	mu           sync.Mutex
 
-	// localProgress reports each custom build live, ahead of the final
-	// LocalBuildEvent that waits for the engine build and the selection.
-	localProgress *utils.Dispatcher[*LocalBuildProgressEvent]
-
 	// localTiming learns how long a testing build takes, to time the final
-	// one against the hand-over.
+	// one against its window end.
 	localTiming buildTimingModel
 
 	// ilStore holds the gossiped inclusion lists (FOCIL, Heze); nil = the
@@ -109,7 +106,6 @@ func NewPayloadBuilder(
 		cfg:               cfg,
 		activeBuilds:      make(map[activeBuildKey]*activeBuild, 4),
 		localLoops:        make(map[activeBuildKey]*activeBuild, 4),
-		localProgress:     &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		log:               log.WithField("component", "payload-builder"),
 	}
 }
@@ -132,7 +128,7 @@ type buildPrelude struct {
 	inclusionList *InclusionListBuild
 }
 
-// localOutcome is the local build goroutine's result.
+// localOutcome is one testing run's result.
 type localOutcome struct {
 	payload    *Payload
 	info       *LocalBuildInfo
@@ -140,33 +136,48 @@ type localOutcome struct {
 	err        error
 }
 
-// BuildPayloadFromAttributes builds a payload using data from a payload_attributes event.
-// This is the primary build path, triggered when the beacon node emits payload_attributes.
-// The event contains all necessary information: timestamp, randao, withdrawals, etc.
-//
-// The attributes may be an effective copy with the parent fields redirected to
-// another candidate parent (reorg / payload-miss handling); this method treats
-// whatever parent it is given as authoritative and stores it on the returned
-// Payload, so the bid built from that payload advertises the same parent it
-// built on.
-//
-// buildTimeMs is the EL build wait; 0 uses the live-configured
-// PayloadBuildTime.
-//
-// local, when non-nil, additionally runs the local build (testing_buildBlockV1)
-// for the same target; it starts once the engine forkchoiceUpdated pinned the
-// EL head to the parent (plus the request's StartDelay) and runs during the
-// engine build's wait. The request's
-// payload source decides which payload the result exposes to consumers. An
-// error is returned when the target ends without a consumable payload; the
-// result still carries both builds' outcomes for inspection.
-func (b *PayloadBuilder) BuildPayloadFromAttributes(
-	ctx context.Context,
-	attrs *beacon.PayloadAttributesEvent,
-	buildTimeMs uint64,
-	local *LocalBuildRequest,
-	il *InclusionListRequest,
-) (*BuildResult, error) {
+// transformTimeout bounds how long an operator jq payload transform may run.
+const transformTimeout = 2 * time.Second
+
+// BuildRequest is one build target handed to the payload builder.
+type BuildRequest struct {
+	// Attrs are the attributes to build from. They may be an effective copy
+	// with the parent fields redirected to another candidate parent (reorg /
+	// payload-miss handling); the builder treats whatever parent it is given
+	// as authoritative and stores it on the payloads, so a bid built from
+	// one advertises the parent it was built on.
+	Attrs *beacon.PayloadAttributesEvent
+	// BuildTimeMs is the engine build's wait; 0 uses the live-configured
+	// PayloadBuildTime.
+	BuildTimeMs uint64
+	// Seq and Candidate identify the target on every payload it builds.
+	Seq       uint64
+	Candidate chain.CandidateKey
+	// Transform is the slot's jq payload transform ("" = none), applied to
+	// every payload right after its build.
+	Transform string
+	// Local, when non-nil, runs the testing builds for the target; its
+	// payload source decides which payload is selected.
+	Local *LocalBuildRequest
+	// InclusionList is the slot's inclusion list instruction.
+	InclusionList *InclusionListRequest
+
+	// reporter receives the engine build and testing run events as they
+	// happen.
+	reporter buildReporter
+}
+
+// BuildPayloadFromAttributes runs one build target: the engine build
+// (forkchoiceUpdated, wait, getPayload) and, when requested, the testing
+// builds in their own window, which outlive this call. Every build reports
+// its own payload through the request's reporter the moment it ends, and the
+// target's pick is re-evaluated right after (targetPicker): a pick change
+// or, once every build ended without one, no payload. The returned error is
+// a failure before any build ran (prelude, forkchoiceUpdated).
+func (b *PayloadBuilder) BuildPayloadFromAttributes(ctx context.Context, req *BuildRequest) error {
+	attrs := req.Attrs
+	local := req.Local
+
 	buildKey := activeBuildKey{
 		slot:       attrs.ProposalSlot,
 		parentRoot: attrs.ParentBlockRoot,
@@ -210,18 +221,18 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		cancel()
 	}()
 
-	prelude, err := b.prepareBuild(buildCtx, attrs, il)
+	prelude, err := b.prepareBuild(buildCtx, attrs, req.InclusionList)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	result := &BuildResult{}
 	runEL := local.RunEL()
+	picker := newTargetPicker(req)
 
 	// The forkchoice update pins the EL head to the build parent. With the
 	// engine build it also starts the EL's own payload construction; without
-	// it (local-only) the head pin alone is what head-pinned ELs need for the
-	// testing call.
+	// it (testing only) the head pin alone is what head-pinned ELs need for
+	// the testing call.
 	var payloadAttrs *engineall.PayloadAttributes
 	if runEL {
 		payloadAttrs = prelude.payloadAttrs
@@ -229,12 +240,20 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 
 	fcuStart := time.Now()
 
-	payloadID, err := b.forkchoiceUpdated(buildCtx, attrs, prelude, payloadAttrs)
-	if err != nil {
-		return nil, err
+	if runEL {
+		b.reportEngine(req, &EngineBuildEvent{Status: EngineStatusStarted, StartedAt: fcuStart})
 	}
 
-	fcuEnd := time.Now()
+	payloadID, err := b.forkchoiceUpdated(buildCtx, attrs, prelude, payloadAttrs)
+	if err != nil {
+		if runEL {
+			b.reportEngine(req, &EngineBuildEvent{Status: EngineStatusFailed, StartedAt: fcuStart, Error: err.Error()})
+		}
+
+		return err
+	}
+
+	calls := &EngineCallTimes{ForkchoiceStart: fcuStart, ForkchoiceEnd: time.Now()}
 
 	if runEL {
 		b.mu.Lock()
@@ -242,70 +261,115 @@ func (b *PayloadBuilder) BuildPayloadFromAttributes(
 		b.mu.Unlock()
 	}
 
-	// The hand-over: the engine build's getPayload, payload_build_time after
-	// the forkchoice update. Consumers get the best payload there; testing
-	// builds still running in their own window may upgrade it afterwards.
-	deadline := time.Now().Add(b.payloadBuildTime(buildTimeMs))
-
-	var (
-		localResultsSet *localResults
-		localDone       chan struct{}
-		localCtx        context.Context
-	)
+	// The engine build's getPayload: payload_build_time after the forkchoice
+	// update.
+	deadline := time.Now().Add(b.payloadBuildTime(req.BuildTimeMs))
 
 	if local != nil {
-		localResultsSet = newLocalResults()
-		localDone = make(chan struct{})
-		localCtx = b.startLocalLoop(ctx, buildKey, attrs, local, localDone)
+		localDone := make(chan struct{})
+		localCtx := b.startLocalLoop(ctx, buildKey, attrs, local, localDone)
 
 		windowStart, windowEnd := b.localWindow(attrs, local)
 
 		go func() {
 			defer close(localDone)
+			defer picker.testingEnded()
 
-			b.runLocalBuilds(localCtx, attrs, prelude, local, windowStart, windowEnd, localResultsSet)
+			b.runLocalBuilds(localCtx, req, prelude, windowStart, windowEnd, picker)
 		}()
 	}
 
 	if runEL {
-		result.EL, result.ELErr = b.buildEngine(buildCtx, attrs, prelude, payloadID, deadline)
+		payload, err := b.buildEngine(buildCtx, req, prelude, payloadID, deadline, calls)
 
-		if result.EL != nil {
-			result.EL.EngineCalls.ForkchoiceStart, result.EL.EngineCalls.ForkchoiceEnd = fcuStart, fcuEnd
+		event := &EngineBuildEvent{Status: EngineStatusReady, StartedAt: fcuStart, Payload: payload}
+		if payload != nil {
+			event.Calls = payload.EngineCalls
+		} else {
+			event.Status = EngineStatusFailed
+			event.Error = err.Error()
 		}
+
+		b.reportEngine(req, event)
+		picker.engineEnded(payload, err)
 	}
 
-	if local != nil {
-		b.collectLocal(buildCtx, result, localResultsSet, localDone, deadline)
+	return nil
+}
+
+// reportEngine stamps an engine build event with the target and hands it to
+// the request's reporter.
+func (b *PayloadBuilder) reportEngine(req *BuildRequest, event *EngineBuildEvent) {
+	if req.reporter == nil {
+		return
 	}
 
-	result, err = b.selectPayload(result, local.selectionRequest())
+	event.Slot, event.Candidate, event.Seq, event.At = req.Attrs.ProposalSlot, req.Candidate, req.Seq, time.Now()
+	req.reporter.reportEngine(event)
+}
 
-	// ReadyAt marks the hand-over to the consumers. A selected local payload
-	// was built during the engine build's wait, so its build time would
-	// otherwise show up as ready long before bids could use it; the local
-	// build's own completion stays on Local.BuiltAt.
-	if err == nil && result.Source == SourceLocal && result.Payload != nil {
-		result.Payload.ReadyAt = time.Now()
+// reportTesting stamps a testing run event with the target and hands it to
+// the request's reporter.
+func (b *PayloadBuilder) reportTesting(req *BuildRequest, event *TestingBuildEvent) {
+	if req.reporter == nil {
+		return
+	}
 
-		// The build line describes the engine build either way.
-		if result.EL != nil {
-			result.Payload.EngineCalls = result.EL.EngineCalls
+	event.Slot, event.Candidate, event.Seq, event.At = req.Attrs.ProposalSlot, req.Candidate, req.Seq, time.Now()
+	event.TxSource = req.Local.TxSource
+	req.reporter.reportTesting(event)
+}
+
+// completePayload stamps a freshly built payload with its build and target
+// and applies the slot's payload transform: the payload is final before its
+// build event reports it, and never modified afterwards.
+func (b *PayloadBuilder) completePayload(ctx context.Context, req *BuildRequest, payload *Payload, ref BuildRef) error {
+	payload.Build = ref
+	payload.BuildSeq = req.Seq
+	payload.Candidate = req.Candidate
+
+	return b.applyPayloadTransform(ctx, req.Transform, payload)
+}
+
+// applyPayloadTransform rewrites the built execution payload with the slot's
+// jq payload transform, in place. Because the bid commits to the payload's
+// block hash, Payload.BlockHash is re-synced to the (possibly modified)
+// payload block hash so the bid and the revealed payload stay consistent.
+// A no-op without a transform.
+func (b *PayloadBuilder) applyPayloadTransform(ctx context.Context, expr string, p *Payload) error {
+	if expr == "" {
+		return nil
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, transformTimeout)
+	defer cancel()
+
+	transformed := &eth2all.ExecutionPayload{Version: p.ExecutionPayload.Version}
+	if err := jqtransform.ApplyTyped(tctx, expr, p.ExecutionPayload, transformed); err != nil {
+		return fmt.Errorf("payload transform failed: %w", err)
+	}
+
+	if transformed.BlockHash == p.ExecutionPayload.BlockHash {
+		newHash, err := RehashBeaconPayload(transformed, p.EngineVersion,
+			p.EngineExecutionRequests, common.Hash(p.Attributes.ParentBeaconBlockRoot))
+		if err != nil {
+			return fmt.Errorf("failed to recompute block hash after transform: %w", err)
 		}
+
+		transformed.BlockHash = phase0.Hash32(newHash)
 	}
 
-	if local != nil && localCtx.Err() == nil {
-		select {
-		case <-localDone:
-		default:
-			upgrades := make(chan *BuildResult, 1)
-			result.Upgrades = upgrades
+	p.ExecutionPayload = transformed
+	p.BlockHash = transformed.BlockHash
 
-			go b.followLocal(localCtx, *result, local.selectionRequest(), localResultsSet, localDone, upgrades)
-		}
-	}
+	b.log.WithFields(logrus.Fields{
+		"slot":       p.Attributes.ProposalSlot,
+		"build":      p.Build.Kind,
+		"run":        p.Build.Run,
+		"block_hash": fmt.Sprintf("%x", p.BlockHash[:8]),
+	}).Warn("Applied payload jq transform")
 
-	return result, err
+	return nil
 }
 
 // localWindow returns the testing build window of the target in wall time.
@@ -353,42 +417,6 @@ func (b *PayloadBuilder) startLocalLoop(
 	return loopCtx
 }
 
-// collectLocal hands the best testing build over once the builds are done or
-// the deadline (plus a short grace for a final build in flight) has passed.
-// A final build still running then is abandoned: the EL finishes it anyway,
-// but no consumer waits for it.
-func (b *PayloadBuilder) collectLocal(
-	ctx context.Context,
-	result *BuildResult,
-	results *localResults,
-	done <-chan struct{},
-	deadline time.Time,
-) {
-	timer := time.NewTimer(max(time.Until(deadline.Add(handoverGrace)), 0))
-	defer timer.Stop()
-
-	select {
-	case <-done:
-	case <-timer.C:
-	case <-ctx.Done():
-		result.LocalErr = fmt.Errorf("local build aborted: %w", ctx.Err())
-
-		return
-	}
-
-	outcome, ok := results.result()
-	if !ok {
-		result.LocalErr = errors.New("local build not ready at the hand-over")
-
-		return
-	}
-
-	result.Local = outcome.payload
-	result.LocalInfo = outcome.info
-	result.LocalSkipReason = outcome.skipReason
-	result.LocalErr = outcome.err
-}
-
 // payloadBuildTime is how long the engine build collects transactions before
 // its getPayload: the live setting, or an explicit per-build time
 // (speculative candidates).
@@ -401,88 +429,41 @@ func (b *PayloadBuilder) payloadBuildTime(buildTimeMs uint64) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// fireLocalProgress reports a custom build's live state: building (outcome
-// nil) or its result the moment testing_buildBlockV1 returned.
-func (b *PayloadBuilder) fireLocalProgress(
-	attrs *beacon.PayloadAttributesEvent,
-	req *LocalBuildRequest,
-	run int,
-	started time.Time,
-	outcome *localOutcome,
-) {
-	event := &LocalBuildProgressEvent{
-		Slot:      attrs.ProposalSlot,
-		Candidate: req.Candidate,
-		Run:       run,
-		Phase:     LocalStatusBuilding,
-		TxSource:  req.TxSource,
-		StartedAt: started,
-		At:        time.Now(),
-	}
-
-	switch {
-	case outcome == nil:
-	case outcome.payload != nil:
-		event.Phase = LocalStatusReady
-		event.BlockValue = outcome.payload.BlockValue
-
-		if outcome.payload.ExecutionPayload != nil {
-			event.NumTransactions = len(outcome.payload.ExecutionPayload.Transactions)
-		}
-	case outcome.skipReason != "":
-		event.Phase = LocalStatusSkipped
-		event.SkipReason = outcome.skipReason
-	default:
-		event.Phase = LocalStatusFailed
-
-		if outcome.err != nil {
-			event.Error = outcome.err.Error()
-		}
-	}
-
-	b.localProgress.Fire(event)
-}
-
-// selectPayload picks the payload feeding the consumers per the request's
-// payload source and returns the error when the target ends without one.
-func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildRequest) (*BuildResult, error) {
+// selectPayload applies the request's payload source to the target's builds
+// as they stand and picks one of the build payloads itself, or returns why
+// there is none to pick.
+func selectPayload(result *buildState, local *LocalBuildRequest) (*selection, error) {
 	source := config.PayloadSourceEL
 	if local != nil {
 		source = config.NormalizedPayloadSource(local.PayloadSource, config.PayloadSourceEL)
 	}
 
-	useEL := func() (*BuildResult, error) {
+	useEL := func(fallback bool) (*selection, error) {
 		if result.EL == nil {
 			if result.ELErr != nil {
-				return result, result.ELErr
+				return nil, result.ELErr
 			}
 
-			return result, errors.New("no engine payload built")
+			return nil, errors.New("no engine payload built")
 		}
 
-		result.Payload = result.EL
-		result.Source = SourceEL
-
-		return result, nil
+		return &selection{Payload: result.EL, Fallback: fallback}, nil
 	}
 
-	useLocal := func() (*BuildResult, error) {
-		result.Payload = result.Local
-		result.Source = SourceLocal
-
-		return result, nil
+	useLocal := func() (*selection, error) {
+		return &selection{Payload: result.Local}, nil
 	}
 
 	localErr := func() error {
 		if result.LocalErr != nil {
-			return fmt.Errorf("local build failed: %w", result.LocalErr)
+			return fmt.Errorf("testing build failed: %w", result.LocalErr)
 		}
 
 		if result.LocalSkipReason != "" {
-			return fmt.Errorf("local build skipped: %s", result.LocalSkipReason)
+			return fmt.Errorf("testing build skipped: %s", result.LocalSkipReason)
 		}
 
-		return errors.New("no local payload built")
+		return errors.New("no testing payload built")
 	}
 
 	switch source {
@@ -491,18 +472,18 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 			return useLocal()
 		}
 
-		return result, localErr()
+		return nil, localErr()
 
 	case config.PayloadSourceHigherValue:
 		switch {
 		case result.Local == nil:
-			return useEL()
+			return useEL(false)
 		case result.EL == nil:
 			return useLocal()
 		case blockValue(result.Local).Cmp(blockValue(result.EL)) > 0:
 			return useLocal()
 		default:
-			return useEL()
+			return useEL(false)
 		}
 
 	case config.PayloadSourceLocalOrEL:
@@ -510,12 +491,10 @@ func (b *PayloadBuilder) selectPayload(result *BuildResult, local *LocalBuildReq
 			return useLocal()
 		}
 
-		result.Fallback = true
-
-		return useEL()
+		return useEL(true)
 
 	default:
-		return useEL()
+		return useEL(false)
 	}
 }
 
@@ -718,14 +697,18 @@ func (b *PayloadBuilder) forkchoiceUpdated(
 	return *fcuResp.PayloadID, nil
 }
 
-// buildEngine waits the build time and retrieves the EL's payload.
+// buildEngine waits the build time and retrieves the EL's payload; calls
+// carries the forkchoiceUpdated times and receives the getPayload ones.
 func (b *PayloadBuilder) buildEngine(
 	ctx context.Context,
-	attrs *beacon.PayloadAttributesEvent,
+	req *BuildRequest,
 	prelude *buildPrelude,
 	payloadID paris.PayloadID,
 	deadline time.Time,
+	calls *EngineCallTimes,
 ) (*Payload, error) {
+	attrs := req.Attrs
+
 	b.log.Infof("Allowing payload to build for: %dms", time.Until(deadline).Milliseconds())
 
 	// Wait for the EL to accumulate transactions, but abort early (with an error)
@@ -767,22 +750,25 @@ wait:
 	}
 
 	// Retrieve the built payload as the fork-agnostic union.
-	getPayloadStart := time.Now()
+	calls.GetPayloadStart = time.Now()
 
 	resp, err := b.engineClient.GetPayloadAgnostic(ctx, prelude.engineVersion, payloadID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payload: %w", err)
 	}
 
-	getPayloadEnd := time.Now()
+	calls.GetPayloadEnd = time.Now()
 
 	payload, err := b.finalizePayload(ctx, attrs, prelude, resp)
 	if err != nil {
 		return nil, err
 	}
 
-	payload.Source = SourceEL
-	payload.EngineCalls = &EngineCallTimes{GetPayloadStart: getPayloadStart, GetPayloadEnd: getPayloadEnd}
+	payload.EngineCalls = calls
+
+	if err := b.completePayload(ctx, req, payload, BuildRef{Kind: BuildKindEngine}); err != nil {
+		return nil, err
+	}
 
 	b.logPayloadBuilt(attrs, prelude, payload, resp)
 
@@ -1083,7 +1069,7 @@ func (b *PayloadBuilder) buildLocal(
 		return localOutcome{info: info, err: fmt.Errorf("local payload: %w", err)}
 	}
 
-	payload.Source = SourceLocal
+	payload.Build = BuildRef{Kind: BuildKindTesting}
 	payload.Local = info
 	payload.InclusionList = inclusionList
 	info.BuiltAt = payload.ReadyAt
@@ -1321,7 +1307,8 @@ func (b *PayloadBuilder) logPayloadBuilt(
 ) {
 	b.log.WithFields(logrus.Fields{
 		"slot":              attrs.ProposalSlot,
-		"source":            payload.Source,
+		"build":             payload.Build.Kind,
+		"run":               payload.Build.Run,
 		"block_hash":        fmt.Sprintf("%x", payload.BlockHash[:8]),
 		"parent_hash":       fmt.Sprintf("%x", attrs.ParentBlockHash[:8]),
 		"block_value":       payload.BlockValue.String(),

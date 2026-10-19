@@ -43,12 +43,15 @@ func (ResultCodec) EncodeValue(result *SlotResult) ([]byte, error) {
 	return json.Marshal(result)
 }
 
-// DecodeValue JSON-decodes a slot result.
+// DecodeValue JSON-decodes a slot result (records of the old build model
+// mapped onto the build targets).
 func (ResultCodec) DecodeValue(value []byte) (*SlotResult, error) {
 	result := &SlotResult{}
 	if err := json.Unmarshal(value, result); err != nil {
 		return nil, fmt.Errorf("failed to decode slot result: %w", err)
 	}
+
+	adoptLegacyBuilds(result, value)
 
 	return result, nil
 }

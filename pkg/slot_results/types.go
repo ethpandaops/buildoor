@@ -16,17 +16,37 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
-// BuildStatus is the lifecycle state of a slot's payload build.
+// BuildStatus is the slot's build state: the baseline before any target ran
+// and, once targets ran, what the primary target came to.
 type BuildStatus string
 
-// Build lifecycle statuses.
+// Slot build statuses.
 const (
 	BuildStatusWaitingAttributes BuildStatus = "waiting_attributes"
 	BuildStatusNoAttributes      BuildStatus = "no_attributes"
-	BuildStatusStarted           BuildStatus = "started"
-	BuildStatusReady             BuildStatus = "ready"
-	BuildStatusFailed            BuildStatus = "failed"
 	BuildStatusSkipped           BuildStatus = "skipped"
+	// BuildStatusBuilding: the primary target runs and selected nothing yet.
+	BuildStatusBuilding BuildStatus = "building"
+	// BuildStatusReady: the primary target selected a payload.
+	BuildStatusReady BuildStatus = "ready"
+	// BuildStatusFailed: no target selected a payload.
+	BuildStatusFailed BuildStatus = "failed"
+)
+
+// TargetStatus is one build target's state.
+type TargetStatus string
+
+// Build target statuses.
+const (
+	// TargetBuilding: started, nothing selected yet.
+	TargetBuilding TargetStatus = "building"
+	// TargetSelected: a payload feeds the target's bids (Selections).
+	TargetSelected TargetStatus = "selected"
+	// TargetNoPayload: the builds ended without a payload to select.
+	TargetNoPayload TargetStatus = "no_payload"
+	// TargetSuperseded: the target ran from synthesized attributes the beacon
+	// node contradicted; its payloads were withdrawn.
+	TargetSuperseded TargetStatus = "superseded"
 )
 
 // BidStatus is the outcome of one bid attempt (p2p or Builder API).
@@ -89,36 +109,108 @@ const (
 // preserving evidence of truncation).
 const maxAttemptsPerKind = 256
 
-// BuildOutcome is the slot's payload build state and, once ready, the built
-// payload's summary.
-type BuildOutcome struct {
+// SlotBuild is the slot's build lifecycle: the baseline before any target
+// ran (waiting for attributes, none arrived, skipped) and the build targets
+// the builder ran, each with its own builds and selections.
+type SlotBuild struct {
 	Status     BuildStatus `json:"status"`
 	SkipReason string      `json:"skip_reason,omitempty"` // action_plan.BuildSkipReason* when skipped
+	// Error is the primary target's error when the slot failed.
+	Error   string         `json:"error,omitempty"`
+	Targets []*BuildTarget `json:"targets,omitempty"`
+	At      time.Time      `json:"at"`
+}
 
-	// BuildSeq is the producing build's sequence number (payload_builder
-	// PayloadBuildStartedEvent.BuildSeq): a slot's candidate can be built
-	// more than once (a superseded build and its replacement), and the
-	// events of the two builds arrive over separate subscriptions in no
-	// fixed order, so an outcome from an older build never overwrites a
-	// newer build's. In-memory only: seqs restart with the process.
-	BuildSeq uint64 `json:"-"`
+// BuildTarget is one (slot, parent tuple) the builder ran builds for: the
+// engine build, the testing runs and the selections among their payloads.
+// A build references its payload by block hash (SlotResult.Payloads), and a
+// selection names the payload that fed the bids from then on.
+type BuildTarget struct {
+	// Seq identifies the target's events (payload_builder
+	// BuildTargetEvent.Seq). A slot's candidate can be built more than once
+	// (a superseded target and its replacement), so events of an older
+	// target never touch a newer one. In-memory only: seqs restart with the
+	// process.
+	Seq uint64 `json:"-"`
 
-	// Candidate classifies which build-parent candidate this outcome belongs
-	// to (parent_full, parent_empty, grandparent_full, grandparent_empty;
-	// empty = unclassified or single-build slot).
-	Candidate string `json:"candidate,omitempty"`
-	// ArtifactIdx is the per-slot payload artifact index of this build's
-	// captured payload (nil when no artifact was captured).
-	ArtifactIdx *int `json:"artifact_idx,omitempty"`
+	// Candidate classifies the parent tuple (parent_full, parent_empty,
+	// grandparent_full, grandparent_empty; empty = unclassified).
+	Candidate string       `json:"candidate,omitempty"`
+	Status    TargetStatus `json:"status"`
+	Error     string       `json:"error,omitempty"`
 
-	BlockHash       string `json:"block_hash,omitempty"`
+	// Attributes is the payload_attributes snapshot the target built from.
+	Attributes *AttributesSnapshot `json:"attributes,omitempty"`
+
+	// Testing request: the testing builds' tx and payload source, or why
+	// none ran although the slot asked for them.
+	TxSource          string `json:"tx_source,omitempty"`
+	PayloadSource     string `json:"payload_source,omitempty"`
+	TestingSkipReason string `json:"testing_skip_reason,omitempty"`
+
+	Engine     *BuildRecord   `json:"engine,omitempty"`
+	Testing    []*BuildRecord `json:"testing,omitempty"`
+	Selections []Selection    `json:"selections,omitempty"`
+
+	StartedAt time.Time `json:"started_at"`
+	At        time.Time `json:"at"`
+}
+
+// BuildRecord is one build of a target: the engine build or one testing run.
+type BuildRecord struct {
+	Kind       string `json:"kind"` // payload_builder.BuildKind*
+	Run        int    `json:"run,omitempty"`
+	Status     string `json:"status"` // started/building, ready, failed, skipped
+	SkipReason string `json:"skip_reason,omitempty"`
+	Error      string `json:"error,omitempty"`
+	// PayloadHash names the build's own payload (ready).
+	PayloadHash string `json:"payload_hash,omitempty"`
+	// Calls times the engine build's calls.
+	Calls *EngineCalls `json:"calls,omitempty"`
+	// Info is the testing run's transaction assembly.
+	Info *payload_builder.LocalBuildInfo `json:"info,omitempty"`
+
+	StartedAt time.Time `json:"started_at"`
+	At        time.Time `json:"at"`
+}
+
+// EngineCalls are the engine build's call times.
+type EngineCalls struct {
+	ForkchoiceStart time.Time `json:"forkchoice_start"`
+	ForkchoiceEnd   time.Time `json:"forkchoice_end"`
+	GetPayloadStart time.Time `json:"get_payload_start"`
+	GetPayloadEnd   time.Time `json:"get_payload_end"`
+}
+
+// Selection is one change of a target's pick: the payload the cache hands
+// to the consumers from At on. What a consumer used is its own record (a
+// bid's block hash).
+type Selection struct {
+	PayloadHash string                   `json:"payload_hash"`
+	Build       payload_builder.BuildRef `json:"build"`
+	Reason      string                   `json:"reason"` // first | better
+	// Fallback marks an engine payload picked because no testing payload the
+	// payload source asked for existed (yet).
+	Fallback bool      `json:"fallback,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// PayloadRecord is one payload built for the slot, recorded once under its
+// block hash: which build produced it and its properties (list fields
+// aggregated to counts). Written once, never modified.
+type PayloadRecord struct {
+	BlockHash string                   `json:"block_hash"`
+	Build     payload_builder.BuildRef `json:"build"`
+	Candidate string                   `json:"candidate,omitempty"`
+	// Captured marks that the payload is stored as an artifact (the engine
+	// payload and every selected one).
+	Captured bool `json:"captured,omitempty"`
+
 	BlockValueWei   string `json:"block_value_wei,omitempty"`
-	NumTransactions int    `json:"num_transactions,omitempty"`
+	NumTransactions int    `json:"num_transactions"`
 	NumBlobs        int    `json:"num_blobs,omitempty"`
 	FeeRecipient    string `json:"fee_recipient,omitempty"`
 
-	// Full built-payload properties; the list fields (transactions, blobs,
-	// withdrawals, execution requests) are aggregated to counts above/below.
 	BlockNumber          uint64 `json:"block_number,omitempty"`
 	ParentHash           string `json:"parent_hash,omitempty"`
 	StateRoot            string `json:"state_root,omitempty"`
@@ -134,71 +226,141 @@ type BuildOutcome struct {
 	NumWithdrawals       int    `json:"num_withdrawals,omitempty"`
 	NumExecutionRequests int    `json:"num_execution_requests,omitempty"`
 
-	// Attributes is the payload_attributes snapshot the build ran on.
-	Attributes *AttributesSnapshot `json:"attributes,omitempty"`
-
-	// Source records which build produced the payload feeding the consumers:
-	// el (engine API) or local (testing_buildBlockV1). Empty pre-ready.
-	Source string `json:"source,omitempty"`
-	// Fallback marks that the local payload was wanted but the engine payload
-	// was used (local build failed or skipped).
-	Fallback bool `json:"fallback,omitempty"`
 	// InclusionList is the inclusion list view (FOCIL, Heze) the payload
-	// was built against: lists, transactions, omissions, committee bits.
+	// was built against.
 	InclusionList *payload_builder.InclusionListBuild `json:"inclusion_list,omitempty"`
-	// LocalBuild is the local build's outcome for this target when the
-	// extension was requested for the slot (ready, failed or skipped).
-	LocalBuild *LocalBuildOutcome `json:"local_build,omitempty"`
 
-	Error string    `json:"error,omitempty"`
-	At    time.Time `json:"at"`
+	BuiltAt time.Time `json:"built_at"`
 }
 
-// LocalBuildOutcome records the local build (testing_buildBlockV1) of one
-// build target: its status, how the transaction list was assembled and the
-// resulting payload's headline properties. The local payload is captured as
-// its own artifact so the shadow build stays inspectable even when the engine
-// payload fed the bids.
-type LocalBuildOutcome struct {
-	Status     string `json:"status"` // ready | failed | skipped
-	SkipReason string `json:"skip_reason,omitempty"`
-	Error      string `json:"error,omitempty"`
-
-	TxSource      string `json:"tx_source,omitempty"`
-	PayloadSource string `json:"payload_source,omitempty"`
-	// Selected marks that the local payload fed the consumers.
-	Selected bool `json:"selected"`
-
-	BlockHash       string `json:"block_hash,omitempty"`
-	BlockValueWei   string `json:"block_value_wei,omitempty"`
-	NumTransactions int    `json:"num_transactions,omitempty"`
-	NumBlobs        int    `json:"num_blobs,omitempty"`
-	GasUsed         uint64 `json:"gas_used,omitempty"`
-	GasLimit        uint64 `json:"gas_limit,omitempty"`
-	// ArtifactIdx is the per-slot payload artifact index of the local payload.
-	ArtifactIdx *int `json:"artifact_idx,omitempty"`
-
-	// Info is the transaction assembly detail (selection summary, explicit
-	// list size, inclusion-list handling, EL drops).
-	Info *payload_builder.LocalBuildInfo `json:"info,omitempty"`
-
-	At time.Time `json:"at"`
-}
-
-func (o *LocalBuildOutcome) clone() *LocalBuildOutcome {
-	if o == nil {
+// Primary returns the slot's primary target: the most canonical one with a
+// selection, else the most canonical running one, else the newest.
+func (b *SlotBuild) Primary() *BuildTarget {
+	if b == nil || len(b.Targets) == 0 {
 		return nil
 	}
 
-	c := *o
+	var best *BuildTarget
 
-	if o.ArtifactIdx != nil {
-		idx := *o.ArtifactIdx
-		c.ArtifactIdx = &idx
+	bestRank := 0
+
+	for _, target := range b.Targets {
+		rank := targetRank(target)
+		if best == nil || rank < bestRank {
+			best, bestRank = target, rank
+		}
 	}
 
-	// Info is written once by the builder and never mutated afterwards;
-	// sharing the pointer is safe.
+	return best
+}
+
+// targetRank orders targets for Primary (lower = more primary).
+func targetRank(target *BuildTarget) int {
+	candidate, classified := buildCandidatePriority[target.Candidate]
+	if !classified {
+		candidate = len(buildCandidatePriority)
+	}
+
+	switch target.Status {
+	case TargetSelected:
+		return candidate
+	case TargetBuilding:
+		return 10 + candidate
+	case TargetNoPayload:
+		return 20 + candidate
+	default: // superseded
+		return 30 + candidate
+	}
+}
+
+// buildCandidatePriority orders candidate keys from most to least canonical.
+var buildCandidatePriority = map[string]int{
+	"parent_full":       0,
+	"parent_empty":      1,
+	"grandparent_full":  2,
+	"grandparent_empty": 3,
+}
+
+// LastSelection returns the target's current selection (nil when none).
+func (t *BuildTarget) LastSelection() *Selection {
+	if t == nil || len(t.Selections) == 0 {
+		return nil
+	}
+
+	return &t.Selections[len(t.Selections)-1]
+}
+
+// SelectedPayload returns the payload the slot's primary target selected
+// last (nil when none).
+func (r *SlotResult) SelectedPayload() *PayloadRecord {
+	selection := r.Build.Primary().LastSelection()
+	if selection == nil {
+		return nil
+	}
+
+	return r.Payloads[selection.PayloadHash]
+}
+
+// refreshStatus derives the slot build's status from its primary target.
+func (b *SlotBuild) refreshStatus() {
+	primary := b.Primary()
+	if primary == nil {
+		return
+	}
+
+	b.Error = ""
+
+	switch primary.Status {
+	case TargetSelected:
+		b.Status = BuildStatusReady
+	case TargetBuilding:
+		b.Status = BuildStatusBuilding
+	default:
+		b.Status = BuildStatusFailed
+		b.Error = primary.Error
+	}
+
+	b.SkipReason = ""
+	b.At = primary.At
+}
+
+func (t *BuildTarget) clone() *BuildTarget {
+	c := *t
+
+	if t.Engine != nil {
+		engine := *t.Engine
+		c.Engine = &engine
+	}
+
+	if t.Testing != nil {
+		c.Testing = make([]*BuildRecord, len(t.Testing))
+		for i, run := range t.Testing {
+			record := *run
+			c.Testing[i] = &record
+		}
+	}
+
+	c.Selections = append([]Selection(nil), t.Selections...)
+
+	// Attributes, Calls and Info are written once and never mutated
+	// afterwards; sharing the pointers is safe.
+
+	return &c
+}
+
+func (b *SlotBuild) clone() *SlotBuild {
+	if b == nil {
+		return nil
+	}
+
+	c := *b
+
+	if b.Targets != nil {
+		c.Targets = make([]*BuildTarget, len(b.Targets))
+		for i, target := range b.Targets {
+			c.Targets[i] = target.clone()
+		}
+	}
 
 	return &c
 }
@@ -231,9 +393,9 @@ type BidAttempt struct {
 	// time (p2p only, our own builder index excluded).
 	CompetitorHighGwei *uint64 `json:"competitor_high_gwei,omitempty"`
 
-	// Full bid message properties (Gloas+ bids; blob commitments aggregated
-	// to a count). Empty for legacy Builder API bids and pre-construction
-	// failures.
+	// Full bid message properties (blob commitments aggregated to a count;
+	// pre-Gloas header bids carry block hash, parent hash, fee recipient and
+	// gas limit). Empty for pre-construction failures.
 	BlockHash       string `json:"block_hash,omitempty"`
 	ParentBlockHash string `json:"parent_block_hash,omitempty"`
 	ParentBlockRoot string `json:"parent_block_root,omitempty"`
@@ -317,11 +479,11 @@ type SlotResult struct {
 	// AppliedPlan is the frozen plan snapshot the slot executed under.
 	AppliedPlan *action_plan.FrozenPlan `json:"applied_plan,omitempty"`
 
-	// Build is the slot's primary build outcome (the most canonical ready
-	// candidate, or the single lifecycle record). Builds lists every
-	// candidate build the slot produced when more than one ran.
-	Build            *BuildOutcome     `json:"build,omitempty"`
-	Builds           []*BuildOutcome   `json:"builds,omitempty"`
+	// Build is the slot's build lifecycle with every target it ran.
+	Build *SlotBuild `json:"build,omitempty"`
+	// Payloads holds every payload built for the slot, by block hash.
+	Payloads map[string]*PayloadRecord `json:"payloads,omitempty"`
+
 	Bids             []BidAttempt      `json:"bids,omitempty"`
 	BlockSubmissions []BlockSubmission `json:"block_submissions,omitempty"`
 	RevealAttempts   []RevealAttempt   `json:"reveal_attempts,omitempty"`
@@ -411,7 +573,7 @@ func (p *TxPlanResult) clone() *TxPlanResult {
 
 // Redacted returns the result for readers without a login: the applied
 // plan loses its raw explicit transactions (see action_plan.SlotPlan.Redacted)
-// and the custom builds and the tx plan lose their transaction hashes (see
+// and the testing runs and the tx plan lose their transaction hashes (see
 // payload_builder.LocalBuildInfo.Public).
 func (r *SlotResult) Redacted() *SlotResult {
 	if r == nil {
@@ -422,13 +584,6 @@ func (r *SlotResult) Redacted() *SlotResult {
 	out.AppliedPlan = r.AppliedPlan.Redacted()
 	out.Build = r.Build.public()
 
-	if len(r.Builds) > 0 {
-		out.Builds = make([]*BuildOutcome, len(r.Builds))
-		for i, build := range r.Builds {
-			out.Builds[i] = build.public()
-		}
-	}
-
 	if r.TxPlan != nil && r.TxPlan.ExpectedHashes != nil {
 		plan := *r.TxPlan
 		plan.ExpectedHashes = nil
@@ -438,17 +593,34 @@ func (r *SlotResult) Redacted() *SlotResult {
 	return &out
 }
 
-// public returns the outcome with its custom build info stripped of
+// public returns the build with the testing runs' info stripped of
 // transaction hashes.
-func (b *BuildOutcome) public() *BuildOutcome {
-	if b == nil || b.LocalBuild == nil || b.LocalBuild.Info.Public() == b.LocalBuild.Info {
-		return b
+func (b *SlotBuild) public() *SlotBuild {
+	if b == nil {
+		return nil
 	}
 
 	out := *b
-	local := *b.LocalBuild
-	local.Info = b.LocalBuild.Info.Public()
-	out.LocalBuild = &local
+	out.Targets = make([]*BuildTarget, len(b.Targets))
+
+	for i, target := range b.Targets {
+		out.Targets[i] = target
+
+		if len(target.Testing) == 0 {
+			continue
+		}
+
+		public := *target
+		public.Testing = make([]*BuildRecord, len(target.Testing))
+
+		for j, run := range target.Testing {
+			record := *run
+			record.Info = run.Info.Public()
+			public.Testing[j] = &record
+		}
+
+		out.Targets[i] = &public
+	}
 
 	return &out
 }
@@ -471,31 +643,12 @@ func (r *SlotResult) Clone() *SlotResult {
 
 	c := *r
 
-	if r.Build != nil {
-		build := *r.Build
-		if r.Build.ArtifactIdx != nil {
-			idx := *r.Build.ArtifactIdx
-			build.ArtifactIdx = &idx
-		}
+	c.Build = r.Build.clone()
 
-		build.LocalBuild = r.Build.LocalBuild.clone()
-
-		c.Build = &build
-	}
-
-	if r.Builds != nil {
-		c.Builds = make([]*BuildOutcome, len(r.Builds))
-		for i, build := range r.Builds {
-			clone := *build
-			if build.ArtifactIdx != nil {
-				idx := *build.ArtifactIdx
-				clone.ArtifactIdx = &idx
-			}
-
-			clone.LocalBuild = build.LocalBuild.clone()
-
-			c.Builds[i] = &clone
-		}
+	// Payload records are written once and never modified: the map is
+	// copied, the records shared.
+	if r.Payloads != nil {
+		c.Payloads = maps.Clone(r.Payloads)
 	}
 
 	if r.Inclusion != nil {
@@ -542,10 +695,11 @@ func (r *SlotResult) Clone() *SlotResult {
 }
 
 // Summary returns the result trimmed to what an overview (the action plan
-// grid) shows: the build's status and headline payload fields, the attempts,
-// the inclusion and the tx plan verdict. The applied plan, the candidate
-// builds, the attributes and the testing build details — most of a record's
-// size — are left out; the full record is a per-slot request away.
+// grid) shows: the build's status and each target's builds and selections
+// without their details, the selected payloads, the attempts, the inclusion
+// and the tx plan verdict. The applied plan, the attributes, the testing
+// runs' assembly details and the payloads no target selected — most of a
+// record's size — are left out; the full record is a per-slot request away.
 func (r *SlotResult) Summary() *SlotResult {
 	if r == nil {
 		return nil
@@ -565,19 +719,49 @@ func (r *SlotResult) Summary() *SlotResult {
 	}
 
 	if b := r.Build; b != nil {
-		s.Build = &BuildOutcome{
-			Status:          b.Status,
-			SkipReason:      b.SkipReason,
-			Candidate:       b.Candidate,
-			BlockHash:       b.BlockHash,
-			BlockValueWei:   b.BlockValueWei,
-			NumTransactions: b.NumTransactions,
-			NumBlobs:        b.NumBlobs,
-			Source:          b.Source,
-			Fallback:        b.Fallback,
-			Error:           b.Error,
-			At:              b.At,
+		build := *b
+		build.Targets = make([]*BuildTarget, len(b.Targets))
+
+		for i, target := range b.Targets {
+			summary := &BuildTarget{
+				Seq:               target.Seq,
+				Candidate:         target.Candidate,
+				Status:            target.Status,
+				Error:             target.Error,
+				TestingSkipReason: target.TestingSkipReason,
+				Selections:        target.Selections,
+				StartedAt:         target.StartedAt,
+				At:                target.At,
+			}
+
+			if target.Engine != nil {
+				engine := *target.Engine
+				engine.Calls = nil
+				summary.Engine = &engine
+			}
+
+			if len(target.Testing) > 0 {
+				summary.Testing = make([]*BuildRecord, len(target.Testing))
+
+				for j, run := range target.Testing {
+					record := *run
+					record.Info = nil
+					summary.Testing[j] = &record
+				}
+			}
+
+			build.Targets[i] = summary
+
+			if selection := target.LastSelection(); selection != nil && r.Payloads[selection.PayloadHash] != nil {
+				if s.Payloads == nil {
+					s.Payloads = make(map[string]*PayloadRecord, len(b.Targets))
+				}
+
+				s.Payloads[selection.PayloadHash] = r.Payloads[selection.PayloadHash]
+			}
 		}
+
+		s.Build = &build
 	}
 
 	return s

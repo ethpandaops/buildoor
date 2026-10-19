@@ -14,9 +14,9 @@ const LegendView: React.FC = () => {
         <span className="legend-section ms-2">Builder:</span>
         <span><span className="legend-dot bg-payload-attributes"></span> Payload Attributes</span>
         <span><span className="legend-line legend-line-build"></span> Build</span>
-        <span><span className="legend-dot bg-payload-created"></span> Payload Created</span>
-        <span><span className="legend-dot bg-local-build"></span> Testing Build</span>
-        <span><span className="legend-dot bg-local-build legend-dot-selected"></span> Used for bids</span>
+        <span><span className="legend-dot bg-payload-created"></span> Engine Payload</span>
+        <span><span className="legend-dot bg-local-build"></span> Testing Payload</span>
+        <span><span className="legend-dot bg-local-build legend-dot-selected"></span> Current pick</span>
         <span><span className="legend-dot bg-local-build-skipped"></span> Testing Build Skipped</span>
         <span><span className="legend-dot bg-build-failed"></span> Build Failed</span>
         <span className="legend-section ms-2">Voting:</span>

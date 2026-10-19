@@ -26,6 +26,10 @@ interface BrandHeaderProps {
   onBrandClick?: () => void;
   navItems?: React.ReactNode;
   endContent?: React.ReactNode;
+  // expand is the Bootstrap breakpoint from which the nav shows inline;
+  // below it the items fold into the menu button. A long nav needs a wider
+  // breakpoint, or its items wrap.
+  expand?: 'lg' | 'xxl';
 }
 
 export const BrandHeader: React.FC<BrandHeaderProps> = ({
@@ -34,6 +38,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
   onBrandClick,
   navItems,
   endContent,
+  expand = 'lg',
 }) => {
   const { theme, setTheme } = useTheme();
 
@@ -63,10 +68,10 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
         </symbol>
       </svg>
 
-      <nav id="nav" className="main-navigation navbar navbar-expand-lg navbar-light">
+      <nav id="nav" className={`main-navigation navbar navbar-expand-${expand} navbar-light`}>
         <div className="container-fluid d-flex">
           <a
-            className="navbar-brand col-10 col-lg-auto me-lg-3"
+            className={`navbar-brand col-10 col-${expand}-auto me-${expand}-3`}
             href={brandHref}
             onClick={handleBrand}
           >
@@ -78,7 +83,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
             </div>
           </a>
 
-          <div className="toggler-wrapper d-block d-lg-none">
+          <div className={`toggler-wrapper d-block d-${expand}-none`}>
             <button
               className="navbar-toggler"
               type="button"
@@ -92,7 +97,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
             </button>
           </div>
 
-          <div className="flex-grow-1 d-none d-lg-block"></div>
+          <div className={`flex-grow-1 d-none d-${expand}-block`}></div>
 
           <div className="collapse navbar-collapse" id="navbarSupportedContent">
             {navItems && <ul className="navbar-nav me-auto">{navItems}</ul>}
@@ -137,7 +142,7 @@ export const BrandHeader: React.FC<BrandHeaderProps> = ({
               </li>
 
               {endContent && (
-                <li className="nav-item ms-lg-3 mt-2 mt-lg-0 d-flex align-items-center">{endContent}</li>
+                <li className={`nav-item ms-${expand}-3 mt-2 mt-${expand}-0 d-flex align-items-center`}>{endContent}</li>
               )}
             </ul>
           </div>

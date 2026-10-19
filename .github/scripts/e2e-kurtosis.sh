@@ -140,18 +140,45 @@ wait_for_win() {
   done
 }
 
-# assert_slot_result <label> <slot> <jq filter over the slot's SlotResult>
+# Helpers for the slot result filters, keyed by the won block's hash ($hash):
+# the record keeps every payload once under its block hash, and every target
+# its builds and its pick changes, so the evidence is chained by hash instead
+# of trusting any derived flag. $eltxs is the EL block's transaction count.
+readonly SLOT_RESULT_DEFS='
+  def won_payload: (.payloads // {})[$hash];
+  def targets: (.build.targets // [])[];
+  def picked: [targets | (.selections // [])[] | select(.payload_hash == $hash)] | length > 0;
+  def bids_for($transport; $status):
+    [(.bids // [])[] | select(.transport == $transport and .status == $status
+                              and ((.block_hash // "") | ascii_downcase) == $hash)];
+  def bids_of($transport; $status):
+    [(.bids // [])[] | select(.transport == $transport and .status == $status)];
+  def published: [(.reveal_attempts // [])[] | select(.status == "published")] | length > 0;
+  def builder_of_won: [targets | ((.engine // empty), (.testing // [])[])
+                       | select(.payload_hash == $hash)];
+  def won_by_us:
+    won_payload != null
+    and picked
+    and (won_payload.num_transactions == $eltxs)
+    and ((.inclusion.block_hash // "" | ascii_downcase) == $hash);
+'
+
+# assert_slot_result <label> <slot> <won block hash> <jq filter over the slot's SlotResult>
 # Checks the attempt-level record of the slot, which is what actually proves
 # WHICH flow produced the win: the won-block source alone is derived from the
-# same records, so the filters below spell out the expected evidence. The
-# tracker consumes the producing services' events asynchronously, so the record
-# is polled until it satisfies the filter.
+# same records, so the filters below spell out the expected evidence, chained
+# by the won block's hash (SLOT_RESULT_DEFS). The tracker consumes the
+# producing services' events asynchronously, so the record is polled until it
+# satisfies the filter.
 assert_slot_result() {
   local label=$1
   local slot=$2
-  local filter=$3
-  local results record
+  local hash=$3
+  local filter=$4
+  local results record eltxs
   local assert_deadline=$((SECONDS + 60))
+
+  eltxs=$(jq '.result.transactions | length' "$ARTIFACT_DIR/${label}-execution-block.json")
 
   while true; do
     if results=$(curl --fail --silent --show-error \
@@ -161,19 +188,44 @@ assert_slot_result() {
       # SlotResult.slot is a JSON string, so compare it numerically.
       record=$(jq -c --argjson slot "$slot" \
         '[.results[] | select((.slot | tonumber) == $slot)] | first // empty' <<<"$results")
-      if [[ -n "$record" ]] && jq -e "$filter" <<<"$record" >/dev/null; then
+      if [[ -n "$record" ]] && jq -e --arg hash "$hash" --argjson eltxs "$eltxs" \
+        "$SLOT_RESULT_DEFS ($filter)" <<<"$record" >/dev/null; then
         echo "Slot result evidence for the $label slot $slot checks out"
         return 0
       fi
     fi
 
     if (( SECONDS >= assert_deadline )); then
-      echo "Slot result for the $label slot $slot does not match: $filter" >&2
+      echo "Slot result for the $label slot $slot (block $hash, $eltxs txs) does not match: $filter" >&2
       jq '.' <<<"${record:-null}" >&2
       exit 1
     fi
     sleep 2
   done
+}
+
+# assert_payload_artifact <label> <slot> <won block hash>
+# The won payload's artifact, fetched by its block hash, is that payload.
+assert_payload_artifact() {
+  local label=$1
+  local slot=$2
+  local hash=$3
+  local artifact
+
+  artifact=$(curl --fail --silent --show-error \
+    "$BUILDOOR_URL/api/buildoor/slot-results/$slot/payloads/$hash")
+  printf '%s\n' "$artifact" >"$ARTIFACT_DIR/${label}-payload-artifact.json"
+
+  if ! jq -e --arg hash "$hash" '(.data.block_hash | ascii_downcase) == $hash' <<<"$artifact" >/dev/null; then
+    echo "The $label payload artifact fetched by hash $hash is not that payload" >&2
+    exit 1
+  fi
+  echo "Payload artifact of the $label block fetched by its hash"
+}
+
+# won_hash prints a won-block entry's hash, lowercased.
+won_hash() {
+  jq -r '.block_hash | ascii_downcase' <<<"$1"
 }
 
 verify_block() {
@@ -259,34 +311,49 @@ jq -e '.data.PRESET_BASE == "minimal" and (.data.GLOAS_FORK_EPOCH | tonumber) ==
 echo "== Phase 1: pre-Gloas Builder API (getHeader / blinded block)"
 pre_block=$(wait_for_win pre-gloas builder_api 0 $((GLOAS_SLOT - 1)) "$PREGLOAS_TIMEOUT_SECONDS")
 pre_slot=$(jq -r '.slot' <<<"$pre_block")
+pre_hash=$(won_hash "$pre_block")
 verify_block pre-gloas "$pre_block"
-assert_slot_result pre-gloas "$pre_slot" \
-  '((.block_submissions // []) | map(select(.dialect == "legacy" and .status == "accepted")) | length > 0)'
+# The proposer took the header buildoor served for exactly this block and
+# handed the blinded block back.
+assert_slot_result pre-gloas "$pre_slot" "$pre_hash" \
+  'won_by_us
+   and (bids_for("builder-api"; "served") | length > 0)
+   and ((.block_submissions // []) | map(select(.dialect == "legacy" and .status == "accepted")) | length > 0)'
+assert_payload_artifact pre-gloas "$pre_slot" "$pre_hash"
 
 echo "== Phase 2: post-Gloas p2p bidding (Builder API suppressed)"
 update_settings '{"builder_api_enabled": false}'
 p2p_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
 p2p_block=$(wait_for_win post-gloas-p2p epbs "$p2p_from" "$MAX_SLOT" "$POSTGLOAS_TIMEOUT_SECONDS")
 p2p_slot=$(jq -r '.slot' <<<"$p2p_block")
+p2p_hash=$(won_hash "$p2p_block")
 verify_block post-gloas-p2p "$p2p_block"
-assert_slot_result post-gloas-p2p "$p2p_slot" \
-  '((.bids // []) | map(select(.transport == "p2p" and .status == "submitted")) | length > 0)
-   and ((.bids // []) | map(select(.transport == "builder-api" and .status == "served")) | length == 0)
-   and ((.reveal_attempts // []) | map(select(.status == "published")) | length > 0)'
+# A p2p bid committed to exactly the won block, nothing was served over the
+# Builder API, and the envelope was revealed.
+assert_slot_result post-gloas-p2p "$p2p_slot" "$p2p_hash" \
+  'won_by_us
+   and (bids_for("p2p"; "submitted") | length > 0)
+   and (bids_of("builder-api"; "served") | length == 0)
+   and published'
+assert_payload_artifact post-gloas-p2p "$p2p_slot" "$p2p_hash"
 
 echo "== Phase 3: post-Gloas Builder API (p2p bidding suppressed)"
 update_settings '{"builder_api_enabled": true, "epbs_enabled": false}'
 api_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
 api_block=$(wait_for_win post-gloas-builder-api builder_api "$api_from" "$MAX_SLOT" "$POSTGLOAS_TIMEOUT_SECONDS")
 api_slot=$(jq -r '.slot' <<<"$api_block")
+api_hash=$(won_hash "$api_block")
 verify_block post-gloas-builder-api "$api_block"
-# The proposer took the bid it fetched over HTTP, handed the signed block back
-# to buildoor (epbs dialect) and buildoor revealed the envelope for it.
-assert_slot_result post-gloas-builder-api "$api_slot" \
-  '((.bids // []) | map(select(.transport == "builder-api" and .status == "served")) | length > 0)
-   and ((.bids // []) | map(select(.transport == "p2p" and .status == "submitted")) | length == 0)
+# The proposer took the bid it fetched over HTTP for exactly the won block,
+# handed the signed block back to buildoor (epbs dialect) and buildoor
+# revealed the envelope for it.
+assert_slot_result post-gloas-builder-api "$api_slot" "$api_hash" \
+  'won_by_us
+   and (bids_for("builder-api"; "served") | length > 0)
+   and (bids_of("p2p"; "submitted") | length == 0)
    and ((.block_submissions // []) | map(select(.dialect == "epbs" and .status == "accepted")) | length > 0)
-   and ((.reveal_attempts // []) | map(select(.status == "published")) | length > 0)'
+   and published'
+assert_payload_artifact post-gloas-builder-api "$api_slot" "$api_hash"
 
 # The Lodestar VC submits builder preferences (max_execution_payment) ahead of
 # every proposal; a stored entry proves submitBuilderPreferences accepts the
@@ -364,19 +431,23 @@ echo "Transaction pool is being fed"
 
 local_block=$(wait_for_win post-gloas-local-pool epbs "$local_from" "$MAX_SLOT" "$POSTGLOAS_TIMEOUT_SECONDS")
 local_slot=$(jq -r '.slot' <<<"$local_block")
+local_hash=$(won_hash "$local_block")
 verify_block post-gloas-local-pool "$local_block"
-# The won payload came from the local build (testing_buildBlockV1) fed by the
-# pool, carried at least one pool transaction, and the pool records the
-# block as one of ours.
-assert_slot_result post-gloas-local-pool "$local_slot" \
-  '(.build.source == "local")
-   and (.build.local_build.status == "ready")
-   and (.build.local_build.selected == true)
-   and (.build.local_build.tx_source == "txpool")
-   and ((.build.local_build.info.selection.selected // 0) > 0)
-   and ((.build.num_transactions // 0) > 0)
-   and ((.bids // []) | map(select(.transport == "p2p" and .status == "submitted")) | length > 0)
-   and ((.reveal_attempts // []) | map(select(.status == "published")) | length > 0)'
+# The won block is a testing run's own payload (testing_buildBlockV1), picked
+# for the target, built from the pool with at least one pool transaction, a
+# p2p bid committed to exactly it, and it is not the engine build's payload.
+assert_slot_result post-gloas-local-pool "$local_slot" "$local_hash" \
+  'won_by_us
+   and (won_payload.build.kind == "testing")
+   and (won_payload.num_transactions > 0)
+   and (builder_of_won | length > 0)
+   and (builder_of_won | all(.kind == "testing" and .status == "ready"
+                             and .info.tx_source == "txpool"
+                             and ((.info.selection.selected // 0) > 0)))
+   and ([targets | .engine.payload_hash // empty] | all(. != $hash))
+   and (bids_for("p2p"; "submitted") | length > 0)
+   and published'
+assert_payload_artifact post-gloas-local-pool "$local_slot" "$local_hash"
 
 # The verifier re-reads every included local payload from the EL and compares
 # the block's transaction list with the plan buildoor built it from. The
@@ -411,9 +482,10 @@ while true; do
 
   if (( SECONDS >= plan_deadline )); then
     echo "Only $verified verified pool blocks within ${LOCAL_POOL_TIMEOUT_SECONDS}s" >&2
-    jq -c '.results[] | {slot, build: .build.status, source: .build.source,
-                         txs: .build.num_transactions, plan: .tx_plan.status,
-                         included: .tx_plan.included_count}' <<<"$results" >&2
+    jq -c '.results[] | {slot, build: .build.status,
+                         picks: [(.build.targets // [])[] | (.selections // [])[]
+                                 | {build: .build, hash: .payload_hash}],
+                         plan: .tx_plan.status, included: .tx_plan.included_count}' <<<"$results" >&2
     exit 1
   fi
 

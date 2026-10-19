@@ -1,12 +1,13 @@
 import React, { useState, useCallback, useRef } from 'react';
 import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
-import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition } from '../utils';
+import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition, decodeExtraData } from '../utils';
 import { Popover, PopoverData, type PopoverItem } from './Popover';
 import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
 import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
-import { engineBuildRan, inclusionListItems, testingRuns } from './slotGraphBuilds';
+import { engineBuildView, payloadOwnerItems, testingRunViews } from './slotGraphBuilds';
+import { primaryTarget } from '../buildTargets';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -43,21 +44,6 @@ interface PopoverState {
   // Set for bid popovers: resolves the bid's stored SSZ artifact on open.
   bidArtifact?: { transport: string; valueGwei: number; timeMs: number };
 }
-
-// decodeExtraData renders a payload's 0x-hex extra data as printable ASCII
-// when possible (builders commonly stamp readable tags), else keeps the hex.
-const decodeExtraData = (hex: string): string => {
-  const raw = hex.startsWith('0x') ? hex.slice(2) : hex;
-  if (raw.length === 0) return '(empty)';
-
-  let text = '';
-  for (let i = 0; i + 1 < raw.length || i < raw.length; i += 2) {
-    const code = parseInt(raw.slice(i, i + 2), 16);
-    if (Number.isNaN(code) || code < 0x20 || code > 0x7e) return hex;
-    text += String.fromCharCode(code);
-  }
-  return text;
-};
 
 // Maps participation percentage (0-100) to SVG Y coordinate (100=bottom, 0=top).
 const pctToY = (pct: number): number => {
@@ -226,15 +212,7 @@ const candidateLabel = (candidate?: string): string =>
   (candidate && CANDIDATE_LABELS[candidate]) || 'unclassified';
 
 
-
-// Short tab labels and ordering for the per-candidate payload tabs.
-const CANDIDATE_SHORT: Record<string, string> = {
-  parent_full: 'parent',
-  parent_empty: 'parent (empty)',
-  grandparent_full: 'grandparent',
-  grandparent_empty: 'grandparent (empty)'
-};
-
+// Ordering of the per-candidate popover tabs.
 const CANDIDATE_ORDER: Record<string, number> = {
   parent_full: 0,
   parent_empty: 1,
@@ -242,103 +220,8 @@ const CANDIDATE_ORDER: Record<string, number> = {
   grandparent_empty: 3
 };
 
-const candidateShortLabel = (candidate?: string): string =>
-  (candidate && CANDIDATE_SHORT[candidate]) || 'unclassified';
-
 const candidateOrder = (candidate?: string): number =>
   (candidate ? CANDIDATE_ORDER[candidate] : undefined) ?? 9;
-
-// candidatePayloadItems renders one candidate payload's rows for its tab in
-// the payload-created popover.
-const candidatePayloadItems = (
-  build: import('../types').CandidateBuild,
-  slotStartTime: number
-): PopoverItem[] => {
-  if (build.failed) {
-    return [
-      { label: 'Status', value: 'build failed' },
-      { label: 'Error', value: build.error ?? 'unknown error' }
-    ];
-  }
-
-  if (build.readyAt === undefined) {
-    return [{ label: 'Status', value: 'building…' }];
-  }
-
-  const d = build.detail;
-
-  return [
-    { label: 'Ready', value: `${build.readyAt - slotStartTime}ms` },
-    ...(build.blockHash
-      ? [{ label: 'Block Hash', value: truncateHashStr(build.blockHash), copyValue: build.blockHash }]
-      : []),
-    ...parentRows(build.parentBlockRoot, build.parentSlot, build.parentBlockHash, build.parentBlockNumber),
-    ...(build.blockValueGwei !== undefined
-      ? [{ label: 'Block Value', value: formatGwei(build.blockValueGwei) }]
-      : []),
-    ...(d?.blockNumber !== undefined ? [{ label: 'Block #', value: `${d.blockNumber}` }] : []),
-    ...(d?.gasUsed !== undefined
-      ? [{
-          label: 'Gas',
-          value: `${d.gasUsed.toLocaleString()} / ${(d.gasLimit ?? 0).toLocaleString()}`
-        }]
-      : []),
-    ...(d
-      ? [{
-          label: 'Contents',
-          value: `${d.numTransactions ?? 0} txs, ${d.numBlobs ?? 0} blobs, ` +
-            `${d.numWithdrawals ?? 0} wdrls, ${d.numExecRequests ?? 0} reqs`
-        }]
-      : [])
-  ];
-};
-
-// candidateRows labels which built candidate payload an event committed to,
-// matched by the payload's block hash.
-const candidateRows = (
-  builds: import('../types').CandidateBuild[],
-  blockHash?: string
-): PopoverItem[] => {
-  if (!blockHash || builds.length < 2) {
-    return [];
-  }
-
-  const match = builds.find(
-    (build) => build.blockHash && build.blockHash.toLowerCase() === blockHash.toLowerCase()
-  );
-
-  return match ? [{ label: 'Payload', value: candidateShortLabel(match.candidate) }] : [];
-};
-
-// parentRows renders the parent tuple a payload was built on: the beacon
-// parent (root + its slot) and the execution parent (hash + its block
-// number), so the payload's position in the chain is readable.
-const parentRows = (
-  parentRoot?: string,
-  parentSlot?: number,
-  parentHash?: string,
-  parentNumber?: number
-): PopoverItem[] => [
-  ...(parentRoot
-    ? [{
-        label: parentSlot !== undefined ? `Parent Block (slot ${parentSlot})` : 'Parent Block',
-        value: truncateHashStr(parentRoot),
-        copyValue: parentRoot
-      }]
-    : []),
-  ...(parentHash
-    ? [{
-        label: parentNumber ? `Parent Payload (#${parentNumber})` : 'Parent Payload',
-        value: truncateHashStr(parentHash),
-        copyValue: parentHash
-      }]
-    : [])
-];
-
-// truncateHashStr shortens a hash for popover display (module scope twin of
-// the component-local helper).
-const truncateHashStr = (hash: string, len = 16): string =>
-  hash.length <= len + 3 ? hash : hash.substring(0, len) + '...';
 
 const SlotGraphView: React.FC<SlotGraphProps> = ({
   slot,
@@ -382,10 +265,6 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
   const graphHeight = slotGraphHeight(effectiveServiceStatus);
 
-  // The testing build only runs for the canonical candidate; when its block
-  // feeds the bids, the "payload created" event describes that block.
-  const testingBlockBids = !!state.localBuild?.selected && state.localBuild.status === 'ready';
-
   // Row positions from bottom: Builder API (if active) -> ePBS (if active) -> chain (top)
   // When neither builder is active, an empty row sits below chain.
   let rowIdx = 0;
@@ -421,10 +300,6 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   const pct75X = calculatePosition(slotDuration * 0.75, rangeStart, totalRange);
   const slotEndX = calculatePosition(slotDuration, rangeStart, totalRange);
 
-  // The engine lane (build line + payload dot) only exists when the target ran
-  // the engine-API build; the testing lane is drawn from its own builds.
-  const engineRan = engineBuildRan(state);
-
   // Build windows: the engine build collects transactions from its start for
   // payload_build_time; the testing builds have their own window.
   const engineWindowMs = epbsConfig && config?.build?.engine_enabled !== false &&
@@ -459,37 +334,32 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
     ? calculatePosition(revealConfig.time_ms, rangeStart, totalRange)
     : -1;
 
-  // Build delay line: from build start to payloadCreatedAt (or live "now" while building).
-  // Prefer the actual build-started time (accurate even when building immediately);
-  // fall back to the configured build_start_time for slots without a start event.
-  const buildStartMs = state.payloadBuildStartedAt !== undefined
-    ? state.payloadBuildStartedAt - slotStartTime
-    : (epbsConfig ? epbsConfig.build_start_time : 0);
-  const buildStartX = calculatePosition(buildStartMs, rangeStart, totalRange);
-  const buildFailed = state.payloadBuildFailed === true;
-  // The build span finalizes at the payload-ready time (success) or the failure time.
-  const buildEndAt = state.payloadCreatedAt ?? state.payloadBuildFailedAt;
-  const buildActive = state.payloadBuildStartedAt !== undefined
-    || state.payloadCreatedAt !== undefined
-    || buildFailed;
+  // Build lanes of the primary target, each build with its own payload: the
+  // engine build's line and dot, one line and dot per testing run, an inner
+  // ring on the dot of the build whose payload is the current pick. Other
+  // targets' engine builds are tabs of the engine popover.
+  const primary = primaryTarget(state);
+  const engineView = genesisTime > 0
+    ? engineBuildView(state, primary, slot, slotStartTime, candidateColor, candidateOrder)
+    : undefined;
+  const testingViews = genesisTime > 0 ? testingRunViews(state, primary, slot, slotStartTime) : [];
 
-  // While a build is in progress, the line grows toward "now" but is capped at the
-  // expected completion (build start + payload_build_time) so a stuck/timed-out build
-  // shows a bounded bar instead of creeping to the slot end. payload_build_time lives
-  // at the root of the SSE config object.
+  // The engine line grows toward "now" while building, capped at the expected
+  // getPayload (build start + payload_build_time) so a stuck build shows a
+  // bounded bar. payload_build_time lives at the root of the SSE config.
   const payloadBuildTime = (config as unknown as Record<string, unknown>)?.payload_build_time;
-  const expectedBuildEndAt = typeof payloadBuildTime === 'number'
-    ? slotStartTime + buildStartMs + payloadBuildTime
+  const expectedEngineEndAt = engineView && typeof payloadBuildTime === 'number'
+    ? engineView.startedAt + payloadBuildTime
     : undefined;
 
-  // Candidate builds: the primary payload keeps the classic build line; every
-  // other candidate renders as a thin colored mini-bar below it, and a badge
-  // with a popover lists them all. One fixed color per candidate key,
-  // consistent across the UI.
-  const candidateBuilds = state.candidateBuilds ?? [];
-  const multiCandidate = candidateBuilds.length > 1;
-  const primaryCandidate = state.payloadCandidate
-    ?? (candidateBuilds.length === 1 ? candidateBuilds[0].candidate : undefined);
+  // A target that ended without a payload: a red dot at its end, unless its
+  // engine build's own failure dot already says so.
+  const targetFailed = primary && primary.status === 'no_payload' && primary.engineBuild?.status !== 'failed'
+    ? primary
+    : undefined;
+
+  const selectionRing = (view: { selected: boolean }) => (view.selected ? ' payload-selected' : '');
+
   const truncateHash = (hash: string, len = 16) => {
     if (hash.length <= len + 3) return hash;
     return hash.substring(0, len) + '...';
@@ -788,67 +658,55 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
 
         {/* Chain + payload events row (always on top) */}
         <div className="event-row chain-events" style={{ bottom: `${chainRowBottom}px` }}>
-          {/* Build delay line: from build start to payload ready (animates live while building).
-              On failure we render a red dot (below) instead — a thin line is too hard to see/click. */}
-          {epbsConfig && buildActive && !buildFailed && engineRan && genesisTime > 0 && buildStartX < 100 && (
-            <BuildDelayLine
-              leftPct={buildStartX}
-              slotStartTime={slotStartTime}
-              rangeStart={rangeStart}
-              totalRange={totalRange}
-              endAt={buildEndAt}
-              endGapPx={6}
-              expectedEndAt={expectedBuildEndAt}
-              lineColor={candidateColor(primaryCandidate)}
-              dashed
-              calls={state.payloadEngineCalls
-                ? [
-                    { start: state.payloadEngineCalls.fcu_start, end: state.payloadEngineCalls.fcu_end },
-                    { start: state.payloadEngineCalls.get_payload_start, end: state.payloadEngineCalls.get_payload_end }
-                  ]
-                : undefined}
-              onClick={(e) => showPopover(e, {
-                title: `Engine Build${primaryCandidate ? ` (${candidateLabel(primaryCandidate)})` : ''}`,
-                items: state.payloadCreatedAt
-                  ? [
-                      { label: 'Build Start', value: `${buildStartMs}ms` },
-                      ...(state.payloadEngineCalls
-                        ? (() => {
-                            const calls = state.payloadEngineCalls;
-                            return [
-                              { label: 'forkchoiceUpdated', value: `${calls.fcu_start - slotStartTime}ms, took ${calls.fcu_end - calls.fcu_start}ms` },
-                              { label: 'EL building', value: `${calls.get_payload_start - calls.fcu_end}ms (waiting for getPayload)` },
-                              { label: 'getPayload', value: `${calls.get_payload_start - slotStartTime}ms, took ${calls.get_payload_end - calls.get_payload_start}ms` }
-                            ];
-                          })()
-                        : []),
-                      { label: 'Payload Ready', value: `${state.payloadCreatedAt - slotStartTime}ms` },
-                      ...(state.payloadUpgrades && state.payloadUpgradedAt
-                        ? [{ label: 'Upgraded', value: `${state.payloadUpgrades}× by testing builds, latest at ${state.payloadUpgradedAt - slotStartTime}ms` }]
-                        : []),
-                      { label: 'Duration', value: `${(state.payloadCreatedAt - slotStartTime) - buildStartMs}ms` }
-                    ]
-                  : [
-                      { label: 'Build Start', value: `${buildStartMs}ms` },
-                      { label: 'Status', value: 'Building…' }
-                    ]
-              })}
-            />
-          )}
+          {/* Engine lane: the engine build's line (calls solid, the EL's build wait dashed)
+              ending at its own payload's dot, or at its failure. */}
+          {epbsConfig && engineView && (() => {
+            const startX = calculatePosition(engineView.startedAt - slotStartTime, rangeStart, totalRange);
+            if (startX >= 100) return null;
+            const calls = engineView.calls;
 
+            return (
+              <React.Fragment key={engineView.key}>
+                {engineView.status !== 'failed' && (
+                  <BuildDelayLine
+                    leftPct={startX}
+                    slotStartTime={slotStartTime}
+                    rangeStart={rangeStart}
+                    totalRange={totalRange}
+                    endAt={engineView.endAt}
+                    endGapPx={6}
+                    expectedEndAt={expectedEngineEndAt}
+                    lineColor={candidateColor(primary?.candidate)}
+                    dashed
+                    calls={calls
+                      ? [
+                          { start: calls.fcu_start, end: calls.fcu_end },
+                          { start: calls.get_payload_start, end: calls.get_payload_end }
+                        ]
+                      : undefined}
+                    onClick={(e) => showPopover(e, engineView.data)}
+                  />
+                )}
+                {engineView.endAt !== undefined && renderEventDot(
+                  engineView.status === 'ready' ? `payload-created${selectionRing(engineView)}` : 'build-failed',
+                  engineView.endAt - slotStartTime,
+                  engineView.data,
+                  `${engineView.key}-dot`
+                )}
+              </React.Fragment>
+            );
+          })()}
 
-          {/* Testing lane: every testing build of the primary target, the handed-over one
-              highlighted (green ring when it feeds the bids), the others dimmed. */}
-          {genesisTime > 0 && epbsConfig && testingRuns(state, slot, slotStartTime).map((run) => {
+          {/* Testing lane: one line and dot per testing run, each with its own payload. */}
+          {epbsConfig && testingViews.map((run) => {
             const startX = calculatePosition(run.startedAt - slotStartTime, rangeStart, totalRange);
             if (startX >= 100) return null;
-            const other = run.dimmed ? ' local-build-run-other' : '';
             const dotClass = run.status === 'ready'
-              ? `local-build-created${run.selected ? ' local-build-selected' : ''}`
+              ? `local-build-created${selectionRing(run)}`
               : run.status === 'failed' ? 'local-build-failed' : 'local-build-skipped';
 
             return (
-              <React.Fragment key={`local-build-${run.run}`}>
+              <React.Fragment key={run.key}>
                 {run.status !== 'skipped' && (
                   <BuildDelayLine
                     leftPct={startX}
@@ -857,29 +715,30 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                     totalRange={totalRange}
                     endGapPx={4}
                     endAt={run.endAt}
-                    className={`local-build-line${other}`}
+                    className="local-build-line"
                     onClick={(e) => showPopover(e, run.data)}
                   />
                 )}
                 {run.endAt !== undefined &&
-                  renderEventDot(`${dotClass}${other}`, run.endAt - slotStartTime, run.data, `local-build-dot-${run.run}`)}
+                  renderEventDot(dotClass, run.endAt - slotStartTime, run.data, `${run.key}-dot`)}
               </React.Fragment>
             );
           })}
 
-          {/* Build failed — red dot at the failure time (falls back to build start) with error details */}
-          {epbsConfig && buildFailed && genesisTime > 0 && renderEventDot(
+          {/* A target that ended without a payload to select. */}
+          {epbsConfig && targetFailed && genesisTime > 0 && renderEventDot(
             'build-failed',
-            (state.payloadBuildFailedAt ?? (slotStartTime + buildStartMs)) - slotStartTime,
+            targetFailed.at - slotStartTime,
             {
-              title: 'Build Failed',
+              title: 'No Payload',
               items: [
-                { label: 'Build Start', value: `${buildStartMs}ms` },
-                ...(state.payloadBuildFailedAt ? [{ label: 'Failed At', value: `${state.payloadBuildFailedAt - slotStartTime}ms` }] : []),
-                { label: 'Error', value: state.payloadBuildError || 'unknown error' }
+                { label: 'Build Start', value: `${targetFailed.startedAt - slotStartTime}ms` },
+                { label: 'Ended At', value: `${targetFailed.at - slotStartTime}ms` },
+                ...(targetFailed.candidate ? [{ label: 'Candidate', value: candidateLabel(targetFailed.candidate) }] : []),
+                { label: 'Error', value: targetFailed.error || 'unknown error' }
               ]
             },
-            'build-failed'
+            `target-failed-${targetFailed.seq}`
           )}
 
           {/* Payload attributes for the next slot — each arrives during this slot
@@ -932,110 +791,6 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
             },
             `payload-attributes-${i}`
           ))}
-
-          {/* Payload created — one tab per built candidate payload */}
-          {state.payloadCreatedAt && engineRan && genesisTime > 0 && renderEventDot(
-            'payload-created',
-            state.payloadCreatedAt - slotStartTime,
-            {
-              title: multiCandidate
-                ? 'Payloads Created'
-                : testingBlockBids ? 'Payload Created (testing block)' : 'Payload Created',
-              wide: true,
-              artifact: {
-                url: `/api/buildoor/slot-results/${slot}/payload`,
-                filename: `slot-${slot}-payload.ssz`
-              },
-              tabs: multiCandidate
-                ? [...candidateBuilds]
-                    .sort((a, b) => candidateOrder(a.candidate) - candidateOrder(b.candidate))
-                    .map(build => ({
-                      key: build.candidate || 'unclassified',
-                      label: candidateShortLabel(build.candidate),
-                      color: candidateColor(build.candidate),
-                      items: candidatePayloadItems(build, slotStartTime),
-                      artifact: build.candidate
-                        ? {
-                            url: `/api/buildoor/slot-results/${slot}/payload?candidate=${build.candidate}`,
-                            filename: `slot-${slot}-payload-${build.candidate}.ssz`
-                          }
-                        : undefined
-                    }))
-                : undefined,
-              items: [
-                { label: 'Time', value: `${state.payloadCreatedAt - slotStartTime}ms` },
-                // payload_ready carries the payload the bids use: with a testing
-                // build in front that is the testing block, not the engine's.
-                ...(state.localBuild ? [{
-                  label: 'Built By',
-                  value: testingBlockBids
-                    ? 'testing build (testing_buildBlockV1), used for bids'
-                    : 'engine build, used for bids'
-                }] : []),
-                ...(state.payloadBlockHash ? [{
-                  label: 'Block Hash',
-                  value: truncateHash(state.payloadBlockHash),
-                  copyValue: state.payloadBlockHash
-                }] : []),
-                ...(state.payloadBlockValue ? [{
-                  label: 'Block Value',
-                  value: formatGwei(state.payloadBlockValue)
-                }] : []),
-                ...(() => {
-                  const primary = candidateBuilds.find(b => b.candidate === primaryCandidate)
-                    ?? candidateBuilds[0];
-
-                  return parentRows(primary?.parentBlockRoot, primary?.parentSlot,
-                    primary?.parentBlockHash, primary?.parentBlockNumber);
-                })(),
-                ...(state.payloadDetail?.blockNumber !== undefined ? [{
-                  label: 'Block #',
-                  value: `${state.payloadDetail.blockNumber}`
-                }] : []),
-                ...(state.payloadDetail?.feeRecipient ? [{
-                  label: 'Fee Recipient',
-                  value: truncateHash(state.payloadDetail.feeRecipient),
-                  copyValue: state.payloadDetail.feeRecipient
-                }] : []),
-                ...(state.payloadDetail?.gasUsed !== undefined ? [{
-                  label: 'Gas',
-                  value: `${state.payloadDetail.gasUsed.toLocaleString()} / ${(state.payloadDetail.gasLimit ?? 0).toLocaleString()}`
-                }] : []),
-                ...(state.payloadDetail?.baseFeePerGas ? [{
-                  label: 'Base Fee',
-                  value: `${state.payloadDetail.baseFeePerGas} wei`
-                }] : []),
-                ...(state.payloadDetail?.extraData ? [{
-                  label: 'Extra Data',
-                  value: decodeExtraData(state.payloadDetail.extraData),
-                  copyValue: state.payloadDetail.extraData
-                }] : []),
-                ...(state.payloadDetail?.blobGasUsed !== undefined && state.payloadDetail.blobGasUsed > 0 ? [{
-                  label: 'Blob Gas',
-                  value: `${state.payloadDetail.blobGasUsed.toLocaleString()} (excess ${(state.payloadDetail.excessBlobGas ?? 0).toLocaleString()})`
-                }] : []),
-                ...inclusionListItems(state.payloadInclusionList),
-                ...(state.payloadDetail ? [{
-                  label: 'Contents',
-                  value: `${state.payloadDetail.numTransactions ?? 0} txs, ${state.payloadDetail.numBlobs ?? 0} blobs, ` +
-                    `${state.payloadDetail.numWithdrawals ?? 0} wdrls, ${state.payloadDetail.numExecRequests ?? 0} reqs`
-                }] : []),
-                ...(testingBlockBids && state.localBuild?.el ? [
-                  {
-                    label: 'Engine Block Hash',
-                    value: truncateHash(state.localBuild.el.block_hash),
-                    copyValue: state.localBuild.el.block_hash
-                  },
-                  {
-                    label: 'Engine Block',
-                    value: `${state.localBuild.el.num_transactions} txs, ` +
-                      formatGwei(Number(BigInt(state.localBuild.el.block_value_wei || '0') / 1000000000n))
-                  }
-                ] : [])
-              ]
-            },
-            'payload'
-          )}
 
           {/* Block received — with crown when block contains our payload */}
           {state.blockReceivedAt && genesisTime > 0 && (() => {
@@ -1113,7 +868,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                 ...(won
                   ? [
                       { label: 'Result', value: 'Our payload was included in this block' },
-                      ...candidateRows(candidateBuilds, state.payloadBlockHash)
+                      ...payloadOwnerItems(state, detail?.bid?.block_hash ?? detail?.payload?.block_hash)
                     ]
                   : [])
               ]
@@ -1258,7 +1013,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                       value: truncateHash(bid.blockHash),
                       copyValue: bid.blockHash
                     }] : []),
-                    ...candidateRows(candidateBuilds, bid.blockHash),
+                    ...payloadOwnerItems(state, bid.blockHash),
                     ...(bid.keyIndex !== undefined ? [{
                       label: 'Builder Key',
                       value: `#${bid.keyIndex}` +
@@ -1425,7 +1180,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                     value: truncateHash(state.getHeaderBlockHash),
                     copyValue: state.getHeaderBlockHash
                   }] : []),
-                  ...candidateRows(candidateBuilds, state.getHeaderBlockHash)
+                  ...payloadOwnerItems(state, state.getHeaderBlockHash)
                 ]
               },
               'builder-api-get-header'
@@ -1475,7 +1230,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                     value: truncateHash(state.getBidBlockHash),
                     copyValue: state.getBidBlockHash
                   }] : []),
-                  ...candidateRows(candidateBuilds, state.getBidBlockHash)
+                  ...payloadOwnerItems(state, state.getBidBlockHash)
                 ]
               },
               'builder-api-get-bid'

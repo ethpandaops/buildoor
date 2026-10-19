@@ -247,7 +247,7 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 // preparePayload stores a payload for the slot and (unless noPrefs) a cached
 // proposer preference so the prefs gate passes.
 func (h *schedulerHarness) preparePayload(slot phase0.Slot, blockValueGwei uint64, noPrefs bool) {
-	h.cache.Store(newSchedulerTestPayload(slot, gweiToWei(blockValueGwei)))
+	h.cache.Select(newSchedulerTestPayload(slot, gweiToWei(blockValueGwei)))
 
 	if !noPrefs {
 		h.prefs.Put(slot, &gloasspec.SignedProposerPreferences{})
@@ -688,8 +688,8 @@ func TestSchedulerBidCandidateSelection(t *testing.T) {
 
 	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
 	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
-	h.cache.Store(full)
-	h.cache.Store(empty)
+	h.cache.Select(full)
+	h.cache.Select(empty)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	// A forced candidate key bids exactly that payload.
@@ -705,8 +705,8 @@ func TestSchedulerBidCandidateSelection(t *testing.T) {
 func TestSchedulerBidCandidateAll(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.cfg.EPBS.BidCandidate = "all"
@@ -725,7 +725,7 @@ func TestSchedulerAutoCandidateSticky(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 
 	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
-	h.cache.Store(empty)
+	h.cache.Select(empty)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	// Auto (no head tracker in the stub): primary payload wins and the
@@ -749,8 +749,8 @@ func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
 	// Interval mode: candidates must not throttle each other in one tick.
 	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":500,"bid_candidate":"all"}`)
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.bidTick(1000)
@@ -774,8 +774,8 @@ func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
 
 	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
 	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
-	h.cache.Store(full)
-	h.cache.Store(empty)
+	h.cache.Select(full)
+	h.cache.Select(empty)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.cfg.EPBS.BidCandidate = "all"
@@ -809,7 +809,7 @@ func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
 	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":50,"bid_increase":10}`)
 
 	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
-	h.cache.Store(payload)
+	h.cache.Select(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	seen := make(map[uint64]struct{}, 3)
@@ -845,8 +845,8 @@ func TestSchedulerBidKeysPerSlotCap(t *testing.T) {
 	h.applyBidPlan(t, testSlot,
 		`{"mode":"custom","bid_candidate":"all","bid_keys_per_slot":1}`)
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.bidTick(1000)
@@ -867,7 +867,7 @@ func TestSchedulerDoesNotReBidDuringSubmission(t *testing.T) {
 	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":500}`)
 
 	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
-	h.cache.Store(payload)
+	h.cache.Select(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	// Block the submission so a concurrent tick runs while it is in flight.
@@ -908,7 +908,7 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 
 	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":5000}`)
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	// One bid, then many ticks inside the interval.
@@ -940,7 +940,7 @@ func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 	h.applyBidPlan(t, testSlot,
 		`{"mode":"custom","bid_value_gwei":100,"bid_increase":10,"bid_keys_per_step":0}`)
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.bidTick(1000)
@@ -977,7 +977,7 @@ func TestSchedulerEscalatesEveryBid(t *testing.T) {
 		`{"mode":"custom","bid_value_gwei":100,"bid_increase":10,"bid_interval":50,"bid_keys_per_step":2}`)
 
 	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
-	h.cache.Store(payload)
+	h.cache.Select(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.bidTick(1000)
@@ -1008,7 +1008,7 @@ func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
 		`{"mode":"custom","bid_interval":50,"bid_keys_per_step":2}`)
 
 	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
-	h.cache.Store(payload)
+	h.cache.Select(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	h.bidTick(1000)
@@ -1030,7 +1030,7 @@ func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
 func TestSchedulerTickDoesNotWaitForSubmissions(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 
-	h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 	release := make(chan struct{})
@@ -1089,7 +1089,7 @@ func TestSchedulerKeepsRejectedKeysSpent(t *testing.T) {
 
 			h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_keys_per_step":1}`)
 
-			h.cache.Store(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+			h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
 			h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
 			h.bidTick(1000)

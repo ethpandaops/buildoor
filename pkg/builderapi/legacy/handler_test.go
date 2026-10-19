@@ -269,7 +269,7 @@ func seedPayloadAtSlot(h *Handler, slot phase0.Slot, blockValue *big.Int) *paylo
 		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
 		BlockValue:       blockValue,
 	}
-	h.payloadCache.Store(event)
+	h.payloadCache.Select(event)
 
 	return event
 }
@@ -501,7 +501,7 @@ func TestHandleSubmitBlindedBlockV1_Capella(t *testing.T) {
 		BlockHash:        phase0.Hash32(blockHashFromBuilderSpecsFulu),
 		BlockValue:       big.NewInt(1_000_000_000),
 	}
-	h.payloadCache.Store(event)
+	h.payloadCache.Select(event)
 
 	req := httptest.NewRequest(http.MethodPost, "/eth/v1/builder/blinded_blocks",
 		bytes.NewReader([]byte(capellaBlindedBlockJSON())))

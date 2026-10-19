@@ -1,6 +1,7 @@
 package slot_results
 
 import (
+	"fmt"
 	"io"
 	"math/big"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
@@ -175,7 +177,7 @@ func TestGetReturnsClones(t *testing.T) {
 
 	first := env.tracker.Get(2000)
 	first.Bids[0].TotalValueGwei = 1
-	first.Build = &BuildOutcome{Status: BuildStatusFailed}
+	first.Build = &SlotBuild{Status: BuildStatusFailed}
 
 	second := env.tracker.Get(2000)
 	require.Equal(t, uint64(5000), second.Bids[0].TotalValueGwei)
@@ -225,6 +227,34 @@ func TestRecordBidCaptureDisabled(t *testing.T) {
 	require.Empty(t, metas)
 }
 
+// TestRecordLegacyHeaderBidPayload: a pre-Gloas header bid records the block
+// hash it committed to, so the payload it used is known.
+func TestRecordLegacyHeaderBidPayload(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+	env.cfg.SlotArtifactCaptureEnabled = false
+
+	bid := &legacytypes.SignedBuilderBid{
+		Version: version.DataVersionFulu,
+		Message: &legacytypes.BuilderBid{
+			Version: version.DataVersionFulu,
+			Header: &eth2all.ExecutionPayloadHeader{
+				Version:      version.DataVersionFulu,
+				BlockHash:    phase0.Hash32{0xab},
+				ParentHash:   phase0.Hash32{0xaa},
+				FeeRecipient: [20]byte{0x01},
+				GasLimit:     36_000_000,
+			},
+		},
+	}
+	env.tracker.RecordBuilderAPIBid(5, "fulu", bid, 7000, 0, string(BidStatusServed), "")
+
+	result := env.tracker.Get(5)
+	require.Len(t, result.Bids, 1)
+	require.Equal(t, hashHex(0xab), result.Bids[0].BlockHash)
+	require.Equal(t, hashHex(0xaa), result.Bids[0].ParentBlockHash)
+	require.Equal(t, uint64(36_000_000), result.Bids[0].GasLimit)
+}
+
 func TestAttemptCapAndDroppedCounter(t *testing.T) {
 	env := newTrackerTestEnv(t, false)
 	env.cfg.SlotArtifactCaptureEnabled = false
@@ -256,7 +286,7 @@ func TestBaselineMaterialization(t *testing.T) {
 
 	// A ready outcome is never regressed by finalize.
 	env.tracker.upsert(1501, func(r *SlotResult) {
-		r.Build = &BuildOutcome{Status: BuildStatusReady}
+		r.Build = &SlotBuild{Status: BuildStatusReady}
 	})
 	env.tracker.finalizeWaitingBaseline(1501)
 	require.Equal(t, BuildStatusReady, env.tracker.Get(1501).Build.Status)
@@ -407,7 +437,7 @@ func TestMigrateWonBlocks(t *testing.T) {
 	resultsPersistence := db.NewKVPersistence(env.stateDB, Namespace, ResultCodec{})
 	require.NoError(t, resultsPersistence.PersistBatch(map[phase0.Slot]*SlotResult{
 		200: {Slot: 200, Epoch: 6, Inclusion: &InclusionResult{BlockHash: "0xexisting"}},
-		300: {Slot: 300, Epoch: 9, Build: &BuildOutcome{Status: BuildStatusReady}},
+		300: {Slot: 300, Epoch: 9, Build: &SlotBuild{Status: BuildStatusReady}},
 	}, nil))
 
 	migrateWonBlocks(env.stateDB, 32, log)
@@ -477,7 +507,7 @@ func TestArtifactStoreBufferWithoutDB(t *testing.T) {
 		GasLimit: 1, GasUsed: 1, Timestamp: 1, BlockNumber: 1,
 	}
 
-	_, err := store.StorePayload(700, version.DataVersionFulu, payload, PayloadArtifactMeta{})
+	err := store.StorePayload(700, version.DataVersionFulu, payload, PayloadArtifactMeta{})
 	require.NoError(t, err)
 
 	artifact, err := store.Get(700, ArtifactKindPayload, 0)
@@ -487,7 +517,7 @@ func TestArtifactStoreBufferWithoutDB(t *testing.T) {
 
 	// Buffer bound: newest 64 distinct slots.
 	for slot := phase0.Slot(701); slot <= 800; slot++ {
-		_, slotErr := store.StorePayload(slot, version.DataVersionFulu, payload, PayloadArtifactMeta{})
+		slotErr := store.StorePayload(slot, version.DataVersionFulu, payload, PayloadArtifactMeta{})
 		require.NoError(t, slotErr)
 	}
 
@@ -515,7 +545,7 @@ func TestArtifactSSZRoundTrip(t *testing.T) {
 		Timestamp:   1234,
 	}
 
-	_, err := store.StorePayload(900, version.DataVersionFulu, original, PayloadArtifactMeta{})
+	err := store.StorePayload(900, version.DataVersionFulu, original, PayloadArtifactMeta{})
 	require.NoError(t, err)
 
 	artifact, err := store.Get(900, ArtifactKindPayload, 0)
@@ -559,84 +589,239 @@ drain:
 	require.Len(t, env.tracker.Get(2000).Bids, 5)
 }
 
-func TestBuildValueFromBigInt(t *testing.T) {
-	// Guard the wei string formatting used by handlePayloadReady.
-	value := big.NewInt(1_500_000_000)
-	require.Equal(t, "1500000000", value.String())
+// buildEvents builds a target's events the way the builder emits them.
+type buildEvents struct {
+	slot phase0.Slot
+	seq  uint64
+	at   time.Time
 }
 
-// TestBuildOutcomeSeqOrdering: a candidate rebuilt after a supersede reports
-// through two builds whose events arrive over separate subscriptions in no
-// fixed order; the newer build's outcome always wins and a build's own
-// superseded failure still replaces its withdrawn ready payload.
-func TestBuildOutcomeSeqOrdering(t *testing.T) {
-	env := newTrackerTestEnv(t, false)
-	slot := phase0.Slot(1600)
-	now := time.Now()
+func (b buildEvents) payload(ref payload_builder.BuildRef, hash byte, value int64) *payload_builder.Payload {
+	return &payload_builder.Payload{
+		Attributes: &beacon.PayloadAttributesEvent{
+			ProposalSlot:    b.slot,
+			ParentBlockRoot: phase0.Root{0x01},
+			ParentBlockHash: phase0.Hash32{0xaa},
+		},
+		ExecutionPayload: &eth2all.ExecutionPayload{
+			Version: version.DataVersionFulu, BlockHash: phase0.Hash32{hash}, GasLimit: 1, Timestamp: 1,
+		},
+		Build:      ref,
+		Candidate:  chain.CandidateParentFull,
+		BlockHash:  phase0.Hash32{hash},
+		BlockValue: big.NewInt(value),
+		ReadyAt:    b.at,
+		BuildSeq:   b.seq,
+	}
+}
 
-	readyPayload := func(seq uint64, hash byte) *payload_builder.Payload {
-		return &payload_builder.Payload{
-			Attributes: &beacon.PayloadAttributesEvent{
-				ProposalSlot:    slot,
-				ParentBlockRoot: phase0.Root{0x01},
-				ParentBlockHash: phase0.Hash32{0xaa},
-			},
-			Candidate: chain.CandidateParentFull,
-			BlockHash: phase0.Hash32{hash},
-			ReadyAt:   now,
-			BuildSeq:  seq,
-		}
+func (b buildEvents) target(status string) *payload_builder.BuildTargetEvent {
+	return &payload_builder.BuildTargetEvent{
+		Slot: b.slot, Candidate: chain.CandidateParentFull, Seq: b.seq, Status: status, At: b.at,
+		Attributes: &beacon.PayloadAttributesEvent{ProposalSlot: b.slot, ParentBlockHash: phase0.Hash32{0xaa}},
+		Engine:     true, Testing: true,
+	}
+}
+
+func (b buildEvents) selected(payload *payload_builder.Payload, reason string) *payload_builder.PayloadSelectedEvent {
+	return &payload_builder.PayloadSelectedEvent{
+		Slot: b.slot, Candidate: chain.CandidateParentFull, Seq: b.seq, Build: payload.Build,
+		BlockHash: payload.BlockHash, Reason: reason, Payload: payload, At: b.at,
+	}
+}
+
+func hashHex(hash byte) string {
+	return fmt.Sprintf("%#x", phase0.Hash32{hash})
+}
+
+// TestBuildTargetKeepsEveryBuild: the engine build, every testing run and
+// every selection are recorded apart; an upgrade only adds a selection and
+// never touches the engine build or its payload.
+func TestBuildTargetKeepsEveryBuild(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+	ev := buildEvents{slot: 1600, seq: 4, at: time.Now()}
+
+	engineRef := payload_builder.BuildRef{Kind: payload_builder.BuildKindEngine}
+	engine := ev.payload(engineRef, 0xe1, 10)
+	run1 := ev.payload(payload_builder.BuildRef{Kind: payload_builder.BuildKindTesting, Run: 1}, 0x71, 5)
+	run2 := ev.payload(payload_builder.BuildRef{Kind: payload_builder.BuildKindTesting, Run: 2}, 0x72, 20)
+
+	for _, event := range []payload_builder.BuildEvent{
+		ev.target(payload_builder.TargetStatusStarted),
+		&payload_builder.EngineBuildEvent{Slot: ev.slot, Seq: ev.seq, Status: payload_builder.EngineStatusStarted, StartedAt: ev.at},
+		&payload_builder.TestingBuildEvent{Slot: ev.slot, Seq: ev.seq, Run: 1, Status: payload_builder.LocalStatusBuilding},
+		&payload_builder.TestingBuildEvent{Slot: ev.slot, Seq: ev.seq, Run: 1, Status: payload_builder.LocalStatusReady,
+			Payload: run1, Info: &payload_builder.LocalBuildInfo{Run: 1, ExpectedHashes: []string{"0x01"}}},
+		&payload_builder.EngineBuildEvent{Slot: ev.slot, Seq: ev.seq, Status: payload_builder.EngineStatusReady,
+			Payload: engine, Calls: &payload_builder.EngineCallTimes{ForkchoiceStart: ev.at}},
+		ev.selected(engine, payload_builder.SelectionFirst),
+		&payload_builder.TestingBuildEvent{Slot: ev.slot, Seq: ev.seq, Run: 2, Status: payload_builder.LocalStatusReady, Payload: run2},
+		ev.selected(run2, payload_builder.SelectionBetter),
+	} {
+		env.tracker.handleBuildEvent(event)
 	}
 
-	// Build 1 (synthesized) starts, emits a payload, then is superseded.
-	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
-		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 1,
-	})
-	env.tracker.handlePayloadReady(readyPayload(1, 0x11))
-	require.Equal(t, BuildStatusReady, env.tracker.Get(slot).Build.Status)
-
-	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
-		Slot: slot, Candidate: "parent_full", Error: "superseded by beacon node attributes",
-		FailedAt: now, BuildSeq: 1,
-	})
-	result := env.tracker.Get(slot)
-	require.Equal(t, BuildStatusFailed, result.Build.Status, "same build: failure replaces the withdrawn ready payload")
-	require.Len(t, result.Builds, 1)
-
-	// Build 2 (node attributes) starts the candidate over.
-	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
-		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 2,
-	})
-	result = env.tracker.Get(slot)
-	require.Len(t, result.Builds, 1)
-	require.Equal(t, BuildStatusStarted, result.Builds[0].Status, "a newer build restarts the candidate")
-
-	env.tracker.handlePayloadReady(readyPayload(2, 0x22))
-	result = env.tracker.Get(slot)
+	result := env.tracker.Get(ev.slot)
 	require.Equal(t, BuildStatusReady, result.Build.Status)
-	require.Equal(t, "0x2200000000000000000000000000000000000000000000000000000000000000", result.Build.BlockHash)
+	require.Len(t, result.Build.Targets, 1)
 
-	// Late events of build 1 (its superseded failure, a duplicate ready)
-	// arrive after build 2 reported: ignored.
-	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
-		Slot: slot, Candidate: "parent_full", Error: "superseded by beacon node attributes",
-		FailedAt: now, BuildSeq: 1,
-	})
-	env.tracker.handlePayloadReady(readyPayload(1, 0x11))
-	env.tracker.handleBuildStarted(&payload_builder.PayloadBuildStartedEvent{
-		Slot: slot, Candidate: "parent_full", StartedAt: now, BuildSeq: 1,
-	})
+	target := result.Build.Targets[0]
+	require.Equal(t, TargetSelected, target.Status)
+	require.Equal(t, hashHex(0xe1), target.Engine.PayloadHash, "the engine build keeps its own payload")
+	require.Equal(t, payload_builder.EngineStatusReady, target.Engine.Status)
+	require.NotNil(t, target.Engine.Calls)
+	require.Len(t, target.Testing, 2)
+	require.Equal(t, hashHex(0x71), target.Testing[0].PayloadHash)
+	require.Equal(t, hashHex(0x72), target.Testing[1].PayloadHash)
 
-	result = env.tracker.Get(slot)
-	require.Len(t, result.Builds, 1)
-	require.Equal(t, BuildStatusReady, result.Build.Status, "stale build 1 events never clobber build 2")
-	require.Equal(t, "0x2200000000000000000000000000000000000000000000000000000000000000", result.Build.BlockHash)
+	require.Len(t, target.Selections, 2)
+	require.Equal(t, payload_builder.SelectionFirst, target.Selections[0].Reason)
+	require.Equal(t, hashHex(0xe1), target.Selections[0].PayloadHash)
+	require.Equal(t, payload_builder.SelectionBetter, target.Selections[1].Reason)
+	require.Equal(t, hashHex(0x72), target.Selections[1].PayloadHash)
 
-	// Build 2's own failure would still apply (same seq).
-	env.tracker.handleBuildFailed(&payload_builder.PayloadBuildFailedEvent{
-		Slot: slot, Candidate: "parent_full", Error: "boom", FailedAt: now, BuildSeq: 2,
-	})
-	require.Equal(t, BuildStatusFailed, env.tracker.Get(slot).Build.Status)
+	require.Len(t, result.Payloads, 3, "every payload once, by hash")
+	require.Equal(t, engineRef, result.Payloads[hashHex(0xe1)].Build)
+	require.Equal(t, "10", result.Payloads[hashHex(0xe1)].BlockValueWei)
+	require.Equal(t, 2, result.Payloads[hashHex(0x72)].Build.Run)
+	require.Same(t, result.Payloads[hashHex(0x72)], result.SelectedPayload())
+
+	// Captured: the engine payload and the selected run, not the run nobody
+	// selected.
+	require.True(t, result.Payloads[hashHex(0xe1)].Captured)
+	require.True(t, result.Payloads[hashHex(0x72)].Captured)
+	require.False(t, result.Payloads[hashHex(0x71)].Captured)
+
+	for hash, want := range map[byte]bool{0xe1: true, 0x72: true, 0x71: false} {
+		artifact, err := env.tracker.Artifacts().PayloadByHash(ev.slot, hashHex(hash))
+		require.NoError(t, err)
+		require.Equal(t, want, artifact != nil, "artifact of %x", hash)
+	}
+
+	engineArtifact, err := env.tracker.Artifacts().PayloadByHash(ev.slot, hashHex(0xe1))
+	require.NoError(t, err)
+	require.False(t, IsCustomPayloadArtifact(engineArtifact))
+
+	runArtifact, err := env.tracker.Artifacts().PayloadByHash(ev.slot, hashHex(0x72))
+	require.NoError(t, err)
+	require.True(t, IsCustomPayloadArtifact(runArtifact))
+
+	// The summary keeps the targets' builds and selections, the selected
+	// payloads, and drops the details.
+	summary := result.Summary()
+	require.Len(t, summary.Build.Targets, 1)
+	require.Len(t, summary.Build.Targets[0].Selections, 2)
+	require.Nil(t, summary.Build.Targets[0].Testing[0].Info)
+	require.Len(t, summary.Payloads, 1)
+	require.NotNil(t, summary.Payloads[hashHex(0x72)])
+
+	// Readers without a login get no transaction hash of a testing run.
+	redacted := result.Redacted()
+	require.Nil(t, redacted.Build.Targets[0].Testing[0].Info.ExpectedHashes)
+	require.NotNil(t, result.Build.Targets[0].Testing[0].Info.ExpectedHashes, "the record itself is untouched")
+}
+
+// TestBuildTargetSupersededAndRebuilt: a superseded target stays recorded as
+// such, its replacement becomes the primary one, and late events of the
+// superseded target change nothing.
+func TestBuildTargetSupersededAndRebuilt(t *testing.T) {
+	env := newTrackerTestEnv(t, false)
+	stale := buildEvents{slot: 1601, seq: 1, at: time.Now()}
+	fresh := buildEvents{slot: 1601, seq: 2, at: time.Now()}
+
+	engineRef := payload_builder.BuildRef{Kind: payload_builder.BuildKindEngine}
+	stalePayload := stale.payload(engineRef, 0x11, 1)
+
+	env.tracker.handleBuildEvent(stale.target(payload_builder.TargetStatusStarted))
+	env.tracker.handleBuildEvent(&payload_builder.EngineBuildEvent{Slot: stale.slot, Seq: stale.seq,
+		Status: payload_builder.EngineStatusReady, Payload: stalePayload})
+	env.tracker.handleBuildEvent(stale.selected(stalePayload, payload_builder.SelectionFirst))
+	require.Equal(t, BuildStatusReady, env.tracker.Get(stale.slot).Build.Status)
+
+	superseded := stale.target(payload_builder.TargetStatusSuperseded)
+	superseded.Error = "superseded by beacon node attributes"
+	env.tracker.handleBuildEvent(superseded)
+	require.Equal(t, BuildStatusFailed, env.tracker.Get(stale.slot).Build.Status, "a withdrawn selection is no payload")
+
+	env.tracker.handleBuildEvent(fresh.target(payload_builder.TargetStatusStarted))
+	require.Equal(t, BuildStatusBuilding, env.tracker.Get(fresh.slot).Build.Status)
+
+	freshPayload := fresh.payload(engineRef, 0x22, 2)
+	env.tracker.handleBuildEvent(&payload_builder.EngineBuildEvent{Slot: fresh.slot, Seq: fresh.seq,
+		Status: payload_builder.EngineStatusReady, Payload: freshPayload})
+	env.tracker.handleBuildEvent(fresh.selected(freshPayload, payload_builder.SelectionFirst))
+
+	// A late pick of the superseded target is dropped.
+	env.tracker.handleBuildEvent(stale.selected(stalePayload, payload_builder.SelectionBetter))
+
+	result := env.tracker.Get(fresh.slot)
+	require.Len(t, result.Build.Targets, 2)
+	require.Equal(t, TargetSuperseded, result.Build.Targets[0].Status)
+	require.Len(t, result.Build.Targets[0].Selections, 1)
+	require.Equal(t, BuildStatusReady, result.Build.Status)
+	require.Equal(t, hashHex(0x22), result.SelectedPayload().BlockHash)
+
+	// A target that ends without a selection fails the slot only when it is
+	// the primary one.
+	other := buildEvents{slot: 1601, seq: 3, at: time.Now()}
+	started := other.target(payload_builder.TargetStatusStarted)
+	started.Candidate = chain.CandidateParentEmpty
+	env.tracker.handleBuildEvent(started)
+
+	noPayload := other.target(payload_builder.TargetStatusNoPayload)
+	noPayload.Candidate = chain.CandidateParentEmpty
+	noPayload.Error = "boom"
+	env.tracker.handleBuildEvent(noPayload)
+
+	result = env.tracker.Get(fresh.slot)
+	require.Equal(t, BuildStatusReady, result.Build.Status)
+	require.Equal(t, TargetNoPayload, result.Build.Targets[2].Status)
+}
+
+// TestLegacyBuildRecordsDecode maps records of the old build model onto
+// targets: the payload that fed the bids becomes the target's selection.
+func TestLegacyBuildRecordsDecode(t *testing.T) {
+	raw := []byte(`{"slot":"7","build":{"status":"ready","candidate":"parent_full","block_hash":"0x02",` +
+		`"block_value_wei":"9","source":"local","artifact_idx":1,"at":"2026-01-01T00:00:00Z",` +
+		`"local_build":{"status":"ready","selected":true,"block_hash":"0x02","tx_source":"txpool",` +
+		`"info":{"tx_source":"txpool","submitted_txs":3,"run":2,"started_at":"2026-01-01T00:00:00Z","built_at":"2026-01-01T00:00:00Z"},` +
+		`"at":"2026-01-01T00:00:00Z"}},` +
+		`"builds":[{"status":"ready","candidate":"parent_full","block_hash":"0x02","block_value_wei":"9",` +
+		`"source":"local","artifact_idx":1,"at":"2026-01-01T00:00:00Z",` +
+		`"local_build":{"status":"ready","selected":true,"block_hash":"0x02","tx_source":"txpool",` +
+		`"info":{"tx_source":"txpool","submitted_txs":3,"run":2,"started_at":"2026-01-01T00:00:00Z","built_at":"2026-01-01T00:00:00Z"},` +
+		`"at":"2026-01-01T00:00:00Z"}},` +
+		`{"status":"ready","candidate":"parent_empty","block_hash":"0x03","source":"el","at":"2026-01-01T00:00:00Z"}]}`)
+
+	result, err := ResultCodec{}.DecodeValue(raw)
+	require.NoError(t, err)
+	require.Equal(t, BuildStatusReady, result.Build.Status)
+	require.Len(t, result.Build.Targets, 2)
+
+	local := result.Build.Targets[0]
+	require.Equal(t, "parent_full", local.Candidate)
+	require.Nil(t, local.Engine, "the old record never captured the engine payload")
+	require.Len(t, local.Testing, 1)
+	require.Equal(t, 2, local.Testing[0].Run)
+	require.Len(t, local.Selections, 1)
+	require.Equal(t, payload_builder.BuildRef{Kind: payload_builder.BuildKindTesting, Run: 2}, local.Selections[0].Build)
+	require.Equal(t, "9", result.Payloads["0x02"].BlockValueWei)
+	require.True(t, result.Payloads["0x02"].Captured)
+
+	engine := result.Build.Targets[1]
+	require.Equal(t, "0x03", engine.Engine.PayloadHash)
+	require.Equal(t, payload_builder.BuildKindEngine, result.Payloads["0x03"].Build.Kind)
+
+	require.Equal(t, "0x02", result.SelectedPayload().BlockHash, "parent_full stays the primary target")
+
+	// A record of the build model round-trips unchanged.
+	encoded, err := ResultCodec{}.EncodeValue(result)
+	require.NoError(t, err)
+
+	again, err := ResultCodec{}.DecodeValue(encoded)
+	require.NoError(t, err)
+	require.Len(t, again.Build.Targets, 2)
+	require.Len(t, again.Payloads, 2)
 }
 
 // TestTxPlanVerdictBeforeSeed keeps a tx plan verdict recorded before the

@@ -252,9 +252,9 @@ npm run clean
      `grandparent_*`) is not the head — the CL's own forkchoice updates and
      parallel candidate builds move it — so those targets skip with
      `speculative_candidate` (payload source `local` then yields no payload for
-     them; `local_or_el` falls back). `local_build.payload_source` decides which
-     payload feeds `PayloadReady` (bids/reveals): `el` (default; the local payload
-     is an inspection-only SHADOW), `local` (strict — no payload when the local
+     them; `local_or_el` falls back). `local_build.payload_source` is the rule of
+     the target's PICK (below): `el` (default; the testing payloads are built
+     and recorded for inspection only), `local` (strict — no payload when the local
      build fails), `local_or_el` (fallback, recorded), `higher_value` (both
      built, the higher EL-reported block value wins; engine on a tie, the
      surviving one when a build fails). The ENGINE BUILDER switch
@@ -298,26 +298,18 @@ npm run clean
      `Pool.ContentVersion` moved (pool changes + mirror arrivals clearing the
      latest base fee), at least the interval apart. The testing loop has its
      own lifetime (`startLocalLoop`: window end + 5 s, cancelled like a build
-     by a newer tuple build, a newer slot or `AbortBuild`). The HAND-OVER
-     stays the engine build's getPayload: consumers get the payload source's
-     pick of what exists then; afterwards `followLocal` sends each better
-     pick on `BuildResult.Upgrades` and the service's `followUpgrades`
-     publishes it (classification, transform, supersede rules, cache store,
-     `PayloadReady` + `LocalBuildEvent` again). The cache replaces the
-     tuple's payload for slot/tuple lookups (next p2p bid tick, next
-     getHeader) but keeps the replaced one for `GetByBlockHash` (unblind,
-     reveal, inclusion of bids already made). Runs: `LocalBuildInfo.run`/
-     `runs`, drawn per build in the slot graph (live via
-     `local_build_progress.run`), the engine and testing windows as bluish
-     bands; upgrades keep the build line's hand-over time
-     (`payloadUpgrades`). The hand-over waits for the builds until the
-     deadline + 50 ms, never longer; a build still running is not cut off
-     (the EL finishes it anyway) so its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
+     by a newer tuple build, a newer slot or `AbortBuild`). There is no
+     hand-over moment: no build waits for another, the target's pick is
+     re-evaluated whenever one of its builds finishes (see "Builds, payloads,
+     picks" under 1). Every run is drawn with its own payload in the slot
+     graph, the engine and testing windows as bluish bands. A build still
+     running at its window end is not cut off (the EL finishes it anyway), so
+     its duration still trains the model. | `empty` (`[]`) | `el_mempool` (`null`) | per-slot `explicit`
      (action plan `build.local.transactions`, validated at plan-update time). FOCIL
      inclusion-list txs are prepended; a failure with them retries once without
-     (flagged `inclusion_list_dropped`). Consumers still receive exactly one
-     payload per target; `Payload.Source`/`Payload.Local` and the `LocalBuildEvent`
-     (`SubscribeLocalBuild`) carry the rest. Every EL either fails the whole call on
+     (flagged `inclusion_list_dropped`). Every build reports its own
+     payload (`Payload.Build` = engine | testing run N, `Payload.Local` the
+     testing run's assembly), see "Builds, payloads, picks" under 1. Every EL either fails the whole call on
      one invalid tx (geth, ethrex), drops + post-checks (nethermind, besu) or
      silently filters (erigon → `dropped_by_el` recorded), hence the strict
      state-aware selection below.
@@ -430,9 +422,8 @@ npm run clean
    - Per-slot: action plan `build.local` (`enabled`, `payload_source`, `tx_source`,
      `transactions`, `queued`, `build_el_payload` (the slot's engine build switch), `max_txs`, `gas_fill_pct`, `ordering`)
      resolves into `FrozenPlan.Build.Local` (rules carry it too). Slot results:
-     `BuildOutcome.source`/`fallback`/`local_build` (+ the shadow payload as its own
-     artifact, `GET .../payload?source=local`). SSE: `local_build` (slot-scoped),
-     `txpool_stats` (on pool change), `service_status` gains
+     each target's `testing` runs and pick changes (`selections`, see 4b). SSE:
+     `testing_build` / `payload_selected` (slot-scoped), `txpool_stats` (on pool change), `service_status` gains
      `local_build_*`/`txpool_*`. WebUI: Mempool page, Testing builder and
      Mempool flow cards/drawer tabs, plan/rule editor section.
 
@@ -472,7 +463,7 @@ npm run clean
      censoring payload) and the per-slot plan `build.inclusion_list
      {mode, bits, omit_txs}` (omit_txs censors exactly those transactions);
      the action plan grid draws an `IL` chip. Visible on slot results
-     (`build.inclusion_list`, the testing build's `local_build.info`) and the
+     (the payload records' `inclusion_list`, the testing runs' `info`) and the
      slot graph's payload / testing build popovers
 
 1. **Builder Service** (`pkg/payload_builder/`)
@@ -494,7 +485,33 @@ npm run clean
      are due long before); the commitments stay. Read them through
      `BlobsBundle.Blobs()/Proofs()`; a released bundle fails an unblind or
      reveal loudly
-   - Emits `PayloadReadyEvent` to subscribers; plan-involved skips fire
+   - **Builds, payloads, picks** — separate entities, never mixed. A
+     BUILD TARGET is one (slot, parent tuple) (`BuildTargetEvent`, numbered by
+     `Seq`); its BUILDS are the engine build (`EngineBuildEvent`) and the
+     testing runs (`TestingBuildEvent`, `Run` 1..n); each build produces its
+     OWN `Payload` (`Payload.Build`), completed (target identity, payload
+     transform) before its build event and never modified afterwards; the
+     PICK is the payload the cache hands to the consumers for the target,
+     re-evaluated (`targetPicker`, `pick.go`) right after each build ends by
+     the payload source's rule over the payloads that exist then — `el`:
+     the engine payload; `local`: the best testing run, as soon as one
+     exists; `higher_value`: moves only to a strictly more valuable block;
+     `local_or_el`: the engine payload (fallback) until a testing run exists.
+     A pick change is a `PayloadSelectedEvent` (block hash, `first` |
+     `better`, fallback); a rebuild of the picked block (same hash) is the
+     same payload, no change; a target whose builds all ended without a pick
+     reports `no_payload`. Each consumer reads the pick of its own moment (p2p
+     bid tick, Builder API request/response gate), so what a consumer USED is
+     its own record — a bid's block hash (Builder API pre-Gloas header bids
+     included), the reveal, the inclusion — shown per payload in the UI. All
+     four events go out in order on ONE stream (`SubscribeBuildEvents`: a
+     payload's build event precedes its pick, the superseded report ends a
+     target). The `PayloadCache` holds every built payload once, keyed by
+     block hash (`GetByBlockHash` finds any of them — unblind, reveal,
+     inclusion), plus a separate target → picked hash map behind
+     `Get`/`GetCandidate`/`GetVariant`/`GetSlotPayloads` (the bidders and
+     the Builder API read the picks). A target's events go out under its
+     own lock (`candidateBuild.emitMu`); plan-involved skips fire
      `BuildSkippedEvent` (deduped per slot) for the slot results tracker
    - **Missing-block fallback** (`applyAttributesFallback`): when no attributes
      arrived for a slot by its build start time, the previous slot's are
@@ -506,10 +523,10 @@ npm run clean
      event for the same parent tuple therefore SUPERSEDES a build that ran
      from synthesized attributes (`supersedeSynthesizedBuild`): unless its
      build inputs are identical (`PayloadAttributesEvent.BuildInputsEqual`),
-     the in-flight engine build is cancelled, an already emitted payload is
-     withdrawn from the payload cache (a `PayloadBuildFailedEvent` with reason
-     `superseded by beacon node attributes` is recorded) and the tuple is
-     rebuilt from the node's attributes via the late-build path
+     the target's payloads and pick are withdrawn from the payload cache,
+     a `BuildTargetEvent{superseded}` ends its events, its builds are
+     cancelled and the tuple
+     is rebuilt from the node's attributes via the late-build path
 
 2. **Payload Bidder** (`pkg/payload_bidder/`) — shared Gloas+ bid/reveal domain
    - `Signer`, `BuildSignedBid`, `BuildSignedEnvelope`: bid/envelope construction + signing
@@ -684,7 +701,13 @@ npm run clean
      (`memstore.ReplaceResident`); without a state-db records stay full
    - Consumes the services' BLOCKING subscriptions (loss-free history) and implements
      the `builderapi.SlotResultRecorder` interface for request-scoped recording
-   - `ArtifactStore`: raw SSZ artifacts per slot — built payload, every signed bid
+   - Builds: `SlotResult.build` holds the baseline status and every target
+     (`targets`: engine build, testing runs, pick changes (`selections`) — each build names
+     its payload by hash); `SlotResult.payloads` holds every payload built
+     for the slot once, by block hash. Records of the old outcome model are
+     mapped onto targets when read (`legacy.go`)
+   - `ArtifactStore`: raw SSZ artifacts per slot — payloads keyed by block
+     hash (the engine payload and every picked one), every signed bid
      (restart-safe per-slot indices via `MAX(idx)+1`), the signed envelope at
      construction time — write-through to a bounded 64-slot memory buffer (works
      without a state-db) + async batching writer into the `slot_artifacts` table;
@@ -708,7 +731,7 @@ npm run clean
      dialects hold a validated request until the gate
      (`ResolvedBuilderAPISettings.AwaitRespondGate`) and only then pick the
      payload, so the response carries the best payload built by then
-     (testing-build upgrades included); a hang-up during the hold records
+     (the target's pick at the gate); a hang-up during the hold records
      `cancelled`. Distinct from the plan's `response_delay_ms`, a testing knob
      applied after the bid is built. Drawn as the "respond" gate in the slot
      graph's Builder API row The `enabled` flag keeps gating only the
@@ -803,7 +826,7 @@ npm run clean
 ### Event Flow
 
 ```
-Beacon Node ─payload_attributes─▶ payload_builder ─PayloadReady─▶ p2p_bidder (bids via gossip)
+Beacon Node ─payload_attributes─▶ payload_builder ─builds+selection (cache)─▶ p2p_bidder (bids via gossip)
 Beacon Node ─head events────────▶ payload_bidder.InclusionTracker ─▶ RevealService ─▶ Beacon Node
 Proposer ───Builder API─────────▶ builderapi (legacy: unblind+publish │ epbs: block broadcast
                                               + RevealService.RequestReveal)
@@ -813,7 +836,8 @@ Proposer ───Builder API─────────▶ builderapi (legacy: 
 
 1. Beacon node emits `payload_attributes` event
 2. Builder validates slot against schedule and builds at `BuildStartTime`
-   (Engine API: forkchoiceUpdated → getPayload), emits `PayloadReadyEvent`
+   (Engine API: forkchoiceUpdated → getPayload, plus testing runs), reports
+   each build's payload and selects the one feeding the bids
 3. p2p_bidder scheduler ticks every 10ms and submits bids inside the slot's FROZEN
    bid window (per-slot plan > global config; gated on builder registration and, per
    slot, on the frozen enable resolution)
@@ -1181,8 +1205,10 @@ To make frontend changes:
   history per slot (build, bids, submissions, reveals, inclusion, applied plan);
   `view=summary` trims each record to what overview grids need (no applied
   plan, attributes, testing build runs or per-candidate builds)
-- `GET /api/buildoor/slot-results/{slot}/payload|envelope|bids|bids/{index}` - Raw
-  SSZ artifacts with beacon-API content negotiation: `Accept:
+- `GET /api/buildoor/slot-results/{slot}/payloads/{blockHash}|payload|envelope|bids|bids/{index}` - Raw
+  SSZ artifacts (`payloads/{blockHash}`: any captured payload of the slot;
+  `payload`: the primary target's current pick, `?candidate=` another
+  target's; a testing payload, and the envelope revealing one, need a login) with beacon-API content negotiation: `Accept:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
   JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
   is JSON-only metadata
@@ -1257,10 +1283,11 @@ To make frontend changes:
 - `action_plan_rules_updated` - Fired on committed recurring-rule mutations; data
   is the authoritative `{rules: [...]}` set. The plan grid refetches its range
   because rules change the effective plan of every uncovered slot
-- `local_build` - One build target's local build outcome (slot-scoped, replayed):
-  status/skip reason/error, tx + payload source, whether it fed the bids or was
-  a fallback, headline properties of the local and the EL payload, the
-  selection summary
+- `build_target` / `engine_build` / `testing_build` / `payload_selected` -
+  the build events (slot-scoped, replayed): a target's lifecycle, its engine
+  build and each testing run with its OWN payload (properties under the block
+  hash, the UI's `payloads[hash]`), and the pick changes naming the payload
+  the consumers get from then on by hash
 - `local_build_status` - The local build status (the `GET
   /api/buildoor/local-build/status` body: probed EL availability, effective
   settings, pool state, plan check counters), sent at connect and whenever
@@ -1398,7 +1425,7 @@ happened afterwards, down to the exact SSZ objects.
 
 **Outcome inspection** (see `pkg/slot_results/`): every active slot gets an
 attempt-level `SlotResult` (REST range queries + `slot_result_updated` SSE) and
-raw SSZ artifacts (built payload, every signed bid, the signed envelope — stored
+raw SSZ artifacts (built payloads by block hash, every signed bid, the signed envelope — stored
 at construction, so withheld/failed reveals stay inspectable) served with
 SSZ/JSON content negotiation. Blobs bundles are not captured (documented future
 artifact kind).

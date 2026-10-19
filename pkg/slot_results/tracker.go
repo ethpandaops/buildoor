@@ -14,6 +14,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
+	legacytypes "github.com/ethpandaops/buildoor/pkg/builderapi/legacy/types"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/db"
@@ -129,11 +130,8 @@ func (t *Tracker) Start(ctx context.Context) error {
 	// Authoritative outcome sources subscribe blocking: the tracker loop only
 	// does in-memory clone-mutate-put work, so producers never stall
 	// meaningfully, and history never silently loses events.
-	readySub := t.builderSvc.SubscribePayloadReady(16, true)
-	startedSub := t.builderSvc.SubscribePayloadBuildStarted(16, true)
-	failedSub := t.builderSvc.SubscribePayloadBuildFailed(16, true)
+	buildSub := t.builderSvc.SubscribeBuildEvents(64, true)
 	skippedSub := t.builderSvc.SubscribeBuildSkipped(16, true)
-	localBuildSub := t.builderSvc.SubscribeLocalBuild(16, true)
 	epochSub := t.chainSvc.SubscribeEpochStats()
 
 	var bidSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent]
@@ -151,8 +149,7 @@ func (t *Tracker) Start(ctx context.Context) error {
 
 	t.wg.Add(1)
 
-	go t.run(readySub, startedSub, failedSub, skippedSub, localBuildSub, bidSub, revealSub,
-		includedSub, payloadStatusSub, epochSub)
+	go t.run(buildSub, skippedSub, bidSub, revealSub, includedSub, payloadStatusSub, epochSub)
 
 	t.log.Info("Slot results tracker started")
 
@@ -175,11 +172,8 @@ func (t *Tracker) Stop() {
 
 //nolint:gocyclo // single select loop over all outcome sources
 func (t *Tracker) run(
-	readySub *utils.Subscription[*payload_builder.Payload],
-	startedSub *utils.Subscription[*payload_builder.PayloadBuildStartedEvent],
-	failedSub *utils.Subscription[*payload_builder.PayloadBuildFailedEvent],
+	buildSub *utils.Subscription[payload_builder.BuildEvent],
 	skippedSub *utils.Subscription[*payload_builder.BuildSkippedEvent],
-	localBuildSub *utils.Subscription[*payload_builder.LocalBuildEvent],
 	bidSub *utils.Subscription[*p2p_bidder.BidSubmissionEvent],
 	revealSub *utils.Subscription[*payload_bidder.RevealResult],
 	includedSub *utils.Subscription[*payload_bidder.PayloadIncludedEvent],
@@ -187,11 +181,8 @@ func (t *Tracker) run(
 	epochSub *utils.Subscription[*chain.EpochStats],
 ) {
 	defer t.wg.Done()
-	defer readySub.Unsubscribe()
-	defer startedSub.Unsubscribe()
-	defer failedSub.Unsubscribe()
+	defer buildSub.Unsubscribe()
 	defer skippedSub.Unsubscribe()
-	defer localBuildSub.Unsubscribe()
 	defer includedSub.Unsubscribe()
 	defer payloadStatusSub.Unsubscribe()
 	defer epochSub.Unsubscribe()
@@ -222,26 +213,12 @@ func (t *Tracker) run(
 		case <-t.ctx.Done():
 			return
 
-		case payload, ok := <-readySub.Channel():
+		case event, ok := <-buildSub.Channel():
 			if !ok {
 				return
 			}
 
-			t.handlePayloadReady(payload)
-
-		case event, ok := <-startedSub.Channel():
-			if !ok {
-				return
-			}
-
-			t.handleBuildStarted(event)
-
-		case event, ok := <-failedSub.Channel():
-			if !ok {
-				return
-			}
-
-			t.handleBuildFailed(event)
+			t.handleBuildEvent(event)
 
 		case event, ok := <-skippedSub.Channel():
 			if !ok {
@@ -249,13 +226,6 @@ func (t *Tracker) run(
 			}
 
 			t.handleBuildSkipped(event)
-
-		case event, ok := <-localBuildSub.Channel():
-			if !ok {
-				return
-			}
-
-			t.handleLocalBuild(event)
 
 		case event, ok := <-bidCh:
 			if !ok {
@@ -348,9 +318,9 @@ func (t *Tracker) materializeBaseline(slot phase0.Slot) {
 		}
 
 		if frozen.Build.Build {
-			result.Build = &BuildOutcome{Status: BuildStatusWaitingAttributes, At: time.Now()}
+			result.Build = &SlotBuild{Status: BuildStatusWaitingAttributes, At: time.Now()}
 		} else {
-			result.Build = &BuildOutcome{
+			result.Build = &SlotBuild{
 				Status:     BuildStatusSkipped,
 				SkipReason: frozen.Build.SkipReason,
 				At:         time.Now(),
@@ -375,190 +345,291 @@ func (t *Tracker) finalizeWaitingBaseline(slot phase0.Slot) {
 	})
 }
 
-func (t *Tracker) handlePayloadReady(payload *payload_builder.Payload) {
-	if payload == nil || payload.Attributes == nil {
+// handleBuildEvent records one build target event. The events of a target
+// arrive in the order they happened (one stream), so the target exists
+// before its builds report and a payload's record before its selection.
+func (t *Tracker) handleBuildEvent(event payload_builder.BuildEvent) {
+	switch e := event.(type) {
+	case *payload_builder.BuildTargetEvent:
+		t.handleTargetEvent(e)
+	case *payload_builder.EngineBuildEvent:
+		t.handleEngineBuild(e)
+	case *payload_builder.TestingBuildEvent:
+		t.handleTestingBuild(e)
+	case *payload_builder.PayloadSelectedEvent:
+		t.handleSelection(e)
+	}
+}
+
+// findTarget returns the slot's target with the given seq (nil when the
+// record holds none, e.g. its slot was pruned).
+func findTarget(result *SlotResult, seq uint64) *BuildTarget {
+	if result.Build == nil {
+		return nil
+	}
+
+	for _, target := range result.Build.Targets {
+		if target.Seq == seq {
+			return target
+		}
+	}
+
+	return nil
+}
+
+func (t *Tracker) handleTargetEvent(event *payload_builder.BuildTargetEvent) {
+	t.upsert(event.Slot, func(result *SlotResult) {
+		if result.Build == nil {
+			result.Build = &SlotBuild{}
+		}
+
+		target := findTarget(result, event.Seq)
+
+		switch event.Status {
+		case payload_builder.TargetStatusStarted:
+			if target != nil {
+				return
+			}
+
+			target = &BuildTarget{
+				Seq:               event.Seq,
+				Candidate:         string(event.Candidate),
+				Status:            TargetBuilding,
+				Attributes:        attributesSnapshot(event.Attributes),
+				TxSource:          event.TxSource,
+				PayloadSource:     event.PayloadSource,
+				TestingSkipReason: event.TestingSkipReason,
+				StartedAt:         event.At,
+				At:                event.At,
+			}
+			result.Build.Targets = append(result.Build.Targets, target)
+
+		case payload_builder.TargetStatusNoPayload:
+			if target == nil || target.Status == TargetSuperseded {
+				return
+			}
+
+			target.Status = TargetNoPayload
+			target.Error = event.Error
+			target.At = event.At
+
+		case payload_builder.TargetStatusSuperseded:
+			if target == nil {
+				return
+			}
+
+			target.Status = TargetSuperseded
+			target.Error = event.Error
+			target.At = event.At
+		}
+
+		result.Build.refreshStatus()
+	})
+}
+
+func (t *Tracker) handleEngineBuild(event *payload_builder.EngineBuildEvent) {
+	var record *PayloadRecord
+
+	if event.Payload != nil {
+		record = payloadRecord(event.Payload)
+		record.Captured = t.capturePayload(event.Payload)
+	}
+
+	t.upsert(event.Slot, func(result *SlotResult) {
+		target := findTarget(result, event.Seq)
+		if target == nil {
+			return
+		}
+
+		engine := &BuildRecord{
+			Kind:      payload_builder.BuildKindEngine,
+			Status:    event.Status,
+			Error:     event.Error,
+			StartedAt: event.StartedAt,
+			At:        event.At,
+		}
+
+		if calls := event.Calls; calls != nil {
+			engine.Calls = &EngineCalls{
+				ForkchoiceStart: calls.ForkchoiceStart,
+				ForkchoiceEnd:   calls.ForkchoiceEnd,
+				GetPayloadStart: calls.GetPayloadStart,
+				GetPayloadEnd:   calls.GetPayloadEnd,
+			}
+		}
+
+		if record != nil {
+			engine.PayloadHash = record.BlockHash
+			addPayloadRecord(result, record)
+		}
+
+		target.Engine = engine
+	})
+}
+
+func (t *Tracker) handleTestingBuild(event *payload_builder.TestingBuildEvent) {
+	var record *PayloadRecord
+
+	if event.Payload != nil {
+		record = payloadRecord(event.Payload)
+	}
+
+	t.upsert(event.Slot, func(result *SlotResult) {
+		target := findTarget(result, event.Seq)
+		if target == nil {
+			return
+		}
+
+		run := &BuildRecord{
+			Kind:       payload_builder.BuildKindTesting,
+			Run:        event.Run,
+			Status:     event.Status,
+			SkipReason: event.SkipReason,
+			Error:      event.Error,
+			Info:       event.Info,
+			StartedAt:  event.StartedAt,
+			At:         event.At,
+		}
+
+		if record != nil {
+			run.PayloadHash = record.BlockHash
+			addPayloadRecord(result, record)
+		}
+
+		for i, existing := range target.Testing {
+			if existing.Run == event.Run {
+				target.Testing[i] = run
+
+				return
+			}
+		}
+
+		target.Testing = append(target.Testing, run)
+	})
+}
+
+func (t *Tracker) handleSelection(event *payload_builder.PayloadSelectedEvent) {
+	hash := fmt.Sprintf("%#x", event.BlockHash)
+
+	// The engine payload was captured with its build; a testing payload is
+	// captured once it is selected (the runs nobody selected stay records).
+	captured := event.Payload != nil && event.Build.IsTesting() && t.capturePayload(event.Payload)
+
+	t.upsert(event.Slot, func(result *SlotResult) {
+		target := findTarget(result, event.Seq)
+		if target == nil || target.Status == TargetSuperseded {
+			return
+		}
+
+		if captured {
+			if existing := result.Payloads[hash]; existing != nil && !existing.Captured {
+				record := *existing
+				record.Captured = true
+				result.Payloads[hash] = &record
+			}
+		}
+
+		target.Selections = append(target.Selections, Selection{
+			PayloadHash: hash,
+			Build:       event.Build,
+			Reason:      event.Reason,
+			Fallback:    event.Fallback,
+			At:          event.At,
+		})
+		target.Status = TargetSelected
+		target.Error = ""
+		target.At = event.At
+
+		result.Build.refreshStatus()
+	})
+}
+
+// addPayloadRecord adds a payload record (a block hash is recorded once).
+func addPayloadRecord(result *SlotResult, record *PayloadRecord) {
+	if result.Payloads == nil {
+		result.Payloads = make(map[string]*PayloadRecord, 4)
+	} else if _, ok := result.Payloads[record.BlockHash]; ok {
 		return
+	}
+
+	result.Payloads[record.BlockHash] = record
+}
+
+// capturePayload stores the payload as an artifact, keyed by its block hash;
+// false when capture is off or failed.
+func (t *Tracker) capturePayload(payload *payload_builder.Payload) bool {
+	if !t.cfg.SlotArtifactCaptureEnabled || payload.ExecutionPayload == nil || payload.Attributes == nil {
+		return false
 	}
 
 	slot := payload.Attributes.ProposalSlot
 
-	numTxs := 0
-	forkVersion := version.DataVersionUnknown
+	err := t.artifacts.StorePayload(slot, payload.ExecutionPayload.Version, payload.ExecutionPayload,
+		PayloadArtifactMeta{
+			BlockHash:       fmt.Sprintf("%#x", payload.BlockHash),
+			Build:           payload.Build.Kind,
+			Run:             payload.Build.Run,
+			Candidate:       string(payload.Candidate),
+			ParentBlockRoot: fmt.Sprintf("%#x", payload.Attributes.ParentBlockRoot),
+			ParentBlockHash: fmt.Sprintf("%#x", payload.Attributes.ParentBlockHash),
+			At:              payload.ReadyAt.UnixMilli(),
+		})
+	if err != nil {
+		t.log.WithError(err).WithField("slot", slot).Warn("Failed to store payload artifact")
 
-	if payload.ExecutionPayload != nil {
-		numTxs = len(payload.ExecutionPayload.Transactions)
-		forkVersion = payload.ExecutionPayload.Version
+		return false
 	}
 
-	numBlobs := 0
-	if payload.BlobsBundle != nil {
-		numBlobs = len(payload.BlobsBundle.Commitments)
+	return true
+}
+
+// payloadRecord summarizes a built payload (list fields aggregated to
+// counts).
+func payloadRecord(payload *payload_builder.Payload) *PayloadRecord {
+	record := &PayloadRecord{
+		BlockHash:     fmt.Sprintf("%#x", payload.BlockHash),
+		Build:         payload.Build,
+		Candidate:     string(payload.Candidate),
+		BlockValueWei: "0",
+		FeeRecipient:  payload.FeeRecipient.Hex(),
+		InclusionList: payload.InclusionList,
+		BuiltAt:       payload.ReadyAt,
 	}
 
-	blockValue := "0"
 	if payload.BlockValue != nil {
-		blockValue = payload.BlockValue.String()
+		record.BlockValueWei = payload.BlockValue.String()
 	}
 
-	outcome := &BuildOutcome{
-		Status:          BuildStatusReady,
-		BlockHash:       fmt.Sprintf("%#x", payload.BlockHash),
-		BlockValueWei:   blockValue,
-		NumTransactions: numTxs,
-		NumBlobs:        numBlobs,
-		FeeRecipient:    payload.FeeRecipient.Hex(),
-		At:              payload.ReadyAt,
-		Attributes:      attributesSnapshot(payload.Attributes),
+	if payload.BlobsBundle != nil {
+		record.NumBlobs = len(payload.BlobsBundle.Commitments)
 	}
 
 	if ep := payload.ExecutionPayload; ep != nil {
-		outcome.BlockNumber = ep.BlockNumber
-		outcome.ParentHash = fmt.Sprintf("%#x", ep.ParentHash)
-		outcome.StateRoot = fmt.Sprintf("%#x", ep.StateRoot)
-		outcome.ReceiptsRoot = fmt.Sprintf("%#x", ep.ReceiptsRoot)
-		outcome.PrevRandao = fmt.Sprintf("%#x", ep.PrevRandao)
-		outcome.Timestamp = ep.Timestamp
-		outcome.GasLimit = ep.GasLimit
-		outcome.GasUsed = ep.GasUsed
-		outcome.ExtraData = fmt.Sprintf("%#x", ep.ExtraData)
-		outcome.BlobGasUsed = ep.BlobGasUsed
-		outcome.ExcessBlobGas = ep.ExcessBlobGas
-		outcome.NumWithdrawals = len(ep.Withdrawals)
+		record.NumTransactions = len(ep.Transactions)
+		record.BlockNumber = ep.BlockNumber
+		record.ParentHash = fmt.Sprintf("%#x", ep.ParentHash)
+		record.StateRoot = fmt.Sprintf("%#x", ep.StateRoot)
+		record.ReceiptsRoot = fmt.Sprintf("%#x", ep.ReceiptsRoot)
+		record.PrevRandao = fmt.Sprintf("%#x", ep.PrevRandao)
+		record.Timestamp = ep.Timestamp
+		record.GasLimit = ep.GasLimit
+		record.GasUsed = ep.GasUsed
+		record.ExtraData = fmt.Sprintf("%#x", ep.ExtraData)
+		record.BlobGasUsed = ep.BlobGasUsed
+		record.ExcessBlobGas = ep.ExcessBlobGas
+		record.NumWithdrawals = len(ep.Withdrawals)
 
 		if ep.BaseFeePerGas != nil {
-			outcome.BaseFeePerGas = ep.BaseFeePerGas.Dec()
+			record.BaseFeePerGas = ep.BaseFeePerGas.Dec()
 		}
 	}
 
 	if reqs := payload.ExecutionRequests; reqs != nil {
-		outcome.NumExecutionRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
+		record.NumExecutionRequests = len(reqs.Deposits) + len(reqs.Withdrawals) +
 			len(reqs.Consolidations) + len(reqs.BuilderDeposits) + len(reqs.BuilderExits)
 	}
 
-	outcome.Candidate = string(payload.Candidate)
-	outcome.Source = payload.Source
-	outcome.BuildSeq = payload.BuildSeq
-	outcome.InclusionList = payload.InclusionList
-
-	if t.cfg.SlotArtifactCaptureEnabled && payload.ExecutionPayload != nil {
-		idx, err := t.artifacts.StorePayload(slot, forkVersion, payload.ExecutionPayload,
-			PayloadArtifactMeta{
-				Candidate:       string(payload.Candidate),
-				ParentBlockRoot: fmt.Sprintf("%#x", payload.Attributes.ParentBlockRoot),
-				ParentBlockHash: fmt.Sprintf("%#x", payload.Attributes.ParentBlockHash),
-				Source:          payload.Source,
-				At:              payload.ReadyAt.UnixMilli(),
-			})
-		if err != nil {
-			t.log.WithError(err).WithField("slot", slot).Warn("Failed to store payload artifact")
-		} else {
-			outcome.ArtifactIdx = &idx
-		}
-	}
-
-	t.upsert(slot, func(result *SlotResult) {
-		if staleBuildOutcome(result, outcome) {
-			return
-		}
-
-		upsertBuildOutcome(result, outcome)
-		result.Build = primaryBuildOutcome(result)
-	})
-}
-
-// staleBuildOutcome reports whether the result already holds an outcome of
-// the same candidate build slot produced by a NEWER build (higher BuildSeq):
-// such an outcome belongs to a superseded build whose late events must not
-// overwrite its replacement's. Outcomes without a seq (legacy or baseline
-// records) never count as newer.
-func staleBuildOutcome(result *SlotResult, outcome *BuildOutcome) bool {
-	if outcome.BuildSeq == 0 {
-		return false
-	}
-
-	for _, existing := range result.Builds {
-		if buildOutcomesMatch(existing, outcome) {
-			return existing.BuildSeq > outcome.BuildSeq
-		}
-	}
-
-	return false
-}
-
-// buildCandidatePriority orders candidate keys from most to least canonical
-// for primary build selection.
-var buildCandidatePriority = map[string]int{
-	"parent_full":       0,
-	"parent_empty":      1,
-	"grandparent_full":  2,
-	"grandparent_empty": 3,
-}
-
-// upsertBuildOutcome inserts the outcome into the result's build list,
-// replacing an earlier entry of the same candidate parent (matched by the
-// attributes parent tuple, falling back to the candidate key).
-func upsertBuildOutcome(result *SlotResult, outcome *BuildOutcome) {
-	for i, existing := range result.Builds {
-		if buildOutcomesMatch(existing, outcome) {
-			// The local build outcome arrives on its own event; keep it when
-			// the lifecycle entry is replaced.
-			if outcome.LocalBuild == nil {
-				outcome.LocalBuild = existing.LocalBuild
-				outcome.Fallback = outcome.Fallback || existing.Fallback
-			}
-
-			result.Builds[i] = outcome
-
-			return
-		}
-	}
-
-	result.Builds = append(result.Builds, outcome)
-}
-
-// buildOutcomesMatch reports whether two outcomes describe the same candidate
-// build.
-func buildOutcomesMatch(a, b *BuildOutcome) bool {
-	if a.Attributes != nil && b.Attributes != nil {
-		return a.Attributes.ParentBlockRoot == b.Attributes.ParentBlockRoot &&
-			a.Attributes.ParentBlockHash == b.Attributes.ParentBlockHash
-	}
-
-	return a.Candidate == b.Candidate
-}
-
-// primaryBuildOutcome selects the result's primary build: the most canonical
-// ready candidate, then any ready build, then the newest entry.
-func primaryBuildOutcome(result *SlotResult) *BuildOutcome {
-	if len(result.Builds) == 0 {
-		return result.Build
-	}
-
-	var best *BuildOutcome
-
-	bestRank := len(buildCandidatePriority) + 1
-
-	for _, build := range result.Builds {
-		if build.Status != BuildStatusReady {
-			continue
-		}
-
-		rank, classified := buildCandidatePriority[build.Candidate]
-		if !classified {
-			rank = len(buildCandidatePriority)
-		}
-
-		if best == nil || rank < bestRank {
-			best = build
-			bestRank = rank
-		}
-	}
-
-	if best != nil {
-		return best
-	}
-
-	return result.Builds[len(result.Builds)-1]
+	return record
 }
 
 // attributesSnapshot reduces a payload_attributes event to the stored
@@ -609,181 +680,13 @@ func (t *Tracker) fillBidDetail(attempt *BidAttempt, signedBid *eth2all.SignedEx
 	}
 }
 
-// handleLocalBuild records the local build's outcome on the target's build
-// entry and captures the local payload as its own artifact (the shadow build
-// stays inspectable even when the engine payload fed the bids).
-func (t *Tracker) handleLocalBuild(event *payload_builder.LocalBuildEvent) {
-	if event == nil {
-		return
-	}
-
-	outcome := &LocalBuildOutcome{
-		Status:        event.Status,
-		SkipReason:    event.SkipReason,
-		Error:         event.Error,
-		TxSource:      event.TxSource,
-		PayloadSource: event.PayloadSource,
-		Selected:      event.Selected,
-		Info:          event.Info,
-		At:            event.At,
-	}
-
-	var attrs *beacon.PayloadAttributesEvent
-
-	if p := event.Payload; p != nil {
-		attrs = p.Attributes
-		outcome.BlockHash = fmt.Sprintf("%#x", p.BlockHash)
-
-		if p.BlockValue != nil {
-			outcome.BlockValueWei = p.BlockValue.String()
-		}
-
-		if ep := p.ExecutionPayload; ep != nil {
-			outcome.NumTransactions = len(ep.Transactions)
-			outcome.GasUsed = ep.GasUsed
-			outcome.GasLimit = ep.GasLimit
-		}
-
-		if p.BlobsBundle != nil {
-			outcome.NumBlobs = len(p.BlobsBundle.Commitments)
-		}
-
-		// The selected local payload is captured by the ready handler as the
-		// target's primary payload; the shadow one gets its own artifact here.
-		if !event.Selected && t.cfg.SlotArtifactCaptureEnabled && p.ExecutionPayload != nil && attrs != nil {
-			idx, err := t.artifacts.StorePayload(attrs.ProposalSlot, p.ExecutionPayload.Version, p.ExecutionPayload,
-				PayloadArtifactMeta{
-					Candidate:       event.Candidate,
-					ParentBlockRoot: fmt.Sprintf("%#x", attrs.ParentBlockRoot),
-					ParentBlockHash: fmt.Sprintf("%#x", attrs.ParentBlockHash),
-					Source:          payload_builder.SourceLocal,
-					At:              p.ReadyAt.UnixMilli(),
-				})
-			if err != nil {
-				t.log.WithError(err).WithField("slot", attrs.ProposalSlot).Warn("Failed to store local payload artifact")
-			} else {
-				outcome.ArtifactIdx = &idx
-			}
-		}
-	} else if event.ELPayload != nil {
-		attrs = event.ELPayload.Attributes
-	}
-
-	t.upsert(event.Slot, func(result *SlotResult) {
-		build := findBuildOutcome(result, event.Candidate, attrs)
-		if build == nil {
-			build = &BuildOutcome{
-				Status:    BuildStatusStarted,
-				Candidate: event.Candidate,
-				At:        event.At,
-			}
-
-			if attrs != nil {
-				build.Attributes = attributesSnapshot(attrs)
-			}
-
-			result.Builds = append(result.Builds, build)
-		}
-
-		build.LocalBuild = outcome
-		build.Fallback = event.Fallback
-
-		result.Build = primaryBuildOutcome(result)
-	})
-}
-
-// findBuildOutcome locates the result's build entry for a target: by the
-// attributes parent tuple when known, else by candidate key.
-func findBuildOutcome(result *SlotResult, candidate string, attrs *beacon.PayloadAttributesEvent) *BuildOutcome {
-	if attrs != nil {
-		root := fmt.Sprintf("%#x", attrs.ParentBlockRoot)
-		hash := fmt.Sprintf("%#x", attrs.ParentBlockHash)
-
-		for _, build := range result.Builds {
-			if build.Attributes != nil && build.Attributes.ParentBlockRoot == root &&
-				build.Attributes.ParentBlockHash == hash {
-				return build
-			}
-		}
-	}
-
-	for _, build := range result.Builds {
-		if build.Candidate == candidate && (attrs == nil || build.Attributes == nil) {
-			return build
-		}
-	}
-
-	return nil
-}
-
-func (t *Tracker) handleBuildStarted(event *payload_builder.PayloadBuildStartedEvent) {
-	t.upsert(event.Slot, func(result *SlotResult) {
-		outcome := &BuildOutcome{
-			Status:    BuildStatusStarted,
-			Candidate: event.Candidate,
-			At:        event.StartedAt,
-			BuildSeq:  event.BuildSeq,
-		}
-
-		// Track per-candidate progress; a candidate already past started
-		// (ready/failed) is never regressed by the same build's events. A
-		// NEWER build of the candidate (a rebuild after a supersede) starts
-		// the candidate over.
-		for _, existing := range result.Builds {
-			if existing.Candidate == event.Candidate && existing.Status != BuildStatusStarted &&
-				!(event.BuildSeq != 0 && event.BuildSeq > existing.BuildSeq) {
-				return
-			}
-		}
-
-		upsertBuildOutcome(result, outcome)
-
-		// Never regress the primary ready/failed outcome to started (events
-		// may race).
-		if result.Build != nil && result.Build.Status != BuildStatusWaitingAttributes &&
-			result.Build.Status != BuildStatusNoAttributes {
-			return
-		}
-
-		result.Build = outcome
-	})
-}
-
-func (t *Tracker) handleBuildFailed(event *payload_builder.PayloadBuildFailedEvent) {
-	t.upsert(event.Slot, func(result *SlotResult) {
-		outcome := &BuildOutcome{
-			Status:    BuildStatusFailed,
-			Candidate: event.Candidate,
-			Error:     event.Error,
-			At:        event.FailedAt,
-			BuildSeq:  event.BuildSeq,
-		}
-
-		if staleBuildOutcome(result, outcome) {
-			return
-		}
-
-		upsertBuildOutcome(result, outcome)
-
-		// Another candidate's ready payload keeps the primary slot outcome;
-		// the same candidate's ready payload was withdrawn (a superseded
-		// build), so its failure replaces it.
-		if result.Build != nil && result.Build.Status == BuildStatusReady &&
-			result.Build.Candidate != event.Candidate {
-			return
-		}
-
-		result.Build = outcome
-	})
-}
-
 func (t *Tracker) handleBuildSkipped(event *payload_builder.BuildSkippedEvent) {
 	t.upsert(event.Slot, func(result *SlotResult) {
 		if result.Build != nil && result.Build.Status != BuildStatusWaitingAttributes {
 			return
 		}
 
-		result.Build = &BuildOutcome{
+		result.Build = &SlotBuild{
 			Status:     BuildStatusSkipped,
 			SkipReason: event.Reason,
 			At:         time.Now(),
@@ -869,8 +772,13 @@ func (t *Tracker) handleRevealResult(result *payload_bidder.RevealResult) {
 	}
 
 	if t.cfg.SlotArtifactCaptureEnabled && result.Envelope != nil {
+		meta := EnvelopeArtifactMeta{}
+		if message := result.Envelope.Message; message != nil && message.Payload != nil {
+			meta.BlockHash = fmt.Sprintf("%#x", message.Payload.BlockHash)
+		}
+
 		if err := t.artifacts.StoreEnvelope(result.Slot, result.Envelope.Version,
-			result.Envelope); err != nil {
+			result.Envelope, meta); err != nil {
 			t.log.WithError(err).WithField("slot", result.Slot).
 				Warn("Failed to store envelope artifact")
 		}
@@ -1025,10 +933,21 @@ func (t *Tracker) RecordBuilderAPIBid(slot phase0.Slot, forkName string, signedB
 		At:                   time.Now(),
 	}
 
-	// The epbs dialect serves Gloas+ bids with the full message; the legacy
-	// dialect's versioned header bids stay aggregate-only.
-	if signed, ok := signedBid.(*eth2all.SignedExecutionPayloadBid); ok {
+	// The epbs dialect serves Gloas+ bids with the full message; of the
+	// legacy dialect's header bids the payload (block hash, parent, fee
+	// recipient, gas limit) is recorded.
+	switch signed := signedBid.(type) {
+	case *eth2all.SignedExecutionPayloadBid:
 		t.fillBidDetail(&attempt, signed)
+	case *legacytypes.SignedBuilderBid:
+		if signed != nil && signed.Message != nil && signed.Message.Header != nil {
+			header := signed.Message.Header
+			attempt.BlockHash = fmt.Sprintf("%#x", header.BlockHash)
+			attempt.ParentBlockHash = fmt.Sprintf("%#x", header.ParentHash)
+			attempt.FeeRecipient = fmt.Sprintf("%#x", header.FeeRecipient)
+			attempt.GasLimit = header.GasLimit
+			attempt.NumBlobCommitments = len(signed.Message.BlobKZGCommitments)
+		}
 	}
 
 	marshaler, isMarshaler := signedBid.(sszMarshaler)

@@ -1,11 +1,15 @@
 import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
 import React, { useEffect, useMemo, useState } from 'react';
 import type {
+  BuildRecord,
+  BuildTargetRecord,
   FrozenPlan,
+  PayloadRecord,
   PlanUpdate,
   SlotPlan,
   SlotResult,
 } from '../../types';
+import { buildLabel, payloadArtifactUrl, primaryTargetRecord, sameBuild } from '../../buildTargets';
 import type { ApplyUpdatesResult } from '../../hooks/useActionPlan';
 import { TransformEditor, type TransformState } from './TransformEditor';
 import {
@@ -81,7 +85,7 @@ const BUILD_BADGES: Record<string, string> = {
   ready: 'success',
   failed: 'danger',
   skipped: 'secondary',
-  started: 'primary',
+  building: 'primary',
   waiting_attributes: 'info',
   no_attributes: 'warning',
 };
@@ -401,6 +405,324 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
   </div>
 );
 
+// ---------------------------------------------------------------------------
+// Build targets: each target's builds and selections, each build with its own
+// payload (by block hash)
+// ---------------------------------------------------------------------------
+
+const TARGET_BADGES: Record<string, string> = {
+  selected: 'success',
+  building: 'primary',
+  no_payload: 'danger',
+  superseded: 'warning',
+};
+
+const RUN_BADGES: Record<string, string> = {
+  ready: 'success',
+  started: 'primary',
+  building: 'primary',
+  failed: 'danger',
+  skipped: 'secondary',
+};
+
+// sinceMs renders a time relative to an earlier one ("+123ms").
+const sinceMs = (at: string, from: string): string => `+${Date.parse(at) - Date.parse(from)}ms`;
+
+const HashLine: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
+  value ? (
+    <div className="col-12">
+      <div className="config-item">
+        <div className="config-item-label">{label}</div>
+        <div className="config-item-value font-monospace ap-break">{value}</div>
+      </div>
+    </div>
+  ) : null;
+
+// PayloadDetails renders one payload record.
+const PayloadDetails: React.FC<{ payload: PayloadRecord }> = ({ payload }) => (
+  <div className="row g-2">
+    <HashLine label="Block Hash" value={payload.block_hash} />
+    <KV label="Value" hint="The block value the EL reported for this payload.">
+      {weiToEth(payload.block_value_wei)}
+    </KV>
+    <KV label="Contents">
+      {payload.num_transactions ?? 0} txs, {payload.num_blobs ?? 0} blobs, {payload.num_withdrawals ?? 0} wdrls,{' '}
+      {payload.num_execution_requests ?? 0} reqs
+    </KV>
+    {payload.block_number !== undefined && <KV label="Block #">{payload.block_number}</KV>}
+    {payload.gas_used !== undefined && (
+      <KV label="Gas">
+        {payload.gas_used.toLocaleString()} / {(payload.gas_limit ?? 0).toLocaleString()}
+      </KV>
+    )}
+    {payload.base_fee_per_gas && <KV label="Base Fee">{payload.base_fee_per_gas} wei</KV>}
+    {payload.blob_gas_used !== undefined && payload.blob_gas_used > 0 && (
+      <KV label="Blob Gas">
+        {payload.blob_gas_used.toLocaleString()} (excess {(payload.excess_blob_gas ?? 0).toLocaleString()})
+      </KV>
+    )}
+    {payload.timestamp !== undefined && <KV label="Timestamp">{payload.timestamp}</KV>}
+    {payload.extra_data && <KV label="Extra Data">{payload.extra_data}</KV>}
+    <KV label="Built At">{formatDateTime(payload.built_at)}</KV>
+    {payload.inclusion_list && (
+      <KV
+        label="Inclusion Lists"
+        hint={
+          <>
+            FOCIL (Heze): the committee lists of slot {payload.inclusion_list.slot} the payload was built
+            against — the gossiped lists merged with the beacon node&apos;s attributes list. Omitted
+            transactions were left out on purpose (omit mode or the plan&apos;s omit_txs).
+          </>
+        }
+      >
+        {payload.inclusion_list.lists} lists ({payload.inclusion_list.timely} timely),{' '}
+        {payload.inclusion_list.transactions} txs
+        {payload.inclusion_list.omitted ? `, ${payload.inclusion_list.omitted} omitted` : ''}
+        {payload.inclusion_list.mode === 'omit' && (
+          <span className={`ms-1 ${badgeClass('danger')}`} title="Built without the inclusion lists">
+            omitted
+          </span>
+        )}
+        {payload.inclusion_list.bits && (
+          <span className="ms-1 font-monospace text-secondary">bits {payload.inclusion_list.bits}</span>
+        )}
+      </KV>
+    )}
+    <HashLine label="Parent Hash" value={payload.parent_hash} />
+    <HashLine label="State Root" value={payload.state_root} />
+    <HashLine label="Receipts Root" value={payload.receipts_root} />
+    <HashLine label="Prev Randao" value={payload.prev_randao} />
+    <HashLine label="Fee Recipient" value={payload.fee_recipient} />
+  </div>
+);
+
+// payloadUsage lists what the consumers did with one payload (by block
+// hash): the bids that committed to it and its inclusion.
+const payloadUsage = (result: SlotResult, hash: string): string[] => {
+  const same = (other?: string) => !!other && other.toLowerCase() === hash.toLowerCase();
+  const usage: string[] = [];
+  const bids = (result.bids ?? []).filter((bid) => same(bid.block_hash));
+
+  for (const transport of ['p2p', 'builder-api']) {
+    const sent = bids.filter((bid) => bid.transport === transport && (bid.status === 'submitted' || bid.status === 'served'));
+    if (sent.length === 0) continue;
+
+    const times = sent.map((bid) => new Date(bid.at).toLocaleTimeString()).join(', ');
+    usage.push(transport === 'p2p'
+      ? `${sent.length} p2p bid${sent.length > 1 ? 's' : ''} (${times})`
+      : `served to the proposer ${sent.length}× (${times})`);
+  }
+
+  if (same(result.inclusion?.block_hash)) {
+    usage.push(`included${result.inclusion?.payload_status ? ` (${result.inclusion.payload_status})` : ''}`);
+  }
+
+  return usage;
+};
+
+// BuildPayloadLine is a build's payload in one line: hash, value, contents,
+// whether it is the target's pick, what the consumers did with it, and its
+// download.
+const BuildPayloadLine: React.FC<{
+  slot: number;
+  build: BuildRecord;
+  payload?: PayloadRecord;
+  selected: 'current' | 'earlier' | null;
+  usage: string[];
+  onArtifactError: (message: string) => void;
+}> = ({ slot, build, payload, selected, usage, onArtifactError }) => {
+  if (!build.payload_hash) return null;
+
+  return (
+    <div className="d-flex flex-wrap align-items-center gap-2 small">
+      <span className="font-monospace ap-break">{build.payload_hash}</span>
+      {payload && (
+        <span className="text-muted">
+          {payload.num_transactions} txs, {payload.num_blobs ?? 0} blobs, {weiToEth(payload.block_value_wei)}
+        </span>
+      )}
+      {selected === 'current' && <span className={badgeClass('success')}>current pick</span>}
+      {selected === 'earlier' && <span className={badgeClass('secondary')}>picked earlier</span>}
+      {payload?.captured && (
+        <span className="ms-auto">
+          <ArtifactLinks
+            url={payloadArtifactUrl(slot, build.payload_hash)}
+            filename={`slot-${slot}-${build.kind}${build.run ? `-${build.run}` : ''}-${build.payload_hash.slice(0, 10)}.ssz`}
+            onError={onArtifactError}
+          />
+        </span>
+      )}
+      <div className="w-100 text-muted">used by: {usage.length > 0 ? usage.join(' · ') : 'nothing'}</div>
+    </div>
+  );
+};
+
+const BuildTargetView: React.FC<{
+  slot: number;
+  target: BuildTargetRecord;
+  primary: boolean;
+  result: SlotResult;
+  onArtifactError: (message: string) => void;
+}> = ({ slot, target, primary, result, onArtifactError }) => {
+  const payloads = result.payloads ?? {};
+  const selections = target.selections ?? [];
+  const current = target.status === 'selected' ? selections[selections.length - 1] : undefined;
+  // Picks name builds: a rebuild of a picked block is not picked itself.
+  const selectedState = (build: BuildRecord): 'current' | 'earlier' | null =>
+    sameBuild(current?.build, build) ? 'current' : selections.some((s) => sameBuild(s.build, build)) ? 'earlier' : null;
+  const selectedPayload = current ? payloads[current.payload_hash] : undefined;
+  const engine = target.engine;
+  const runs = target.testing ?? [];
+
+  return (
+    <div className={`border rounded p-2 mb-2${primary ? '' : ' opacity-75'}`}>
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <strong className="small">{target.candidate || 'unclassified'}</strong>
+        {primary && <span className={badgeClass('info')}>primary</span>}
+        <StatusBadge map={TARGET_BADGES} status={target.status} />
+        <span className="text-muted small">started {formatDateTime(target.started_at)}</span>
+      </div>
+      {target.error && <div className="alert alert-danger small py-1 px-2 mb-2">{target.error}</div>}
+
+      <div className="section-header mb-1">Engine Build</div>
+      {engine ? (
+        <div className="mb-2">
+          <div className="d-flex flex-wrap align-items-center gap-2 small">
+            <StatusBadge map={RUN_BADGES} status={engine.status} />
+            {engine.status !== 'started' && <span className="text-muted">took {sinceMs(engine.at, engine.started_at)}</span>}
+            {engine.calls && (
+              <span className="text-muted">
+                forkchoiceUpdated {sinceMs(engine.calls.forkchoice_end, engine.calls.forkchoice_start)}, EL build wait{' '}
+                {sinceMs(engine.calls.get_payload_start, engine.calls.forkchoice_end)}, getPayload{' '}
+                {sinceMs(engine.calls.get_payload_end, engine.calls.get_payload_start)}
+              </span>
+            )}
+          </div>
+          {engine.error && <div className="text-danger small">{engine.error}</div>}
+          <BuildPayloadLine
+            slot={slot}
+            build={engine}
+            payload={engine.payload_hash ? payloads[engine.payload_hash] : undefined}
+            selected={selectedState(engine)}
+            usage={engine.payload_hash ? payloadUsage(result, engine.payload_hash) : []}
+            onArtifactError={onArtifactError}
+          />
+        </div>
+      ) : (
+        <div className="text-muted small mb-2">did not run</div>
+      )}
+
+      <div className="section-header mb-1">
+        Testing Builds
+        <InfoHint>
+          testing_buildBlockV1 runs from buildoor&apos;s transaction list (tx source{' '}
+          <code>{target.tx_source || '—'}</code>, payload source <code>{target.payload_source || '—'}</code>).
+          Every run builds its own payload; payloads never picked are recorded but not captured.
+        </InfoHint>
+      </div>
+      {runs.length === 0 ? (
+        <div className="text-muted small mb-2">
+          {target.testing_skip_reason ? `skipped (${target.testing_skip_reason})` : 'none'}
+        </div>
+      ) : (
+        <div className="mb-2">
+          {runs.map((run) => (
+            <div key={run.run} className="border-top pt-1 mt-1">
+              <div className="d-flex flex-wrap align-items-center gap-2 small">
+                <strong>#{run.run}</strong>
+                <StatusBadge map={RUN_BADGES} status={run.status} />
+                {run.skip_reason && <span className="text-muted">({run.skip_reason})</span>}
+                <span className="text-muted">
+                  started {sinceMs(run.started_at, target.started_at)} after the target, took {sinceMs(run.at, run.started_at)}
+                </span>
+                {run.info && (
+                  <span className="text-muted">
+                    submitted {run.info.submitted_txs < 0 ? 'EL mempool' : `${run.info.submitted_txs} txs`}
+                    {run.info.selection &&
+                      ` · selected ${run.info.selection.selected} of ${run.info.selection.pool_size} pooled`}
+                    {run.info.explicit_txs ? ` · explicit list of ${run.info.explicit_txs}` : ''}
+                    {run.info.inclusion_list_txs ? ` · ${run.info.inclusion_list_txs} inclusion-list txs` : ''}
+                    {run.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
+                    {run.info.dropped_by_el ? ` · ${run.info.dropped_by_el} dropped by the EL` : ''}
+                    {run.info.attempts && run.info.attempts > 1 ? ` · ${run.info.attempts} attempts` : ''}
+                    {run.info.dropped?.length
+                      ? ` · dropped after EL refusal: ${run.info.dropped
+                          .map((d) => (d.hash ? `${d.hash.slice(0, 10)}… (${d.reason})` : d.reason))
+                          .join(', ')}`
+                      : ''}
+                  </span>
+                )}
+              </div>
+              {run.error && <div className="text-danger small">{run.error}</div>}
+              <BuildPayloadLine
+                slot={slot}
+                build={run}
+                payload={run.payload_hash ? payloads[run.payload_hash] : undefined}
+                selected={selectedState(run)}
+                usage={run.payload_hash ? payloadUsage(result, run.payload_hash) : []}
+                onArtifactError={onArtifactError}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="section-header mb-1">
+        Picks
+        <InfoHint>
+          The payload the cache hands to the consumers for this target, re-evaluated whenever one of
+          its builds finishes (by the payload source). Each consumer takes the pick of its own
+          moment — what it used is listed with each payload.
+        </InfoHint>
+      </div>
+      {selections.length === 0 ? (
+        <div className="text-muted small mb-2">no payload was picked</div>
+      ) : (
+        <ul className="small mb-2 ps-3">
+          {selections.map((selection, i) => (
+            <li key={i}>
+              {sinceMs(selection.at, target.started_at)}: {selection.reason === 'first' ? 'first pick' : 'better pick'}, the{' '}
+              <strong>{buildLabel(selection.build)}</strong> payload{' '}
+              <span className="font-monospace">{selection.payload_hash.slice(0, 18)}…</span>
+              {selection.fallback && <span className={`ms-1 ${badgeClass('warning')}`}>fallback</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {selectedPayload && (
+        <>
+          <div className="section-header mb-1">Current Pick ({buildLabel(selectedPayload.build)})</div>
+          <PayloadDetails payload={selectedPayload} />
+        </>
+      )}
+
+      {target.attributes && (
+        <>
+          <div className="section-header mt-3 mb-1">Payload Attributes</div>
+          <div className="row g-2">
+            <KV label="Proposer">{target.attributes.proposer_index}</KV>
+            <KV label="Parent Block #">{target.attributes.parent_block_number}</KV>
+            <KV label="Timestamp">{target.attributes.timestamp}</KV>
+            {target.attributes.target_gas_limit !== undefined && target.attributes.target_gas_limit > 0 && (
+              <KV label="Target Gas Limit">{target.attributes.target_gas_limit.toLocaleString()}</KV>
+            )}
+            <KV label="Contents">
+              {target.attributes.num_withdrawals} wdrls
+              {target.attributes.num_inclusion_list_txs ? `, ${target.attributes.num_inclusion_list_txs} IL txs` : ''}
+            </KV>
+            <HashLine label="Parent Hash" value={target.attributes.parent_block_hash} />
+            <HashLine label="Parent Root" value={target.attributes.parent_block_root} />
+            <HashLine label="Beacon Parent Root" value={target.attributes.parent_beacon_block_root} />
+            <HashLine label="Prev Randao" value={target.attributes.prev_randao} />
+            <HashLine label="Suggested Fee Recipient" value={target.attributes.suggested_fee_recipient} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 const ResultView: React.FC<{
   slot: number;
   result?: SlotResult;
@@ -423,7 +745,7 @@ const ResultView: React.FC<{
 
   const baseUrl = `/api/buildoor/slot-results/${slot}`;
   const build = result.build;
-  const payloadExists = build?.status === 'ready' || !!build?.block_hash;
+  const primary = primaryTargetRecord(build);
   const reveals = result.reveal_attempts || [];
   const envelopeExists = reveals.some((r) => r.status === 'published' || r.status === 'failed');
 
@@ -442,265 +764,40 @@ const ResultView: React.FC<{
                   <dd>the slot is active, payload attributes have not arrived yet</dd>
                   <dt>no_attributes</dt>
                   <dd>no payload attributes arrived for the slot, so nothing could be built</dd>
-                  <dt>started</dt>
-                  <dd>the engine build is running</dd>
+                  <dt>building</dt>
+                  <dd>the builds run, no payload picked yet</dd>
                   <dt>ready</dt>
-                  <dd>a payload was built</dd>
+                  <dd>a payload is picked for the consumers</dd>
                   <dt>failed</dt>
-                  <dd>the build failed (see the error)</dd>
+                  <dd>no build produced a payload to pick (see the error)</dd>
                   <dt>skipped</dt>
                   <dd>the build decision skipped the slot (schedule, plan_disabled, no_consumer)</dd>
                 </dl>
+                Each build target (a parent the slot built on) lists its engine build, its testing runs
+                and its picks: which build&apos;s payload the consumers got from when on. Every build has
+                its own payload, named by block hash, with what the consumers did with it.
               </InfoHint>
             </strong>
             <StatusBadge map={BUILD_BADGES} status={build.status} />
             {build.skip_reason && <span className="text-muted small">({build.skip_reason})</span>}
-            {payloadExists && (
-              <span className="ms-auto">
-                <ArtifactLinks
-                  url={`${baseUrl}/payload`}
-                  filename={`slot-${slot}-payload.ssz`}
-                  onError={onArtifactError}
-                />
-              </span>
-            )}
           </div>
           <div className="card-body py-2">
             {build.error && <div className="alert alert-danger small py-1 px-2 mb-2">{build.error}</div>}
-            <div className="row g-2">
-              {build.block_hash && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">Block Hash</div>
-                    <div className="config-item-value font-monospace ap-break">{build.block_hash}</div>
-                  </div>
-                </div>
-              )}
-              <KV label="Value" hint="The block value the EL reported for the built payload.">
-                {weiToEth(build.block_value_wei)}
-              </KV>
-              <KV label="Contents">
-                {build.num_transactions ?? 0} txs, {build.num_blobs ?? 0} blobs,{' '}
-                {build.num_withdrawals ?? 0} wdrls, {build.num_execution_requests ?? 0} reqs
-              </KV>
-              {build.block_number !== undefined && <KV label="Block #">{build.block_number}</KV>}
-              {build.gas_used !== undefined && (
-                <KV label="Gas">
-                  {build.gas_used.toLocaleString()} / {(build.gas_limit ?? 0).toLocaleString()}
-                </KV>
-              )}
-              {build.base_fee_per_gas && <KV label="Base Fee">{build.base_fee_per_gas} wei</KV>}
-              {build.blob_gas_used !== undefined && build.blob_gas_used > 0 && (
-                <KV label="Blob Gas">
-                  {build.blob_gas_used.toLocaleString()} (excess {(build.excess_blob_gas ?? 0).toLocaleString()})
-                </KV>
-              )}
-              {build.timestamp !== undefined && <KV label="Timestamp">{build.timestamp}</KV>}
-              {build.extra_data && <KV label="Extra Data">{build.extra_data}</KV>}
-              {build.source && (
-                <KV
-                  label="Source"
-                  hint={
-                    <>
-                      Which build fed bids and the reveal. <strong>el</strong>: the engine API build.{' '}
-                      <strong>local</strong>: the custom testing_buildBlockV1 build.{' '}
-                      <em>fallback</em>: the custom block was wanted but the engine block was used.
-                    </>
-                  }
-                >
-                  {build.source}
-                  {build.fallback && (
-                    <span className={`ms-1 ${badgeClass('warning')}`} title="Custom block wanted, engine block used">
-                      fallback
-                    </span>
-                  )}
-                </KV>
-              )}
-              <KV label="At">{formatDateTime(build.at)}</KV>
-              {build.inclusion_list && (
-                <KV
-                  label="Inclusion Lists"
-                  hint={
-                    <>
-                      FOCIL (Heze): the committee lists of slot {build.inclusion_list.slot} the payload was
-                      built against — the gossiped lists merged with the beacon node&apos;s attributes list.
-                      Omitted transactions were left out on purpose (omit mode or the plan&apos;s omit_txs).
-                    </>
-                  }
-                >
-                  {build.inclusion_list.lists} lists ({build.inclusion_list.timely} timely),{' '}
-                  {build.inclusion_list.transactions} txs
-                  {build.inclusion_list.omitted ? `, ${build.inclusion_list.omitted} omitted` : ''}
-                  {build.inclusion_list.mode === 'omit' && (
-                    <span className={`ms-1 ${badgeClass('danger')}`} title="Built without the inclusion lists">
-                      omitted
-                    </span>
-                  )}
-                  {build.inclusion_list.bits && (
-                    <span className="ms-1 font-monospace text-secondary">bits {build.inclusion_list.bits}</span>
-                  )}
-                </KV>
-              )}
-              {build.local_build && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label d-flex align-items-center gap-2">
-                      Testing build (testing_buildBlockV1)
-                      <span className={badgeClass(
-                        build.local_build.status === 'ready' ? 'success' :
-                        build.local_build.status === 'failed' ? 'danger' : 'secondary'
-                      )}>
-                        {build.local_build.status}
-                        {build.local_build.skip_reason ? ` (${build.local_build.skip_reason})` : ''}
-                      </span>
-                      {build.local_build.selected && <span className={badgeClass('info')}>fed bids</span>}
-                      {build.local_build.status === 'ready' && !build.local_build.selected && (
-                        <span className={badgeClass('secondary')}>shadow</span>
-                      )}
-                      {build.local_build.artifact_idx !== undefined && !build.local_build.selected && (
-                        <span className="ms-auto">
-                          <ArtifactLinks
-                            url={`${baseUrl}/payload?source=local`}
-                            filename={`slot-${slot}-payload-local.ssz`}
-                            onError={onArtifactError}
-                          />
-                        </span>
-                      )}
-                    </div>
-                    <div className="config-item-value small">
-                      {build.local_build.error && (
-                        <div className="text-danger">{build.local_build.error}</div>
-                      )}
-                      <div>
-                        source <code>{build.local_build.tx_source || '—'}</code>, payload source{' '}
-                        <code>{build.local_build.payload_source || '—'}</code>
-                        {build.local_build.block_hash && (
-                          <>
-                            {' · '}{build.local_build.num_transactions ?? 0} txs, {build.local_build.num_blobs ?? 0} blobs,{' '}
-                            {weiToEth(build.local_build.block_value_wei)}
-                            {build.local_build.gas_used !== undefined && (
-                              <> · gas {build.local_build.gas_used.toLocaleString()} / {(build.local_build.gas_limit ?? 0).toLocaleString()}</>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      {build.local_build.block_hash && (
-                        <div className="font-monospace ap-break">{build.local_build.block_hash}</div>
-                      )}
-                      {build.local_build.info && (
-                        <div className="text-muted">
-                          submitted {build.local_build.info.submitted_txs < 0 ? 'EL mempool' : `${build.local_build.info.submitted_txs} txs`}
-                          {build.local_build.info.selection && (
-                            <>
-                              {' · '}selected {build.local_build.info.selection.selected} of {build.local_build.info.selection.pool_size} pooled
-                              {' '}(gas {build.local_build.info.selection.gas_sum.toLocaleString()})
-                              {build.local_build.info.selection.skipped && Object.keys(build.local_build.info.selection.skipped).length > 0 && (
-                                <> · skipped {Object.entries(build.local_build.info.selection.skipped).map(([k, v]) => `${k}: ${v}`).join(', ')}</>
-                              )}
-                            </>
-                          )}
-                          {build.local_build.info.explicit_txs ? ` · explicit list of ${build.local_build.info.explicit_txs}` : ''}
-                          {build.local_build.info.inclusion_list_txs ? ` · ${build.local_build.info.inclusion_list_txs} inclusion-list txs` : ''}
-                          {build.local_build.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
-                          {build.local_build.info.dropped_by_el ? ` · ${build.local_build.info.dropped_by_el} dropped by the EL` : ''}
-                          {build.local_build.info.attempts && build.local_build.info.attempts > 1 ? ` · ${build.local_build.info.attempts} attempts` : ''}
-                          {build.local_build.info.dropped?.length ? ` · dropped after EL refusal: ${build.local_build.info.dropped.map((d) => (d.hash ? `${d.hash.slice(0, 10)}… (${d.reason})` : d.reason)).join(', ')}` : ''}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {build.parent_hash && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">Parent Hash</div>
-                    <div className="config-item-value font-monospace ap-break">{build.parent_hash}</div>
-                  </div>
-                </div>
-              )}
-              {build.state_root && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">State Root</div>
-                    <div className="config-item-value font-monospace ap-break">{build.state_root}</div>
-                  </div>
-                </div>
-              )}
-              {build.receipts_root && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">Receipts Root</div>
-                    <div className="config-item-value font-monospace ap-break">{build.receipts_root}</div>
-                  </div>
-                </div>
-              )}
-              {build.prev_randao && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">Prev Randao</div>
-                    <div className="config-item-value font-monospace ap-break">{build.prev_randao}</div>
-                  </div>
-                </div>
-              )}
-              {build.fee_recipient && (
-                <div className="col-12">
-                  <div className="config-item">
-                    <div className="config-item-label">Fee Recipient</div>
-                    <div className="config-item-value font-monospace ap-break">{build.fee_recipient}</div>
-                  </div>
-                </div>
-              )}
-            </div>
-            {build.attributes && (
-              <>
-                <div className="section-header mt-3 mb-1">Payload Attributes</div>
-                <div className="row g-2">
-                  <KV label="Proposer">{build.attributes.proposer_index}</KV>
-                  <KV label="Parent Block #">{build.attributes.parent_block_number}</KV>
-                  <KV label="Timestamp">{build.attributes.timestamp}</KV>
-                  {build.attributes.target_gas_limit !== undefined && build.attributes.target_gas_limit > 0 && (
-                    <KV label="Target Gas Limit">{build.attributes.target_gas_limit.toLocaleString()}</KV>
-                  )}
-                  <KV label="Contents">
-                    {build.attributes.num_withdrawals} wdrls
-                    {build.attributes.num_inclusion_list_txs ? `, ${build.attributes.num_inclusion_list_txs} IL txs` : ''}
-                  </KV>
-                  <div className="col-12">
-                    <div className="config-item">
-                      <div className="config-item-label">Parent Hash</div>
-                      <div className="config-item-value font-monospace ap-break">{build.attributes.parent_block_hash}</div>
-                    </div>
-                  </div>
-                  <div className="col-12">
-                    <div className="config-item">
-                      <div className="config-item-label">Parent Root</div>
-                      <div className="config-item-value font-monospace ap-break">{build.attributes.parent_block_root}</div>
-                    </div>
-                  </div>
-                  {build.attributes.parent_beacon_block_root && (
-                    <div className="col-12">
-                      <div className="config-item">
-                        <div className="config-item-label">Beacon Parent Root</div>
-                        <div className="config-item-value font-monospace ap-break">{build.attributes.parent_beacon_block_root}</div>
-                      </div>
-                    </div>
-                  )}
-                  <div className="col-12">
-                    <div className="config-item">
-                      <div className="config-item-label">Prev Randao</div>
-                      <div className="config-item-value font-monospace ap-break">{build.attributes.prev_randao}</div>
-                    </div>
-                  </div>
-                  <div className="col-12">
-                    <div className="config-item">
-                      <div className="config-item-label">Suggested Fee Recipient</div>
-                      <div className="config-item-value font-monospace ap-break">{build.attributes.suggested_fee_recipient}</div>
-                    </div>
-                  </div>
-                </div>
-              </>
+            {(build.targets ?? []).length === 0 && (
+              <div className="text-muted small">No build target ran.</div>
             )}
+            {[...(build.targets ?? [])]
+              .sort((a, b) => (a === primary ? -1 : b === primary ? 1 : 0))
+              .map((target, i) => (
+                <BuildTargetView
+                  key={`${target.candidate ?? ''}-${i}`}
+                  slot={slot}
+                  target={target}
+                  primary={target === primary}
+                  result={result}
+                  onArtifactError={onArtifactError}
+                />
+              ))}
           </div>
         </div>
       )}

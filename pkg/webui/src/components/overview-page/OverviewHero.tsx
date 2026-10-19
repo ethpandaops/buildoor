@@ -18,7 +18,7 @@ const BUILDING_WINDOW = 4;
 function buildingTag(slotStates: Record<number, SlotState>, currentSlot: number): { tone: Tone; text: string; title: string } {
   for (let slot = currentSlot; slot > currentSlot - BUILDING_WINDOW; slot--) {
     const state = slotStates[slot];
-    if (state?.payloadReady || state?.payloadBuildStartedAt) {
+    if (state?.targets && Object.keys(state.targets).length > 0) {
       return { tone: 'ok', text: 'Building', title: `Built a payload within the last ${BUILDING_WINDOW} slots` };
     }
   }

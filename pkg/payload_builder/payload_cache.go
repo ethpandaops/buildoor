@@ -20,7 +20,7 @@ const (
 )
 
 // candidatePriority orders candidate keys from most to least canonical; it
-// decides which of a slot's payloads Get returns as the primary one.
+// decides which of a slot's selected payloads Get returns as the primary one.
 var candidatePriority = []chain.CandidateKey{
 	chain.CandidateParentFull,
 	chain.CandidateParentEmpty,
@@ -28,17 +28,24 @@ var candidatePriority = []chain.CandidateKey{
 	chain.CandidateGrandparentEmpty,
 }
 
-// PayloadCache stores built payloads per slot, keyed by the parent tuple they
-// were built on: reorg and payload-miss handling can produce several
-// candidate payloads for the same slot. A tuple's newer payload (a better
-// testing build after the hand-over) replaces it for the lookups by slot or
-// tuple, while the replaced one stays findable by block hash: a bid made on
-// it must still unblind, reveal and be recognised when included.
+// PayloadCache holds every payload the builder built, once, keyed by its
+// block hash — the engine build's and every testing run's alike, whether
+// selected or not: a bid made on any of them must unblind, reveal and be
+// recognised when included.
+//
+// Apart from the payloads it keeps each build target's selection: the block
+// hash of the payload that feeds the target's bids and reveals now. The
+// lookups by slot, candidate or parent tuple resolve a target's selection;
+// GetByBlockHash finds any payload.
 type PayloadCache struct {
-	payloads   map[phase0.Slot]map[beacon.AttrParentKey]*Payload
-	superseded map[phase0.Slot][]*Payload
-	maxSlots   int
-	mu         sync.RWMutex
+	mu       sync.RWMutex
+	payloads map[phase0.Hash32]*Payload
+	// slots indexes the payloads by slot (eviction, blob release).
+	slots map[phase0.Slot][]phase0.Hash32
+	// selected maps a slot's build targets (parent tuple) to the block hash
+	// of their selected payload.
+	selected map[phase0.Slot]map[beacon.AttrParentKey]phase0.Hash32
+	maxSlots int
 	// blobsReleasedBefore: the payloads of the slots below it have released
 	// their blobs.
 	blobsReleasedBefore phase0.Slot
@@ -51,32 +58,31 @@ func NewPayloadCache(maxSlots int) *PayloadCache {
 	}
 
 	return &PayloadCache{
-		payloads:   make(map[phase0.Slot]map[beacon.AttrParentKey]*Payload, maxSlots),
-		superseded: make(map[phase0.Slot][]*Payload, 16),
-		maxSlots:   maxSlots,
+		payloads: make(map[phase0.Hash32]*Payload, maxSlots*2),
+		slots:    make(map[phase0.Slot][]phase0.Hash32, maxSlots),
+		selected: make(map[phase0.Slot]map[beacon.AttrParentKey]phase0.Hash32, maxSlots),
+		maxSlots: maxSlots,
 	}
 }
 
-// Store stores a payload in the cache (replacing an earlier build on the same
-// parent tuple) and evicts old slots to maintain the size limit.
-func (c *PayloadCache) Store(event *Payload) {
+// Store adds a built payload and evicts old slots to maintain the size limit.
+// Storing a payload does not select it.
+func (c *PayloadCache) Store(payload *Payload) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	slot := event.Attributes.ProposalSlot
+	c.storeLocked(payload)
+}
 
-	variants := c.payloads[slot]
-	if variants == nil {
-		variants = make(map[beacon.AttrParentKey]*Payload, 2)
-		c.payloads[slot] = variants
+func (c *PayloadCache) storeLocked(payload *Payload) {
+	if _, ok := c.payloads[payload.BlockHash]; ok {
+		return
 	}
 
-	key := beacon.AttrParentKeyOf(event.Attributes)
-	if old := variants[key]; old != nil && old != event && old.BlockHash != event.BlockHash {
-		c.superseded[slot] = append(c.superseded[slot], old)
-	}
+	slot := payload.Attributes.ProposalSlot
 
-	variants[key] = event
+	c.payloads[payload.BlockHash] = payload
+	c.slots[slot] = append(c.slots[slot], payload.BlockHash)
 	c.evictOld()
 
 	if slot > blobRetentionSlots {
@@ -84,46 +90,118 @@ func (c *PayloadCache) Store(event *Payload) {
 	}
 }
 
+// Select makes the payload its target's selection (storing it if needed).
+func (c *PayloadCache) Select(payload *Payload) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.storeLocked(payload)
+
+	slot := payload.Attributes.ProposalSlot
+
+	targets := c.selected[slot]
+	if targets == nil {
+		targets = make(map[beacon.AttrParentKey]phase0.Hash32, 2)
+		c.selected[slot] = targets
+	}
+
+	targets[beacon.AttrParentKeyOf(payload.Attributes)] = payload.BlockHash
+}
+
+// Withdraw drops the given payloads of a slot, and the target selections
+// pointing at them: a superseded target's payloads must never be bid.
+func (c *PayloadCache) Withdraw(slot phase0.Slot, hashes []phase0.Hash32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	withdrawn := make(map[phase0.Hash32]bool, len(hashes))
+
+	for _, hash := range hashes {
+		if payload := c.payloads[hash]; payload != nil && payload.Attributes.ProposalSlot == slot {
+			withdrawn[hash] = true
+			delete(c.payloads, hash)
+		}
+	}
+
+	if len(withdrawn) == 0 {
+		return
+	}
+
+	kept := c.slots[slot][:0]
+	for _, hash := range c.slots[slot] {
+		if !withdrawn[hash] {
+			kept = append(kept, hash)
+		}
+	}
+
+	if len(kept) == 0 {
+		delete(c.slots, slot)
+	} else {
+		c.slots[slot] = kept
+	}
+
+	for tuple, hash := range c.selected[slot] {
+		if withdrawn[hash] {
+			delete(c.selected[slot], tuple)
+		}
+	}
+
+	if len(c.selected[slot]) == 0 {
+		delete(c.selected, slot)
+	}
+}
+
 // releaseBlobsBefore drops the blobs and proofs of the payloads of the slots
-// below cutoff, current and superseded ones alike. Must hold mu.
+// below cutoff. Must hold mu.
 func (c *PayloadCache) releaseBlobsBefore(cutoff phase0.Slot) {
 	if cutoff <= c.blobsReleasedBefore {
 		return
 	}
 
-	for slot, variants := range c.payloads {
+	for slot, hashes := range c.slots {
 		if slot >= cutoff || slot < c.blobsReleasedBefore {
 			continue
 		}
 
-		for _, payload := range variants {
-			payload.BlobsBundle.release()
-		}
-
-		for _, payload := range c.superseded[slot] {
-			payload.BlobsBundle.release()
+		for _, hash := range hashes {
+			c.payloads[hash].BlobsBundle.release()
 		}
 	}
 
 	c.blobsReleasedBefore = cutoff
 }
 
-// Get retrieves the slot's primary payload: the most canonical classified
-// candidate, falling back to the most recently built unclassified one.
+// selectedLocked returns the slot's selected payloads by target. Must hold mu.
+func (c *PayloadCache) selectedLocked(slot phase0.Slot) map[beacon.AttrParentKey]*Payload {
+	targets := c.selected[slot]
+	out := make(map[beacon.AttrParentKey]*Payload, len(targets))
+
+	for tuple, hash := range targets {
+		if payload := c.payloads[hash]; payload != nil {
+			out[tuple] = payload
+		}
+	}
+
+	return out
+}
+
+// Get returns the slot's primary selected payload: the most canonical
+// classified target's, falling back to the most recently built unclassified
+// one.
 func (c *PayloadCache) Get(slot phase0.Slot) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	variants := c.payloads[slot]
-	if len(variants) == 0 {
+	selected := c.selectedLocked(slot)
+	if len(selected) == 0 {
 		return nil
 	}
 
-	byCandidate := make(map[chain.CandidateKey]*Payload, len(variants))
+	byCandidate := make(map[chain.CandidateKey]*Payload, len(selected))
 
 	var newestUnclassified *Payload
 
-	for _, payload := range variants {
+	for _, payload := range selected {
 		if payload.Candidate != "" {
 			byCandidate[payload.Candidate] = payload
 			continue
@@ -143,12 +221,13 @@ func (c *PayloadCache) Get(slot phase0.Slot) *Payload {
 	return newestUnclassified
 }
 
-// GetCandidate retrieves the slot's payload built for the given candidate key.
+// GetCandidate returns the selected payload of the slot's target for the
+// given candidate key.
 func (c *PayloadCache) GetCandidate(slot phase0.Slot, key chain.CandidateKey) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	for _, payload := range c.payloads[slot] {
+	for _, payload := range c.selectedLocked(slot) {
 		if payload.Candidate == key {
 			return payload
 		}
@@ -157,143 +236,71 @@ func (c *PayloadCache) GetCandidate(slot phase0.Slot, key chain.CandidateKey) *P
 	return nil
 }
 
-// GetVariant retrieves the slot's payload built on the given parent tuple.
+// GetVariant returns the selected payload of the slot's target on the given
+// parent tuple.
 func (c *PayloadCache) GetVariant(slot phase0.Slot, key beacon.AttrParentKey) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	return c.payloads[slot][key]
+	hash, ok := c.selected[slot][key]
+	if !ok {
+		return nil
+	}
+
+	return c.payloads[hash]
 }
 
-// GetSlotPayloads returns all payloads built for the slot (arbitrary order).
+// GetSlotPayloads returns the selected payload of each of the slot's targets
+// (arbitrary order).
 func (c *PayloadCache) GetSlotPayloads(slot phase0.Slot) []*Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	variants := c.payloads[slot]
-	result := make([]*Payload, 0, len(variants))
+	selected := c.selectedLocked(slot)
+	result := make([]*Payload, 0, len(selected))
 
-	for _, payload := range variants {
+	for _, payload := range selected {
 		result = append(result, payload)
 	}
 
 	return result
 }
 
-// GetByBlockHash retrieves a payload by its block hash.
+// GetByBlockHash returns any payload we built, selected or not.
 func (c *PayloadCache) GetByBlockHash(blockHash phase0.Hash32) *Payload {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	for _, variants := range c.payloads {
-		for _, payload := range variants {
-			if payload.BlockHash == blockHash {
-				return payload
-			}
-		}
-	}
-
-	for _, payloads := range c.superseded {
-		for _, payload := range payloads {
-			if payload.BlockHash == blockHash {
-				return payload
-			}
-		}
-	}
-
-	return nil
-}
-
-// Remove drops the given payload from the cache. Returns whether it was
-// still the cached build of its parent tuple (a newer build on the same
-// tuple stays); a payload a newer one already replaced is dropped too, but
-// reported as not removed, since the tuple's payload did not change.
-func (c *PayloadCache) Remove(payload *Payload) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	slot := payload.Attributes.ProposalSlot
-	key := beacon.AttrParentKeyOf(payload.Attributes)
-
-	for i, old := range c.superseded[slot] {
-		if old == payload {
-			c.superseded[slot] = append(c.superseded[slot][:i], c.superseded[slot][i+1:]...)
-
-			return false
-		}
-	}
-
-	variants := c.payloads[slot]
-	if variants[key] != payload {
-		return false
-	}
-
-	delete(variants, key)
-
-	if len(variants) == 0 {
-		delete(c.payloads, slot)
-	}
-
-	return true
-}
-
-// Delete removes all payloads for the given slot.
-func (c *PayloadCache) Delete(slot phase0.Slot) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	delete(c.payloads, slot)
-	delete(c.superseded, slot)
-}
-
-// GetAll returns all cached payloads.
-func (c *PayloadCache) GetAll() []*Payload {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	result := make([]*Payload, 0, len(c.payloads))
-
-	for _, variants := range c.payloads {
-		for _, payload := range variants {
-			result = append(result, payload)
-		}
-	}
-
-	return result
-}
-
-// Size returns the number of slots with cached payloads.
-func (c *PayloadCache) Size() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	return len(c.payloads)
+	return c.payloads[blockHash]
 }
 
 // evictOld removes the oldest slots beyond the retention limit.
 // Must be called with lock held.
 func (c *PayloadCache) evictOld() {
-	for len(c.payloads) > c.maxSlots {
+	for len(c.slots) > c.maxSlots {
 		var oldestSlot phase0.Slot
 
 		first := true
 
-		for slot := range c.payloads {
+		for slot := range c.slots {
 			if first || slot < oldestSlot {
 				oldestSlot = slot
 				first = false
 			}
 		}
 
-		delete(c.payloads, oldestSlot)
-		delete(c.superseded, oldestSlot)
+		c.deleteSlotLocked(oldestSlot)
+	}
+}
+
+// deleteSlotLocked drops a slot's payloads and selections. Must hold mu.
+func (c *PayloadCache) deleteSlotLocked(slot phase0.Slot) {
+	for _, hash := range c.slots[slot] {
+		delete(c.payloads, hash)
 	}
 
-	for slot := range c.superseded {
-		if _, ok := c.payloads[slot]; !ok {
-			delete(c.superseded, slot)
-		}
-	}
+	delete(c.slots, slot)
+	delete(c.selected, slot)
 }
 
 // Cleanup removes payloads older than the given slot.
@@ -301,15 +308,9 @@ func (c *PayloadCache) Cleanup(olderThan phase0.Slot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for slot := range c.payloads {
+	for slot := range c.slots {
 		if slot < olderThan {
-			delete(c.payloads, slot)
-		}
-	}
-
-	for slot := range c.superseded {
-		if slot < olderThan {
-			delete(c.superseded, slot)
+			c.deleteSlotLocked(slot)
 		}
 	}
 }

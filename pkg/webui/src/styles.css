@@ -441,13 +441,12 @@
   border: 1px solid #0aa2c0;
 }
 
-.local-build-selected {
-  box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45);
-}
-
-/* A rebuild that was not handed over: same element, dimmed. */
-.local-build-run-other {
-  opacity: 0.45;
+/* The build whose payload is the target's current pick: an outline drawn
+   inside its own dot (the dot keeps its size) in the page's text colour,
+   which contrasts with every dot fill in both themes. */
+.payload-selected {
+  outline: 2px solid var(--bs-body-color);
+  outline-offset: -2px;
 }
 
 .local-build-failed {
@@ -464,7 +463,7 @@
 .bg-local-build-skipped { background: #adb5bd; width: 8px; height: 8px; }
 
 /* Legend swatches for the non-dot graph elements. */
-.legend-dot-selected { box-shadow: 0 0 0 2px rgba(13, 202, 240, 0.45); }
+.legend-dot-selected { outline: 2px solid var(--bs-body-color); outline-offset: -2px; }
 .legend-line-build { height: 3px; background: linear-gradient(90deg, rgba(23, 162, 184, 0.4), rgba(23, 162, 184, 0.8)); }
 .legend-crown { color: #ffc107; font-size: 9px; margin-right: 3px; }
 .legend-window {
@@ -1293,21 +1292,32 @@ header.header-bar .navbar {
   padding: 8px;
 }
 
+/* Inline nav (from the nav's expand breakpoint, lg or xxl). */
 @media (min-width: 992px) {
-  header .collapsed-info {
+  header .navbar-expand-lg .collapsed-info {
     display: none;
   }
 
-  header .navbar-collapse {
+  header .navbar-expand-lg .navbar-collapse {
     flex-grow: initial;
   }
 }
 
-/* Mobile: the header is fixed at 65px, so the expanded hamburger menu
-   overflows it. Render the menu as a solid panel anchored below the
-   header instead of letting nav items float over the page content. */
+@media (min-width: 1400px) {
+  header .navbar-expand-xxl .collapsed-info {
+    display: none;
+  }
+
+  header .navbar-expand-xxl .navbar-collapse {
+    flex-grow: initial;
+  }
+}
+
+/* Folded nav: the header is fixed at 65px, so the expanded menu overflows
+   it. Render the menu as a solid panel anchored below the header instead of
+   letting nav items float over the page content. */
 @media (max-width: 991.98px) {
-  header.header-bar .navbar-collapse {
+  header.header-bar .navbar-expand-lg .navbar-collapse {
     position: absolute;
     top: 65px;
     left: 0;
@@ -1320,7 +1330,27 @@ header.header-bar .navbar {
     overflow-y: auto;
   }
 
-  header.header-bar .navbar-collapse .nav-link {
+  header.header-bar .navbar-expand-lg .navbar-collapse .nav-link {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+}
+
+@media (max-width: 1399.98px) {
+  header.header-bar .navbar-expand-xxl .navbar-collapse {
+    position: absolute;
+    top: 65px;
+    left: 0;
+    right: 0;
+    background-color: var(--bs-dark);
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0.5em 1em rgba(0, 0, 0, 0.35);
+    padding: 0.5rem 1rem 1rem;
+    max-height: calc(100vh - 65px);
+    overflow-y: auto;
+  }
+
+  header.header-bar .navbar-expand-xxl .navbar-collapse .nav-link {
     padding-top: 0.5rem;
     padding-bottom: 0.5rem;
   }

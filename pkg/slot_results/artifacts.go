@@ -6,14 +6,17 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
 // Artifact kinds stored in the slot_artifacts table.
@@ -154,36 +157,44 @@ func (s *ArtifactStore) runWriter() {
 }
 
 // PayloadArtifactMeta is the JSON metadata stored alongside a payload
-// artifact: which candidate parent the payload was built on.
+// artifact: the payload's block hash (its key) and the build that produced
+// it.
 type PayloadArtifactMeta struct {
-	V               int    `json:"v"`
+	V         int    `json:"v"`
+	BlockHash string `json:"block_hash,omitempty"`
+	// Build is the build kind (engine | testing), Run the testing run.
+	Build           string `json:"build,omitempty"`
+	Run             int    `json:"run,omitempty"`
 	Candidate       string `json:"candidate,omitempty"`
 	ParentBlockRoot string `json:"parent_block_root,omitempty"`
 	ParentBlockHash string `json:"parent_block_hash,omitempty"`
-	// Source is the build that produced the payload: empty/el for the engine
-	// payload, local for the testing_buildBlockV1 payload. A local payload on
-	// the same parent tuple gets its own artifact index.
+	// Source is the build of artifacts stored before the build kinds: empty
+	// or el for the engine payload, local for the testing payload.
 	Source string `json:"source,omitempty"`
 	At     int64  `json:"at"` // unix milliseconds
 }
 
-// StorePayload captures one built execution payload and returns its per-slot
-// artifact index. A slot may produce several candidate payloads (reorg /
-// payload-miss preparedness): each parent tuple gets its own index, and a
-// rebuild on the same tuple replaces its artifact. Index allocation is
+// custom reports whether the payload was built by a testing build: its
+// transactions may come from the private pool.
+func (m *PayloadArtifactMeta) custom() bool {
+	if m.Build != "" {
+		return m.Build == payload_builder.BuildKindTesting
+	}
+
+	return m.Source != "" && m.Source != "el"
+}
+
+// StorePayload captures one built execution payload under its block hash
+// (meta.BlockHash): each payload gets its own per-slot artifact index, a
+// payload stored again replaces its artifact. Index allocation is
 // restart-safe (seeded from MAX(idx)+1).
 func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion,
-	payload sszMarshaler, meta PayloadArtifactMeta) (int, error) {
-	meta.V = 1
+	payload sszMarshaler, meta PayloadArtifactMeta) error {
+	meta.V = 2
 
 	metaJSON, err := json.Marshal(meta)
 	if err != nil {
-		return 0, fmt.Errorf("failed to encode payload artifact meta: %w", err)
-	}
-
-	tuple := meta.ParentBlockRoot + "/" + meta.ParentBlockHash
-	if meta.Source != "" && meta.Source != "el" {
-		tuple += "/" + meta.Source
+		return fmt.Errorf("failed to encode payload artifact meta: %w", err)
 	}
 
 	s.mu.Lock()
@@ -196,37 +207,33 @@ func (s *ArtifactStore) StorePayload(slot phase0.Slot, fork version.DataVersion,
 		if err != nil {
 			s.mu.Unlock()
 
-			return 0, fmt.Errorf("failed to seed payload artifact index: %w", err)
+			return fmt.Errorf("failed to seed payload artifact index: %w", err)
 		}
 
 		if exists {
 			next = maxIdx + 1
 		}
 
-		state = &payloadIdxState{next: next, byTuple: make(map[string]int, 2)}
+		state = &payloadIdxState{next: next, byHash: make(map[string]int, 2)}
 		s.payloadIdx[slot] = state
 	}
 
-	idx, seen := state.byTuple[tuple]
+	idx, seen := state.byHash[meta.BlockHash]
 	if !seen {
 		idx = state.next
 		state.next++
-		state.byTuple[tuple] = idx
+		state.byHash[meta.BlockHash] = idx
 	}
 	s.mu.Unlock()
 
-	if err := s.store(slot, ArtifactKindPayload, idx, fork, string(metaJSON), payload); err != nil {
-		return 0, err
-	}
-
-	return idx, nil
+	return s.store(slot, ArtifactKindPayload, idx, fork, string(metaJSON), payload)
 }
 
 // payloadIdxState allocates per-slot payload artifact indices: one index per
-// parent tuple, rebuilds replace in place.
+// block hash.
 type payloadIdxState struct {
-	next    int
-	byTuple map[string]int
+	next   int
+	byHash map[string]int
 }
 
 // StoreBid captures one signed bid and returns its per-slot artifact index.
@@ -267,11 +274,22 @@ func (s *ArtifactStore) StoreBid(slot phase0.Slot, fork version.DataVersion,
 	return idx, nil
 }
 
+// EnvelopeArtifactMeta is the JSON metadata stored alongside an envelope
+// artifact: the block hash of the payload it reveals.
+type EnvelopeArtifactMeta struct {
+	BlockHash string `json:"block_hash"`
+}
+
 // StoreEnvelope captures the slot's signed payload envelope (idx 0; stored at
 // construction time so failed publishes remain inspectable).
 func (s *ArtifactStore) StoreEnvelope(slot phase0.Slot, fork version.DataVersion,
-	envelope sszMarshaler) error {
-	return s.store(slot, ArtifactKindEnvelope, 0, fork, "", envelope)
+	envelope sszMarshaler, meta EnvelopeArtifactMeta) error {
+	metaJSON, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to encode envelope artifact meta: %w", err)
+	}
+
+	return s.store(slot, ArtifactKindEnvelope, 0, fork, string(metaJSON), envelope)
 }
 
 func (s *ArtifactStore) store(slot phase0.Slot, kind string, idx int,
@@ -468,9 +486,9 @@ func (s *ArtifactStore) payloadMetas(slot phase0.Slot) []db.SlotArtifact {
 	return stored
 }
 
-// IsCustomPayloadArtifact reports whether a payload artifact was built by the
-// custom build (testing_buildBlockV1): its transactions may come from the
-// private pool, so it must not be served to unauthenticated readers.
+// IsCustomPayloadArtifact reports whether a payload artifact was built by a
+// testing build: its transactions may come from the private pool, so it must
+// not be served to unauthenticated readers.
 func IsCustomPayloadArtifact(artifact *db.SlotArtifact) bool {
 	if artifact == nil || artifact.Kind != ArtifactKindPayload {
 		return false
@@ -481,41 +499,15 @@ func IsCustomPayloadArtifact(artifact *db.SlotArtifact) bool {
 		return false
 	}
 
-	return meta.Source != "" && meta.Source != "el"
+	return meta.custom()
 }
 
-// HasCustomPayload reports whether the slot holds a custom-built payload
-// artifact; the slot's envelope may then wrap private transactions.
-func (s *ArtifactStore) HasCustomPayload(slot phase0.Slot) bool {
-	for _, artifact := range s.payloadMetas(slot) {
-		if IsCustomPayloadArtifact(&artifact) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// PayloadIndexForCandidate returns the per-slot index of the engine payload
-// artifact built for the given candidate key, scanning the slot's payload
-// artifact metadata. Returns false when the slot has no such artifact.
-func (s *ArtifactStore) PayloadIndexForCandidate(slot phase0.Slot, candidate string) (int, bool) {
-	return s.PayloadIndexFor(slot, candidate, "")
-}
-
-// PayloadIndexFor returns the per-slot payload artifact index matching the
-// candidate key (empty = any) and source (empty = the engine payload, "local"
-// = the local build's payload), scanning the slot's payload artifact
-// metadata. Returns false when no artifact matches.
-func (s *ArtifactStore) PayloadIndexFor(slot phase0.Slot, candidate, source string) (int, bool) {
+// PayloadByHash returns the slot's payload artifact with the given block
+// hash (0x-hex), or nil when none was captured. Artifacts stored before the
+// block hash was recorded are matched by decoding them.
+func (s *ArtifactStore) PayloadByHash(slot phase0.Slot, blockHash string) (*db.SlotArtifact, error) {
 	metas := s.payloadMetas(slot)
-	if len(metas) == 0 {
-		return 0, false
-	}
-
-	if source == "el" {
-		source = ""
-	}
+	legacy := make([]int, 0, len(metas))
 
 	for _, artifact := range metas {
 		var meta PayloadArtifactMeta
@@ -523,23 +515,65 @@ func (s *ArtifactStore) PayloadIndexFor(slot phase0.Slot, candidate, source stri
 			continue
 		}
 
-		metaSource := meta.Source
-		if metaSource == "el" {
-			metaSource = ""
-		}
+		if meta.BlockHash == "" {
+			legacy = append(legacy, artifact.Idx)
 
-		if candidate != "" && meta.Candidate != candidate {
 			continue
 		}
 
-		if metaSource != source {
-			continue
+		if strings.EqualFold(meta.BlockHash, blockHash) {
+			return s.Get(slot, ArtifactKindPayload, artifact.Idx)
 		}
-
-		return artifact.Idx, true
 	}
 
-	return 0, false
+	for _, idx := range legacy {
+		artifact, err := s.Get(slot, ArtifactKindPayload, idx)
+		if err != nil || artifact == nil {
+			continue
+		}
+
+		payload := &eth2all.ExecutionPayload{Version: version.DataVersion(artifact.Fork)}
+		if err := payload.UnmarshalSSZ(artifact.Data); err != nil {
+			continue
+		}
+
+		if strings.EqualFold(fmt.Sprintf("%#x", payload.BlockHash), blockHash) {
+			return artifact, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// EnvelopeIsPrivate reports whether the slot's envelope reveals a custom
+// (testing build) payload: it then carries the payload's transactions,
+// which may come from the private pool. Envelopes stored before the revealed
+// block hash was recorded count as private when the slot captured any
+// custom payload.
+func (s *ArtifactStore) EnvelopeIsPrivate(slot phase0.Slot, envelope *db.SlotArtifact) bool {
+	if envelope == nil {
+		return false
+	}
+
+	var meta EnvelopeArtifactMeta
+	if err := json.Unmarshal([]byte(envelope.Meta), &meta); err == nil && meta.BlockHash != "" {
+		payload, err := s.PayloadByHash(slot, meta.BlockHash)
+		if err != nil {
+			return true
+		}
+
+		// A revealed payload that was never captured is decided by the
+		// envelope itself: unknown means private.
+		return payload == nil || IsCustomPayloadArtifact(payload)
+	}
+
+	for _, artifact := range s.payloadMetas(slot) {
+		if IsCustomPayloadArtifact(&artifact) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // PruneBefore drops all artifacts for slots below the cutoff from the buffer

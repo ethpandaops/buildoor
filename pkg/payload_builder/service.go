@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethpandaops/go-eth-engine-client/spec/identification"
-	eth2all "github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/sirupsen/logrus"
 
@@ -17,7 +16,6 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/inclusionlist"
-	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/metrics"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
@@ -27,9 +25,6 @@ import (
 // buildCallTimeout is the margin added on top of the configured PayloadBuildTime
 // for the engine getPayload and finality lookups that run after the build wait.
 const buildCallTimeout = 10 * time.Second
-
-// transformTimeout bounds how long an operator jq payload transform may run.
-const transformTimeout = 2 * time.Second
 
 // Service is the standalone builder service that handles payload building.
 // It does NOT handle ePBS bidding or revealing - those are handled by the epbs package.
@@ -51,12 +46,8 @@ type Service struct {
 	settingsResolvers      []ProposerSettingsResolver // ordered proposer-settings sources (register before Start)
 	payloadBuilder         *PayloadBuilder
 	payloadCache           *PayloadCache
-	payloadReadyDispatcher *utils.Dispatcher[*Payload]
-	buildStartedDispatcher *utils.Dispatcher[*PayloadBuildStartedEvent]
-	buildFailedDispatcher  *utils.Dispatcher[*PayloadBuildFailedEvent]
+	buildEvents            *utils.Dispatcher[BuildEvent]
 	buildSkippedDispatcher *utils.Dispatcher[*BuildSkippedEvent]
-	localBuildDispatcher   *utils.Dispatcher[*LocalBuildEvent]
-	localProgress          *utils.Dispatcher[*LocalBuildProgressEvent]
 	stats                  *BuilderStats
 	statsMu                sync.RWMutex
 	ctx                    context.Context
@@ -88,7 +79,7 @@ type Service struct {
 	// lastBuiltSlot tracks the most recently built slot (WebUI status).
 	lastBuiltSlot atomic.Uint64
 
-	// buildSeq numbers every candidate build (PayloadBuildStartedEvent.BuildSeq).
+	// buildSeq numbers every build target (BuildTargetEvent.Seq).
 	buildSeq atomic.Uint64
 
 	// EL client identification (engine_getClientVersionV1) — refreshed periodically.
@@ -135,12 +126,8 @@ func NewService(
 		engineClient:           engineClient,
 		feeRecipient:           feeRecipient,
 		payloadCache:           NewPayloadCache(DefaultCacheSize),
-		payloadReadyDispatcher: &utils.Dispatcher[*Payload]{},
-		buildStartedDispatcher: &utils.Dispatcher[*PayloadBuildStartedEvent]{},
-		buildFailedDispatcher:  &utils.Dispatcher[*PayloadBuildFailedEvent]{},
+		buildEvents:            &utils.Dispatcher[BuildEvent]{},
 		buildSkippedDispatcher: &utils.Dispatcher[*BuildSkippedEvent]{},
-		localBuildDispatcher:   &utils.Dispatcher[*LocalBuildEvent]{},
-		localProgress:          &utils.Dispatcher[*LocalBuildProgressEvent]{},
 		stats:                  &BuilderStats{},
 		log:                    serviceLog,
 		slotBuilds:             make(map[phase0.Slot]*slotBuildState, 16),
@@ -175,9 +162,6 @@ func (s *Service) Start(ctx context.Context) error {
 		s.settingsResolvers,
 	)
 
-	// Subscribers attach before the builder starts (the WebUI does), so the
-	// service owns the progress dispatcher and the payload builder fires on it.
-	s.payloadBuilder.localProgress = s.localProgress
 	s.payloadBuilder.ilStore = s.ilStore
 
 	// Start event stream
@@ -336,26 +320,12 @@ func (s *Service) GetCLClient() *beacon.Client {
 	return s.clClient
 }
 
-// SubscribePayloadReady subscribes to payload ready events.
-// Consumers (like the ePBS service) use this to receive built payloads.
-func (s *Service) SubscribePayloadReady(capacity int, blocking bool) *utils.Subscription[*Payload] {
-	return s.payloadReadyDispatcher.Subscribe(capacity, blocking)
-}
-
-// SubscribePayloadBuildStarted subscribes to payload build started events.
-// Consumers (like the WebUI) use this to render builds as in-progress.
-func (s *Service) SubscribePayloadBuildStarted(
-	capacity int, blocking bool,
-) *utils.Subscription[*PayloadBuildStartedEvent] {
-	return s.buildStartedDispatcher.Subscribe(capacity, blocking)
-}
-
-// SubscribePayloadBuildFailed subscribes to payload build failed events.
-// Consumers (like the WebUI) use this to mark in-progress builds as failed.
-func (s *Service) SubscribePayloadBuildFailed(
-	capacity int, blocking bool,
-) *utils.Subscription[*PayloadBuildFailedEvent] {
-	return s.buildFailedDispatcher.Subscribe(capacity, blocking)
+// SubscribeBuildEvents subscribes to the build targets' events (target
+// lifecycle, engine builds, testing runs, selections) in the order they
+// happened. Authoritative consumers (the slot results tracker) pass
+// blocking=true.
+func (s *Service) SubscribeBuildEvents(capacity int, blocking bool) *utils.Subscription[BuildEvent] {
+	return s.buildEvents.Subscribe(capacity, blocking)
 }
 
 // SubscribeBuildSkipped subscribes to build skipped events. Authoritative
@@ -520,31 +490,200 @@ type slotBuildState struct {
 	passScheduled bool
 	buildStartMs  int64
 	started       map[beacon.AttrParentKey]*candidateBuild
-	readyFired    bool // OnSlotBuilt/stat accounting fired (once per slot)
+	selected      bool // the slot's first selection was booked (OnSlotBuilt, stats)
 }
 
 func newSlotBuildState() *slotBuildState {
 	return &slotBuildState{started: make(map[beacon.AttrParentKey]*candidateBuild, 4)}
 }
 
-// candidateBuild is one started candidate build of a slot, tracked by the
-// parent tuple it builds on. A build from locally synthesized attributes
+// candidateBuild is one started build target of a slot, tracked by the
+// parent tuple it builds on. A target from locally synthesized attributes
 // (missing-block fallback or candidate synthesis) can be superseded by the
 // beacon node's own attributes for the same tuple while it runs or after it
-// emitted its payload; the fields are guarded by Service.scheduledBuildMu.
+// selected a payload. attrs, synthesized and cancel are guarded by
+// Service.scheduledBuildMu. The target's events go out under emitMu, which
+// keeps them in order and ends them with the superseded report: nothing of a
+// withdrawn target is stored, selected or reported afterwards.
 type candidateBuild struct {
-	seq         uint64                         // BuildSeq of the build's events
-	attrs       *beacon.PayloadAttributesEvent // attributes the build ran from
+	svc         *Service
+	slot        phase0.Slot
+	candidate   chain.CandidateKey
+	seq         uint64
+	attrs       *beacon.PayloadAttributesEvent // attributes the target ran from
 	synthesized bool                           // attrs were synthesized locally
 	cancel      context.CancelFunc             // aborts the in-flight engine build
-	aborted     bool                           // superseded: the payload must not be emitted
-	payload     *Payload                       // cached payload (nil while building or failed)
-	readyFired  bool                           // the payload's ready event was dispatched
+
+	emitMu   sync.Mutex
+	aborted  bool            // superseded
+	built    []phase0.Hash32 // the target's payloads (block hashes)
+	selected *Payload        // the payload selected last
 }
 
-// errBuildSuperseded is the recorded failure reason of a build superseded by
-// the beacon node's attributes.
-const errBuildSuperseded = "superseded by beacon node attributes"
+var _ buildReporter = (*candidateBuild)(nil)
+
+// reportEngine stores the engine build's payload and reports the build.
+func (c *candidateBuild) reportEngine(event *EngineBuildEvent) {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	if c.aborted {
+		return
+	}
+
+	if event.Payload != nil {
+		c.storeLocked(event.Payload)
+	}
+
+	c.svc.buildEvents.Fire(event)
+}
+
+// reportTesting stores the testing run's payload and reports the run.
+func (c *candidateBuild) reportTesting(event *TestingBuildEvent) {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	if c.aborted {
+		return
+	}
+
+	if event.Status != LocalStatusBuilding {
+		observeTestingRun(event)
+	}
+
+	if event.Payload != nil {
+		c.storeLocked(event.Payload)
+	}
+
+	if event.Status == LocalStatusFailed || event.Status == LocalStatusSkipped {
+		c.svc.log.WithFields(logrus.Fields{
+			"slot":        c.slot,
+			"candidate":   c.candidate,
+			"run":         event.Run,
+			"status":      event.Status,
+			"skip_reason": event.SkipReason,
+			"error":       event.Error,
+		}).Warn("Testing build did not produce a payload")
+	}
+
+	c.svc.buildEvents.Fire(event)
+}
+
+// storeLocked caches a built payload by its block hash. Must hold emitMu.
+func (c *candidateBuild) storeLocked(payload *Payload) {
+	c.svc.payloadCache.Store(payload)
+	c.built = append(c.built, payload.BlockHash)
+
+	// Every built block hash, so the pool tells blocks of ours from other
+	// builders' when it evicts included transactions.
+	if c.svc.txPool != nil {
+		c.svc.txPool.NoteBuiltBlock(common.Hash(payload.BlockHash), c.slot)
+	}
+}
+
+// fireTarget reports the target's lifecycle (dropped once superseded).
+func (c *candidateBuild) fireTarget(event *BuildTargetEvent) {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	if c.aborted {
+		return
+	}
+
+	event.Slot, event.Candidate, event.Seq, event.At = c.slot, c.candidate, c.seq, time.Now()
+	c.svc.buildEvents.Fire(event)
+}
+
+// selectPayload makes one of the target's payloads its selection and reports
+// it; false once the target was superseded.
+func (c *candidateBuild) selectPayload(payload *Payload, reason string, fallback bool) bool {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	if c.aborted {
+		return false
+	}
+
+	c.svc.payloadCache.Select(payload)
+	c.selected = payload
+
+	metrics.PayloadSelections.WithLabelValues(payload.Build.Kind, reason).Inc()
+
+	c.svc.buildEvents.Fire(&PayloadSelectedEvent{
+		Slot:      c.slot,
+		Candidate: c.candidate,
+		Seq:       c.seq,
+		Build:     payload.Build,
+		BlockHash: payload.BlockHash,
+		Reason:    reason,
+		Fallback:  fallback,
+		Payload:   payload,
+		At:        time.Now(),
+	})
+
+	return true
+}
+
+// hasSelection reports whether the target selected a payload yet.
+func (c *candidateBuild) hasSelection() bool {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	return c.selected != nil
+}
+
+// withdraw supersedes the target: its payloads and selection leave the
+// cache (no bid may commit to them) and the superseded report is its last
+// event. Returns the selection it withdrew (nil when none).
+func (c *candidateBuild) withdraw() *Payload {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	if c.aborted {
+		return nil
+	}
+
+	c.svc.payloadCache.Withdraw(c.slot, c.built)
+
+	c.svc.buildEvents.Fire(&BuildTargetEvent{
+		Slot:      c.slot,
+		Candidate: c.candidate,
+		Seq:       c.seq,
+		Status:    TargetStatusSuperseded,
+		Error:     errBuildSuperseded,
+		At:        time.Now(),
+	})
+
+	c.aborted = true
+
+	return c.selected
+}
+
+// isAborted reports whether the target was superseded.
+func (c *candidateBuild) isAborted() bool {
+	c.emitMu.Lock()
+	defer c.emitMu.Unlock()
+
+	return c.aborted
+}
+
+// observeTestingRun records a finished testing run in the metrics.
+func observeTestingRun(event *TestingBuildEvent) {
+	reason := event.SkipReason
+	if event.Status == LocalStatusFailed {
+		reason = "error"
+	}
+
+	metrics.LocalBuildOutcomes.WithLabelValues(event.Status, reason).Inc()
+
+	if p := event.Payload; p != nil && p.ExecutionPayload != nil {
+		metrics.LocalBuildTxs.Observe(float64(len(p.ExecutionPayload.Transactions)))
+
+		if p.ExecutionPayload.GasLimit > 0 {
+			metrics.LocalBuildFillRatio.Set(float64(p.ExecutionPayload.GasUsed) / float64(p.ExecutionPayload.GasLimit))
+		}
+	}
+}
 
 // maybeLateBuild activates a candidate build for an attributes variant that
 // arrived after the slot's build pass already ran: the chain moved (reorg,
@@ -604,7 +743,7 @@ func (s *Service) fireBuildSkipped(slot phase0.Slot, build *action_plan.Resolved
 
 	s.skipFiredSlots[slot] = true
 
-	// Prune inline: the emitPayloadReady cleanup only runs on successful
+	// Prune inline: the noteSlotBuilt cleanup only runs on successful
 	// builds, which never happen when every slot is skipped.
 	if slot > 64 {
 		cutoff := slot - 64
@@ -845,26 +984,39 @@ func (s *Service) executeBuildForSlot(slot phase0.Slot) {
 	}
 }
 
-// executeCandidateBuild builds one candidate payload for the slot (deduped by
-// parent tuple), applies the frozen plan's build tweaks and transform, and
-// emits the payload.
+// executeCandidateBuild runs one build target of the slot (deduped by parent
+// tuple) with the frozen plan's build tweaks and transform: its builds report
+// their own payloads as they end, and the target's pick is re-evaluated after
+// each of them (candidateBuild.reportPick).
 func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
-	// The local build extension runs alongside the engine build when the
-	// slot's frozen plan enables it, the target is the canonical candidate
-	// and the EL exposes the testing namespace. With the engine builder off
-	// it is the only builder: a target without it has nothing to build.
+	// The testing builds run alongside the engine build when the slot's
+	// frozen plan enables them, the target is the canonical candidate and the
+	// EL exposes the testing namespace. With the engine builder off they are
+	// the only builder: a target without them has nothing to build.
 	localReq, localSkip := s.resolveLocalBuildRequest(slot, target.candidate)
+	frozen := s.planSvc.Freeze(slot)
 
-	if localReq == nil {
-		if frozen := s.planSvc.Freeze(slot); frozen.Build != nil && !frozen.Build.EngineEnabled {
-			s.log.WithFields(logrus.Fields{
-				"slot":       slot,
-				"candidate":  target.candidate,
-				"local_skip": localSkip,
-			}).Debug("Engine builder disabled and no testing build for the target, nothing to build")
+	if localReq == nil && frozen.Build != nil && !frozen.Build.EngineEnabled {
+		s.log.WithFields(logrus.Fields{
+			"slot":       slot,
+			"candidate":  target.candidate,
+			"local_skip": localSkip,
+		}).Debug("Engine builder disabled and no testing build for the target, nothing to build")
 
-			return
-		}
+		return
+	}
+
+	// The frozen plan decides whether to build this slot's payload on the
+	// grandparent execution payload (a parent-reorg test). When so, the
+	// target builds from an effective attributes copy whose parent fields
+	// point at the grandparent, so the builds, the stored payloads and the
+	// bids all agree on the parent; the target is classified by the parent it
+	// actually builds on.
+	event := s.effectiveBuildAttributes(slot, target.attrs)
+
+	candidate := target.candidate
+	if event != target.attrs {
+		candidate = s.classifyCandidate(event)
 	}
 
 	s.scheduledBuildMu.Lock()
@@ -884,7 +1036,7 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	// Size the build deadline to the target's build time plus a margin for the
 	// engine getPayload and finality lookups, so a long PayloadBuildTime doesn't
 	// make the getPayload call time out spuriously. The cancel func is
-	// registered with the build so a superseding attributes event can abort
+	// registered with the target so a superseding attributes event can abort
 	// the engine build while it runs.
 	buildTimeMs := s.candidateBuildTime(target)
 	buildTimeout := time.Duration(buildTimeMs)*time.Millisecond + buildCallTimeout
@@ -893,6 +1045,9 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	defer cancel()
 
 	build := &candidateBuild{
+		svc:         s,
+		slot:        slot,
+		candidate:   candidate,
 		seq:         s.buildSeq.Add(1),
 		attrs:       target.attrs,
 		synthesized: target.derived || target.attrs.Synthesized,
@@ -901,256 +1056,92 @@ func (s *Service) executeCandidateBuild(slot phase0.Slot, target *buildTarget) {
 	state.started[tuple] = build
 	s.scheduledBuildMu.Unlock()
 
-	// The frozen plan (idempotent Freeze) decides whether to build this slot's
-	// payload on the grandparent execution payload (a parent-reorg test). When
-	// so, we build from an effective attributes copy whose parent fields point
-	// at the grandparent, so the build, the stored payload and the bid all
-	// agree on the parent.
-	event := s.effectiveBuildAttributes(slot, target.attrs)
-
 	s.log.WithFields(logrus.Fields{
 		"slot":        slot,
-		"candidate":   target.candidate,
+		"candidate":   candidate,
 		"derived":     target.derived,
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 	}).Info("Starting payload build")
 
-	// Notify subscribers that building has started so the build can be rendered
-	// as in-progress before the payload is ready.
-	s.buildStartedDispatcher.Fire(&PayloadBuildStartedEvent{
-		Slot:      slot,
-		Candidate: string(target.candidate),
-		StartedAt: time.Now(),
-		Engine:    localReq.RunEL(),
-		BuildSeq:  build.seq,
-	})
-
-	result, err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, event, buildTimeMs, localReq,
-		newInclusionListRequest(s.planSvc.Freeze(slot).Build.InclusionList))
-
-	// Testing builds still running in their window publish better payloads
-	// after this hand-over; followed once the hand-over itself is published,
-	// so an upgrade never lands before the payload it replaces.
-	if result != nil && result.Upgrades != nil {
-		defer func() {
-			go s.followUpgrades(slot, target, event, build, localReq, result.Upgrades)
-		}()
+	started := &BuildTargetEvent{
+		Status:            TargetStatusStarted,
+		Attributes:        event,
+		Engine:            localReq.RunEL(),
+		Testing:           localReq != nil,
+		TestingSkipReason: localSkip,
 	}
 
-	// With testing builds still running the follower reports their outcome
-	// at the window end; a build merely not done yet is no failure.
-	if (localReq != nil || localSkip != "") && (result == nil || result.Upgrades == nil) {
-		s.emitLocalBuild(slot, target, result, localReq, localSkip, err)
+	if localReq != nil {
+		started.TxSource, started.PayloadSource = localReq.TxSource, localReq.PayloadSource
 	}
 
-	if err != nil {
-		if s.buildAborted(build) {
-			s.reportBuildSuperseded(slot, target.candidate, build.seq)
-			return
-		}
+	build.fireTarget(started)
 
-		s.log.WithError(err).WithFields(logrus.Fields{
-			"slot":      slot,
-			"candidate": target.candidate,
-		}).Error("Failed to build payload from attributes")
+	req := &BuildRequest{
+		Attrs:         event,
+		BuildTimeMs:   buildTimeMs,
+		Seq:           build.seq,
+		Candidate:     candidate,
+		Local:         localReq,
+		InclusionList: newInclusionListRequest(frozen.Build.InclusionList),
+		reporter:      build,
+	}
 
-		// Notify subscribers so the in-progress build is marked failed rather than
-		// left rendered as perpetually building.
-		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
-			Slot:      slot,
-			Candidate: string(target.candidate),
-			Error:     err.Error(),
-			FailedAt:  time.Now(),
-			BuildSeq:  build.seq,
-		})
+	if frozen.Transforms != nil {
+		req.Transform = frozen.Transforms.Payload
+	}
 
+	if err := s.payloadBuilder.BuildPayloadFromAttributes(ctx, req); err != nil {
+		build.reportNoPayload(err)
+	}
+}
+
+// reportPick makes a payload the target's pick and books the slot as built on
+// its first pick.
+func (c *candidateBuild) reportPick(payload *Payload, fallback bool, reason string) {
+	if !c.selectPayload(payload, reason, fallback) {
 		return
 	}
 
-	payloadEvent := result.Payload
-	payloadEvent.BuildSeq = build.seq
+	c.svc.log.WithFields(logrus.Fields{
+		"slot":        c.slot,
+		"candidate":   c.candidate,
+		"reason":      reason,
+		"build":       payload.Build.Kind,
+		"run":         payload.Build.Run,
+		"fallback":    fallback,
+		"block_hash":  fmt.Sprintf("%x", payload.BlockHash[:8]),
+		"block_value": payload.BlockValue,
+	}).Info("Payload picked")
 
-	if s.txPool != nil {
-		// Remember every built block hash so the pool can tell blocks of ours
-		// from other builders' when it evicts included transactions.
-		s.txPool.NoteBuiltBlock(common.Hash(payloadEvent.BlockHash), slot)
+	c.svc.noteSlotBuilt(c.slot)
+}
 
-		if result.Local != nil && result.Local != payloadEvent {
-			s.txPool.NoteBuiltBlock(common.Hash(result.Local.BlockHash), slot)
-		}
-	}
-
-	// Classify the payload by the parent it was actually built on (the plan's
-	// parent-reorg tweak may have redirected it).
-	if event == target.attrs {
-		payloadEvent.Candidate = target.candidate
-	} else {
-		payloadEvent.Candidate = s.classifyCandidate(payloadEvent.Attributes)
-	}
-
-	// Apply the slot's frozen payload transform (if any) before the payload
-	// feeds the bid commitment and the envelope reveal.
-	if err := s.applyPayloadTransform(ctx, slot, payloadEvent); err != nil {
-		s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed")
-
-		s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
-			Slot:      slot,
-			Candidate: string(target.candidate),
-			Error:     err.Error(),
-			FailedAt:  time.Now(),
-			BuildSeq:  build.seq,
-		})
-
+// reportNoPayload ends a target whose builds produced no payload to pick.
+func (c *candidateBuild) reportNoPayload(err error) {
+	if c.isAborted() || c.hasSelection() {
 		return
 	}
 
-	// Publish under the build lock: a supersede that raced the build's end
-	// either sees the payload here (and withdraws it) or the build sees the
-	// abort (and never emits).
-	s.scheduledBuildMu.Lock()
-	if build.aborted {
-		s.scheduledBuildMu.Unlock()
-		s.reportBuildSuperseded(slot, target.candidate, build.seq)
+	c.svc.log.WithError(err).WithFields(logrus.Fields{
+		"slot":      c.slot,
+		"candidate": c.candidate,
+	}).Error("Build target produced no payload")
 
-		return
-	}
-
-	build.payload = payloadEvent
-	s.payloadCache.Store(payloadEvent)
-	s.scheduledBuildMu.Unlock()
-
-	s.emitPayloadReady(slot, payloadEvent)
-	s.completeBuild(build)
+	c.fireTarget(&BuildTargetEvent{Status: TargetStatusNoPayload, Error: err.Error()})
 }
 
-// followUpgrades publishes the testing builds' upgrades of a target's
-// payload: same classification, transform and supersede rules as the
-// hand-over. The newer payload replaces the old one for the next bid or
-// getHeader; the old one stays findable by block hash for the bids already
-// made on it.
-func (s *Service) followUpgrades(
-	slot phase0.Slot,
-	target *buildTarget,
-	event *beacon.PayloadAttributesEvent,
-	build *candidateBuild,
-	localReq *LocalBuildRequest,
-	upgrades <-chan *BuildResult,
-) {
-	for upgrade := range upgrades {
-		if s.buildAborted(build) {
-			continue
-		}
-
-		// The final report re-sends the payload already published.
-		s.scheduledBuildMu.Lock()
-		published := build.payload
-		s.scheduledBuildMu.Unlock()
-
-		if upgrade.Payload == nil || upgrade.Payload == published {
-			s.emitLocalBuild(slot, target, upgrade, localReq, "", nil)
-
-			continue
-		}
-
-		payload := upgrade.Payload
-		payload.BuildSeq = build.seq
-
-		if s.txPool != nil {
-			s.txPool.NoteBuiltBlock(common.Hash(payload.BlockHash), slot)
-		}
-
-		if event == target.attrs {
-			payload.Candidate = target.candidate
-		} else {
-			payload.Candidate = s.classifyCandidate(payload.Attributes)
-		}
-
-		if err := s.applyPayloadTransform(s.ctx, slot, payload); err != nil {
-			s.log.WithError(err).WithField("slot", slot).Error("Payload transform failed on an upgraded payload")
-
-			continue
-		}
-
-		s.scheduledBuildMu.Lock()
-		if build.aborted {
-			s.scheduledBuildMu.Unlock()
-
-			continue
-		}
-
-		build.payload = payload
-		s.payloadCache.Store(payload)
-		s.scheduledBuildMu.Unlock()
-
-		s.log.WithFields(logrus.Fields{
-			"slot":        slot,
-			"source":      upgrade.Source,
-			"block_hash":  fmt.Sprintf("%x", payload.BlockHash[:8]),
-			"block_value": payload.BlockValue,
-		}).Info("Testing build upgraded the published payload")
-
-		s.emitPayloadReady(slot, payload)
-		s.emitLocalBuild(slot, target, upgrade, localReq, "", nil)
-	}
-}
-
-// completeBuild marks the build's ready event as dispatched. A supersede that
-// withdrew the payload while the ready event was in flight left the failure
-// report to this goroutine, so the superseded failure always follows the
-// same build's ready event (a consumer never ends on "ready" for a withdrawn
-// payload).
-func (s *Service) completeBuild(build *candidateBuild) {
-	s.scheduledBuildMu.Lock()
-	build.readyFired = true
-	aborted := build.aborted
-	s.scheduledBuildMu.Unlock()
-
-	if aborted {
-		s.reportBuildSuperseded(build.payload.Attributes.ProposalSlot, build.payload.Candidate, build.seq)
-	}
-}
-
-// buildAborted reports whether the build was superseded while running.
-func (s *Service) buildAborted(build *candidateBuild) bool {
-	s.scheduledBuildMu.Lock()
-	defer s.scheduledBuildMu.Unlock()
-
-	return build.aborted
-}
-
-// reportBuildSuperseded records a superseded build as failed so its
-// in-progress (or already ready) rendering is not left standing for a
-// payload that will never be bid. Fired exactly once per superseded build,
-// after that build's ready event when one was dispatched; the seq lets
-// consumers drop it when the replacement build already reported.
-func (s *Service) reportBuildSuperseded(slot phase0.Slot, candidate chain.CandidateKey, seq uint64) {
-	s.log.WithFields(logrus.Fields{
-		"slot":      slot,
-		"candidate": candidate,
-		"build_seq": seq,
-	}).Info("Payload build superseded by beacon node attributes")
-
-	s.buildFailedDispatcher.Fire(&PayloadBuildFailedEvent{
-		Slot:      slot,
-		Candidate: string(candidate),
-		Error:     errBuildSuperseded,
-		FailedAt:  time.Now(),
-		BuildSeq:  seq,
-	})
-}
-
-// supersedeSynthesizedBuild aborts the slot's started build on the event's
-// parent tuple when that build ran from locally synthesized attributes and
+// supersedeSynthesizedBuild aborts the slot's started target on the event's
+// parent tuple when that target ran from locally synthesized attributes and
 // the beacon node's own attributes disagree with them. The missing-block
 // fallback copies the previous slot's attributes, which are wrong whenever
 // the state moved in between (an epoch transition changes the expected
 // withdrawals), and the beacon node can emit its real attributes after the
-// fallback fired: the in-flight engine build is cancelled, an already
-// emitted payload is withdrawn from the cache so no bid commits to it, and
-// the tuple is released so the caller's normal path builds again from the
-// real attributes. Identical build inputs keep the running build (nothing to
-// fix) and just clear its synthesized marker. Returns whether a build was
-// superseded.
+// fallback fired: the target's payloads and selection are withdrawn so no bid
+// commits to them, its in-flight builds are cancelled, and the tuple is
+// released so the caller's normal path builds again from the real attributes.
+// Identical build inputs keep the running target (nothing to fix) and just
+// clear its synthesized marker. Returns whether a target was superseded.
 func (s *Service) supersedeSynthesizedBuild(event *beacon.PayloadAttributesEvent) bool {
 	slot := event.ProposalSlot
 	tuple := beacon.AttrParentKeyOf(event)
@@ -1181,78 +1172,28 @@ func (s *Service) supersedeSynthesizedBuild(event *beacon.PayloadAttributesEvent
 		return false
 	}
 
-	build.aborted = true
-	build.cancel()
 	delete(state.started, tuple)
-
-	// The build goroutine reports the abort itself while it is still running
-	// or still dispatching its ready event; only a fully published build is
-	// reported here, which keeps the failure after the ready event.
-	emitted := build.payload
-	reportHere := emitted != nil && build.readyFired
-
-	if emitted != nil {
-		s.payloadCache.Remove(emitted)
-	}
 	s.scheduledBuildMu.Unlock()
+
+	// Withdrawn before the cancel: the cancelled builds' failures must not
+	// follow the superseded report.
+	withdrawn := build.withdraw()
+	build.cancel()
 
 	fields := logrus.Fields{
 		"slot":        slot,
 		"parent_hash": fmt.Sprintf("%x", event.ParentBlockHash[:8]),
 		"withdrawals": len(event.Withdrawals),
+		"seq":         build.seq,
 	}
-	if emitted != nil {
-		fields["block_hash"] = fmt.Sprintf("%x", emitted.BlockHash[:8])
+	if withdrawn != nil {
+		fields["block_hash"] = fmt.Sprintf("%x", withdrawn.BlockHash[:8])
 	}
 
 	s.log.WithFields(fields).Warn("Beacon node attributes differ from the synthesized " +
 		"attributes the build ran from, aborting it and rebuilding")
 
-	if reportHere {
-		s.reportBuildSuperseded(slot, emitted.Candidate, build.seq)
-	}
-
 	return true
-}
-
-// applyPayloadTransform rewrites the built execution payload with the slot's
-// frozen jq payload transform (idempotent Freeze), in place. Because the bid
-// commits to the payload's block hash, Payload.BlockHash is re-synced to the
-// (possibly modified) payload block hash so the bid and the revealed payload
-// stay consistent. A no-op when no transform is set.
-func (s *Service) applyPayloadTransform(ctx context.Context, slot phase0.Slot, p *Payload) error {
-	transforms := s.planSvc.Freeze(slot).Transforms
-	if transforms == nil || transforms.Payload == "" {
-		return nil
-	}
-
-	tctx, cancel := context.WithTimeout(ctx, transformTimeout)
-	defer cancel()
-
-	transformed := &eth2all.ExecutionPayload{Version: p.ExecutionPayload.Version}
-	if err := jqtransform.ApplyTyped(tctx, transforms.Payload, p.ExecutionPayload, transformed); err != nil {
-		return err
-	}
-
-	if transformed.BlockHash == p.ExecutionPayload.BlockHash {
-		newHash, err := RehashBeaconPayload(transformed, p.EngineVersion,
-			p.EngineExecutionRequests, common.Hash(p.Attributes.ParentBeaconBlockRoot))
-		if err != nil {
-			return fmt.Errorf("failed to recompute block hash after transform: %w", err)
-		}
-
-		transformed.BlockHash = phase0.Hash32(newHash)
-	}
-
-	p.ExecutionPayload = transformed
-	p.BlockHash = transformed.BlockHash
-
-	s.log.WithFields(logrus.Fields{
-		"slot":       slot,
-		"block_hash": fmt.Sprintf("%x", p.BlockHash[:8]),
-	}).Warn("Applied payload jq transform")
-
-	return nil
 }
 
 // effectiveBuildAttributes returns the payload attributes to build the slot
@@ -1346,22 +1287,10 @@ func (s *Service) handlePayloadAvailableEvent(event *beacon.PayloadAvailableEven
 	// Building is now triggered by payload_attributes events.
 }
 
-// emitPayloadReady stores the payload and emits the ready event. Per-slot
-// accounting (next_n schedule budget, slots-built stat) fires once per slot
-// regardless of how many candidate payloads it produced.
-func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
-	// Emit the payload ready event to subscribers (the payload is already
-	// cached by the build that produced it).
-	s.payloadReadyDispatcher.Fire(payloadEvent)
-
-	s.log.WithFields(logrus.Fields{
-		"slot":              slot,
-		"candidate":         payloadEvent.Candidate,
-		"block_hash":        fmt.Sprintf("%x", payloadEvent.BlockHash[:8]),
-		"block_value":       payloadEvent.BlockValue,
-		"parent_block_hash": fmt.Sprintf("%x", payloadEvent.Attributes.ParentBlockHash[:8]),
-	}).Info("Payload built and dispatched")
-
+// noteSlotBuilt books a selection for the slot: the per-slot accounting
+// (next_n schedule budget, slots-built stat) fires once per slot regardless
+// of how many targets and selections it had.
+func (s *Service) noteSlotBuilt(slot phase0.Slot) {
 	s.scheduledBuildMu.Lock()
 	state := s.slotBuilds[slot]
 
@@ -1370,18 +1299,20 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 		s.slotBuilds[slot] = state
 	}
 
-	firstOfSlot := !state.readyFired
-	state.readyFired = true
+	firstOfSlot := !state.selected
+	state.selected = true
 	s.scheduledBuildMu.Unlock()
 
-	if firstOfSlot {
-		// Mark slot as built (next_n schedule accounting + WebUI status).
-		s.planSvc.OnSlotBuilt(slot)
-
-		s.incrementStat(func(stats *BuilderStats) {
-			stats.SlotsBuilt++
-		})
+	if !firstOfSlot {
+		return
 	}
+
+	// Mark slot as built (next_n schedule accounting + WebUI status).
+	s.planSvc.OnSlotBuilt(slot)
+
+	s.incrementStat(func(stats *BuilderStats) {
+		stats.SlotsBuilt++
+	})
 
 	s.lastBuiltSlot.Store(uint64(slot))
 
@@ -1420,109 +1351,6 @@ func (s *Service) emitPayloadReady(slot phase0.Slot, payloadEvent *Payload) {
 		}
 		s.wonPayloadsMu.Unlock()
 	}
-}
-
-// emitLocalBuild reports the local build's outcome for one target. skipReason
-// is set when no local build ran although the slot asked for one (availability
-// gate); otherwise the result carries the local outcome.
-func (s *Service) emitLocalBuild(
-	slot phase0.Slot,
-	target *buildTarget,
-	result *BuildResult,
-	req *LocalBuildRequest,
-	skipReason string,
-	buildErr error,
-) {
-	event := &LocalBuildEvent{
-		Slot:      slot,
-		Candidate: string(target.candidate),
-		At:        time.Now(),
-	}
-
-	if req != nil {
-		event.TxSource = req.TxSource
-		event.PayloadSource = req.PayloadSource
-	}
-
-	frozen := s.planSvc.Freeze(slot)
-	if frozen.Build != nil && frozen.Build.Local != nil {
-		if event.TxSource == "" {
-			event.TxSource = frozen.Build.Local.TxSource
-		}
-
-		if event.PayloadSource == "" {
-			event.PayloadSource = frozen.Build.Local.PayloadSource
-		}
-	}
-
-	switch {
-	case skipReason != "":
-		event.Status = LocalStatusSkipped
-		event.SkipReason = skipReason
-		event.Fallback = true
-	case result == nil:
-		// The target failed before either build ran (forkchoice update,
-		// prelude): the local build shares that failure.
-		event.Status = LocalStatusFailed
-		event.Error = "build did not run"
-
-		if buildErr != nil {
-			event.Error = buildErr.Error()
-		}
-	case result.Local != nil:
-		event.Status = LocalStatusReady
-		event.Payload = result.Local
-		event.Info = result.LocalInfo
-		event.Selected = result.Source == SourceLocal
-	case result.LocalSkipReason != "":
-		event.Status = LocalStatusSkipped
-		event.SkipReason = result.LocalSkipReason
-		event.Info = result.LocalInfo
-		event.Fallback = result.Fallback
-	default:
-		event.Status = LocalStatusFailed
-		event.Info = result.LocalInfo
-		event.Fallback = result.Fallback
-
-		if result.LocalErr != nil {
-			event.Error = result.LocalErr.Error()
-		}
-	}
-
-	if result != nil {
-		event.ELPayload = result.EL
-	}
-
-	reason := event.SkipReason
-	if event.Status == LocalStatusFailed {
-		reason = "error"
-	}
-
-	metrics.LocalBuildOutcomes.WithLabelValues(event.Status, reason).Inc()
-
-	if result != nil && result.Source != "" {
-		metrics.LocalBuildSelected.WithLabelValues(result.Source).Inc()
-	}
-
-	if p := event.Payload; p != nil && p.ExecutionPayload != nil {
-		metrics.LocalBuildTxs.Observe(float64(len(p.ExecutionPayload.Transactions)))
-
-		if p.ExecutionPayload.GasLimit > 0 {
-			metrics.LocalBuildFillRatio.Set(float64(p.ExecutionPayload.GasUsed) / float64(p.ExecutionPayload.GasLimit))
-		}
-	}
-
-	if event.Status != LocalStatusReady {
-		s.log.WithFields(logrus.Fields{
-			"slot":        slot,
-			"candidate":   target.candidate,
-			"status":      event.Status,
-			"skip_reason": event.SkipReason,
-			"error":       event.Error,
-		}).Warn("Local build did not produce a payload")
-	}
-
-	s.localBuildDispatcher.Fire(event)
 }
 
 // UnmarkPayloadWon clears the won marker of a payload whose winning block was

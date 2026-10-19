@@ -54,7 +54,7 @@ export function deriveBidStatus(result?: SlotResult): BidDotStatus {
   if (
     buildStatus === 'no_attributes' ||
     buildStatus === 'waiting_attributes' ||
-    buildStatus === 'started'
+    buildStatus === 'building'
   ) {
     return 'idle';
   }
