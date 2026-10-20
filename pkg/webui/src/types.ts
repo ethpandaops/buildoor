@@ -79,7 +79,7 @@ export interface BuildConfig {
 export interface LocalBuildConfig {
   enabled: boolean;
   payload_source: string; // el | local | local_or_el | higher_value
-  tx_source: string; // txpool | txpool_el_fill | empty | el_mempool
+  tx_source: string; // txpool | private_first | most_profitable | empty | el_mempool
   allow_blobs_without_bundle: boolean;
   blob_encoding: string; // auto | network | canonical (startup-only)
   max_attempts: number;
@@ -274,12 +274,28 @@ export interface TxSelectionSummary {
   ceiling_applied?: boolean;
   bytes?: number;
   hashes?: string[];
-  // EL mempool fill (tx source txpool_el_fill).
+  // EL mempool fill (tx sources private_first, most_profitable).
   fill_candidates?: number;
   fill_selected?: number;
   fill_gas_sum?: number;
   fill_blobs?: number;
   fill_skipped?: Record<string, number>;
+  // The block's transactions by origin.
+  origins?: SelectionOrigins;
+}
+
+export interface OriginStats {
+  txs: number;
+  gas: number; // gas limit sum
+  blobs?: number;
+  // Effective tip × gas limit, summed (wei): the most the origin can pay.
+  tips: string;
+}
+
+export interface SelectionOrigins {
+  inclusion_list: OriginStats;
+  private: OriginStats;
+  public: OriginStats;
 }
 
 // The EL mempool mirror (the testing build's fill source).
@@ -324,12 +340,62 @@ export interface FeeDistribution {
   mirror_active: boolean;
 }
 
-export interface TxPoolPreviewResponse {
-  selection: TxSelectionSummary;
+// GET /api/v1/next-block: the next block's testing build selection,
+// estimated on the current head. txs need a login.
+export interface NextBlockTx {
+  hash: string;
+  from: string;
+  nonce: number;
+  type: number;
+  origin: 'inclusion_list' | 'private' | 'public';
+  gas: number;
+  tip: string; // effective tip per gas, wei
+  blobs?: number;
+  gas_used?: number; // on-chain blocks
+}
+
+// GET /api/v1/payloads/{hash}/transactions: one of our recent payloads or
+// any recent on-chain block (a testing build's before it is on chain needs
+// a login).
+export interface PayloadTransactionsResponse {
+  block_hash: string;
+  ours: boolean;
+  on_chain: boolean;
+  gas_limit: number;
+  gas_used: number;
+  base_fee: string;
+  value?: string; // wei: priority fees to the fee recipient
+  txs: NextBlockTx[];
+}
+
+export interface NextBlockResponse {
+  slot: number;
   parent_hash: string;
   gas_limit: number;
   max_blobs: number;
+  tx_source: string;
   ordering: string;
+  local_build_enabled: boolean;
+  public_mempool: 'mirrored' | 'idle' | 'unused';
+  note?: string;
+  selection?: TxSelectionSummary;
+  txs?: NextBlockTx[];
+  txs_total?: number;
+  computed_at: number;
+  // head: a block on the current head; candidate: the slot after our
+  // current slot candidate (basis_block), assumed included; head_only: the
+  // slot after a current slot block nobody here built.
+  basis: 'head' | 'candidate' | 'head_only';
+  basis_block?: string;
+}
+
+// The next_block event / GET /api/v1/next-block: an estimate per slot to
+// come (the block on the head, and the slot after the current one while its
+// block is not on chain).
+export interface NextBlockEstimates {
+  estimates: NextBlockResponse[];
+  version: number;
+  computed_at: number;
 }
 
 // How a local payload's transaction list was assembled.
@@ -1046,7 +1112,7 @@ export interface InclusionListPlan {
 export interface LocalBuildPlan {
   enabled?: boolean;
   payload_source?: string; // el | local | local_or_el | higher_value
-  tx_source?: string; // txpool | empty | el_mempool | explicit
+  tx_source?: string; // txpool | private_first | most_profitable | empty | el_mempool | explicit | queued
   transactions?: string[]; // 0x-hex raw transactions (tx_source explicit)
   // Length of the explicit list when the backend hid it from a reader
   // without a login (output only; saving it back is refused).

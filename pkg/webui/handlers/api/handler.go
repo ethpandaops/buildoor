@@ -56,6 +56,9 @@ type APIHandler struct {
 	resultTracker    *slot_results.Tracker            // May be nil
 	planVerifier     *tx_plan_verifier.Verifier       // May be nil (no --el-rpc)
 
+	// nextBlockCache shares the next block estimate between viewers.
+	nextBlockCache nextBlockCache
+
 	// The /rpc ingress (nil without --el-rpc).
 	rpcIngress   *txpoolrpc.Server
 	rpcUpstreams *txpoolrpc.UpstreamPool
@@ -122,6 +125,8 @@ func NewAPIHandler(
 		)
 		h.eventStreamMgr.AttachSources(settingsSvc, validatorStore, propPrefSvc, valRanges)
 		h.eventStreamMgr.Start()
+
+		go h.runNextBlockFeed(h.eventStreamMgr.ctx)
 	}
 
 	return h

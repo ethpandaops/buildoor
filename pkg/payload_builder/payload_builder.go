@@ -799,10 +799,12 @@ func (b *PayloadBuilder) buildLocal(
 
 	var (
 		txs [][]byte
-		// submitted is the list error attribution works on (the pool
-		// selection's block order without the fill: inclusion list and pool
-		// entries); fill is the EL mempool part at the end of txs.
-		submitted, fill []*txpool.PooledTx
+		// submitted is the pool selection's block order behind txs: the
+		// inclusion list, the pool and the EL mempool fill (after the pool
+		// for private_first, interleaved for most_profitable). fill marks
+		// the EL mempool entries.
+		submitted []*txpool.PooledTx
+		fill      map[common.Hash]struct{}
 	)
 
 	switch req.TxSource {
@@ -850,7 +852,7 @@ func (b *PayloadBuilder) buildLocal(
 			info.InclusionListDropped = true
 		}
 
-	default: // txpool, txpool_el_fill
+	default: // txpool, private_first, most_profitable
 		if b.txPool == nil {
 			return localOutcome{skipReason: LocalSkipTxPoolUnavailable}
 		}
@@ -866,7 +868,7 @@ func (b *PayloadBuilder) buildLocal(
 			fillSidecars txpool.SidecarSource
 		)
 
-		if req.TxSource == config.TxSourceTxPoolELFill {
+		if config.TxSourceUsesELMempool(req.TxSource) {
 			if source, ok := newEngineBlobSource(b.engineClient, prelude.engineVersion); ok {
 				fillSidecars = source
 			}
@@ -899,21 +901,26 @@ func (b *PayloadBuilder) buildLocal(
 			CellProofs:     prelude.engineVersion >= enginev.DataVersionOsaka,
 			Fill:           pending,
 			FillSidecars:   fillSidecars,
+			MostProfitable: req.TxSource == config.TxSourceMostProfitable,
 		})
 		if err != nil {
 			return localOutcome{info: info, err: fmt.Errorf("pool selection failed: %w", err)}
 		}
 
 		info.FillTxs = len(selection.Fill)
-		fill = selection.Fill
+		fill = make(map[common.Hash]struct{}, len(selection.Fill))
+
+		for _, tx := range selection.Fill {
+			fill[tx.Hash] = struct{}{}
+		}
 
 		info.Selection = selection.Summary()
 		info.InclusionListTxs = selection.InclusionListTxs
 		txs = selection.Txs
 
-		// Error attribution works on the block order without the fill (a
-		// refusal drops the fill first): inclusion list and pool alike.
-		submitted = selection.Ordered[:len(selection.Ordered)-len(selection.Fill)]
+		// A refusal drops the fill first; error attribution then works on
+		// what is left: inclusion list and pool alike.
+		submitted = selection.Ordered
 	}
 
 	// The pool selection places the inclusion list itself (checked against
@@ -945,7 +952,7 @@ func (b *PayloadBuilder) buildLocal(
 	// refusal fails them, since dropping would build a block that is not the
 	// plan.
 	maxAttempts := max(req.MaxAttempts, 1)
-	if req.TxSource != config.TxSourceTxPool && req.TxSource != config.TxSourceTxPoolELFill {
+	if !config.TxSourceSelects(req.TxSource) {
 		maxAttempts = 1
 	}
 
@@ -962,42 +969,49 @@ func (b *PayloadBuilder) buildLocal(
 			break
 		}
 
-		if !info.FillDropped && !info.FillBlobsDropped && hasBlobTxs(fill) {
+		isFill := func(tx *txpool.PooledTx) bool {
+			_, ok := fill[tx.Hash]
+			return ok
+		}
+
+		if !info.FillDropped && !info.FillBlobsDropped && hasFillBlobTxs(submitted, fill) {
 			// The fill's blob transactions carry sidecars assembled from the
 			// EL blob pool: the likeliest part to be refused, so they go
-			// first, together with their senders' later fill transactions.
-			kept := withoutFillBlobTxs(fill)
-
-			encoded, encErr := encodeTxs(kept, req.BlobEncoding)
-			if encErr != nil {
-				return localOutcome{info: info, err: encErr}
-			}
+			// first, together with their senders' later transactions.
+			kept := withoutSenderTails(submitted, func(tx *txpool.PooledTx) bool {
+				return isFill(tx) && tx.Tx.Type() == types.BlobTxType
+			})
 
 			b.log.WithError(err).WithFields(logrus.Fields{
 				"slot":    attrs.ProposalSlot,
-				"dropped": len(fill) - len(kept),
+				"dropped": len(submitted) - len(kept),
 			}).Warn("EL refused the transaction list, retrying without the EL mempool blob transactions")
 
-			txs = append(txs[:len(txs)-info.FillTxs:len(txs)-info.FillTxs], encoded...)
-			fill = kept
-			info.FillTxs = len(kept)
+			if txs, err = resubmit(info, kept, req.BlobEncoding, fill); err != nil {
+				return localOutcome{info: info, err: err}
+			}
+
+			submitted = kept
 			info.FillBlobsDropped = true
-			info.SubmittedTxs = len(txs)
-			info.ExpectedHashes = txHashes(txs)
 
 			continue
 		}
 
 		if info.FillTxs > 0 && !info.FillDropped {
-			// The EL mempool fill sits at the end of the list; a refusal is
-			// retried without it before anything of the pool's is dropped.
+			// A refusal is retried without the EL mempool fill (and the
+			// senders' transactions after it) before anything of the pool's
+			// is dropped.
 			b.log.WithError(err).WithField("slot", attrs.ProposalSlot).
 				Warn("EL refused the transaction list, retrying without the EL mempool fill")
 
-			txs = txs[:len(txs)-info.FillTxs]
+			kept := withoutSenderTails(submitted, isFill)
+
+			if txs, err = resubmit(info, kept, req.BlobEncoding, fill); err != nil {
+				return localOutcome{info: info, err: err}
+			}
+
+			submitted = kept
 			info.FillDropped = true
-			info.SubmittedTxs = len(txs)
-			info.ExpectedHashes = txHashes(txs)
 
 			continue
 		}
@@ -1098,10 +1112,11 @@ func (b *PayloadBuilder) buildLocal(
 	return localOutcome{payload: payload, info: info}
 }
 
-// hasBlobTxs reports whether any of the transactions is a blob transaction.
-func hasBlobTxs(txs []*txpool.PooledTx) bool {
+// hasFillBlobTxs reports whether the list carries an EL mempool blob
+// transaction.
+func hasFillBlobTxs(txs []*txpool.PooledTx, fill map[common.Hash]struct{}) bool {
 	for _, tx := range txs {
-		if tx.Tx.Type() == types.BlobTxType {
+		if _, ok := fill[tx.Hash]; ok && tx.Tx.Type() == types.BlobTxType {
 			return true
 		}
 	}
@@ -1109,14 +1124,14 @@ func hasBlobTxs(txs []*txpool.PooledTx) bool {
 	return false
 }
 
-// withoutFillBlobTxs drops the blob transactions of a fill and every later
-// fill transaction of their senders, which would follow a nonce gap.
-func withoutFillBlobTxs(fill []*txpool.PooledTx) []*txpool.PooledTx {
-	kept := make([]*txpool.PooledTx, 0, len(fill))
+// withoutSenderTails drops the transactions drop picks and every later
+// transaction of their senders, which would follow a nonce gap.
+func withoutSenderTails(txs []*txpool.PooledTx, drop func(*txpool.PooledTx) bool) []*txpool.PooledTx {
+	kept := make([]*txpool.PooledTx, 0, len(txs))
 	dropped := make(map[common.Address]bool, 4)
 
-	for _, tx := range fill {
-		if dropped[tx.Sender] || tx.Tx.Type() == types.BlobTxType {
+	for _, tx := range txs {
+		if dropped[tx.Sender] || drop(tx) {
 			dropped[tx.Sender] = true
 
 			continue
@@ -1126,6 +1141,33 @@ func withoutFillBlobTxs(fill []*txpool.PooledTx) []*txpool.PooledTx {
 	}
 
 	return kept
+}
+
+// resubmit encodes the list a retry submits and updates the build info: the
+// submitted count, the expected hashes and the EL mempool share.
+func resubmit(
+	info *LocalBuildInfo,
+	txs []*txpool.PooledTx,
+	blobEncoding string,
+	fill map[common.Hash]struct{},
+) ([][]byte, error) {
+	encoded, err := encodeTxs(txs, blobEncoding)
+	if err != nil {
+		return nil, err
+	}
+
+	info.FillTxs = 0
+
+	for _, tx := range txs {
+		if _, ok := fill[tx.Hash]; ok {
+			info.FillTxs++
+		}
+	}
+
+	info.SubmittedTxs = len(encoded)
+	info.ExpectedHashes = txHashes(encoded)
+
+	return encoded, nil
 }
 
 // encodeTxs encodes pool entries for the testing call.

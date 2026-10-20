@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -123,23 +124,34 @@ func (c *Client) accountStatesBatch(
 	return out, nil
 }
 
-// BlockTxList is the transaction hash list of an execution block together
-// with the block's number.
+// BlockTxList is an execution block's transactions together with the
+// block's number, gas and base fee.
 type BlockTxList struct {
 	Number   uint64
+	GasLimit uint64
+	GasUsed  uint64
+	BaseFee  *big.Int
+	// TxHashes lists every transaction; Txs and Senders the ones that
+	// decoded, in the same order (Txs[i] nil for a type this client does
+	// not know).
 	TxHashes []common.Hash
+	Txs      []*types.Transaction
+	Senders  []common.Address
 }
 
-// BlockTransactions returns the transaction hashes (and number) of the
-// execution block with the given hash, or found=false when the EL does not
-// know the block yet (a Gloas payload whose envelope is still unrevealed).
+// BlockTransactions returns the transactions of the execution block with the
+// given hash, or found=false when the EL does not know the block yet (a
+// Gloas payload whose envelope is still unrevealed).
 func (c *Client) BlockTransactions(ctx context.Context, blockHash common.Hash) (*BlockTxList, bool, error) {
 	var block *struct {
-		Number       hexutil.Uint64 `json:"number"`
-		Transactions []common.Hash  `json:"transactions"`
+		Number       hexutil.Uint64    `json:"number"`
+		GasLimit     hexutil.Uint64    `json:"gasLimit"`
+		GasUsed      hexutil.Uint64    `json:"gasUsed"`
+		BaseFee      *hexutil.Big      `json:"baseFeePerGas"`
+		Transactions []json.RawMessage `json:"transactions"`
 	}
 
-	if err := c.rpcClient.CallContext(ctx, &block, "eth_getBlockByHash", blockHash, false); err != nil {
+	if err := c.rpcClient.CallContext(ctx, &block, "eth_getBlockByHash", blockHash, true); err != nil {
 		return nil, false, fmt.Errorf("failed to get block %s: %w", blockHash.Hex(), err)
 	}
 
@@ -147,7 +159,56 @@ func (c *Client) BlockTransactions(ctx context.Context, blockHash common.Hash) (
 		return nil, false, nil
 	}
 
-	return &BlockTxList{Number: uint64(block.Number), TxHashes: block.Transactions}, true, nil
+	out := &BlockTxList{
+		Number:   uint64(block.Number),
+		GasLimit: uint64(block.GasLimit),
+		GasUsed:  uint64(block.GasUsed),
+		BaseFee:  (*big.Int)(block.BaseFee),
+		TxHashes: make([]common.Hash, 0, len(block.Transactions)),
+		Txs:      make([]*types.Transaction, 0, len(block.Transactions)),
+		Senders:  make([]common.Address, 0, len(block.Transactions)),
+	}
+
+	for _, raw := range block.Transactions {
+		var meta struct {
+			Hash common.Hash    `json:"hash"`
+			From common.Address `json:"from"`
+		}
+
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return nil, false, fmt.Errorf("failed to decode block %s: %w", blockHash.Hex(), err)
+		}
+
+		tx := new(types.Transaction)
+		if err := tx.UnmarshalJSON(raw); err != nil {
+			tx = nil
+		}
+
+		out.TxHashes = append(out.TxHashes, meta.Hash)
+		out.Txs = append(out.Txs, tx)
+		out.Senders = append(out.Senders, meta.From)
+	}
+
+	return out, true, nil
+}
+
+// BlockGasUsed returns the gas each transaction of the block used, in block
+// order (eth_getBlockReceipts).
+func (c *Client) BlockGasUsed(ctx context.Context, blockHash common.Hash) ([]uint64, error) {
+	var receipts []struct {
+		GasUsed hexutil.Uint64 `json:"gasUsed"`
+	}
+
+	if err := c.rpcClient.CallContext(ctx, &receipts, "eth_getBlockReceipts", blockHash); err != nil {
+		return nil, fmt.Errorf("failed to get receipts of block %s: %w", blockHash.Hex(), err)
+	}
+
+	out := make([]uint64, len(receipts))
+	for i, receipt := range receipts {
+		out[i] = uint64(receipt.GasUsed)
+	}
+
+	return out, nil
 }
 
 // TransactionBlockHashes resolves, in one batch request, the block hash each

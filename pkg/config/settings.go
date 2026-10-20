@@ -29,6 +29,24 @@ var retiredKeys = map[string]string{
 	"local_build.build_el_payload": KeyBuildEngineEnabled,
 }
 
+// retiredValues maps a value a setting no longer takes to the value that took
+// over its meaning, per key. Overrides persisted with it load as the
+// successor value.
+var retiredValues = map[string]map[string]string{
+	KeyLocalBuildTxSource: {txSourceRetiredELFill: TxSourcePrivateFirst},
+}
+
+// renewValue maps a retired value of the key to its successor.
+func renewValue(key string, v any) any {
+	if s, ok := v.(string); ok {
+		if successor, retired := retiredValues[key][s]; retired {
+			return successor
+		}
+	}
+
+	return v
+}
+
 // keyState holds the in-memory 3-way state for one setting key.
 type keyState struct {
 	hasCLI   bool
@@ -138,7 +156,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		if row.UISeq > 0 && row.UIValue.Valid {
 			if v, derr := f.Decode(json.RawMessage(row.UIValue.String)); derr == nil {
 				ks.hasUI = true
-				ks.uiValue = v
+				ks.uiValue = renewValue(f.Key, v)
 				ks.uiSeq = row.UISeq
 
 				// The row carries one timestamp for its last write; it dates
@@ -179,7 +197,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		}
 
 		ks.hasUI = true
-		ks.uiValue = v
+		ks.uiValue = renewValue(successor, v)
 		ks.uiSeq = row.UISeq
 		adopted[successor] = struct{}{}
 
@@ -200,7 +218,7 @@ func NewService(effective, defaults *Config, supplied map[string]bool, store *db
 		storedHasCLI := row.CLISeq > 0 && row.CLIValue.Valid
 		if storedHasCLI {
 			if v, derr := f.Decode(json.RawMessage(row.CLIValue.String)); derr == nil {
-				storedCLI = v
+				storedCLI = renewValue(f.Key, v)
 			} else {
 				storedHasCLI = false
 			}

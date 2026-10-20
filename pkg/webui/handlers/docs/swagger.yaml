@@ -238,8 +238,9 @@ definitions:
         type: integer
       tx_source:
         description: |-
-          TxSource: txpool | empty | el_mempool | explicit (explicit requires
-          Transactions; a non-empty Transactions list implies explicit).
+          TxSource: txpool | private_first | most_profitable | empty |
+          el_mempool | explicit (explicit requires Transactions; a non-empty
+          Transactions list implies explicit).
         type: string
     type: object
   action_plan.Mode:
@@ -528,7 +529,9 @@ definitions:
           hidden from a reader without a login (output only).
         type: integer
       tx_source:
-        description: 'TxSource: txpool | empty | el_mempool | explicit.'
+        description: |-
+          TxSource: txpool | private_first | most_profitable | empty |
+          el_mempool | explicit | queued.
         type: string
     type: object
   action_plan.ResolvedRevealSettings:
@@ -881,6 +884,108 @@ definitions:
       txpool:
         $ref: '#/definitions/api.TxPoolStatus'
     type: object
+  api.NextBlockEstimates:
+    properties:
+      computed_at:
+        type: integer
+      estimates:
+        items:
+          $ref: '#/definitions/api.NextBlockResponse'
+        type: array
+      version:
+        description: |-
+          Version counts the estimate sets: the next_block event carries it, so
+          a logged-in reader fetches the transactions of exactly that set.
+        type: integer
+    type: object
+  api.NextBlockResponse:
+    properties:
+      basis:
+        description: |-
+          Basis is what the estimated block follows: head (a block on the
+          current head), candidate (the slot after our current slot candidate,
+          BasisBlock, assumed included) or head_only (the slot after a current
+          slot block nobody here built: nothing assumed).
+        type: string
+      basis_block:
+        type: string
+      computed_at:
+        type: integer
+      gas_limit:
+        type: integer
+      local_build_enabled:
+        description: |-
+          LocalBuildEnabled is false when the testing build is off: the estimate
+          then shows what it would select.
+        type: boolean
+      max_blobs:
+        type: integer
+      note:
+        description: |-
+          Note explains an estimate that cannot be made (the source leaves the
+          choice to the EL, or builds empty blocks).
+        type: string
+      ordering:
+        type: string
+      parent_hash:
+        type: string
+      public_mempool:
+        description: |-
+          PublicMempool is mirrored (the EL mempool is part of the estimate),
+          idle (the source takes it, but the mirror is not running: no build
+          asked for it lately) or unused (the source does not take it).
+        type: string
+      selection:
+        allOf:
+        - $ref: '#/definitions/txpool.Summary'
+        description: |-
+          Selection carries the aggregates (counts, gas, blobs, skips and the
+          split by origin); its pool transaction hashes need a login.
+      slot:
+        description: |-
+          Slot is the slot of the block that extends the current head (the slot
+          after the head, or the current slot after missed slots).
+        type: integer
+      tx_source:
+        description: |-
+          TxSource is the configured transaction source; Ordering the private
+          pool's order (private_first and txpool).
+        type: string
+      txs:
+        description: |-
+          Txs are the block's transactions in block order (login only, at most
+          nextBlockMaxTxs).
+        items:
+          $ref: '#/definitions/api.NextBlockTx'
+        type: array
+      txs_total:
+        type: integer
+    type: object
+  api.NextBlockTx:
+    properties:
+      blobs:
+        type: integer
+      from:
+        type: string
+      gas:
+        type: integer
+      gas_used:
+        description: GasUsed is the gas the transaction used (on-chain blocks only).
+        type: integer
+      hash:
+        type: string
+      nonce:
+        type: integer
+      origin:
+        description: inclusion_list, private or public
+        type: string
+      tip:
+        description: Tip is the effective priority fee per gas over the base fee,
+          wei.
+        type: string
+      type:
+        type: integer
+    type: object
   api.OverviewBalances:
     properties:
       cl_balance_gwei:
@@ -1007,6 +1112,37 @@ definitions:
         type: integer
       slots_built:
         type: integer
+    type: object
+  api.PayloadTransactionsResponse:
+    properties:
+      base_fee:
+        type: string
+      block_hash:
+        type: string
+      gas_limit:
+        type: integer
+      gas_used:
+        type: integer
+      on_chain:
+        type: boolean
+      ours:
+        description: |-
+          Ours marks one of our payloads (classified by its build's own
+          accounting); OnChain that the EL has the block.
+        type: boolean
+      txs:
+        description: |-
+          Txs are in block order. Origin is inclusion_list (on the list the
+          block had to satisfy), private (from our private mempool) or public.
+        items:
+          $ref: '#/definitions/api.NextBlockTx'
+        type: array
+      value:
+        description: |-
+          Value is what the block pays its fee recipient in priority fees, wei:
+          our build's reported block value, or the effective tips times the gas
+          the transactions used (empty while unknown).
+        type: string
     type: object
   api.ProposerPreferencesEntry:
     properties:
@@ -1168,19 +1304,6 @@ definitions:
         type: string
       target:
         type: string
-    type: object
-  api.TxPoolPreviewResponse:
-    properties:
-      gas_limit:
-        type: integer
-      max_blobs:
-        type: integer
-      ordering:
-        type: string
-      parent_hash:
-        type: string
-      selection:
-        $ref: '#/definitions/txpool.Summary'
     type: object
   api.TxPoolResponse:
     properties:
@@ -1520,8 +1643,9 @@ definitions:
         type: string
       fill_txs:
         description: |-
-          FillTxs is how many EL mempool transactions the txpool_el_fill source
-          appended after the pool selection; FillError is why the EL mempool
+          FillTxs is how many EL mempool transactions the private_first source
+          placed after the pool selection (most_profitable: among it); FillError
+          is why the EL mempool
           could not be read (the build then used the pool alone); FillDropped
           marks that the EL refused the list and the build retried without the
           fill; FillBlobsDropped that a refused list was first retried without
@@ -2186,6 +2310,31 @@ definitions:
       txs:
         type: integer
     type: object
+  txpool.OriginStats:
+    properties:
+      blobs:
+        type: integer
+      gas:
+        description: gas limit sum
+        type: integer
+      tips:
+        description: |-
+          Tips is the effective tip times the gas limit, summed, in wei: the
+          most the origin's transactions can pay the builder (they pay for the
+          gas they use).
+        type: string
+      txs:
+        type: integer
+    type: object
+  txpool.SelectionOrigins:
+    properties:
+      inclusion_list:
+        $ref: '#/definitions/txpool.OriginStats'
+      private:
+        $ref: '#/definitions/txpool.OriginStats'
+      public:
+        $ref: '#/definitions/txpool.OriginStats'
+    type: object
   txpool.Stats:
     properties:
       admitted:
@@ -2251,7 +2400,7 @@ definitions:
       fill_blobs:
         type: integer
       fill_candidates:
-        description: EL mempool fill (tx source txpool_el_fill).
+        description: EL mempool fill (tx sources private_first, most_profitable).
         type: integer
       fill_gas_sum:
         type: integer
@@ -2278,6 +2427,11 @@ definitions:
         type: object
       inclusion_list_txs:
         type: integer
+      origins:
+        allOf:
+        - $ref: '#/definitions/txpool.SelectionOrigins'
+        description: Origins accounts the block's transactions by where they came
+          from.
       pool_size:
         type: integer
       selected:
@@ -3017,6 +3171,43 @@ paths:
       summary: Get the local build (testing_buildBlockV1) status
       tags:
       - LocalBuild
+  /next-block:
+    get:
+      description: |-
+        Runs the testing build's transaction selection with the live
+        settings — the inclusion list first, then the configured
+        transaction source (txpool, private_first or most_profitable)
+        — without building: for the block on the current head and,
+        while the current slot's block is not on chain yet, for the
+        slot after it, assuming our current slot candidate gets
+        included (its transactions out, their senders' nonces and
+        balances past them, the base fee after it). Public: the
+        aggregates; the transactions and pool hashes need a login.
+        Estimates are shared between viewers and pushed as the
+        next_block event.
+      operationId: getNextBlock
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NextBlockEstimates'
+        "404":
+          description: Pool not configured or no head
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Selection failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Estimate the next blocks
+      tags:
+      - LocalBuild
   /overview:
     get:
       description: |-
@@ -3034,6 +3225,49 @@ paths:
       summary: Get a compact overview of this buildoor instance
       tags:
       - Buildoor
+  /payloads/{blockHash}/transactions:
+    get:
+      description: |-
+        The transactions of one of our recent payloads or of any
+        recent block on chain, in block order, with their origin
+        (inclusion list, private, public), effective tip and gas
+        used. A testing build's payload may hold private
+        transactions: before it is on chain it needs a login.
+      operationId: getPayloadTransactions
+      parameters:
+      - description: Block hash
+        in: path
+        name: blockHash
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.PayloadTransactionsResponse'
+        "400":
+          description: Invalid block hash
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Testing build payload not on chain yet, without a login
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Unknown block
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List a block's transactions
+      tags:
+      - LocalBuild
   /registrations/builder-preferences:
     get:
       description: Returns all builder preferences currently in the cache, submitted
@@ -3744,41 +3978,6 @@ paths:
               type: string
             type: object
       summary: Pending gas by max fee
-      tags:
-      - LocalBuild
-  /txpool/preview:
-    get:
-      description: |-
-        Runs the pool selection against the current head with the
-        live settings and returns what a local block built now would
-        contain (count, gas sum, skipped-by-reason), without building.
-      operationId: getTxPoolPreview
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.TxPoolPreviewResponse'
-        "401":
-          description: Unauthorized (the pool holds private transactions)
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Pool not configured or no head
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Selection failed
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Preview the next local block's selection
       tags:
       - LocalBuild
   /version:

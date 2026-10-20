@@ -612,12 +612,17 @@ const (
 	// TxSourceELMempool lets the EL fill the block from its own mempool
 	// through the testing path (transactions: null).
 	TxSourceELMempool = "el_mempool"
-	// TxSourceTxPoolELFill selects from the owned pool first, then fills the
-	// remaining gas with the EL mempool's pending transactions (read through
-	// txpool_content, checked against the parent state like pool
-	// transactions; blob transactions are left out, their sidecars are not
-	// exposed).
-	TxSourceTxPoolELFill = "txpool_el_fill"
+	// TxSourcePrivateFirst selects from the owned (private) pool first, in
+	// the pool's ordering, then fills the remaining gas with the EL (public)
+	// mempool's pending transactions, highest tip first. Both are checked
+	// against the parent state.
+	TxSourcePrivateFirst = "private_first"
+	// TxSourceMostProfitable merges the private pool and the EL mempool into
+	// one selection ordered by effective tip: the most profitable
+	// transactions of both, each sender in nonce order across the pools.
+	TxSourceMostProfitable = "most_profitable"
+	// txSourceRetiredELFill is private_first's former name, still accepted.
+	txSourceRetiredELFill = "txpool_el_fill"
 	// TxSourceExplicit uses the exact transaction list of the slot's action
 	// plan; only reachable through a plan, never as a global default.
 	TxSourceExplicit = "explicit"
@@ -632,11 +637,32 @@ const (
 // normalize, but it is meaningless as a global setting.
 func NormalizedTxSource(source, fallback string) string {
 	switch source {
-	case TxSourceTxPool, TxSourceTxPoolELFill, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
+	case TxSourceTxPool, TxSourcePrivateFirst, TxSourceMostProfitable, TxSourceEmpty, TxSourceELMempool,
+		TxSourceExplicit, TxSourceQueued:
 		return source
+	case txSourceRetiredELFill:
+		return TxSourcePrivateFirst
 	default:
 		return fallback
 	}
+}
+
+// TxSourceSelects reports whether the source is a pool selection (the
+// state-aware selection of pkg/txpool, as opposed to an exact list or the
+// EL's own choice).
+func TxSourceSelects(source string) bool {
+	switch source {
+	case TxSourceTxPool, TxSourcePrivateFirst, TxSourceMostProfitable:
+		return true
+	default:
+		return false
+	}
+}
+
+// TxSourceUsesELMempool reports whether the selection takes the EL (public)
+// mempool's pending transactions too.
+func TxSourceUsesELMempool(source string) bool {
+	return source == TxSourcePrivateFirst || source == TxSourceMostProfitable
 }
 
 // Blob transaction encodings handed to testing_buildBlockV1.
@@ -678,9 +704,10 @@ type LocalBuildConfig struct {
 	// higher_value (whichever of the two is worth more).
 	PayloadSource string `yaml:"payload_source" json:"payload_source"`
 
-	// TxSource is where the local build's transaction list comes from:
-	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
-	// may also supply an explicit list.
+	// TxSource is where the local build's transaction list comes from, after
+	// the inclusion list: txpool (default; the private pool alone),
+	// private_first, most_profitable, empty or el_mempool. Per-slot plans may
+	// also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
 
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on

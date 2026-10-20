@@ -262,8 +262,17 @@ npm run clean
      plan `build.local.build_el_payload`; the toggle of the Engine builder
      card) turns the engine build off: only the head-pinning FCU remains, the
      testing build alone feeds the consumers whatever the payload source, and
-     a target without a testing build is skipped quietly. Tx source:
-     `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
+     a target without a testing build is skipped quietly. Tx source (the
+     FOCIL inclusion list always goes first, see 0e):
+     `txpool` (the private pool alone, in `txpool.ordering`) |
+     `most_profitable` (private pool and EL mempool merged into one
+     selection by effective tip: one queue per sender across both pools in
+     nonce order, of two txs at one nonce the higher tip; the ordering does
+     not apply; a refusal retries without the public txs and their senders'
+     later txs, `withoutSenderTails`) |
+     `private_first` (formerly `txpool_el_fill`, the old value still maps:
+     `NormalizedTxSource`, persisted overrides via `retiredValues`; pool
+     selection first, then the EL mempool's
      pending txs fill the remaining gas — same parent-state checks, each
      sender continuing at the nonce/balance the pool left, highest tip first,
      pool duplicates skipped, txs below the next base fee dropped BEFORE any
@@ -789,9 +798,16 @@ npm run clean
      target, auto exit) need a confirmation. Fields come from the registry in
      `settings/fields.tsx` (one entry per backend setting key: label, kind,
      unit/scale, options, validation, help text) and are written through
-     `settings/write.ts` (generic settings endpoint, service toggle, key target)
-   - Mempool page (tabs Queue / Next block / EL mempool / Access / Settings;
-     EL mempool = the mirror's state, a pending-gas-by-max-fee chart against
+     `settings/write.ts` (generic settings endpoint, key target)
+   - Mempool page (tabs Next block / Public mempool / Private mempool /
+     Access / Settings; old sub paths `queue`, `el-mempool` still route).
+     Next block = two cards: the current slot's pick (live from the build
+     events; split by origin from the testing run's selection summary
+     `origins`) and the next slot's estimate (`GET /api/v1/next-block`): a
+     gas bar and blob slots by origin (inclusion list / private / public),
+     key stats, skips, and for logged-in readers a block map (width = gas,
+     height = effective tip) and the transaction list. Public mempool = the
+     mirror's state, a pending-gas-by-max-fee chart against
      the next base fee and one block of gas, buildoor's private txs
      highlighted for logged-in readers, and the mirrored txs) and one tabbed
      Registrations page (Builder API registrations, proposer preferences,
@@ -939,7 +955,7 @@ Key config sections:
   testing rebuilds, 0 = one build timed to the window end; see "Testing
   build timing" in 0d),
   `--local-build-payload-source`
-  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
+  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | private_first | most_profitable | empty |
   el_mempool), `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
@@ -1231,7 +1247,12 @@ command polls `/api/v1/overview` and falls back to the pre-v1
   re-probes now (auth + audit)
 - `GET /api/v1/txpool?offset=&limit=&sender=&sort=` - Pool stats (pending,
   senders, gas sum, value, blobs, lifetime counters) + a page of queued txs;
-  `GET /api/v1/txpool/preview` dry-runs the selection on the current head;
+  `GET /api/v1/next-block` estimates the next slot's testing build on the
+  current head with the live settings (inclusion list view, tx source; the
+  EL mempool only while the mirror runs — the public endpoint never starts
+  it): public aggregates incl. `selection.origins`, txs and pool hashes with
+  a login; one shared estimate per head, recomputed at most every 2 s or on
+  a pool change (the pre-v1 alias is `/api/buildoor/txpool/preview`);
   `DELETE /api/v1/txpool` / `DELETE /api/v1/txpool/{hash}` drop
   (auth + audit); `GET /api/v1/txpool/el-mempool?offset=&limit=&sender=&sort=`
   the EL mempool mirror's stats + a page of it (public: the EL's public txs;

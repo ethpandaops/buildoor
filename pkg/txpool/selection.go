@@ -41,6 +41,9 @@ const (
 	// SkipNonceTaken: an earlier placed transaction (the inclusion list's,
 	// or the pool's for the fill) took the transaction's nonce.
 	SkipNonceTaken = "nonce_taken"
+	// SkipInPrecedingBlock: the transaction is in the preceding block the
+	// estimate assumes (SelectParams.Preceding).
+	SkipInPrecedingBlock = "in_preceding_block"
 )
 
 // maxBlockBytes bounds the encoded transaction bytes of a selection: geth's
@@ -91,6 +94,20 @@ type SelectParams struct {
 	// encoding cannot carry them and the fill skips blob transactions; the
 	// canonical encoding needs no sidecar.
 	FillSidecars SidecarSource
+	// Preceding are the transactions of a block before this one that is not
+	// on chain yet (an estimate of the slot after the current slot's
+	// candidate): they are not selected again, and their senders' nonces and
+	// balances move past them. A selection with them is speculative: it
+	// evicts nothing.
+	Preceding []*PooledTx
+	// BaseFee, when set, replaces the base fee derived from the parent
+	// header (the base fee after a preceding block).
+	BaseFee *big.Int
+	// MostProfitable merges Fill into the pool selection instead of placing
+	// it after: one queue per sender across both pools (in nonce order; of
+	// two transactions at one nonce the higher tip is taken), all senders'
+	// heads ordered by effective tip. Ordering does not apply then.
+	MostProfitable bool
 }
 
 // SidecarSource supplies the blob sidecars of EL mempool blob transactions.
@@ -169,12 +186,52 @@ type Summary struct {
 	Bytes                uint64         `json:"bytes,omitempty"`
 	Hashes               []string       `json:"hashes,omitempty"`
 
-	// EL mempool fill (tx source txpool_el_fill).
+	// EL mempool fill (tx sources private_first, most_profitable).
 	FillCandidates int            `json:"fill_candidates,omitempty"`
 	FillSelected   int            `json:"fill_selected,omitempty"`
 	FillGasSum     uint64         `json:"fill_gas_sum,omitempty"`
 	FillBlobs      int            `json:"fill_blobs,omitempty"`
 	FillSkipped    map[string]int `json:"fill_skipped,omitempty"`
+
+	// Origins accounts the block's transactions by where they came from.
+	Origins *SelectionOrigins `json:"origins,omitempty"`
+}
+
+// SelectionOrigins splits a selection by where its transactions came from:
+// the inclusion list, the private pool and the public (EL) mempool.
+type SelectionOrigins struct {
+	InclusionList OriginStats `json:"inclusion_list"`
+	Private       OriginStats `json:"private"`
+	Public        OriginStats `json:"public"`
+}
+
+// OriginStats accounts one origin's transactions.
+type OriginStats struct {
+	Txs   int    `json:"txs"`
+	Gas   uint64 `json:"gas"` // gas limit sum
+	Blobs int    `json:"blobs,omitempty"`
+	// Tips is the effective tip times the gas limit, summed, in wei: the
+	// most the origin's transactions can pay the builder (they pay for the
+	// gas they use).
+	Tips string `json:"tips"`
+}
+
+func originStats(txs []*PooledTx, baseFee *big.Int) OriginStats {
+	stats := OriginStats{Txs: len(txs)}
+	tips := new(big.Int)
+
+	for _, tx := range txs {
+		stats.Gas += tx.Tx.Gas()
+		stats.Blobs += len(tx.Tx.BlobHashes())
+
+		if baseFee != nil {
+			tips.Add(tips, new(big.Int).Mul(effectiveTip(tx.Tx, baseFee), new(big.Int).SetUint64(tx.Tx.Gas())))
+		}
+	}
+
+	stats.Tips = tips.String()
+
+	return stats
 }
 
 // Summary renders the selection for results and the API.
@@ -204,6 +261,12 @@ func (s *Selection) Summary() *Summary {
 
 	if len(s.FillSkipped) > 0 {
 		out.FillSkipped = s.FillSkipped
+	}
+
+	out.Origins = &SelectionOrigins{
+		InclusionList: originStats(s.InclusionList, s.BaseFee),
+		Private:       originStats(s.Selected, s.BaseFee),
+		Public:        originStats(s.Fill, s.BaseFee),
 	}
 
 	if s.BaseFee != nil {
@@ -295,6 +358,14 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 	}
 
 	sel.BaseFee = calcNextBaseFee(parent)
+	if params.BaseFee != nil {
+		sel.BaseFee = new(big.Int).Set(params.BaseFee)
+	}
+
+	speculative := len(params.Preceding) > 0
+	if speculative {
+		params = withoutPreceding(sel, params)
+	}
 
 	gasLimit := params.GasLimit
 	if gasLimit == 0 {
@@ -322,10 +393,35 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		sel.PoolSize += len(txs)
 	}
 
+	if speculative {
+		queues = withoutHashes(sel, queues, precedingHashes(params.Preceding))
+	}
+
 	inclusionList := p.decodeInclusionList(sel, params.InclusionList)
 
 	if sel.PoolSize == 0 && len(params.Fill) == 0 && len(inclusionList) == 0 {
 		return sel, nil
+	}
+
+	// Most profitable: the fill's candidates join the pool's queues, one
+	// queue per sender across both pools.
+	merged := params.MostProfitable && len(params.Fill) > 0
+	fillSet := make(map[common.Hash]struct{})
+
+	if merged {
+		listed := make(map[common.Hash]struct{}, len(inclusionList))
+		for _, tx := range inclusionList {
+			listed[tx.Hash] = struct{}{}
+		}
+
+		fillQueues := p.fillCandidates(sel, params, listed, fillCarriesBlobs(params))
+		for _, txs := range fillQueues {
+			for _, tx := range txs {
+				fillSet[tx.Hash] = struct{}{}
+			}
+		}
+
+		queues = mergeQueues(queues, fillQueues, sel.BaseFee)
 	}
 
 	if params.IncludeBlobTxs && (p.hasBlobTxs(queues) || fillCarriesBlobs(params) && hasBlobTx(params.Fill)) {
@@ -344,9 +440,10 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 
 	sort.Slice(senders, func(i, j int) bool { return senders[i].Cmp(senders[j]) < 0 })
 
-	// The inclusion list's senders need their parent state too.
+	// The inclusion list's senders need their parent state too, and so do
+	// the preceding block's (their state moves past it).
 	stateSenders := append([]common.Address(nil), senders...)
-	for _, tx := range inclusionList {
+	for _, tx := range append(append([]*PooledTx(nil), inclusionList...), params.Preceding...) {
 		if _, pooled := queues[tx.Sender]; !pooled && !slices.Contains(stateSenders, tx.Sender) {
 			stateSenders = append(stateSenders, tx.Sender)
 		}
@@ -360,6 +457,8 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 			return nil, fmt.Errorf("select: %w", err)
 		}
 	}
+
+	advancePastPreceding(states, params.Preceding)
 
 	// The inclusion list goes in first: its transactions are mandatory
 	// whenever they can execute, and they use up gas, bytes and count before
@@ -384,16 +483,57 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 			state.Nonce, ilPlan.hashes, &stale)
 	}
 
+	switch {
+	case speculative:
+		// Nothing the estimate assumes is on chain: nothing is stale.
+		stale = nil
+	case merged:
+		// Nonce-too-low EL mempool transactions belong to the EL's pool:
+		// only the mirror's stale copies go, never anything of ours.
+		stale = p.dropStaleFill(stale, fillSet)
+	}
+
+	if merged {
+		poolParams.Ordering = config.TxOrderingTip
+	}
+
 	p.evictStale(ctx, stale)
 
 	selected := p.mergeHeads(sel, &poolParams, senders, ready, maxBlockBytes)
+
+	var fill []*PooledTx
+
+	if merged {
+		if fillCarriesBlobs(params) && params.BlobEncoding != config.BlobEncodingCanonical {
+			selected = p.completeFillBlobs(ctx, sel, params.FillSidecars, selected)
+		}
+
+		// The merged order is the block order; the origins are accounted
+		// apart.
+		mergedOrder := selected
+		selected, fill = splitOrigins(mergedOrder, fillSet)
+
+		sel.Selected = selected
+		tail := p.placeDeferred(sel, params, ilPlan)
+		sel.InclusionList = append(append([]*PooledTx(nil), ilPlan.head...), tail...)
+		sel.InclusionListTxs = len(sel.InclusionList)
+		sel.Fill = fill
+		sel.recount()
+
+		ordered := make([]*PooledTx, 0, len(ilPlan.head)+len(mergedOrder)+len(tail))
+		ordered = append(ordered, ilPlan.head...)
+		ordered = append(ordered, mergedOrder...)
+		ordered = append(ordered, tail...)
+
+		return p.encodeSelection(sel, params, ordered)
+	}
 
 	sel.Selected = selected
 	tail := p.placeDeferred(sel, params, ilPlan)
 	sel.InclusionList = append(append([]*PooledTx(nil), ilPlan.head...), tail...)
 	sel.InclusionListTxs = len(sel.InclusionList)
 
-	fill, err := p.selectFill(ctx, sel, params, parent, states)
+	fill, err = p.selectFill(ctx, sel, params, parent, states)
 	if err != nil {
 		return nil, err
 	}
@@ -408,6 +548,11 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 	ordered = append(ordered, tail...)
 	ordered = append(ordered, fill...)
 
+	return p.encodeSelection(sel, params, ordered)
+}
+
+// encodeSelection encodes the selection's transactions in block order.
+func (p *Pool) encodeSelection(sel *Selection, params *SelectParams, ordered []*PooledTx) (*Selection, error) {
 	sel.Txs = make([][]byte, 0, len(ordered))
 
 	for _, tx := range ordered {
@@ -830,38 +975,12 @@ func (p *Pool) selectFill(
 		fillParams.MaxTxs = params.MaxTxs - min(uint64(len(sel.Selected)+len(sel.InclusionList)), params.MaxTxs)
 	}
 
-	queues := make(map[common.Address][]*PooledTx, 64)
-
 	listed := make(map[common.Hash]struct{}, len(sel.InclusionList))
 	for _, tx := range sel.InclusionList {
 		listed[tx.Hash] = struct{}{}
 	}
 
-	for _, tx := range params.Fill {
-		if _, ok := listed[tx.Hash]; ok {
-			sel.FillSkipped[SkipInInclusionList]++
-
-			continue
-		}
-
-		if p.Get(tx.Hash) != nil {
-			sel.FillSkipped[SkipDuplicate]++
-
-			continue
-		}
-
-		// Most of a busy EL mempool sits below the base fee. Dropped before
-		// any sender's state is read, which is the per-build cost that
-		// scales with the mempool; a sender's later nonces then fail on
-		// the gap.
-		if tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0 {
-			sel.FillSkipped[SkipFeeBelowBase]++
-
-			continue
-		}
-
-		queues[tx.Sender] = append(queues[tx.Sender], tx)
-	}
+	queues := p.fillCandidates(sel, params, listed, true)
 
 	senders := make([]common.Address, 0, len(queues))
 	missing := make([]common.Address, 0, len(queues))
@@ -932,7 +1051,9 @@ func (p *Pool) selectFill(
 		ready[sender] = p.readyRun(fillSel, &fillParams, queues[sender], remaining, state.Nonce, listed, &ignored)
 	}
 
-	p.mirror.dropStale(ignored)
+	if len(params.Preceding) == 0 {
+		p.mirror.dropStale(ignored)
+	}
 
 	fill := p.mergeHeads(fillSel, &fillParams, senders, ready, maxBlockBytes-min(sel.Bytes, maxBlockBytes))
 
@@ -953,6 +1074,228 @@ func (p *Pool) selectFill(
 	return fill, nil
 }
 
+// withoutPreceding drops the preceding block's transactions from the fill.
+func withoutPreceding(sel *Selection, params *SelectParams) *SelectParams {
+	preceding := precedingHashes(params.Preceding)
+	out := *params
+	out.Fill = make([]*PooledTx, 0, len(params.Fill))
+
+	for _, tx := range params.Fill {
+		if _, ok := preceding[tx.Hash]; ok {
+			sel.Skipped[SkipInPrecedingBlock]++
+
+			continue
+		}
+
+		out.Fill = append(out.Fill, tx)
+	}
+
+	return &out
+}
+
+func precedingHashes(txs []*PooledTx) map[common.Hash]struct{} {
+	hashes := make(map[common.Hash]struct{}, len(txs))
+	for _, tx := range txs {
+		hashes[tx.Hash] = struct{}{}
+	}
+
+	return hashes
+}
+
+// withoutHashes drops the given transactions from the pool's queues.
+func withoutHashes(sel *Selection, queues map[common.Address][]*PooledTx, hashes map[common.Hash]struct{}) map[common.Address][]*PooledTx {
+	out := make(map[common.Address][]*PooledTx, len(queues))
+
+	for sender, txs := range queues {
+		kept := make([]*PooledTx, 0, len(txs))
+
+		for _, tx := range txs {
+			if _, ok := hashes[tx.Hash]; ok {
+				sel.Skipped[SkipInPrecedingBlock]++
+
+				continue
+			}
+
+			kept = append(kept, tx)
+		}
+
+		if len(kept) > 0 {
+			out[sender] = kept
+		}
+	}
+
+	return out
+}
+
+// advancePastPreceding moves the senders' nonces and balances past the
+// preceding block's transactions.
+func advancePastPreceding(states map[common.Address]*execution.AccountState, preceding []*PooledTx) {
+	for _, tx := range preceding {
+		state := states[tx.Sender]
+		if state == nil || tx.Tx == nil {
+			continue
+		}
+
+		if tx.Tx.Nonce() >= state.Nonce {
+			state.Nonce = tx.Tx.Nonce() + 1
+		}
+
+		state.Balance = new(big.Int).Sub(state.Balance, tx.Tx.Cost())
+		if state.Balance.Sign() < 0 {
+			state.Balance.SetInt64(0)
+		}
+	}
+}
+
+// NextBaseFee is the base fee of the block after one with the given gas
+// limit, gas used and base fee (EIP-1559).
+func NextBaseFee(gasLimit, gasUsed uint64, baseFee *big.Int) *big.Int {
+	return calcNextBaseFee(&types.Header{GasLimit: gasLimit, GasUsed: gasUsed, BaseFee: baseFee})
+}
+
+// fillCandidates groups the EL mempool transactions worth a sender's state
+// read by sender (each in nonce order): not on the inclusion list, not queued
+// in the pool too, above the base fee, and blob transactions only when the
+// fill can carry them. The others are counted in FillSkipped.
+func (p *Pool) fillCandidates(
+	sel *Selection,
+	params *SelectParams,
+	listed map[common.Hash]struct{},
+	blobs bool,
+) map[common.Address][]*PooledTx {
+	sel.FillCandidates = len(params.Fill)
+
+	if sel.FillSkipped == nil {
+		sel.FillSkipped = make(map[string]int, 4)
+	}
+
+	p.mirror.noteBaseFee(sel.BaseFee)
+
+	queues := make(map[common.Address][]*PooledTx, 64)
+
+	for _, tx := range params.Fill {
+		if _, ok := listed[tx.Hash]; ok {
+			sel.FillSkipped[SkipInInclusionList]++
+
+			continue
+		}
+
+		if p.Get(tx.Hash) != nil {
+			sel.FillSkipped[SkipDuplicate]++
+
+			continue
+		}
+
+		// Most of a busy EL mempool sits below the base fee. Dropped before
+		// any sender's state is read, which is the per-build cost that
+		// scales with the mempool; a sender's later nonces then fail on
+		// the gap.
+		if tx.Tx.GasFeeCap().Cmp(sel.BaseFee) < 0 {
+			sel.FillSkipped[SkipFeeBelowBase]++
+
+			continue
+		}
+
+		if !blobs && tx.Tx.Type() == types.BlobTxType {
+			sel.FillSkipped[SkipBlobUnsupported]++
+
+			continue
+		}
+
+		queues[tx.Sender] = append(queues[tx.Sender], tx)
+	}
+
+	return queues
+}
+
+// mergeQueues joins the pool's and the EL mempool's queues per sender, in
+// nonce order. Of two transactions at one nonce the higher effective tip
+// comes first; the selection takes it and skips the other (nonce_taken).
+func mergeQueues(pool, fill map[common.Address][]*PooledTx, baseFee *big.Int) map[common.Address][]*PooledTx {
+	merged := make(map[common.Address][]*PooledTx, len(pool)+len(fill))
+
+	for sender, txs := range pool {
+		merged[sender] = append([]*PooledTx(nil), txs...)
+	}
+
+	for sender, txs := range fill {
+		queue := append(merged[sender], txs...)
+
+		sort.SliceStable(queue, func(i, j int) bool {
+			if ni, nj := queue[i].Nonce(), queue[j].Nonce(); ni != nj {
+				return ni < nj
+			}
+
+			if queue[i].Cold() || queue[j].Cold() {
+				return !queue[i].Cold()
+			}
+
+			return effectiveTip(queue[i].Tx, baseFee).Cmp(effectiveTip(queue[j].Tx, baseFee)) > 0
+		})
+
+		merged[sender] = queue
+	}
+
+	return merged
+}
+
+// dropStaleFill hands the stale EL mempool transactions to the mirror and
+// returns the pool's.
+func (p *Pool) dropStaleFill(stale []common.Hash, fillSet map[common.Hash]struct{}) []common.Hash {
+	pool := make([]common.Hash, 0, len(stale))
+	fill := make([]common.Hash, 0, len(stale))
+
+	for _, hash := range stale {
+		if _, ok := fillSet[hash]; ok {
+			fill = append(fill, hash)
+		} else {
+			pool = append(pool, hash)
+		}
+	}
+
+	p.mirror.dropStale(fill)
+
+	return pool
+}
+
+// splitOrigins splits a merged selection into the pool's and the EL
+// mempool's transactions, each in selection order.
+func splitOrigins(txs []*PooledTx, fillSet map[common.Hash]struct{}) (pool, fill []*PooledTx) {
+	pool = make([]*PooledTx, 0, len(txs))
+	fill = make([]*PooledTx, 0, len(txs))
+
+	for _, tx := range txs {
+		if _, ok := fillSet[tx.Hash]; ok {
+			fill = append(fill, tx)
+		} else {
+			pool = append(pool, tx)
+		}
+	}
+
+	return pool, fill
+}
+
+// recount sets the totals of a merged selection from its final lists: the
+// inclusion list's and the pool's in GasSum, Bytes and Blobs, the fill's in
+// its own (the merge counted them together, and blob transactions the
+// sidecar source could not complete are gone).
+func (s *Selection) recount() {
+	s.GasSum, s.Bytes, s.Blobs = 0, 0, 0
+	s.FillGasSum, s.FillBytes, s.FillBlobs = 0, 0, 0
+
+	for _, tx := range append(append([]*PooledTx(nil), s.InclusionList...), s.Selected...) {
+		s.GasSum += tx.Tx.Gas()
+		s.Bytes += tx.Size
+		s.Blobs += len(tx.Tx.BlobHashes())
+	}
+
+	for _, tx := range s.Fill {
+		s.FillGasSum += tx.Tx.Gas()
+		s.FillBytes += tx.Size
+		s.FillBlobs += len(tx.Tx.BlobHashes())
+	}
+}
+
 // fillCarriesBlobs reports whether the fill may select blob transactions:
 // blobs are allowed for the block, and the encoding either needs no sidecar
 // (canonical) or a source can supply it.
@@ -962,9 +1305,10 @@ func fillCarriesBlobs(params *SelectParams) bool {
 }
 
 // completeFillBlobs attaches the sidecars of the selected fill blob
-// transactions. One the source cannot complete is dropped, and the same
-// sender's later fill transactions with it: they would follow a nonce gap.
-// The blob space it frees is not refilled.
+// transactions (the blob transactions without one; the pool's carry theirs).
+// One the source cannot complete is dropped, and the same sender's later
+// transactions with it: they would follow a nonce gap. The blob space it
+// frees is not refilled.
 func (p *Pool) completeFillBlobs(
 	ctx context.Context,
 	sel *Selection,
@@ -974,7 +1318,7 @@ func (p *Pool) completeFillBlobs(
 	blobTxs := make([]*types.Transaction, 0, len(fill))
 
 	for _, tx := range fill {
-		if tx.Tx.Type() == types.BlobTxType {
+		if tx.Tx.Type() == types.BlobTxType && tx.Tx.BlobTxSidecar() == nil {
 			blobTxs = append(blobTxs, tx.Tx)
 		}
 	}
@@ -999,7 +1343,7 @@ func (p *Pool) completeFillBlobs(
 			continue
 		}
 
-		if tx.Tx.Type() != types.BlobTxType {
+		if tx.Tx.Type() != types.BlobTxType || tx.Tx.BlobTxSidecar() != nil {
 			kept = append(kept, tx)
 
 			continue
@@ -1033,6 +1377,16 @@ func hasBlobTx(txs []*PooledTx) bool {
 	}
 
 	return false
+}
+
+// EffectiveTip is the priority fee per gas a transaction pays over the base
+// fee: min(tipCap, feeCap - baseFee), at least 0.
+func EffectiveTip(tx *types.Transaction, baseFee *big.Int) *big.Int {
+	if baseFee == nil {
+		return new(big.Int).Set(tx.GasTipCap())
+	}
+
+	return effectiveTip(tx, baseFee)
 }
 
 // effectiveTip is the priority fee a transaction actually pays over the base

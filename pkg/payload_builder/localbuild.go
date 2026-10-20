@@ -152,8 +152,9 @@ type LocalBuildInfo struct {
 	// SubmittedTxs is how many transactions were handed to the EL (-1 for the
 	// el_mempool source, where the EL chooses).
 	SubmittedTxs int `json:"submitted_txs"`
-	// FillTxs is how many EL mempool transactions the txpool_el_fill source
-	// appended after the pool selection; FillError is why the EL mempool
+	// FillTxs is how many EL mempool transactions the private_first source
+	// placed after the pool selection (most_profitable: among it); FillError
+	// is why the EL mempool
 	// could not be read (the build then used the pool alone); FillDropped
 	// marks that the EL refused the list and the build retried without the
 	// fill; FillBlobsDropped that a refused list was first retried without

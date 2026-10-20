@@ -927,6 +927,45 @@
                 }
             }
         },
+        "/next-block": {
+            "get": {
+                "description": "Runs the testing build's transaction selection with the live\nsettings — the inclusion list first, then the configured\ntransaction source (txpool, private_first or most_profitable)\n— without building: for the block on the current head and,\nwhile the current slot's block is not on chain yet, for the\nslot after it, assuming our current slot candidate gets\nincluded (its transactions out, their senders' nonces and\nbalances past them, the base fee after it). Public: the\naggregates; the transactions and pool hashes need a login.\nEstimates are shared between viewers and pushed as the\nnext_block event.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Estimate the next blocks",
+                "operationId": "getNextBlock",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NextBlockEstimates"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured or no head",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Selection failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/overview": {
             "get": {
                 "description": "Returns a single-payload summary used by the multi-instance overview UI:\nrunning state, builder pubkey, current slot, EL client info, available/enabled\nservices, balances, and recent build stats.",
@@ -943,6 +982,63 @@
                         "description": "Success",
                         "schema": {
                             "$ref": "#/definitions/api.OverviewResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/payloads/{blockHash}/transactions": {
+            "get": {
+                "description": "The transactions of one of our recent payloads or of any\nrecent block on chain, in block order, with their origin\n(inclusion list, private, public), effective tip and gas\nused. A testing build's payload may hold private\ntransactions: before it is on chain it needs a login.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "List a block's transactions",
+                "operationId": "getPayloadTransactions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Block hash",
+                        "name": "blockHash",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PayloadTransactionsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid block hash",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Testing build payload not on chain yet, without a login",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown block",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
                         }
                     }
                 }
@@ -1869,54 +1965,6 @@
                 }
             }
         },
-        "/txpool/preview": {
-            "get": {
-                "description": "Runs the pool selection against the current head with the\nlive settings and returns what a local block built now would\ncontain (count, gas sum, skipped-by-reason), without building.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "LocalBuild"
-                ],
-                "summary": "Preview the next local block's selection",
-                "operationId": "getTxPoolPreview",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.TxPoolPreviewResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized (the pool holds private transactions)",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Pool not configured or no head",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Selection failed",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
         "/txpool/{hash}": {
             "delete": {
                 "description": "Removes the transaction with the given hash from the pool.\nRequires authentication; audited.",
@@ -2253,7 +2301,7 @@
                     "type": "integer"
                 },
                 "tx_source": {
-                    "description": "TxSource: txpool | empty | el_mempool | explicit (explicit requires\nTransactions; a non-empty Transactions list implies explicit).",
+                    "description": "TxSource: txpool | private_first | most_profitable | empty |\nel_mempool | explicit (explicit requires Transactions; a non-empty\nTransactions list implies explicit).",
                     "type": "string"
                 }
             }
@@ -2570,7 +2618,7 @@
                     "type": "integer"
                 },
                 "tx_source": {
-                    "description": "TxSource: txpool | empty | el_mempool | explicit.",
+                    "description": "TxSource: txpool | private_first | most_profitable | empty |\nel_mempool | explicit | queued.",
                     "type": "string"
                 }
             }
@@ -3068,6 +3116,124 @@
                 }
             }
         },
+        "api.NextBlockEstimates": {
+            "type": "object",
+            "properties": {
+                "computed_at": {
+                    "type": "integer"
+                },
+                "estimates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockResponse"
+                    }
+                },
+                "version": {
+                    "description": "Version counts the estimate sets: the next_block event carries it, so\na logged-in reader fetches the transactions of exactly that set.",
+                    "type": "integer"
+                }
+            }
+        },
+        "api.NextBlockResponse": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis is what the estimated block follows: head (a block on the\ncurrent head), candidate (the slot after our current slot candidate,\nBasisBlock, assumed included) or head_only (the slot after a current\nslot block nobody here built: nothing assumed).",
+                    "type": "string"
+                },
+                "basis_block": {
+                    "type": "string"
+                },
+                "computed_at": {
+                    "type": "integer"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "local_build_enabled": {
+                    "description": "LocalBuildEnabled is false when the testing build is off: the estimate\nthen shows what it would select.",
+                    "type": "boolean"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "note": {
+                    "description": "Note explains an estimate that cannot be made (the source leaves the\nchoice to the EL, or builds empty blocks).",
+                    "type": "string"
+                },
+                "ordering": {
+                    "type": "string"
+                },
+                "parent_hash": {
+                    "type": "string"
+                },
+                "public_mempool": {
+                    "description": "PublicMempool is mirrored (the EL mempool is part of the estimate),\nidle (the source takes it, but the mirror is not running: no build\nasked for it lately) or unused (the source does not take it).",
+                    "type": "string"
+                },
+                "selection": {
+                    "description": "Selection carries the aggregates (counts, gas, blobs, skips and the\nsplit by origin); its pool transaction hashes need a login.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/txpool.Summary"
+                        }
+                    ]
+                },
+                "slot": {
+                    "description": "Slot is the slot of the block that extends the current head (the slot\nafter the head, or the current slot after missed slots).",
+                    "type": "integer"
+                },
+                "tx_source": {
+                    "description": "TxSource is the configured transaction source; Ordering the private\npool's order (private_first and txpool).",
+                    "type": "string"
+                },
+                "txs": {
+                    "description": "Txs are the block's transactions in block order (login only, at most\nnextBlockMaxTxs).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockTx"
+                    }
+                },
+                "txs_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.NextBlockTx": {
+            "type": "object",
+            "properties": {
+                "blobs": {
+                    "type": "integer"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "gas": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "description": "GasUsed is the gas the transaction used (on-chain blocks only).",
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "origin": {
+                    "description": "inclusion_list, private or public",
+                    "type": "string"
+                },
+                "tip": {
+                    "description": "Tip is the effective priority fee per gas over the base fee, wei.",
+                    "type": "string"
+                },
+                "type": {
+                    "type": "integer"
+                }
+            }
+        },
         "api.OverviewBalances": {
             "type": "object",
             "properties": {
@@ -3252,6 +3418,41 @@
                 },
                 "slots_built": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.PayloadTransactionsResponse": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "string"
+                },
+                "block_hash": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "on_chain": {
+                    "type": "boolean"
+                },
+                "ours": {
+                    "description": "Ours marks one of our payloads (classified by its build's own\naccounting); OnChain that the EL has the block.",
+                    "type": "boolean"
+                },
+                "txs": {
+                    "description": "Txs are in block order. Origin is inclusion_list (on the list the\nblock had to satisfy), private (from our private mempool) or public.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockTx"
+                    }
+                },
+                "value": {
+                    "description": "Value is what the block pays its fee recipient in priority fees, wei:\nour build's reported block value, or the effective tips times the gas\nthe transactions used (empty while unknown).",
+                    "type": "string"
                 }
             }
         },
@@ -3485,26 +3686,6 @@
                 },
                 "target": {
                     "type": "string"
-                }
-            }
-        },
-        "api.TxPoolPreviewResponse": {
-            "type": "object",
-            "properties": {
-                "gas_limit": {
-                    "type": "integer"
-                },
-                "max_blobs": {
-                    "type": "integer"
-                },
-                "ordering": {
-                    "type": "string"
-                },
-                "parent_hash": {
-                    "type": "string"
-                },
-                "selection": {
-                    "$ref": "#/definitions/txpool.Summary"
                 }
             }
         },
@@ -3957,7 +4138,7 @@
                     "type": "string"
                 },
                 "fill_txs": {
-                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
+                    "description": "FillTxs is how many EL mempool transactions the private_first source\nplaced after the pool selection (most_profitable: among it); FillError\nis why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
                     "type": "integer"
                 },
                 "inclusion_list": {
@@ -4847,6 +5028,39 @@
                 }
             }
         },
+        "txpool.OriginStats": {
+            "type": "object",
+            "properties": {
+                "blobs": {
+                    "type": "integer"
+                },
+                "gas": {
+                    "description": "gas limit sum",
+                    "type": "integer"
+                },
+                "tips": {
+                    "description": "Tips is the effective tip times the gas limit, summed, in wei: the\nmost the origin's transactions can pay the builder (they pay for the\ngas they use).",
+                    "type": "string"
+                },
+                "txs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.SelectionOrigins": {
+            "type": "object",
+            "properties": {
+                "inclusion_list": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                },
+                "private": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                },
+                "public": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                }
+            }
+        },
         "txpool.Stats": {
             "type": "object",
             "properties": {
@@ -4941,7 +5155,7 @@
                     "type": "integer"
                 },
                 "fill_candidates": {
-                    "description": "EL mempool fill (tx source txpool_el_fill).",
+                    "description": "EL mempool fill (tx sources private_first, most_profitable).",
                     "type": "integer"
                 },
                 "fill_gas_sum": {
@@ -4977,6 +5191,14 @@
                 },
                 "inclusion_list_txs": {
                     "type": "integer"
+                },
+                "origins": {
+                    "description": "Origins accounts the block's transactions by where they came from.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/txpool.SelectionOrigins"
+                        }
+                    ]
                 },
                 "pool_size": {
                     "type": "integer"

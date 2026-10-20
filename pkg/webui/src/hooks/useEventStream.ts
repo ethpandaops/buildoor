@@ -1,5 +1,5 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
-import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, SlotOutlook, PayloadInfo, TargetState, EngineCalls, LocalBuildInfo, BuildRef, CandidateKey } from '../types';
+import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, NextBlockEstimates, LocalBuildStatus, SlotOutlook, PayloadInfo, TargetState, EngineCalls, LocalBuildInfo, BuildRef, CandidateKey } from '../types';
 import { buildLabel } from '../buildTargets';
 import { apiPath } from '../utils/api';
 
@@ -85,6 +85,9 @@ export interface UseEventStreamResult {
   voteCoverage: VoteCoverage | null;
   slotOutlook: SlotOutlook | null;
   txPoolStats: TxPoolStats | null;
+  // The estimate of the block on the current head (next_block event, public
+  // aggregates; the transactions come over REST with a login).
+  nextBlock: NextBlockEstimates | null;
   // The local build (testing_buildBlockV1) status: probed EL availability,
   // effective settings, pool state, plan checks. Pushed at connect and on
   // every change.
@@ -111,6 +114,7 @@ function useEventStreamConnection(): UseEventStreamResult {
   const [voteCoverage, setVoteCoverage] = useState<VoteCoverage | null>(null);
   const [slotOutlook, setSlotOutlook] = useState<SlotOutlook | null>(null);
   const [txPoolStats, setTxPoolStats] = useState<TxPoolStats | null>(null);
+  const [nextBlock, setNextBlock] = useState<NextBlockEstimates | null>(null);
   const [localBuildStatus, setLocalBuildStatus] = useState<LocalBuildStatus | null>(null);
   const [currentSlot, setCurrentSlot] = useState(0);
   const [slotStates, setSlotStates] = useState<Record<number, SlotState>>({});
@@ -298,6 +302,10 @@ function useEventStreamConnection(): UseEventStreamResult {
 
         case 'txpool_stats':
           setTxPoolStats(event.data as TxPoolStats);
+          break;
+
+        case 'next_block':
+          setNextBlock(event.data as NextBlockEstimates);
           break;
 
         case 'build_target': {
@@ -900,6 +908,7 @@ function useEventStreamConnection(): UseEventStreamResult {
     voteCoverage,
     slotOutlook,
     txPoolStats,
+    nextBlock,
     localBuildStatus,
     currentSlot,
     slotStates,

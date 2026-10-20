@@ -122,8 +122,9 @@ const PAYLOAD_SOURCES = [
 ];
 
 const TX_SOURCES = [
-  { value: 'txpool', label: 'buildoor mempool', short: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
-  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs). If the EL refuses the list, the build retries once without the EL part." },
+  { value: 'txpool', label: 'Private mempool only', short: 'private only', hint: "Transactions from buildoor's own (private) mempool, sent to /rpc, in the pool ordering. The public (EL) mempool is not used." },
+  { value: 'private_first', label: 'Private first, then public', short: 'private first', hint: "The private mempool first, in the pool ordering; the remaining gas is filled from the public (EL) mempool, highest tip first (checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs). If the EL refuses the list, the build retries without the public part." },
+  { value: 'most_profitable', label: 'Most profitable of both', short: 'most profitable', hint: 'The private and the public (EL) mempool as one, highest effective tip first: each sender in nonce order across both pools, of two transactions at one nonce the higher tip. The pool ordering does not apply. If the EL refuses the list, the build retries without the public transactions (and the senders\' transactions after them).' },
   { value: 'el_mempool', label: 'EL mempool', short: 'EL mempool', hint: 'The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths).' },
   { value: 'empty', label: 'None (empty block)', short: 'empty', hint: 'No transactions at all.' },
 ];
@@ -1229,13 +1230,13 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     hint: 'testing_buildBlockV1 calls per mempool build: a refused list drops the offending transactions and retries. Exact lists never retry.',
     inactiveWhen: (draft) => {
       const source = str(draft, 'local_build.tx_source');
-      return source === 'txpool' || source === 'txpool_el_fill'
+      return source === 'txpool' || source === 'private_first' || source === 'most_profitable'
         ? null
-        : 'Only used for the buildoor mempool transaction sources.';
+        : 'Only used for the mempool transaction sources (private only, private first, most profitable).';
     },
     help: (
       <>
-        For the buildoor mempool sources (<code>local_build.max_attempts</code>): when the EL
+        For the mempool sources (<code>local_build.max_attempts</code>): when the EL
         refuses the list, the offending transactions are dropped (and get a strike in the pool) and
         the build retries, up to this many calls. Exact lists from action plans never retry.
       </>
