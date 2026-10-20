@@ -1632,6 +1632,169 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   word-break: break-all;
 }
 
+/* Past slot result: values in the drawer's cards wrap instead of overflowing
+   (enum values like consensus_and_equivocation, extra data) */
+.ap-plan-drawer .config-item-value {
+  overflow-wrap: anywhere;
+}
+
+/* Times on the slot clock ("+1.25s"), absolute time on hover */
+.ap-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Outcome: one row per stage — stage, status, detail */
+.ap-outcome {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px 10px;
+  font-size: 13px;
+}
+
+.ap-outcome dt {
+  font-weight: 500;
+  color: var(--bs-secondary-color);
+}
+
+.ap-outcome dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.ap-outcome-detail {
+  margin-left: 8px;
+  overflow-wrap: anywhere;
+}
+
+/* Builds: a row per build, compact */
+.ap-build-table th,
+.ap-compact-table th {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+}
+
+.ap-build-table th,
+.ap-build-table td,
+.ap-compact-table th,
+.ap-compact-table td {
+  padding: 3px 4px;
+}
+
+.ap-build-table td,
+.ap-compact-table td {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ap-compact-table th:first-child,
+.ap-compact-table td:first-child {
+  padding-left: 10px;
+}
+
+.ap-compact-table th:last-child,
+.ap-compact-table td:last-child {
+  padding-right: 10px;
+}
+
+.ap-build-table td.ap-wrap,
+.ap-compact-table td.ap-wrap {
+  white-space: normal;
+}
+
+.ap-build-name {
+  font-weight: 600;
+}
+
+.ap-build-current td {
+  background: rgba(var(--bs-success-rgb), 0.08);
+}
+
+.ap-build-note td {
+  white-space: normal;
+  font-size: 12px;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.ap-target + .ap-target {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--bs-border-color);
+}
+
+.ap-target-secondary {
+  opacity: 0.8;
+}
+
+/* Collapsible sections (picked payload, attributes, applied plan) */
+.ap-fold {
+  margin-top: 6px;
+}
+
+.ap-fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.ap-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ap-fold > summary::before {
+  content: "\25B8";
+  color: var(--bs-secondary-color);
+  font-size: 10px;
+}
+
+.ap-fold[open] > summary::before {
+  content: "\25BE";
+}
+
+.ap-fold-title {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--bs-secondary-color);
+  white-space: nowrap;
+}
+
+.ap-fold-extra {
+  color: var(--bs-secondary-color);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ap-fold-body {
+  padding: 6px 0 4px;
+}
+
+/* Label / hash list: each hash on one line, copy on click */
+.ap-hashes {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 2px 10px;
+  font-size: 12px;
+}
+
+.ap-hashes dt {
+  font-weight: 400;
+  color: var(--bs-secondary-color);
+}
+
+.ap-hashes dd {
+  margin: 0;
+}
+
 /* Tiny artifact buttons (JSON / SSZ) */
 .ap-artifact-btn {
   padding: 0 4px;
@@ -1734,16 +1897,22 @@ body:has(#panda-menu-root) header.header-bar > nav.navbar {
   margin: 0 0 0.25rem 0.5rem;
 }
 
-/* Action plan editor: a side drawer beside the grid, not a modal over it. */
+/* Action plan editor: a side drawer beside the grid, not a modal over it.
+   It grows with the screen (the past slot tables need the room); the grid
+   keeps the rest. */
+:root {
+  --ap-drawer-width: clamp(560px, 45vw, 820px);
+}
+
 .ap-plan-drawer {
   position: fixed;
   top: 0;
-  width: min(560px, 100%);
+  width: min(var(--ap-drawer-width), 100%);
   z-index: 1050;
 }
 
 @media (min-width: 1200px) {
   .ap-drawer-open {
-    padding-right: calc(560px + 0.75rem);
+    padding-right: calc(var(--ap-drawer-width) + 0.75rem);
   }
 }
