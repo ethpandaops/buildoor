@@ -140,7 +140,10 @@ func (m *elMirror) PendingIfActive() ([]*PooledTx, bool) {
 }
 
 // snapshotLocked lists the mirrored pending transactions, each sender's in
-// nonce order, without the cold ones. Must hold mu.
+// nonce order, up to the sender's first cold one: a cold transaction is far
+// below the base fee, so neither it nor any later nonce of its sender can
+// execute (they would only show up as nonce gaps, each costing a state
+// read). Must hold mu.
 func (m *elMirror) snapshotLocked() []*PooledTx {
 	senders := make([]common.Address, 0, len(m.bySender))
 	for sender := range m.bySender {
@@ -162,9 +165,12 @@ func (m *elMirror) snapshotLocked() []*PooledTx {
 		sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })
 
 		for _, nonce := range nonces {
-			if tx := byNonce[nonce].tx; !tx.Cold() {
-				out = append(out, tx)
+			tx := byNonce[nonce].tx
+			if tx.Cold() {
+				break
 			}
+
+			out = append(out, tx)
 		}
 	}
 
