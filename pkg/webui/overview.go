@@ -18,6 +18,7 @@ import (
 	"github.com/urfave/negroni"
 
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers"
+	"github.com/ethpandaops/buildoor/version"
 )
 
 // OverviewConfig configures the multi-instance overview HTTP server.
@@ -72,7 +73,7 @@ func StartOverviewServer(cfg *OverviewConfig, log logrus.FieldLogger) error {
 		log.WithField("module", "web-overview-spa"),
 		subFS,
 		"overview.html",
-		handlers.RuntimeConfig{},
+		handlers.RuntimeConfig{Version: version.GetBuildVersion()},
 		headInjectHTML,
 	)
 	if err != nil {

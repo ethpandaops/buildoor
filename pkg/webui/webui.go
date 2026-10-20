@@ -208,6 +208,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 		handlers.RuntimeConfig{
 			AuthProviderURL: frontendConfig.AuthProviderURL,
 			OverviewURL:     frontendConfig.OverviewURL,
+			Version:         version.GetBuildVersion(),
 		},
 		headInjectHTML,
 	)

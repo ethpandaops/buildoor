@@ -1264,6 +1264,11 @@ body main {
   min-height: calc(100vh - 180px) !important;
 }
 
+.app-footer {
+  margin-top: 30px;
+  margin-bottom: 20px;
+}
+
 .header {
   height: 60px;
 }

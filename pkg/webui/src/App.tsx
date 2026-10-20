@@ -1,6 +1,7 @@
 import React, { Suspense } from 'react';
 import { useView } from './stores/viewStore';
 import { Header } from './components/Header';
+import { Footer } from './components/Footer';
 import { SettingsDrawer } from './components/settings/SettingsDrawer';
 
 const DashboardPage = React.lazy(() => import('./pages/DashboardPage'));
@@ -34,6 +35,7 @@ export const App: React.FC = () => {
           {currentView === 'debug-login' && <DebugLoginPage />}
         </Suspense>
       </main>
+      <Footer />
       <SettingsDrawer />
     </>
   );

@@ -6,6 +6,7 @@
 export interface RuntimeConfig {
   authProviderURL: string;
   overviewURL: string;
+  version: string;
 }
 
 export function getRuntimeConfig(): RuntimeConfig {
@@ -13,5 +14,6 @@ export function getRuntimeConfig(): RuntimeConfig {
   return {
     authProviderURL: cfg.authProviderURL ?? '',
     overviewURL: cfg.overviewURL ?? '',
+    version: cfg.version ?? '',
   };
 }

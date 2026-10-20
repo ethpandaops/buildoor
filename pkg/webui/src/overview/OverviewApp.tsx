@@ -2,6 +2,7 @@ import React from 'react';
 import { useOverviewHosts, useOverviewPolling } from './useOverview';
 import { InstanceCard } from './InstanceCard';
 import { BrandHeader } from '../components/BrandHeader';
+import { Footer } from '../components/Footer';
 
 export const OverviewApp: React.FC = () => {
   const { hosts, error: hostsError } = useOverviewHosts();
@@ -48,6 +49,7 @@ export const OverviewApp: React.FC = () => {
           </div>
         )}
       </main>
+      <Footer />
     </>
   );
 };
