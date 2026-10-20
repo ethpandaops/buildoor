@@ -310,13 +310,9 @@ func hezeSignedBeaconBlockJSON(t *testing.T, slot phase0.Slot, blockHash phase0.
 			ParentRoot: phase0.Root{0x22},
 			StateRoot:  phase0.Root{0x33},
 			Body: &hezespec.BeaconBlockBody{
-				ETH1Data: &phase0.ETH1Data{
-					BlockHash: make([]byte, 32),
-				},
 				ProposerSlashings: []*phase0.ProposerSlashing{},
 				AttesterSlashings: []*gloasspec.AttesterSlashing{},
 				Attestations:      []*gloasspec.Attestation{},
-				Deposits:          []*phase0.Deposit{},
 				VoluntaryExits:    []*phase0.SignedVoluntaryExit{},
 				SyncAggregate: &altair.SyncAggregate{
 					SyncCommitteeBits: bitfield.NewBitvector512(),
