@@ -70,6 +70,9 @@ type Manager struct {
 	// earlyWindowLoggedEpoch is the epoch (+1, 0 = none) whose predicted early
 	// onboarding window was last logged.
 	earlyWindowLoggedEpoch atomic.Uint64
+	// earlyAllQueuedLogged dedupes the "all target keys queued" notice of the early
+	// onboarding phase; re-armed when a target key needs a deposit again.
+	earlyAllQueuedLogged atomic.Bool
 
 	// poke requests an immediate reconcile pass (cap 1).
 	poke chan struct{}
