@@ -15,8 +15,9 @@ pr_numbers=$(echo "$merge_commits" | grep -oP '(?<=Merge pull request #)\d+' | s
 # Convert PR numbers to array
 pr_array=($pr_numbers)
 
-# Fetch PR details from GitHub API using GraphQL for batching
-pr_details=""
+# Fetch PR details from GitHub API using GraphQL for batching. Every batch
+# appends to the same file; it exists even when there is no PR.
+: > ./pr-details.txt
 if [ ${#pr_array[@]} -gt 0 ]; then
     # Split repository into owner and name
     IFS='/' read -r repo_owner repo_name <<< "$GITHUB_REPOSITORY"
@@ -45,9 +46,6 @@ if [ ${#pr_array[@]} -gt 0 ]; then
             "https://api.github.com/graphql")
         
         # Parse response
-        if [ -f ./pr-details.txt ]; then
-            rm ./pr-details.txt
-        fi
         for ((j=i; j<batch_end; j++)); do
             pr_num=${pr_array[j]}
             pr_data=$(echo "$graphql_response" | jq -r ".data.pr${pr_num}.pullRequest")
@@ -82,7 +80,7 @@ Pull Request Details:
 $(cat ./pr-details.txt)
 EOF
 )
-rm ./pr-details.txt
+rm -f ./pr-details.txt
 
 # Sanitize the changelog by escaping backticks to prevent command execution
 changelog_safe="${minified_changelog//\`/\\\`}"
