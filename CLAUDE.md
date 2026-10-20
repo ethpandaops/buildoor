@@ -581,18 +581,13 @@ npm run clean
 
 3. **Chain Service** (`pkg/chain/`)
    - Manages epoch-level beacon state
-   - Reads the epoch state STREAMED (`beacon.GetStateSnapshot`,
-     `rpc/beacon/statesnapshot.go`): the SSZ body is walked with each fork's
-     layout from dynamic-ssz and only the fields the chain view reads are
-     decoded (validators reduced record by record to effective balance and
-     activation/exit epochs, plus the pubkeys of the proposer lookahead and
-     a 64-bit digest per exited validator for the deposit queue model;
-     RANDAO mixes, proposer lookahead, pending deposits, builders, pending
-     payments); the rest is skipped unread — never `AgnosticBeaconState` (a
-     large network's state is hundreds of MB, held twice while decoding).
-     `GetValidatorPubkeyByIndex` serves the lookahead's proposers from
-     memory and fetches any other index from the beacon node (bounded
-     cache) — there is no all-validators pubkey array
+   - Reads the epoch state with go-eth2-client's `AgnosticBeaconState`
+     (`*all.BeaconState`, decoded through dynamic-ssz's per-fork views) —
+     never a hand-written SSZ decoder or stream walker: state decoding
+     belongs to go-eth2-client/dynamic-ssz, a new fork's state layout is a
+     library update. `GetValidatorPubkeyByIndex` serves the lookahead's
+     proposers from memory and fetches any other index from the beacon node
+     (bounded cache) — there is no all-validators pubkey array
    - Caches last 2 epochs of state
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)

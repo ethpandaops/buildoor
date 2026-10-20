@@ -83,8 +83,8 @@ github.com/ethereum/go-ethereum v1.17.8 h1:iKuXrT38t1PaU6aBw6MjBJhGoCl/+Ir0vf5aq
 github.com/ethereum/go-ethereum v1.17.8/go.mod h1:Iui379BD7ryQSFeIDn3sh9Od2I1uheqJD2/6N0m4xm0=
 github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28 h1:zPciPcZHSMqL3pJRooPVIVTVAo51PjDX6rYZ6gNJGlU=
 github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28/go.mod h1:ggCXJgxLFNGpC+DkgNQkeTr3dXRQDb0+9niNmaJWAgM=
-github.com/ethpandaops/go-eth2-client v0.1.10 h1:AGROjkS5jMkveL1E46wyWNv5JLJNWWyZE/hIVBibIrg=
-github.com/ethpandaops/go-eth2-client v0.1.10/go.mod h1:sIVbaug0GsltsJS+hj8ID4dmWBIt8TXoNIesvuBCGt0=
+github.com/ethpandaops/go-eth2-client v0.1.11 h1:gQErMw/Kc5zZYk4XeZkD27yEn4DPlzaMHlEiuflIluE=
+github.com/ethpandaops/go-eth2-client v0.1.11/go.mod h1:sIVbaug0GsltsJS+hj8ID4dmWBIt8TXoNIesvuBCGt0=
 github.com/ethpandaops/service-authenticatoor v0.0.3 h1:jb7G49zU49yA2lr9D3WRAWjfD9LQx+/Nzdnj8OqwIac=
 github.com/ethpandaops/service-authenticatoor v0.0.3/go.mod h1:z8kjSSRa87a9QumFfUXQISLQBm+w+oeWZ4o0ICv3MAs=
 github.com/ferranbt/fastssz v0.1.4 h1:OCDB+dYDEQDvAgtAGnTSidK1Pe2tW3nFV40XyMkTeDY=

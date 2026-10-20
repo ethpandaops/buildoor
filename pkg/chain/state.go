@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	eth2client "github.com/ethpandaops/go-eth2-client"
+	"github.com/ethpandaops/go-eth2-client/api"
+	"github.com/ethpandaops/go-eth2-client/spec/all"
 	"github.com/ethpandaops/go-eth2-client/spec/electra"
 	"github.com/ethpandaops/go-eth2-client/spec/gloas"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
-
-	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
 
 // EpochStats holds cached statistics for an epoch computed from beacon state.
@@ -72,26 +73,52 @@ type BuilderInfo struct {
 	PendingPayments   uint64 // Sum of pending payments from BuilderPendingPayments in state
 }
 
-// fetchEpochStats streams the beacon state (only the fields the chain view
-// reads, see beacon.StateSnapshot) and computes epoch statistics.
+// fetchEpochStats fetches the beacon state (go-eth2-client's fork-agnostic
+// state, decoded through its dynamic-ssz views) and computes epoch
+// statistics.
 func (s *service) fetchEpochStats(
 	ctx context.Context,
 	stateID string,
 	epoch phase0.Epoch,
 ) (*EpochStats, error) {
-	snap, err := s.clClient.GetStateSnapshot(ctx, stateID)
+	provider, ok := s.clClient.GetRawClient().(eth2client.BeaconStateProvider)
+	if !ok {
+		return nil, fmt.Errorf("client does not support beacon state provider")
+	}
+
+	resp, err := provider.AgnosticBeaconState(ctx, &api.BeaconStateOpts{
+		State: stateID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get beacon state: %w", err)
 	}
 
-	s.publishProposerPubkeys(snap.Validators.ProposerPubkeys)
+	if resp.Data == nil {
+		return nil, fmt.Errorf("beacon state response is nil")
+	}
 
-	return s.computeEpochStats(snap, epoch)
+	s.publishProposerPubkeys(lookaheadPubkeys(resp.Data))
+
+	return s.computeEpochStats(resp.Data, epoch)
+}
+
+// lookaheadPubkeys maps the state's proposer lookahead to the proposers'
+// pubkeys.
+func lookaheadPubkeys(state *all.BeaconState) map[phase0.ValidatorIndex]phase0.BLSPubKey {
+	pubkeys := make(map[phase0.ValidatorIndex]phase0.BLSPubKey, len(state.ProposerLookahead))
+
+	for _, index := range state.ProposerLookahead {
+		if uint64(index) < uint64(len(state.Validators)) && state.Validators[index] != nil {
+			pubkeys[index] = state.Validators[index].PublicKey
+		}
+	}
+
+	return pubkeys
 }
 
 // publishProposerPubkeys replaces the known proposer pubkeys (the latest
 // state's proposer lookahead). The published map is never written
-// afterwards: every state snapshot decodes its own.
+// afterwards: every state builds its own.
 func (s *service) publishProposerPubkeys(pubkeys map[phase0.ValidatorIndex]phase0.BLSPubKey) {
 	s.cacheMu.Lock()
 	s.proposerPubkeys = pubkeys
@@ -99,29 +126,30 @@ func (s *service) publishProposerPubkeys(pubkeys map[phase0.ValidatorIndex]phase
 }
 
 // computeEpochStats extracts relevant statistics from the beacon state and computes duties.
-func (s *service) computeEpochStats(state *beacon.StateSnapshot, epoch phase0.Epoch) (*EpochStats, error) {
+func (s *service) computeEpochStats(state *all.BeaconState, epoch phase0.Epoch) (*EpochStats, error) {
 	stats := &EpochStats{
 		Version:   state.Version,
 		Epoch:     epoch,
 		StateSlot: state.Slot,
 	}
 
-	stats.FinalizedEpoch = state.FinalizedEpoch
+	if state.FinalizedCheckpoint != nil {
+		stats.FinalizedEpoch = state.FinalizedCheckpoint.Epoch
+	}
 
 	// Build active indices and effective balances
-	validators := &state.Validators
-	stats.ValidatorCount = uint64(validators.Len())
-	stats.ActiveIndices = make([]phase0.ValidatorIndex, 0, validators.Len())
-	stats.EffectiveBalances = make([]uint32, 0, validators.Len())
+	validators := state.Validators
+	stats.ValidatorCount = uint64(len(validators))
+	stats.ActiveIndices = make([]phase0.ValidatorIndex, 0, len(validators))
+	stats.EffectiveBalances = make([]uint32, 0, len(validators))
 
 	var totalActiveBalance phase0.Gwei
 
-	for i := range validators.Len() {
-		if validators.ActivationEpoch[i] <= epoch && epoch < validators.ExitEpoch[i] {
-			balance := validators.EffectiveBalance[i]
+	for i, validator := range validators {
+		if validator != nil && isActiveValidator(validator, epoch) {
 			stats.ActiveIndices = append(stats.ActiveIndices, phase0.ValidatorIndex(i))
-			stats.EffectiveBalances = append(stats.EffectiveBalances, uint32(balance/EtherGweiFactor))
-			totalActiveBalance += balance
+			stats.EffectiveBalances = append(stats.EffectiveBalances, uint32(validator.EffectiveBalance/EtherGweiFactor))
+			totalActiveBalance += validator.EffectiveBalance
 		}
 	}
 
@@ -211,7 +239,7 @@ func (s *service) computeEpochStats(state *beacon.StateSnapshot, epoch phase0.Ep
 // fields needed to model Electra deposit-queue draining. Deposits for exited
 // validators are flagged: process_pending_deposits postpones them (or applies them
 // once withdrawn) without consuming churn.
-func extractPendingDeposits(deposits []*electra.PendingDeposit, validators *beacon.ValidatorSet) []PendingDepositInfo {
+func extractPendingDeposits(deposits []*electra.PendingDeposit, validators []*phase0.Validator) []PendingDepositInfo {
 	if len(deposits) == 0 {
 		return nil
 	}
@@ -223,8 +251,14 @@ func extractPendingDeposits(deposits []*electra.PendingDeposit, validators *beac
 		}
 	}
 
-	for pubkey := range queued {
-		queued[pubkey] = validators.HasExited(pubkey)
+	for _, validator := range validators {
+		if validator == nil || uint64(validator.ExitEpoch) == FarFutureEpoch {
+			continue
+		}
+
+		if _, ok := queued[validator.PublicKey]; ok {
+			queued[validator.PublicKey] = true
+		}
 	}
 
 	result := make([]PendingDepositInfo, 0, len(deposits))
@@ -242,6 +276,11 @@ func extractPendingDeposits(deposits []*electra.PendingDeposit, validators *beac
 	}
 
 	return result
+}
+
+// isActiveValidator checks if a validator is active at the given epoch.
+func isActiveValidator(validator *phase0.Validator, epoch phase0.Epoch) bool {
+	return validator.ActivationEpoch <= epoch && epoch < validator.ExitEpoch
 }
 
 // extractBuilders extracts builder information from the beacon state.
