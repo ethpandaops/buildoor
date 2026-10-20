@@ -678,7 +678,8 @@ npm run clean
    - Early onboarding covers the WHOLE target set: the pre-Gloas deposits sit in
      the pending queue together and the fork transition converts them all, so
      `pending_deposit_sim.go` asks whether the batch's FIRST entry survives
-     (the queue drains from the front)
+     (the queue drains from the front). The phase lasts until the fork: a key
+     target raised after the first batch gets its own early batch (poke-woken)
    - Optional component (only active with `--lifecycle` flag)
 
 4b. **Slot Results Tracker** (`pkg/slot_results/`) — generic per-slot outcome history

@@ -28,12 +28,14 @@ const earlyArrivalsWindowEpochs = 32
 // deposit service is unavailable, Gloas is not scheduled, no deposit contract is
 // known, Gloas is already active, or every target key is already registered.
 //
-// When applicable it re-evaluates the deposit timing on every new head (the
-// deposit can land in the next block at the earliest), on a per-slot timer that
-// covers missed blocks, and on every epoch snapshot, until the batch is submitted
-// (and it waited for registration), the fork is reached, or the manager stops.
-// Builder indices follow the queue order at the fork, so the first safe block is
-// the one to land in.
+// When applicable the phase lasts until the fork: it re-evaluates the deposit
+// timing on every new head (the deposit can land in the next block at the
+// earliest), on a per-slot timer that covers missed blocks, on every epoch
+// snapshot and on every reconcile poke (a target change), and submits a batch for
+// whichever target keys are not yet queued whenever the window is open — a key
+// target raised after the first batch is deposited early too, as long as the
+// fork is far enough away. Builder indices follow the queue order at the fork,
+// so the first safe block is the one to land in.
 func (m *Manager) earlyOnboard(ctx context.Context) {
 	if m.earlyDepositSvc == nil {
 		return
@@ -104,6 +106,9 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 			slotTimer.Reset(m.untilMissedBlockCheck())
 
 			landingSlot = m.chainSvc.GetCurrentSlot()
+		case <-m.poke:
+			// The key target changed: new target keys may need a deposit.
+			landingSlot = m.chainSvc.GetCurrentSlot()
 		}
 	}
 }
@@ -119,8 +124,9 @@ func (m *Manager) untilMissedBlockCheck() time.Duration {
 }
 
 // earlyOnboardTargets returns the target keys that still need an early deposit:
-// not yet in the builder registry and not already waiting in the pending-deposit
-// queue (restart safety — a prior run's deposits must not be submitted twice).
+// not yet in the builder registry, no deposit of ours in flight, and not already
+// waiting in the pending-deposit queue (restart safety — a prior run's deposits
+// must not be submitted twice).
 func (m *Manager) earlyOnboardTargets() []*builder_keys.Key {
 	target := m.cfg.BuilderKeys.EffectiveTargetCount()
 
@@ -139,6 +145,12 @@ func (m *Manager) earlyOnboardTargets() []*builder_keys.Key {
 			continue
 		}
 
+		// A deposit we just sent is neither in the epoch snapshot nor, until its
+		// block arrives, in the head queue.
+		if key.Status() == builder_keys.StatusDepositing {
+			continue
+		}
+
 		if m.earlyDepositSvc.HasPendingDeposit(key) {
 			continue
 		}
@@ -150,9 +162,11 @@ func (m *Manager) earlyOnboardTargets() []*builder_keys.Key {
 }
 
 // tryEarlyOnboardOnce performs one early-onboarding evaluation. It returns true when the
-// early-onboarding phase is complete and the loop should stop: every target key is
-// onboarded or queued (and we waited for registration), or the fork was reached without
-// onboarding (handed off to the normal post-fork flow).
+// early-onboarding phase is over and the loop should stop: the fork is reached or too
+// close for another early deposit (after waiting for the registration of a queued
+// primary key); the normal post-fork flow takes over from there. Keys not yet queued
+// are deposited whenever the window is open; between batches it keeps waiting, so a
+// raised key target is picked up.
 func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoch, landingSlot phase0.Slot) bool {
 	if !m.enabled.Load() {
 		return false // paused; keep waiting until re-enabled
@@ -162,20 +176,24 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 
 	currentEpoch := m.chainSvc.GetCurrentEpoch()
 	if currentEpoch >= forkEpoch {
-		// Fork reached without onboarding — let the normal post-fork flow take over.
+		m.finishEarlyOnboard(ctx, forkEpoch, currentEpoch)
+
 		return true
 	}
 
 	remaining := m.earlyOnboardTargets()
 	if len(remaining) == 0 {
-		// Everything is registered or already queued; wait for the fork transition
-		// to convert the queued deposits into builders.
-		m.log.Info("All target builder keys onboarded or queued, waiting for registration")
-		m.fireEvent("early_onboard", "All target keys deposited, waiting for the Gloas transition", "info")
-		m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
+		// Everything is registered or already queued; the fork transition converts
+		// the queued deposits into builders. Keep watching for a raised key target.
+		if m.earlyAllQueuedLogged.CompareAndSwap(false, true) {
+			m.log.Info("All target builder keys onboarded or queued, waiting for the Gloas transition")
+			m.fireEvent("early_onboard", "All target keys deposited, waiting for the Gloas transition", "info")
+		}
 
-		return true
+		return false
 	}
+
+	m.earlyAllQueuedLogged.Store(false)
 
 	spec := m.chainSvc.GetChainSpec()
 	epochsUntilFork := uint64(forkEpoch - currentEpoch)
@@ -195,6 +213,7 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 		m.fireEvent("early_onboard", fmt.Sprintf(
 			"Only %d slots until Gloas, skipping early onboarding of %d keys; will deposit after the fork",
 			slotsUntilFork, len(remaining)), "info")
+		m.finishEarlyOnboard(ctx, forkEpoch, currentEpoch)
 
 		return true
 	}
@@ -297,11 +316,27 @@ func (m *Manager) tryEarlyOnboardOnce(ctx context.Context, forkEpoch phase0.Epoc
 	}
 
 	m.fireEvent("early_onboard", fmt.Sprintf(
-		"%d early deposits confirmed, waiting for fork transition and registration",
+		"%d early deposits confirmed, waiting for the Gloas transition",
 		submitted), "success")
-	m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
 
-	return true
+	// The phase goes on: a raised key target before the fork is deposited early too.
+	return false
+}
+
+// finishEarlyOnboard ends the early-onboarding phase at the fork. When the primary
+// key's early deposit sits in the pending-deposit queue, or the fork transition has
+// already converted it, it waits for the registration to be observed (bounded by
+// earlyRegistrationWaitMargin) so the registration callback fires; otherwise the
+// reconciler registers the keys via the builder deposit contract right away.
+func (m *Manager) finishEarlyOnboard(ctx context.Context, forkEpoch, currentEpoch phase0.Epoch) {
+	primary := m.registry.Primary()
+
+	if m.chainSvc.GetBuilderByPubkey(primary.Pubkey()) == nil &&
+		!m.earlyDepositSvc.HasPendingDeposit(primary) {
+		return
+	}
+
+	m.waitForEarlyRegistration(ctx, forkEpoch, currentEpoch)
 }
 
 // waitForEarlyRegistration waits for the primary key to be registered after the early
