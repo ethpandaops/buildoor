@@ -188,13 +188,12 @@ const candidateField = (
 // ---------------------------------------------------------------------------
 
 export const SETTING_FIELDS: Record<string, SettingField> = {
-  // ----- Module enable flags (POST /api/services/toggle) -----
+  // ----- Module enable flags -----
   'epbs_enabled': {
     label: 'ePBS p2p bidding',
     short: 'P2P bidding',
     kind: 'bool',
     path: 'service_status.epbs_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'inactive' },
     hint: 'Needs the Gloas fork scheduled on the beacon node.',
     help: (
@@ -210,7 +209,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: 'Builder API',
     kind: 'bool',
     path: 'service_status.builder_api_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'inactive' },
     hint: 'Needs --api-port.',
     help: (
@@ -228,7 +226,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     short: 'Lifecycle',
     kind: 'bool',
     path: 'service_status.lifecycle_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'paused' },
     hint: 'Needs --el-rpc and --wallet-privkey.',
     help: (
@@ -1547,7 +1544,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
   // ----- Builder keys & lifecycle -----
   // The config value is the configured target; the registry clamps it to
   // [1, max_index + 1] (BuilderKeysConfig.EffectiveTargetCount). The clamped
-  // value is served as settings.target_count by GET /api/buildoor/builder-keys
+  // value is served as settings.target_count by GET /api/v1/builder-keys
   // and as key_target in the builder_info SSE event.
   'builder_keys.target_count': {
     label: 'Target keys',

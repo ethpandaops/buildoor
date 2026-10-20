@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { HeadVoteDetail } from '../types';
+import { apiPath } from '../utils/api';
 
 interface HeadVoteHeatmapProps {
   slot: number;
@@ -19,7 +20,7 @@ export const HeadVoteHeatmap: React.FC<HeadVoteHeatmapProps> = ({ slot, slotDura
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`/api/buildoor/head-votes/${slot}`)
+    fetch(apiPath(`/head-votes/${slot}`))
       .then(async res => {
         if (res.status === 404) throw new Error('No vote detail retained for this slot');
         if (!res.ok) throw new Error(`Request failed (${res.status})`);

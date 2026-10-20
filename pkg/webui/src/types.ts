@@ -109,7 +109,7 @@ export interface TxPoolConfig {
   rpc_upstreams?: string; // comma-separated <target>@<priority>
 }
 
-// /rpc ingress API key (GET /api/buildoor/rpc-access); the secret is only
+// /rpc ingress API key (GET /api/v1/rpc-access); the secret is only
 // returned once, at creation.
 export interface RPCKey {
   id: string;
@@ -602,7 +602,7 @@ export interface VoteCoverage {
 }
 
 // Per-name head-vote arrival heatmap of one slot (REST:
-// GET /api/buildoor/head-votes/{slot}); counts are vote arrivals per
+// GET /api/v1/head-votes/{slot}); counts are vote arrivals per
 // fixed-width time bucket from the slot start.
 export interface HeadVoteDetail {
   slot: number;
@@ -1428,7 +1428,7 @@ export interface SlotResultsResponse {
   max_slot: number;
 }
 
-// Slot bid artifact listing (GET /api/buildoor/slot-results/{slot}/bids).
+// Slot bid artifact listing (GET /api/v1/slot-results/{slot}/bids).
 export interface BidArtifactMetaEntry {
   index: number;
   fork: string;

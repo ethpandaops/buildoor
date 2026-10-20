@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import { useAuthContext } from '../context/AuthContext';
+import { apiPath } from '../utils/api';
 
 export interface SettingsResult {
   ok: boolean;
@@ -25,8 +26,8 @@ export function useSettings() {
       }
 
       try {
-        const response = await fetch('/api/config/settings', {
-          method: 'POST',
+        const response = await fetch(apiPath('/config'), {
+          method: 'PATCH',
           headers,
           body: JSON.stringify(settings),
         });

@@ -75,13 +75,6 @@ func (h *APIHandler) Audit(r *http.Request, token *jwt.Token, action, target str
 	h.audit(r, token, action, target, detail, result)
 }
 
-// mustJSON marshals a value for use as a settings override; the inputs are
-// always simple scalars so marshalling cannot fail in practice.
-func mustJSON(v any) json.RawMessage {
-	b, _ := json.Marshal(v)
-	return b
-}
-
 // applySettings applies a batch of UI setting overrides via the settings
 // service, broadcasts a config update on success, and records an audit entry.
 // It writes an error response and returns false on failure. An empty update set
@@ -127,7 +120,7 @@ type AuditLogResponse struct {
 // @Success 200 {object} AuditLogResponse "Success"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/buildoor/audit-log [get]
+// @Router /audit-log [get]
 func (h *APIHandler) GetAuditLog(w http.ResponseWriter, r *http.Request) {
 	// The audit log is privileged: require authentication. In open mode
 	// CheckAuthToken always returns a valid token, matching the rest of the API.

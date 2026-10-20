@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TxPoolPreviewResponse, TxPoolResponse } from '../types';
 import { useAuth } from './useAuth';
+import { apiPath } from '../utils/api';
 
 interface TxPoolQuery {
   offset: number;
@@ -41,7 +42,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
     if (query.sort) params.set('sort', query.sort);
 
     try {
-      const response = await fetch(`/api/buildoor/txpool?${params.toString()}`, { headers: await authHeaders() });
+      const response = await fetch(apiPath(`/txpool?${params.toString()}`), { headers: await authHeaders() });
       if (response.status === 401) {
         setData(null);
         setUnauthorized(true);
@@ -69,7 +70,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
 
   const fetchPreview = useCallback(async () => {
     try {
-      const response = await fetch('/api/buildoor/txpool/preview', { headers: await authHeaders() });
+      const response = await fetch(apiPath('/txpool/preview'), { headers: await authHeaders() });
       if (response.status === 401) {
         setPreview(null);
         setPreviewError(null);
@@ -97,7 +98,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
 
   const clear = useCallback(async (): Promise<string | null> => {
     try {
-      const response = await fetch('/api/buildoor/txpool', { method: 'DELETE', headers: await authHeaders() });
+      const response = await fetch(apiPath('/txpool'), { method: 'DELETE', headers: await authHeaders() });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) return body.error || response.statusText;
     } catch (err) {
@@ -109,7 +110,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
 
   const drop = useCallback(async (hash: string): Promise<string | null> => {
     try {
-      const response = await fetch(`/api/buildoor/txpool/${hash}`, { method: 'DELETE', headers: await authHeaders() });
+      const response = await fetch(apiPath(`/txpool/${hash}`), { method: 'DELETE', headers: await authHeaders() });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) return body.error || response.statusText;
     } catch (err) {

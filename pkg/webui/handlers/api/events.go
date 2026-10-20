@@ -457,7 +457,7 @@ type HeadVotesStreamEvent struct {
 }
 
 // SlotResultUpdatedEvent tells viewers that a slot's result record changed;
-// the record itself is served by GET /api/buildoor/slot-results.
+// the record itself is served by GET /api/v1/slot-results.
 type SlotResultUpdatedEvent struct {
 	Slot uint64 `json:"slot"`
 }
@@ -2254,7 +2254,18 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	}
 }
 
-// EventStream handles the SSE endpoint for real-time events.
+// EventStream godoc
+// @Id eventStream
+// @Summary Server-sent event stream
+// @Tags Events
+// @Description The live event stream of the WebUI (text/event-stream): every
+// @Description event is a JSON object with type, timestamp, data and (for
+// @Description replayable events) seq. A new connection first receives the
+// @Description initial state and a replay of the recent slots.
+// @Produce text/event-stream
+// @Success 200 {string} string "Event stream"
+// @Failure 429 {object} map[string]string "Too many open streams"
+// @Router /events [get]
 func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	// Check if event stream manager is available
 	if h.eventStreamMgr == nil {

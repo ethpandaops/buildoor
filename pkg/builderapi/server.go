@@ -5,8 +5,6 @@
 //   - pkg/builderapi/epbs — the post-Gloas dialect (Gloas/Heze+):
 //     getExecutionPayloadBid, submitBeaconBlock, submitBuilderPreferences
 //
-// plus Buildoor-specific debug/tooling endpoints under /buildoor/v1/*.
-//
 // Builder API follows https://github.com/ethereum/builder-specs
 package builderapi
 
@@ -225,10 +223,6 @@ func (s *Server) RegisterRoutes(router *mux.Router) {
 		s.epbs.HandleSubmitBuilderPreferences,
 	).Methods(http.MethodPost)
 
-	// --- Buildoor API (debug / tooling) ---
-	buildoorAPI := router.PathPrefix("/buildoor/v1").Subrouter()
-	buildoorAPI.HandleFunc("/validators", s.handleGetValidators).Methods(http.MethodGet)
-
 	// Unmatched /eth/* paths must answer with a JSON 404 rather than falling
 	// through to the WebUI SPA catch-all (which serves index.html with 200 —
 	// an API client decoding that HTML fails with a confusing parse error
@@ -262,13 +256,4 @@ func (s *Server) Handler() http.Handler {
 // Returns 200 OK if the builder is ready to accept requests.
 func (s *Server) handleBuilderStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-}
-
-// handleGetValidators handles GET /buildoor/v1/validators.
-// Returns the list of validator registrations stored from POST /eth/v1/builder/validators.
-func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
-	regs := s.validatorsStore.Values()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"validators": regs})
 }

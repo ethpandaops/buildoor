@@ -71,7 +71,7 @@ func (h *APIHandler) requireRPCIngress(w http.ResponseWriter) bool {
 // @Success 200 {object} RPCAccessResponse "Success"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "No ingress"
-// @Router /api/buildoor/rpc-access [get]
+// @Router /rpc-access [get]
 func (h *APIHandler) GetRPCAccess(w http.ResponseWriter, r *http.Request) {
 	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -118,7 +118,7 @@ type CreateRPCKeyResponse struct {
 // @Success 200 {object} CreateRPCKeyResponse "Success"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/rpc-access/keys [post]
+// @Router /rpc-access/keys [post]
 func (h *APIHandler) CreateRPCKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -176,7 +176,7 @@ type UpdateRPCKeyRequest struct {
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "Not Found"
-// @Router /api/buildoor/rpc-access/keys/{id} [post]
+// @Router /rpc-access/keys/{id} [patch]
 func (h *APIHandler) UpdateRPCKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -229,7 +229,7 @@ func (h *APIHandler) UpdateRPCKey(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string "Success"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "Not Found"
-// @Router /api/buildoor/rpc-access/keys/{id} [delete]
+// @Router /rpc-access/keys/{id} [delete]
 func (h *APIHandler) DeleteRPCKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {

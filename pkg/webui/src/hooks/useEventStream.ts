@@ -1,6 +1,7 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, SlotOutlook, PayloadInfo, TargetState, EngineCalls, LocalBuildInfo, BuildRef, CandidateKey } from '../types';
 import { buildLabel } from '../buildTargets';
+import { apiPath } from '../utils/api';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -848,7 +849,7 @@ function useEventStreamConnection(): UseEventStreamResult {
         eventSourceRef.current.close();
       }
 
-      const eventSource = new EventSource('/api/events');
+      const eventSource = new EventSource(apiPath('/events'));
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -913,7 +914,7 @@ function useEventStreamConnection(): UseEventStreamResult {
 const EventStreamContext = createContext<UseEventStreamResult | null>(null);
 
 /**
- * Owns the tab's single /api/events connection. Every page reads the stream
+ * Owns the tab's single /api/v1/events connection. Every page reads the stream
  * through useEventStream(), so switching pages neither reconnects nor makes
  * the server replay its event cache again.
  */

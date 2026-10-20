@@ -20,7 +20,7 @@ func TestGetBuilderPreferences_NotEnabled(t *testing.T) {
 	// No builder API service wired → 404.
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/registrations/builder-preferences", nil)
 	rec := httptest.NewRecorder()
 	h.GetBuilderPreferences(rec, req)
 
@@ -39,7 +39,7 @@ func TestGetBuilderPreferences_ReturnsEntries(t *testing.T) {
 	// srv is passed as builderAPISvc (9th arg).
 	h := NewAPIHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, srv, nil, nil, nil, nil, nil, nil, nil)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-preferences", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/registrations/builder-preferences", nil)
 	rec := httptest.NewRecorder()
 	h.GetBuilderPreferences(rec, req)
 

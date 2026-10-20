@@ -38,7 +38,7 @@ type OverviewHostEntry struct {
 
 // StartOverviewServer starts the overview HTTP server. It serves the overview
 // SPA bundle and exposes a small proxy API the UI uses to poll each instance's
-// /api/buildoor/overview endpoint (so the browser doesn't need CORS to all of them).
+// overview endpoint (so the browser doesn't need CORS to all of them).
 func StartOverviewServer(cfg *OverviewConfig, log logrus.FieldLogger) error {
 	if len(cfg.Hosts) == 0 {
 		return errors.New("at least one --host is required")
@@ -55,9 +55,11 @@ func StartOverviewServer(cfg *OverviewConfig, log logrus.FieldLogger) error {
 
 	router := mux.NewRouter()
 
-	apiRouter := router.PathPrefix("/api/overview").Subrouter()
-	apiRouter.HandleFunc("/hosts", overviewHostsHandler(hosts)).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/proxy/{idx}", overviewProxyHandler(hosts, log)).Methods(http.MethodGet)
+	apiRouter := router.PathPrefix("/api/").Subrouter()
+	apiRouter.NotFoundHandler = apiFallback(apiRouter)
+	apiRouter.MethodNotAllowedHandler = apiRouter.NotFoundHandler
+	apiRouter.HandleFunc("/v1/hosts", overviewHostsHandler(hosts)).Methods(http.MethodGet)
+	apiRouter.HandleFunc("/v1/hosts/{idx}/overview", overviewProxyHandler(hosts, log)).Methods(http.MethodGet)
 
 	subFS, err := fs.Sub(staticEmbedFS, "static")
 	if err != nil {
@@ -119,8 +121,13 @@ func overviewHostsHandler(hosts []OverviewHostEntry) http.HandlerFunc {
 	}
 }
 
-// overviewProxyHandler proxies GET /api/overview/proxy/{idx} to hosts[idx]/api/buildoor/overview.
-// Keeps responses small and bounded by a per-request timeout. Surfaces upstream errors as 502.
+// overviewInstancePaths are the paths an instance serves its overview at:
+// the v1 path first, then the pre-v1 one of older instances.
+var overviewInstancePaths = []string{APIBasePath + "/overview", "/api/buildoor/overview"}
+
+// overviewProxyHandler proxies GET /api/v1/hosts/{idx}/overview to the
+// instance's overview endpoint. Keeps responses small and bounded by a
+// per-request timeout. Surfaces upstream errors as 502.
 func overviewProxyHandler(hosts []OverviewHostEntry, log logrus.FieldLogger) http.HandlerFunc {
 	client := &http.Client{Timeout: 5 * time.Second}
 
@@ -129,32 +136,44 @@ func overviewProxyHandler(hosts []OverviewHostEntry, log logrus.FieldLogger) htt
 
 		idx, err := strconv.Atoi(idxStr)
 		if err != nil || idx < 0 || idx >= len(hosts) {
-			http.Error(w, "invalid host index", http.StatusBadRequest)
+			writeProxyError(w, http.StatusBadRequest, "invalid host index")
 			return
 		}
-
-		target := hosts[idx].URL + "/api/buildoor/overview"
 
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		for i, path := range overviewInstancePaths {
+			target := hosts[idx].URL + path
+
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+			if err != nil {
+				writeProxyError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.WithError(err).WithField("target", target).Debug("Overview proxy upstream error")
+				writeProxyError(w, http.StatusBadGateway, err.Error())
+				return
+			}
+
+			// An instance without this path answers 404, or, before the API
+			// had JSON errors, its WebUI's HTML: try the next path.
+			isJSON := strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json")
+			if (resp.StatusCode == http.StatusNotFound || !isJSON) && i < len(overviewInstancePaths)-1 {
+				resp.Body.Close()
+				continue
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			resp.Body.Close()
+
 			return
 		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.WithError(err).WithField("target", target).Debug("Overview proxy upstream error")
-			writeProxyError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		defer resp.Body.Close()
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
 	}
 }
 

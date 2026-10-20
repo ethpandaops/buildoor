@@ -1,6 +1,7 @@
 import { REFRESH_INTERVAL_SLOW_MS } from './refreshIntervals';
 import { usePolledList } from './usePolledList';
 import type { BuilderPreference, BuilderPreferencesResponse } from '../types';
+import { apiPath } from '../utils/api';
 
 // useBuilderPreferences lists the payment caps (max_execution_payment) that
 // proposers submitted through the Gloas Builder API, highest cap first. A 404
@@ -8,7 +9,7 @@ import type { BuilderPreference, BuilderPreferencesResponse } from '../types';
 export function useBuilderPreferences() {
   // Builder preferences change rarely; slow aligned background refresh.
   return usePolledList<BuilderPreference, BuilderPreferencesResponse>({
-    url: '/api/buildoor/builder-preferences',
+    url: apiPath('/registrations/builder-preferences'),
     intervalMs: REFRESH_INTERVAL_SLOW_MS,
     select: (body) => body.preferences,
     compare: (a, b) => b.max_execution_payment - a.max_execution_payment,

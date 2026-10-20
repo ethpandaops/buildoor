@@ -8,6 +8,7 @@ import type {
   TargetState,
   TargetStatus,
 } from './types';
+import { apiPath } from './utils/api';
 
 // A slot's builds as separate entities: every payload is kept once under its
 // block hash, every target holds its own engine build, testing runs and
@@ -95,4 +96,4 @@ export function primaryTargetRecord(build: SlotBuild | undefined): BuildTargetRe
 
 // payloadArtifactUrl is the download URL of one of a slot's payloads.
 export const payloadArtifactUrl = (slot: number, blockHash: string): string =>
-  `/api/buildoor/slot-results/${slot}/payloads/${blockHash}`;
+  apiPath(`/slot-results/${slot}/payloads/${blockHash}`);

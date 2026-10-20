@@ -6,6 +6,7 @@ import type {
   BuilderKeysResponse,
   BuilderKeysSettings,
 } from '../types';
+import { apiPath } from '../utils/api';
 
 const EMPTY_AGGREGATE: BuilderKeysAggregate = {
   target: 0,
@@ -44,7 +45,7 @@ export function useBuilderKeys(changeToken?: unknown) {
 
   const fetchKeys = useCallback(async () => {
     try {
-      const response = await fetch('/api/buildoor/builder-keys');
+      const response = await fetch(apiPath('/builder-keys'));
 
       if (response.status === 404) {
         setKeys([]);
@@ -126,9 +127,9 @@ export function useBuilderKeyActions() {
 
   return {
     isLoggedIn,
-    depositKey: (keyIndex: number) => post(`/api/buildoor/builder-keys/${keyIndex}/deposit`),
-    topupKey: (keyIndex: number) => post(`/api/buildoor/builder-keys/${keyIndex}/topup`, {}),
+    depositKey: (keyIndex: number) => post(apiPath(`/builder-keys/${keyIndex}/deposit`)),
+    topupKey: (keyIndex: number) => post(apiPath(`/builder-keys/${keyIndex}/topup`), {}),
     exitKey: (keyIndex: number, lowerTarget: boolean) =>
-      post(`/api/buildoor/builder-keys/${keyIndex}/exit`, { lower_target: lowerTarget }),
+      post(apiPath(`/builder-keys/${keyIndex}/exit`), { lower_target: lowerTarget }),
   };
 }

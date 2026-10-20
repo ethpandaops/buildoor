@@ -38,12 +38,9 @@ import (
 	"github.com/klauspost/compress/gzhttp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
-	httpSwagger "github.com/swaggo/http-swagger"
 	"github.com/urfave/negroni"
 
 	_ "net/http/pprof"
-
-	_ "github.com/ethpandaops/buildoor/pkg/webui/handlers/docs"
 )
 
 var (
@@ -110,89 +107,12 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 	}
 
 	apiHandler.SetPlanVerifier(planVerifier)
-	apiRouter := router.PathPrefix("/api").Subrouter()
-	apiRouter.HandleFunc("/version", apiHandler.GetVersion).Methods("GET")
-	apiRouter.HandleFunc("/status", apiHandler.GetStatus).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/stats", apiHandler.GetStats).Methods(http.MethodGet)
 
-	// Event stream endpoint for real-time updates
-	apiRouter.HandleFunc("/events", apiHandler.EventStream).Methods(http.MethodGet)
-
-	// Configuration endpoints
-	apiRouter.HandleFunc("/config", apiHandler.GetConfig).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/config/schedule", apiHandler.UpdateSchedule).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/config/epbs", apiHandler.UpdateEPBS).Methods(http.MethodPost)
-
-	// Shared builder config endpoint (build start time, payload build delay)
-	apiRouter.HandleFunc("/config/builder", apiHandler.UpdateBuilderConfig).Methods(http.MethodPost)
-
-	// Service toggle endpoint (enable/disable ePBS and Builder API)
-	apiRouter.HandleFunc("/services/toggle", apiHandler.ToggleServices).Methods(http.MethodPost)
-
-	// Builder API config endpoint
-	apiRouter.HandleFunc("/config/builder-api", apiHandler.UpdateBuilderAPIConfig).Methods(http.MethodPost)
-
-	// Generic path-based settings endpoint (partial updates by canonical key)
-	apiRouter.HandleFunc("/config/settings", apiHandler.UpdateSettings).Methods(http.MethodPost)
-
-	// Per-slot action plan + results endpoints
-	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.GetActionPlan).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/action-plan", apiHandler.UpdateActionPlan).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/action-plan/rules", apiHandler.GetActionPlanRules).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/action-plan/rules", apiHandler.UpdateActionPlanRules).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/action-plan/test-transform", apiHandler.TestTransform).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/slot-results", apiHandler.GetSlotResults).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payload", apiHandler.GetSlotPayloadArtifact).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/payloads/{blockHash}", apiHandler.GetSlotPayloadArtifactByHash).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids", apiHandler.GetSlotBidArtifacts).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/bids/{index}", apiHandler.GetSlotBidArtifact).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/slot-results/{slot}/envelope", apiHandler.GetSlotEnvelopeArtifact).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/head-votes/{slot}", apiHandler.GetHeadVoteDetail).Methods(http.MethodGet)
-
-	// Local build extension (testing_buildBlockV1) + owned transaction pool
-	apiRouter.HandleFunc("/buildoor/local-build/status", apiHandler.GetLocalBuildStatus).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/local-build/probe", apiHandler.ProbeLocalBuild).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.GetTxPool).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/txpool", apiHandler.ClearTxPool).Methods(http.MethodDelete)
-	apiRouter.HandleFunc("/buildoor/txpool/preview", apiHandler.GetTxPoolPreview).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/txpool/el-mempool", apiHandler.GetELMempool).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/txpool/fees", apiHandler.GetTxPoolFees).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/txpool/{hash}", apiHandler.DropTxPoolTx).Methods(http.MethodDelete)
-	apiRouter.HandleFunc("/buildoor/rpc-access", apiHandler.GetRPCAccess).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/rpc-access/keys", apiHandler.CreateRPCKey).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/rpc-access/keys/{id}", apiHandler.UpdateRPCKey).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/rpc-access/keys/{id}", apiHandler.DeleteRPCKey).Methods(http.MethodDelete)
-
-	// Buildoor endpoints
-	apiRouter.HandleFunc("/buildoor/validators", apiHandler.GetValidators).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/bids-won", apiHandler.GetBidsWon).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/builder-api-status", apiHandler.GetBuilderAPIStatus).Methods(http.MethodGet)
-
-	// Managed builder key set
-	apiRouter.HandleFunc("/buildoor/builder-keys", apiHandler.GetBuilderKeys).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/builder-keys/target", apiHandler.UpdateBuilderKeyTarget).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/deposit", apiHandler.DepositBuilderKey).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/topup", apiHandler.TopupBuilderKey).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/builder-keys/{index:[0-9]+}/exit", apiHandler.ExitBuilderKey).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/buildoor/overview", apiHandler.GetOverview).Methods(http.MethodGet, http.MethodOptions)
-	apiRouter.HandleFunc("/buildoor/proposer-preferences", apiHandler.GetProposerPreferences).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/builder-preferences", apiHandler.GetBuilderPreferences).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/buildoor/audit-log", apiHandler.GetAuditLog).Methods(http.MethodGet)
-
-	// Lifecycle endpoints (if manager available)
-	apiRouter.HandleFunc("/lifecycle/status", apiHandler.GetLifecycleStatus).Methods(http.MethodGet)
-	apiRouter.HandleFunc("/lifecycle/deposit", apiHandler.PostDeposit).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/lifecycle/topup", apiHandler.PostTopup).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/lifecycle/exit", apiHandler.PostExit).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/config/lifecycle", apiHandler.UpdateLifecycleConfig).Methods(http.MethodPost)
+	// REST API (/api/v1), its docs (/api/docs/) and the pre-v1 aliases
+	registerAPI(router, apiRoutes(apiHandler))
 
 	// metrics endpoint
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
-
-	// swagger
-	router.PathPrefix("/api/docs/").Handler(httpSwagger.Handler(func(c *httpSwagger.Config) {
-		c.Layout = httpSwagger.StandaloneLayout
-	}))
 
 	// Optional raw HTML snippet injected into <head> of the served index.html
 	// (e.g. the panda menu loader / analytics). The CLI flag wins; fall back

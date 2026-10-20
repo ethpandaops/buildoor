@@ -79,7 +79,7 @@ json_rpc() {
 # beacon head because it is buildoor's own clock that decides when a slot's
 # action plan freezes, and the chain head lags behind it on a missed slot.
 current_slot() {
-  curl --fail --silent --show-error "$BUILDOOR_URL/api/status" | jq -r '.current_slot'
+  curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/status" | jq -r '.current_slot'
 }
 
 # Applies a partial global settings update by canonical settings key. The
@@ -87,10 +87,10 @@ current_slot() {
 update_settings() {
   local body=$1
   echo "Applying settings update: $body"
-  curl --fail --silent --show-error \
+  curl --fail --silent --show-error -X PATCH \
     -H 'Content-Type: application/json' \
     --data "$body" \
-    "$BUILDOOR_URL/api/config/settings" >/dev/null
+    "$BUILDOOR_URL/api/v1/config" >/dev/null
 }
 
 # first_slot_under_new_settings prints the first slot whose plan is guaranteed
@@ -119,7 +119,7 @@ wait_for_win() {
   echo "Waiting for a '$source' win in slots ${min_slot}..${max_slot} ($label)" >&2
   while true; do
     if won_blocks=$(curl --fail --silent --show-error \
-      "$BUILDOOR_URL/api/buildoor/bids-won?offset=0&limit=100"); then
+      "$BUILDOOR_URL/api/v1/bids-won?offset=0&limit=100"); then
       printf '%s\n' "$won_blocks" >"$ARTIFACT_DIR/bids-won-$label.json"
 
       block=$(jq -c --arg source "$source" --argjson min "$min_slot" --argjson max "$max_slot" \
@@ -182,7 +182,7 @@ assert_slot_result() {
 
   while true; do
     if results=$(curl --fail --silent --show-error \
-      "$BUILDOOR_URL/api/buildoor/slot-results?min_slot=$slot&max_slot=$slot"); then
+      "$BUILDOOR_URL/api/v1/slot-results?min_slot=$slot&max_slot=$slot"); then
       printf '%s\n' "$results" >"$ARTIFACT_DIR/${label}-slot-result.json"
 
       # SlotResult.slot is a JSON string, so compare it numerically.
@@ -213,7 +213,7 @@ assert_payload_artifact() {
   local artifact
 
   artifact=$(curl --fail --silent --show-error \
-    "$BUILDOOR_URL/api/buildoor/slot-results/$slot/payloads/$hash")
+    "$BUILDOOR_URL/api/v1/slot-results/$slot/payloads/$hash")
   printf '%s\n' "$artifact" >"$ARTIFACT_DIR/${label}-payload-artifact.json"
 
   if ! jq -e --arg hash "$hash" '(.data.block_hash | ascii_downcase) == $hash' <<<"$artifact" >/dev/null; then
@@ -361,7 +361,7 @@ assert_payload_artifact post-gloas-builder-api "$api_slot" "$api_hash"
 # working while the preferences endpoint 500'd without --builder-api-url.
 echo "Checking that proposer builder preferences were accepted"
 prefs_deadline=$((SECONDS + 60))
-until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/builder-preferences" \
+until curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/registrations/builder-preferences" \
   | tee "$ARTIFACT_DIR/builder-preferences.json" \
   | jq -e '(.preferences | length) > 0' >/dev/null; do
   if (( SECONDS >= prefs_deadline )); then
@@ -379,7 +379,7 @@ echo "Builder preferences present"
 # buildoor's /rpc ingress, none of which ever entered the EL mempool.
 echo "== Phase 4: post-Gloas p2p bidding from the local transaction pool"
 
-local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/local-build/status")
+local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/local-build/status")
 printf '%s\n' "$local_status" >"$ARTIFACT_DIR/local-build-status.json"
 if ! jq -e '.availability.available == true' <<<"$local_status" >/dev/null; then
   echo "testing_buildBlockV1 is not available on the EL: $(jq -r '.availability.reason' <<<"$local_status")" >&2
@@ -397,7 +397,7 @@ local_from=$(first_slot_under_new_settings "$GLOAS_SLOT")
 rpc_key=$(curl --fail --silent --show-error \
   -H 'Content-Type: application/json' \
   -d '{"label":"e2e-spamoor"}' \
-  "$BUILDOOR_URL/api/buildoor/rpc-access/keys" | jq -r '.secret')
+  "$BUILDOOR_URL/api/v1/rpc-access/keys" | jq -r '.secret')
 if [[ -z "$rpc_key" || "$rpc_key" == "null" ]]; then
   echo "Could not create an /rpc API key for spamoor" >&2
   exit 1
@@ -418,7 +418,7 @@ docker run --rm --network "kt-$ENCLAVE_NAME" "$SPAMOOR_IMAGE" eoatx \
 spamoor_pid=$!
 
 pool_deadline=$((SECONDS + 120))
-until curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1" \
+until curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/txpool?limit=1" \
   | tee "$ARTIFACT_DIR/txpool.json" | jq -e '.stats.admitted > 0' >/dev/null; do
   if (( SECONDS >= pool_deadline )); then
     echo "No transactions reached the pool ingress within 120s" >&2
@@ -461,7 +461,7 @@ plan_deadline=$((SECONDS + LOCAL_POOL_TIMEOUT_SECONDS))
 while true; do
   now_slot=$(current_slot)
   results=$(curl --fail --silent --show-error \
-    "$BUILDOOR_URL/api/buildoor/slot-results?min_slot=$local_from&max_slot=$now_slot")
+    "$BUILDOOR_URL/api/v1/slot-results?min_slot=$local_from&max_slot=$now_slot")
   printf '%s\n' "$results" >"$ARTIFACT_DIR/local-pool-slot-results.json"
 
   bad=$(jq -c '[.results[] | select(.tx_plan != null)
@@ -514,7 +514,7 @@ wait "$spamoor_pid" 2>/dev/null || true
 spamoor_pid=""
 
 # The verifier's own tally agrees: no check ever failed since startup.
-local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/local-build/status")
+local_status=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/local-build/status")
 printf '%s\n' "$local_status" >"$ARTIFACT_DIR/local-build-status-final.json"
 jq -e --argjson min "$MIN_VERIFIED_BLOCKS" \
   '.plan_checks.match >= $min and .plan_checks.mismatch == 0
@@ -522,7 +522,7 @@ jq -e --argjson min "$MIN_VERIFIED_BLOCKS" \
    and .plan_checks.orphaned == 0' <<<"$local_status" >/dev/null
 echo "Plan checks: $(jq -c '.plan_checks' <<<"$local_status")"
 
-pool_stats=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/buildoor/txpool?limit=1")
+pool_stats=$(curl --fail --silent --show-error "$BUILDOOR_URL/api/v1/txpool?limit=1")
 printf '%s\n' "$pool_stats" >"$ARTIFACT_DIR/txpool-final.json"
 # Pool transactions only ever land through our own blocks: none of them was
 # included by a block we did not build.

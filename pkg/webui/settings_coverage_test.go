@@ -18,10 +18,7 @@ import (
 // the text that proves the editor exists there: the field registry routes the
 // setting to its writer, the writer calls the endpoint.
 var dedicatedEditors = map[string]struct{ file, marker string }{
-	config.KeyEPBSEnabled:            {"settings/write.ts", "'/api/services/toggle'"},
-	config.KeyBuilderAPIEnabled:      {"settings/write.ts", "'/api/services/toggle'"},
-	config.KeyLifecycleEnabled:       {"settings/write.ts", "'/api/services/toggle'"},
-	config.KeyBuilderKeysTargetCount: {"settings/write.ts", "'/api/buildoor/builder-keys/target'"},
+	config.KeyBuilderKeysTargetCount: {"settings/write.ts", "apiPath('/builder-keys/target')"},
 }
 
 // Every mutable setting must be editable from the WebUI. A registered setting

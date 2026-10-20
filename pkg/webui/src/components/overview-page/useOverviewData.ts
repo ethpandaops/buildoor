@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { onStreamEvent } from '../../hooks/useEventStream';
 import type { BidWonEntry, BidsWonResponse, SlotResult, SlotResultsResponse } from '../../types';
+import { apiPath } from '../../utils/api';
 
 // Number of recent wins shown in the Blocks won table.
 export const RECENT_WINS = 8;
@@ -31,7 +32,7 @@ export function useRecentWins(connectionGeneration: number): RecentWins {
       }
       inFlight = true;
       try {
-        const res = await fetch(`/api/buildoor/bids-won?offset=0&limit=${RECENT_WINS}`);
+        const res = await fetch(apiPath(`/bids-won?offset=0&limit=${RECENT_WINS}`));
         if (!res.ok) throw new Error(res.statusText);
         const data: BidsWonResponse = await res.json();
         if (active) setState({ entries: data.bids_won ?? [], total: data.total ?? 0, loaded: true });
@@ -82,7 +83,7 @@ export function useStripResults(
     fetchedGeneration.current = connectionGeneration;
 
     const minSlot = Math.max(0, currentSlot - STRIP_SLOTS + 1);
-    fetch(`/api/buildoor/slot-results?min_slot=${minSlot}&max_slot=${currentSlot}`)
+    fetch(apiPath(`/slot-results?min_slot=${minSlot}&max_slot=${currentSlot}`))
       .then((res) => (res.ok ? (res.json() as Promise<SlotResultsResponse>) : null))
       .then((data) => {
         if (!data || !mounted.current) return;

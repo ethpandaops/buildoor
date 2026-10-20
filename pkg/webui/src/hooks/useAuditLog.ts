@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AuditLogEntry, AuditLogResponse } from '../types';
 import { authStore } from '../stores/authStore';
+import { apiPath } from '../utils/api';
 
 export function useAuditLog(offset: number, limit: number) {
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
@@ -20,7 +21,7 @@ export function useAuditLog(offset: number, limit: number) {
       }
 
       const response = await fetch(
-        `/api/buildoor/audit-log?offset=${offset}&limit=${limit}`,
+        apiPath(`/audit-log?offset=${offset}&limit=${limit}`),
         { headers }
       );
 

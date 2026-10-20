@@ -2,6 +2,7 @@ import { useCallback } from 'react';
 import type { LocalBuildAvailability } from '../types';
 import { authHeaders } from './authFetch';
 import { useEventStream } from './useEventStream';
+import { apiPath } from '../utils/api';
 
 // The local build (testing_buildBlockV1) status: the probed EL availability,
 // the effective settings and the pool's state, pushed by the event stream at
@@ -11,7 +12,7 @@ export function useLocalBuildStatus() {
   const { localBuildStatus } = useEventStream();
 
   const probe = useCallback(async (): Promise<LocalBuildAvailability | null> => {
-    const response = await fetch('/api/buildoor/local-build/probe', {
+    const response = await fetch(apiPath('/local-build/probe'), {
       method: 'POST',
       headers: await authHeaders(),
     });

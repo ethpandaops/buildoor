@@ -25,7 +25,7 @@ type ValidatorRangesConfig struct {
 
 // Config represents the complete configuration for the buildoor application.
 //
-// The JSON form of the config is public: GET /api/config and the SSE config
+// The JSON form of the config is public: GET /api/v1/config and the SSE config
 // event serve it to anyone. Keys, secrets and the startup-only endpoints and
 // paths (whose URLs often carry credentials) are therefore json:"-"; YAML
 // config loading is unaffected.

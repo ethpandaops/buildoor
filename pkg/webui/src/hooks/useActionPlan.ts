@@ -14,6 +14,7 @@ import {
   getConnectionGeneration,
   subscribeConnectionGeneration,
 } from './useEventStream';
+import { apiPath } from '../utils/api';
 
 // The backend marshals slot numbers (phase0.Slot) as JSON strings; normalize
 // to a real number at every ingest point so range checks and typeof guards
@@ -76,8 +77,8 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       const query = `min_slot=${minSlot}&max_slot=${maxSlot}`;
       const headers = await authHeaders();
       const [planResp, resultResp] = await Promise.all([
-        fetch(`/api/buildoor/action-plan?${query}`, { headers }),
-        fetch(`/api/buildoor/slot-results?${query}&view=summary`, { headers }),
+        fetch(apiPath(`/action-plan?${query}`), { headers }),
+        fetch(apiPath(`/slot-results?${query}&view=summary`), { headers }),
       ]);
 
       if (!planResp.ok) {
@@ -169,7 +170,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       // which the full record covers too.
       const full = detailSlotsRef.current.has(slot);
       const response = await fetch(
-        `/api/buildoor/slot-results?min_slot=${slot}&max_slot=${slot}${full ? '' : '&view=summary'}`,
+        apiPath(`/slot-results?min_slot=${slot}&max_slot=${slot}${full ? '' : '&view=summary'}`),
         { headers: await authHeaders() },
       );
       if (!response.ok) return;
@@ -253,7 +254,7 @@ export function useActionPlan(minSlot: number, maxSlot: number): UseActionPlanRe
       }
 
       try {
-        const response = await fetch('/api/buildoor/action-plan', {
+        const response = await fetch(apiPath('/action-plan'), {
           method: 'POST',
           headers,
           body: JSON.stringify({ updates }),

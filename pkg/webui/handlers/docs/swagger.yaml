@@ -1,3 +1,4 @@
+basePath: /api/v1
 definitions:
   action_plan.BidPlan:
     properties:
@@ -859,23 +860,6 @@ definitions:
       seen:
         type: integer
     type: object
-  api.LifecycleStatusResponse:
-    properties:
-      balance_gwei:
-        type: integer
-      builder_index:
-        type: integer
-      deposit_epoch:
-        type: integer
-      effective_balance_gwei:
-        type: integer
-      is_registered:
-        type: boolean
-      pending_payments_gwei:
-        type: integer
-      withdrawable_epoch:
-        type: integer
-    type: object
   api.LocalBuildStatusResponse:
     properties:
       availability:
@@ -1252,27 +1236,6 @@ definitions:
       target:
         type: integer
     type: object
-  api.UpdateEPBSRequest:
-    properties:
-      bid_end_time:
-        type: integer
-      bid_increase:
-        type: integer
-      bid_interval:
-        type: integer
-      bid_min_amount:
-        type: integer
-      bid_start_time:
-        type: integer
-      bid_subsidy:
-        type: integer
-      build_start_time:
-        type: integer
-      payload_build_delay:
-        type: integer
-      reveal_time:
-        type: integer
-    type: object
   api.UpdateRPCKeyRequest:
     properties:
       default_rate_limit:
@@ -1287,20 +1250,7 @@ definitions:
           DefaultRateLimit returns it to txpool.rpc_key_rate.
         type: integer
     type: object
-  api.UpdateScheduleRequest:
-    properties:
-      every_nth:
-        type: integer
-      mode:
-        type: string
-      next_n:
-        type: integer
-      start_slot:
-        type: integer
-    type: object
   api.ValidatorRegistrationResponse:
-    description: Returns the list of validators registered via the Builder API (fee
-      recipient preferences). Not paginated.
     properties:
       fee_recipient:
         description: Hex-encoded Ethereum address
@@ -2376,8 +2326,17 @@ definitions:
     type: object
 info:
   contact: {}
+  description: |-
+    REST API of buildoor, the Ethereum builder testing tool: status,
+    settings, per-slot action plans and outcomes, builder keys, the
+    transaction pool and registrations. Mutating endpoints need a
+    login (Bearer token) when an auth provider is configured. The
+    Builder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)
+    follow their own specifications and are not listed here. The
+    pre-v1 paths stay served as deprecated aliases until 2.0.
+  title: Buildoor API
 paths:
-  /api/buildoor/action-plan:
+  /action-plan:
     get:
       description: Returns all per-slot action plans within the inclusive slot range.
       operationId: getActionPlan
@@ -2472,7 +2431,7 @@ paths:
       summary: Update per-slot action plans
       tags:
       - ActionPlan
-  /api/buildoor/action-plan/rules:
+  /action-plan/rules:
     get:
       description: |-
         Returns the recurring slot rules, id-ascending (which is also
@@ -2547,7 +2506,7 @@ paths:
       summary: Replace the recurring action plan rules
       tags:
       - ActionPlan
-  /api/buildoor/action-plan/test-transform:
+  /action-plan/test-transform:
     post:
       consumes:
       - application/json
@@ -2588,7 +2547,7 @@ paths:
       summary: Evaluate a jq transform against a sample builder object
       tags:
       - ActionPlan
-  /api/buildoor/audit-log:
+  /audit-log:
     get:
       description: Returns a paginated list of authenticated mutating actions. Empty
         when no state-db is configured.
@@ -2631,7 +2590,7 @@ paths:
       summary: Get the audit log
       tags:
       - Buildoor
-  /api/buildoor/bids-won:
+  /bids-won:
     get:
       description: Returns a paginated list of won blocks (Builder API and p2p ePBS)
         with transaction counts, blob counts, and values, read from the shared inclusion
@@ -2664,7 +2623,7 @@ paths:
       summary: Get bids won (blocks of ours included on chain)
       tags:
       - Buildoor
-  /api/buildoor/builder-api-status:
+  /builder-api/status:
     get:
       description: Returns the current status of the Builder API including configuration
         and validator count.
@@ -2685,7 +2644,7 @@ paths:
       summary: Get Builder API status
       tags:
       - Buildoor
-  /api/buildoor/builder-keys:
+  /builder-keys:
     get:
       description: |-
         Returns every managed builder key with its lifecycle status,
@@ -2708,7 +2667,7 @@ paths:
       summary: Get the managed builder key set
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/deposit:
+  /builder-keys/{index}/deposit:
     post:
       description: |-
         Submits a builder deposit for the given key and waits for it to
@@ -2744,7 +2703,7 @@ paths:
       summary: Deposit for a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/exit:
+  /builder-keys/{index}/exit:
     post:
       consumes:
       - application/json
@@ -2796,7 +2755,7 @@ paths:
       summary: Exit a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/topup:
+  /builder-keys/{index}/topup:
     post:
       consumes:
       - application/json
@@ -2834,7 +2793,7 @@ paths:
       summary: Top up a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/target:
+  /builder-keys/target:
     post:
       consumes:
       - application/json
@@ -2872,28 +2831,102 @@ paths:
       summary: Set the target builder key count
       tags:
       - Builder Keys
-  /api/buildoor/builder-preferences:
+  /config:
     get:
-      description: Returns all builder preferences currently in the cache, submitted
-        by proposers via the submitBuilderPreferences API.
-      operationId: getBuilderPreferences
+      description: Returns the buildoor configuration in use. Keys, secrets and the
+        client endpoints are left out; the credentials in the RPC upstream URLs are
+        masked.
+      operationId: getConfig
       produces:
       - application/json
       responses:
         "200":
           description: Success
           schema:
-            $ref: '#/definitions/api.BuilderPreferencesResponse'
-        "404":
-          description: Builder API not enabled
+            additionalProperties: true
+            type: object
+        "500":
+          description: Server Error
           schema:
             additionalProperties:
               type: string
             type: object
-      summary: Get cached builder preferences
+      summary: Get buildoor configuration
       tags:
-      - Buildoor
-  /api/buildoor/head-votes/{slot}:
+      - Config
+    patch:
+      consumes:
+      - application/json
+      description: |-
+        Applies partial global settings updates keyed by canonical
+        settings paths (e.g. {"epbs.bid_subsidy": 1000,
+        "schedule.mode": "all"}) without requiring full config
+        objects. Unknown keys are rejected. The module enable flags
+        (epbs_enabled, builder_api_enabled, lifecycle_enabled) are
+        settings too; enabling a module this instance cannot run is
+        refused. Requires authentication.
+      operationId: updateSettings
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Map of settings key paths to values
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Unknown key or invalid value
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update global settings by key path
+      tags:
+      - Config
+  /events:
+    get:
+      description: |-
+        The live event stream of the WebUI (text/event-stream): every
+        event is a JSON object with type, timestamp, data and (for
+        replayable events) seq. A new connection first receives the
+        initial state and a replay of the recent slots.
+      operationId: eventStream
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: Event stream
+          schema:
+            type: string
+        "429":
+          description: Too many open streams
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Server-sent event stream
+      tags:
+      - Events
+  /head-votes/{slot}:
     get:
       description: |-
         Returns the slot's raw single-attestation arrivals grouped by
@@ -2944,7 +2977,7 @@ paths:
       summary: Per-name head-vote arrival heatmap for a slot
       tags:
       - Stats
-  /api/buildoor/local-build/probe:
+  /local-build/probe:
     post:
       description: |-
         Probes the EL RPC for the testing namespace now (instead of
@@ -2967,7 +3000,7 @@ paths:
       summary: Re-probe the EL for testing_buildBlockV1
       tags:
       - LocalBuild
-  /api/buildoor/local-build/status:
+  /local-build/status:
     get:
       description: |-
         Returns whether the EL exposes testing_buildBlockV1 (probed),
@@ -2984,7 +3017,7 @@ paths:
       summary: Get the local build (testing_buildBlockV1) status
       tags:
       - LocalBuild
-  /api/buildoor/overview:
+  /overview:
     get:
       description: |-
         Returns a single-payload summary used by the multi-instance overview UI:
@@ -3001,7 +3034,28 @@ paths:
       summary: Get a compact overview of this buildoor instance
       tags:
       - Buildoor
-  /api/buildoor/proposer-preferences:
+  /registrations/builder-preferences:
+    get:
+      description: Returns all builder preferences currently in the cache, submitted
+        by proposers via the submitBuilderPreferences API.
+      operationId: getBuilderPreferences
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.BuilderPreferencesResponse'
+        "404":
+          description: Builder API not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get cached builder preferences
+      tags:
+      - Buildoor
+  /registrations/proposer-preferences:
     get:
       description: Returns all proposer preferences currently in the cache, received
         via P2P gossip.
@@ -3022,7 +3076,28 @@ paths:
       summary: Get cached proposer preferences
       tags:
       - Buildoor
-  /api/buildoor/rpc-access:
+  /registrations/validators:
+    get:
+      description: Returns the list of validators registered via the Builder API (fee
+        recipient preferences). Not paginated.
+      operationId: getValidators
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.GetValidatorsResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List registered validators
+      tags:
+      - Buildoor
+  /rpc-access:
     get:
       description: 'API keys (without secrets), per-caller call stats (anonymous per
         IP or shared, per key, static token, WebUI login) and the read upstreams.
@@ -3049,7 +3124,7 @@ paths:
       summary: /rpc ingress access state
       tags:
       - Buildoor
-  /api/buildoor/rpc-access/keys:
+  /rpc-access/keys:
     post:
       consumes:
       - application/json
@@ -3085,7 +3160,7 @@ paths:
       summary: Create a /rpc API key
       tags:
       - Buildoor
-  /api/buildoor/rpc-access/keys/{id}:
+  /rpc-access/keys/{id}:
     delete:
       description: Deletes the key; callers using it are refused from the next request
         on.
@@ -3119,7 +3194,7 @@ paths:
       summary: Delete a /rpc API key
       tags:
       - Buildoor
-    post:
+    patch:
       consumes:
       - application/json
       description: Changes a key's label, enabled flag or rate limit. A disabled key
@@ -3164,7 +3239,7 @@ paths:
       summary: Update a /rpc API key
       tags:
       - Buildoor
-  /api/buildoor/slot-results:
+  /slot-results:
     get:
       description: |-
         Returns the recorded outcome history (build, bids, block
@@ -3209,7 +3284,7 @@ paths:
       summary: Get per-slot results
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/bids:
+  /slot-results/{slot}/bids:
     get:
       description: |-
         Lists the metadata of every signed bid stored for the slot
@@ -3244,7 +3319,7 @@ paths:
       summary: List a slot's signed bid artifacts
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/bids/{index}:
+  /slot-results/{slot}/bids/{index}:
     get:
       description: |-
         Returns one signed bid created for the slot, addressed by its
@@ -3293,7 +3368,7 @@ paths:
       summary: Get one signed bid of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/envelope:
+  /slot-results/{slot}/envelope:
     get:
       description: |-
         Returns the signed execution payload envelope constructed for
@@ -3337,7 +3412,7 @@ paths:
       summary: Get the signed payload envelope of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/payload:
+  /slot-results/{slot}/payload:
     get:
       description: |-
         Returns the payload the slot's primary build target selected
@@ -3389,7 +3464,7 @@ paths:
       summary: Get the selected execution payload of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/payloads/{blockHash}:
+  /slot-results/{slot}/payloads/{blockHash}:
     get:
       description: |-
         Returns one execution payload built for the slot, addressed by
@@ -3440,7 +3515,51 @@ paths:
       summary: Get one of a slot's built payloads by block hash
       tags:
       - ActionPlan
-  /api/buildoor/txpool:
+  /stats:
+    get:
+      description: |-
+        Returns builder statistics including slots built, bids submitted/won,
+        total paid, and reveal success/failure counts.
+      operationId: getStats
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatsResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder statistics
+      tags:
+      - Stats
+  /status:
+    get:
+      description: |-
+        Returns the current builder status including running state, current slot,
+        builder index and public key.
+      operationId: getStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatusResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder status
+      tags:
+      - Status
+  /txpool:
     delete:
       description: Clears the transaction pool. Requires authentication; audited.
       operationId: clearTxPool
@@ -3513,7 +3632,7 @@ paths:
       summary: List the transaction pool content
       tags:
       - LocalBuild
-  /api/buildoor/txpool/{hash}:
+  /txpool/{hash}:
     delete:
       description: |-
         Removes the transaction with the given hash from the pool.
@@ -3555,7 +3674,7 @@ paths:
       summary: Drop one queued transaction
       tags:
       - LocalBuild
-  /api/buildoor/txpool/el-mempool:
+  /txpool/el-mempool:
     get:
       description: |-
         Returns the state of the mirror of the EL mempool's pending
@@ -3597,7 +3716,7 @@ paths:
       summary: List the EL mempool mirror
       tags:
       - LocalBuild
-  /api/buildoor/txpool/fees:
+  /txpool/fees:
     get:
       description: |-
         Buckets the pending transactions of the EL mempool mirror by
@@ -3627,7 +3746,7 @@ paths:
       summary: Pending gas by max fee
       tags:
       - LocalBuild
-  /api/buildoor/txpool/preview:
+  /txpool/preview:
     get:
       description: |-
         Runs the pool selection against the current head with the
@@ -3662,417 +3781,7 @@ paths:
       summary: Preview the next local block's selection
       tags:
       - LocalBuild
-  /api/buildoor/validators:
-    get:
-      description: Returns the list of validators registered via the Builder API (fee
-        recipient preferences). Not paginated.
-      operationId: getValidators
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.GetValidatorsResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: List registered validators
-      tags:
-      - Buildoor
-  /api/config:
-    get:
-      description: Returns the buildoor configuration in use. Keys, secrets and the
-        client endpoints are left out; the credentials in the RPC upstream URLs are
-        masked.
-      operationId: getConfig
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get buildoor configuration
-      tags:
-      - Config
-  /api/config/epbs:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Updates the EPBS (enshrined PBS) configuration including timing and bid
-        parameters. Requires authentication.
-      operationId: updateEPBS
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: EPBS configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/api.UpdateEPBSRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update EPBS configuration
-      tags:
-      - Config
-  /api/config/schedule:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Updates the builder schedule configuration including mode, every_nth, and next_n
-        settings. Requires authentication.
-      operationId: updateSchedule
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Schedule configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/api.UpdateScheduleRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update schedule configuration
-      tags:
-      - Config
-  /api/config/settings:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Applies partial global settings updates keyed by canonical
-        settings paths (e.g. {"epbs.bid_subsidy": 1000,
-        "schedule.mode": "all"}) without requiring full config
-        objects. Unknown keys are rejected. Requires authentication.
-      operationId: updateSettings
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Map of settings key paths to values
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Unknown key or invalid value
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update global settings by key path
-      tags:
-      - Config
-  /api/lifecycle/deposit:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Initiates a builder registration deposit. If the builder is not yet
-        registered, this will register it with the specified amount. Requires authentication.
-      operationId: postDeposit
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Deposit amount in gwei
-        in: body
-        name: request
-        required: true
-        schema:
-          properties:
-            amount_gwei:
-              type: integer
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger builder deposit
-      tags:
-      - Lifecycle
-  /api/lifecycle/exit:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Initiates a voluntary exit for the builder. This will begin the withdrawal
-        process and the builder will stop being eligible for block building after
-        the exit is processed. Requires authentication.
-      operationId: postExit
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger voluntary exit
-      tags:
-      - Lifecycle
-  /api/lifecycle/status:
-    get:
-      description: |-
-        Returns the builder lifecycle status including registration state, balance,
-        pending payments, and epoch information.
-      operationId: getLifecycleStatus
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.LifecycleStatusResponse'
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get lifecycle status
-      tags:
-      - Lifecycle
-  /api/lifecycle/topup:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Checks the builder balance and initiates a top-up if needed based on
-        configured thresholds. Requires authentication.
-      operationId: postTopup
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger balance top-up
-      tags:
-      - Lifecycle
-  /api/stats:
-    get:
-      description: |-
-        Returns builder statistics including slots built, bids submitted/won,
-        total paid, and reveal success/failure counts.
-      operationId: getStats
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.StatsResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get builder statistics
-      tags:
-      - Stats
-  /api/status:
-    get:
-      description: |-
-        Returns the current builder status including running state, current slot,
-        builder index and public key.
-      operationId: getStatus
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.StatusResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get builder status
-      tags:
-      - Status
-  /api/version:
+  /version:
     get:
       description: Returns the current version
       operationId: getVersion

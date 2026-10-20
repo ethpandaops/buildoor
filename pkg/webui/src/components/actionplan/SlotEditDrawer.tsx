@@ -45,6 +45,7 @@ import { InfoHint } from '../InfoHint';
 import { Tabs } from '../ui/Tabs';
 import { Tag } from '../ui/Tag';
 import { ArtifactButtons } from '../ArtifactButtons';
+import { apiPath } from '../../utils/api';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -743,7 +744,7 @@ const ResultView: React.FC<{
     );
   }
 
-  const baseUrl = `/api/buildoor/slot-results/${slot}`;
+  const baseUrl = apiPath(`/slot-results/${slot}`);
   const build = result.build;
   const primary = primaryTargetRecord(build);
   const reveals = result.reveal_attempts || [];

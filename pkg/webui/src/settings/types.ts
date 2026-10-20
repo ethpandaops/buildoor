@@ -11,12 +11,11 @@ export interface SettingOption {
   short?: string;
 }
 
-// How a setting is written. Most go through POST /api/config/settings; a few
-// have an endpoint of their own because the write has side effects.
+// How a setting is written. All go through PATCH /api/v1/config, except the
+// key target, whose write has side effects of its own.
 export type SettingWriter =
-  | 'settings' // POST /api/config/settings {key: value}
-  | 'service-toggle' // POST /api/services/toggle {key: bool}
-  | 'builder-keys-target'; // POST /api/buildoor/builder-keys/target
+  | 'settings' // PATCH /api/v1/config {key: value}
+  | 'builder-keys-target'; // POST /api/v1/builder-keys/target
 
 export interface SettingField {
   // Full label for the drawer form.

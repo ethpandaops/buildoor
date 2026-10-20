@@ -120,7 +120,7 @@ func TestGetActionPlanRange(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	env.handler.GetActionPlan(rec,
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan?min_slot=2000&max_slot=2005", nil))
+		httptest.NewRequest(http.MethodGet, "/api/v1/action-plan?min_slot=2000&max_slot=2005", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -147,7 +147,7 @@ func TestGetActionPlanRangeValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			env.handler.GetActionPlan(rec,
-				httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan"+tt.query, nil))
+				httptest.NewRequest(http.MethodGet, "/api/v1/action-plan"+tt.query, nil))
 			assert.Equal(t, http.StatusBadRequest, rec.Code)
 		})
 	}
@@ -156,7 +156,7 @@ func TestGetActionPlanRangeValidation(t *testing.T) {
 func postActionPlan(t *testing.T, env *planAPITestEnv, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/buildoor/action-plan",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action-plan",
 		bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -220,7 +220,7 @@ func TestUpdateActionPlanErrorMapping(t *testing.T) {
 func postActionPlanRules(t *testing.T, env *planAPITestEnv, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/buildoor/action-plan/rules",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action-plan/rules",
 		bytes.NewReader([]byte(body)))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -251,7 +251,7 @@ func TestActionPlanRulesRoundTrip(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	env.handler.GetActionPlanRules(rec,
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan/rules", nil))
+		httptest.NewRequest(http.MethodGet, "/api/v1/action-plan/rules", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -261,7 +261,7 @@ func TestActionPlanRulesRoundTrip(t *testing.T) {
 	// Rule-derived plans surface in the range query, marked with their rule.
 	rec = httptest.NewRecorder()
 	env.handler.GetActionPlan(rec,
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/action-plan?min_slot=1024&max_slot=1055", nil))
+		httptest.NewRequest(http.MethodGet, "/api/v1/action-plan?min_slot=1024&max_slot=1055", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var plans ActionPlanResponse
@@ -302,7 +302,7 @@ func TestGetSlotResultsRange(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	env.handler.GetSlotResults(rec,
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results?min_slot=1990&max_slot=2010", nil))
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results?min_slot=1990&max_slot=2010", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -329,7 +329,7 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 	require.NoError(t, storeErr)
 
 	newRequest := func(accept string) *http.Request {
-		req := httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payloads/"+blockHash, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/payloads/"+blockHash, nil)
 		if accept != "" {
 			req.Header.Set("Accept", accept)
 		}
@@ -380,7 +380,7 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 	// Missing artifact → 404.
 	rec = httptest.NewRecorder()
 	req := mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/999/payloads/"+blockHash, nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/999/payloads/"+blockHash, nil),
 		map[string]string{"slot": "999", "blockHash": blockHash})
 	env.handler.GetSlotPayloadArtifactByHash(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -388,7 +388,7 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 	// No selection recorded for the slot → the selected payload is 404.
 	rec = httptest.NewRecorder()
 	req = mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payload", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/payload", nil),
 		map[string]string{"slot": "2000"})
 	env.handler.GetSlotPayloadArtifact(rec, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -402,7 +402,7 @@ func TestArtifactEndpointsNegotiation(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	req = mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/payloads/"+customHash, nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/payloads/"+customHash, nil),
 		map[string]string{"slot": "2000", "blockHash": customHash})
 	env.handler.GetSlotPayloadArtifactByHash(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -419,7 +419,7 @@ func TestBidArtifactListingAndFetch(t *testing.T) {
 	// Listing (JSON only).
 	rec := httptest.NewRecorder()
 	req := mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/bids", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/bids", nil),
 		map[string]string{"slot": "2000"})
 	env.handler.GetSlotBidArtifacts(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -434,7 +434,7 @@ func TestBidArtifactListingAndFetch(t *testing.T) {
 	// Empty listing for a slot without bids.
 	rec = httptest.NewRecorder()
 	req = mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2001/bids", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2001/bids", nil),
 		map[string]string{"slot": "2001"})
 	env.handler.GetSlotBidArtifacts(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -445,7 +445,7 @@ func TestBidArtifactListingAndFetch(t *testing.T) {
 	// Individual bid fetch by index (JSON branch decodes the Gloas bid).
 	rec = httptest.NewRecorder()
 	req = mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/bids/0", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/bids/0", nil),
 		map[string]string{"slot": "2000", "index": "0"})
 	env.handler.GetSlotBidArtifact(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -454,7 +454,7 @@ func TestBidArtifactListingAndFetch(t *testing.T) {
 	// Invalid index → 400.
 	rec = httptest.NewRecorder()
 	req = mux.SetURLVars(
-		httptest.NewRequest(http.MethodGet, "/api/buildoor/slot-results/2000/bids/x", nil),
+		httptest.NewRequest(http.MethodGet, "/api/v1/slot-results/2000/bids/x", nil),
 		map[string]string{"slot": "2000", "index": "x"})
 	env.handler.GetSlotBidArtifact(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -515,7 +515,7 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 		nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	post := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/api/config/settings",
+		req := httptest.NewRequest(http.MethodPatch, "/api/v1/config",
 			bytes.NewReader([]byte(body)))
 		req.Header.Set("Content-Type", "application/json")
 
@@ -543,4 +543,17 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	// Empty body → 400.
 	rec = post(`{}`)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// The module enable flags are settings too: a module this instance
+	// cannot run (none here) cannot be enabled, disabling it is a no-op write.
+	rec = post(`{"epbs_enabled": true}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ePBS is not available")
+	assert.False(t, cfg.EPBSEnabled)
+
+	rec = post(`{"lifecycle_enabled": "yes"}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	rec = post(`{"builder_api_enabled": false}`)
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 }
