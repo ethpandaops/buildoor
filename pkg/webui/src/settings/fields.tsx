@@ -89,6 +89,7 @@ export function validateUpstreams(spec: string): string | null {
         valid = false;
       }
       if (!valid) return `Upstream "${row.target}" must be "local" or an http(s)/ws(s) URL.`;
+      if (row.target.includes('***')) return `Upstream "${row.target}" is masked, enter the full URL.`;
     }
     if (seen.has(row.target)) return `Upstream "${row.target}" is listed twice.`;
     seen.add(row.target);
@@ -1537,7 +1538,8 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
         <strong>local</strong> is the EL behind <code>--el-rpc</code>; other entries are
         http(s)/ws(s) URLs. The lowest priority is tried first, endpoints of equal priority take
         turns (round robin), and a transport failure moves on to the next endpoint. JSON-RPC errors
-        are answers, not failures.
+        are answers, not failures. The config is public, so URLs are shown with their credentials,
+        path and query masked (<code>***</code>): re-enter the full URL of an entry you edit.
       </>
     ),
   },

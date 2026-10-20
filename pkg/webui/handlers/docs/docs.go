@@ -1805,7 +1805,7 @@ const docTemplate = `{
         },
         "/api/config": {
             "get": {
-                "description": "Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.",
+                "description": "Returns the buildoor configuration in use. Keys, secrets and the client endpoints are left out; the credentials in the RPC upstream URLs are masked.",
                 "produces": [
                     "application/json"
                 ],

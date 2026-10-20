@@ -207,7 +207,7 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 // @Id getConfig
 // @Summary Get buildoor configuration
 // @Tags Config
-// @Description Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.
+// @Description Returns the buildoor configuration in use. Keys, secrets and the client endpoints are left out; the credentials in the RPC upstream URLs are masked.
 // @Produce json
 // @Success 200 {object} map[string]interface{} "Success"
 // @Failure 500 {object} map[string]string "Server Error"
@@ -907,9 +907,11 @@ func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Reques
 	writeJSON(w, http.StatusOK, BuilderPreferencesResponse{Preferences: result})
 }
 
-// configToMap returns the config as a map with sensitive fields redacted. It
-// is the only form in which the config may leave the process: both the REST
-// endpoint and the (unauthenticated) SSE config event serve it.
+// configToMap returns the public form of the config. It is the only form in
+// which the config may leave the process: both the REST endpoint and the
+// (unauthenticated) SSE config event serve it. Keys, secrets and the
+// startup-only endpoints are json:"-" on the config itself; the upstream
+// list, a setting the UI edits, keeps its hosts with the credentials masked.
 func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil
@@ -922,14 +924,9 @@ func configToMap(cfg *config.Config) map[string]any {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil
 	}
-	redact := func(key string) {
-		if v, ok := m[key].(string); ok && v != "" {
-			m[key] = "***"
-		}
+	if txpool, ok := m["txpool"].(map[string]any); ok {
+		txpool["rpc_upstreams"] = config.RedactRPCUpstreams(cfg.TxPool.RPCUpstreams)
 	}
-	redact("builder_privkey")
-	redact("wallet_privkey")
-	redact("el_jwt_secret")
 	return m
 }
 
