@@ -731,3 +731,10 @@ func TestRevealService_PublishesRevealTargets(t *testing.T) {
 	require.Equal(t, phase0.Root{}, extra.Envelope.Message.Payload.StateRoot, "the target copy is untransformed")
 	require.NotEqual(t, primary.Envelope.Signature, extra.Envelope.Signature)
 }
+
+func TestPublicRevealTarget(t *testing.T) {
+	assert.Equal(t, "", PublicRevealTarget(""))
+	assert.Equal(t, RevealTargetPrimary, PublicRevealTarget(RevealTargetPrimary))
+	assert.Equal(t, "http://cl-1:4000", PublicRevealTarget("http://cl-1:4000"))
+	assert.Equal(t, "https://***@bn.example.org/***", PublicRevealTarget("https://u:p@bn.example.org/x?k=1"))
+}

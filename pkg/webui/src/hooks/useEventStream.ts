@@ -626,9 +626,21 @@ function useEventStreamConnection(): UseEventStreamResult {
           const data = event.data as {
             slot: number; success: boolean; skipped: boolean; skip_reason?: string; error?: string;
             attempt?: number; max_attempts?: number; started_at?: number; timestamp?: number;
-            transport?: string; envelope?: import('../types').EnvelopeDetail;
+            transport?: string; envelope?: import('../types').EnvelopeDetail; target?: string;
           };
           const failed = !data.success && !data.skipped;
+          // A reveal target copy goes out after the slot's reveal: logged, but
+          // the slot's reveal state stays the reveal's own.
+          if (data.target) {
+            addEvent(
+              data.success ? 'reveal' : 'reveal_failed',
+              `Reveal target copy to ${data.target} ${data.success ? 'published' : 'failed'} for slot ${data.slot}${
+                data.error ? `: ${data.error}` : ''
+              }`,
+              event.timestamp
+            );
+            break;
+          }
           const attempt = data.attempt || 0;
           const maxAttempts = data.max_attempts || 0;
           const revealMsg = data.skipped

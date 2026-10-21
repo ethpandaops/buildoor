@@ -11,8 +11,20 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/beacon"
 )
+
+// PublicRevealTarget returns a RevealResult.Target as readers without a login
+// see it: a target's beacon URL may carry credentials, so it is redacted
+// (config.RedactURL); "" and RevealTargetPrimary pass unchanged.
+func PublicRevealTarget(target string) string {
+	if target == "" || target == RevealTargetPrimary {
+		return target
+	}
+
+	return config.RedactURL(target)
+}
 
 // targetPublishers lazily opens one beacon client per reveal-target URL and
 // keeps it for the process lifetime; the set of URLs a devnet plan names is

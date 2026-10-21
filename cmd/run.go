@@ -245,26 +245,25 @@ and begins building blocks according to configuration.`,
 		// final flush (inside Stop) runs while the state-db is still open.
 		defer planSvc.Stop()
 
+		// The --rules-json rules replace the ones an earlier start seeded;
+		// without the flag those are removed.
+		var startupRules []*action_plan.SlotRule
+
 		if cfg.RulesJSON != "" {
-			rules, err := action_plan.ParseRules(cfg.RulesJSON)
+			startupRules, err = action_plan.ParseRules(cfg.RulesJSON)
 			if err != nil {
 				return fmt.Errorf("invalid --rules-json: %w", err)
 			}
-
-			if err := planSvc.SeedRules(rules, "cli"); err != nil {
-				return fmt.Errorf("failed to seed --rules-json: %w", err)
-			}
 		}
 
-		if !cfg.Transforms.IsZero() {
-			err := planSvc.SeedTransformRule(&action_plan.TransformPlan{
-				Payload:  cfg.Transforms.Payload,
-				Bid:      cfg.Transforms.Bid,
-				Envelope: cfg.Transforms.Envelope,
-			}, cfg.Transforms.FromEpoch, "cli")
-			if err != nil {
-				return fmt.Errorf("failed to seed the startup transform rule: %w", err)
-			}
+		if err := planSvc.SeedStartupRules(startupRules, "cli"); err != nil {
+			return fmt.Errorf("failed to seed --rules-json: %w", err)
+		}
+
+		// The startup transforms are no rule: every frozen plan resolves them
+		// from the config, under the slot's own expressions.
+		if err := action_plan.ValidateStartupTransforms(&cfg.Transforms); err != nil {
+			return fmt.Errorf("invalid startup transform: %w", err)
 		}
 
 		// 8. Initialize lifecycle manager (if prerequisites available)

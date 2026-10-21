@@ -1162,7 +1162,8 @@ export interface SlotRule {
   id: string;
   enabled: boolean;
   description?: string;
-  slots_in_epoch: number[];
+  source?: string; // 'cli' = seeded by --rules-json (reset on every start)
+  slots_in_epoch: number[]; // empty = every slot
   from_epoch?: number;
   to_epoch?: number;
   bid?: BidPlan;
@@ -1279,6 +1280,8 @@ export interface ResolvedTransforms {
   payload?: string;
   bid?: string;
   envelope?: string;
+  // Objects whose expression comes from the startup transform flags.
+  from_flags?: string[];
 }
 
 export interface FrozenPlan {

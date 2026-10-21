@@ -15,6 +15,14 @@ import { buildLabel, payloadArtifactUrl, primaryTargetRecord, sameBuild } from '
 import type { ApplyUpdatesResult } from '../../hooks/useActionPlan';
 import { TransformEditor, type TransformState } from './TransformEditor';
 import {
+  REVEAL_TARGETS_HINT,
+  RevealTargetsForm,
+  RevealTargetsSummary,
+  initRevealTargets,
+  revealTargetsFromRows,
+  type RevealTargetFormRow,
+} from './RevealTargetsForm';
+import {
   BID_FIELDS,
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
@@ -367,10 +375,14 @@ const outcomeRows = (result: SlotResult, clock: SlotClock, primary?: BuildTarget
     rows.push({ stage: 'Inclusion', variant: 'secondary', status: 'not won' });
   }
 
-  // Reveal (Gloas): the last attempt decides.
-  const reveals = result.reveal_attempts ?? [];
+  // Reveal (Gloas): the last attempt of the slot's own reveal decides; the
+  // reveal target copies follow it and are counted beside it.
+  const allReveals = result.reveal_attempts ?? [];
+  const reveals = allReveals.filter((attempt) => !attempt.target);
+  const copies = allReveals.filter((attempt) => attempt.target);
   if (reveals.length > 0) {
     const last = reveals[reveals.length - 1];
+    const copiesOk = copies.filter((copy) => copy.status === 'published').length;
     rows.push({
       stage: 'Reveal',
       variant: REVEAL_BADGES[last.status] || 'secondary',
@@ -379,6 +391,11 @@ const outcomeRows = (result: SlotResult, clock: SlotClock, primary?: BuildTarget
         <>
           {last.skip_reason ?? last.transport} at <At clock={clock} at={last.at} />
           {reveals.length > 1 && <span className="text-muted"> · {reveals.length} attempts</span>}
+          {copies.length > 0 && (
+            <span className={copiesOk < copies.length ? 'text-warning' : 'text-muted'}>
+              {' '}· {copiesOk}/{copies.length} target copies published
+            </span>
+          )}
           {last.error && <div className="text-danger">{last.error}</div>}
         </>
       ),
@@ -1013,6 +1030,11 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan; clock: SlotClock }> = ({
         <KV label="Retries" hint="Publish attempts × wait between failed attempts.">
           {frozen.reveal.max_attempts} × {frozen.reveal.retry_interval_ms} ms
         </KV>
+        {frozen.reveal.targets && frozen.reveal.targets.length > 0 && (
+          <KV label="Reveal targets" hint={REVEAL_TARGETS_HINT} wide>
+            <RevealTargetsSummary targets={frozen.reveal.targets} />
+          </KV>
+        )}
       </div>
     ) : (
       <p className="text-muted small mb-1">—</p>
@@ -1033,7 +1055,15 @@ const FrozenPlanSection: React.FC<{ frozen: FrozenPlan; clock: SlotClock }> = ({
           {(['payload', 'bid', 'envelope'] as const).map((k) =>
             frozen.transforms?.[k] ? (
               <div key={k} className="mb-1">
-                <div className="ap-transform-io-label">{k}</div>
+                <div className="ap-transform-io-label">
+                  {k}
+                  {frozen.transforms?.from_flags?.includes(k) && (
+                    <span className="text-muted fw-normal" title={`Set by the --${k}-transform startup flag`}>
+                      {' '}
+                      · startup flag
+                    </span>
+                  )}
+                </div>
                 <pre className="ap-transform-io mb-0">{frozen.transforms[k]}</pre>
               </div>
             ) : null
@@ -1192,7 +1222,9 @@ const RevealAttemptsCard: React.FC<{ clock: SlotClock; result: SlotResult }> = (
               after the slot ended) or <code>vote_gate_timeout</code> (the vote gate never opened)
             </dd>
           </dl>
-          The envelope artifact is kept even when the reveal was withheld or failed.
+          The envelope artifact is kept even when the reveal was withheld or failed. Target rows are
+          the reveal target copies (their beacon node, or <code>primary</code>), published after the
+          reveal; the stored envelope artifact is the reveal&apos;s own.
         </InfoHint>
       </strong>
     </div>
@@ -1203,6 +1235,7 @@ const RevealAttemptsCard: React.FC<{ clock: SlotClock; result: SlotResult }> = (
             <th>#</th>
             <th>Status</th>
             <th>Via</th>
+            <th>Target</th>
             <th>Started</th>
             <th>At</th>
             <th>Detail</th>
@@ -1216,6 +1249,7 @@ const RevealAttemptsCard: React.FC<{ clock: SlotClock; result: SlotResult }> = (
                 <StatusBadge map={REVEAL_BADGES} status={attempt.status} />
               </td>
               <td>{attempt.transport}</td>
+              <td className="font-monospace text-break">{attempt.target ?? 'reveal'}</td>
               <td>
                 <At clock={clock} at={attempt.started_at} />
               </td>
@@ -1402,6 +1436,12 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
   const [revealState, setRevealState] = useState<CategoryFormState>(() =>
     initCategoryState(effectivePlan?.reveal, REVEAL_FIELDS, bulk)
   );
+  // Reveal targets of a custom reveal: bulk starts empty (a custom reveal
+  // replaces the category on every targeted slot), single mode edits the
+  // slot's own.
+  const [revealTargets, setRevealTargets] = useState<RevealTargetFormRow[]>(() =>
+    initRevealTargets(bulk ? undefined : effectivePlan?.reveal?.targets)
+  );
   // Build is a modeless single-flag category: tri-state in bulk, on/off single.
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(() =>
     bulk ? 'unchanged' : effectivePlan?.build?.reorg_parent_payload ? 'on' : 'off'
@@ -1446,7 +1486,8 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
 
   // Unsaved edits: the form state differs from the one it opened with.
   const formSnapshot = JSON.stringify([
-    bidState, apiState, revealState, buildReorg, localBuild, buildCandidates, inclusionList, transforms, ignoreRules,
+    bidState, apiState, revealState, revealTargets, buildReorg, localBuild, buildCandidates, inclusionList, transforms,
+    ignoreRules,
   ]);
   const initialSnapshot = useMemo(() => formSnapshot, []); // eslint-disable-line react-hooks/exhaustive-deps
   const dirty = !isPastSingle && formSnapshot !== initialSnapshot;
@@ -1504,11 +1545,30 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
     const updateRec = update as unknown as Record<string, unknown>;
     const setPaths: Record<string, number | string | boolean | object | null> = {};
 
+    const revealOutcome = resolveCategory('reveal', REVEAL_FIELDS, revealState, initialPlan?.reveal as unknown as Record<string, unknown> | undefined, isSingle, false);
     const outcomes: Array<[string, CategoryOutcome]> = [
       ['bid', resolveCategory('bid', BID_FIELDS, bidState, initialPlan?.bid as unknown as Record<string, unknown> | undefined, isSingle, true)],
       ['builder_api', resolveCategory('builder_api', BUILDER_API_FIELDS, apiState, initialPlan?.builder_api as unknown as Record<string, unknown> | undefined, isSingle, false)],
-      ['reveal', resolveCategory('reveal', REVEAL_FIELDS, revealState, initialPlan?.reveal as unknown as Record<string, unknown> | undefined, isSingle, false)],
+      ['reveal', revealOutcome],
     ];
+
+    // Reveal targets ride on a custom reveal: inside the category object it
+    // replaces, otherwise as their own set path when they changed.
+    const targets = revealTargetsFromRows(revealTargets);
+    if (revealState.mode === 'custom') {
+      if (targets.error) {
+        setFormError(targets.error);
+        return;
+      }
+      if (revealOutcome.kind === 'replace') {
+        if (targets.targets) revealOutcome.obj.targets = targets.targets;
+      } else if (
+        isSingle &&
+        JSON.stringify(targets.targets ?? null) !== JSON.stringify(initialPlan?.reveal?.targets ?? null)
+      ) {
+        setPaths['reveal.targets'] = targets.targets ?? null;
+      }
+    }
 
     let hasChange = false;
     for (const [name, outcome] of outcomes) {
@@ -1642,7 +1702,7 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
       update.set = setPaths;
     }
 
-    if (!hasChange) {
+    if (!hasChange && !update.set) {
       setFormError('No changes to save');
       return;
     }
@@ -1827,7 +1887,9 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
                 fields={REVEAL_FIELDS}
                 disabled={formDisabled}
                 onChange={setRevealState}
-              />
+              >
+                <RevealTargetsForm rows={revealTargets} disabled={formDisabled} onChange={setRevealTargets} />
+              </CategoryForm>
             )}
 
             {tab === 'advanced' && (

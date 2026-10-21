@@ -8,6 +8,8 @@ import (
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 )
 
 // newTestEventStreamManager builds a manager suitable for exercising the
@@ -200,4 +202,33 @@ func TestEventStreamManagerConcurrentBroadcastAndRegister(t *testing.T) {
 	for _, ch := range channels {
 		m.RemoveClient(ch)
 	}
+}
+
+// A reveal target copy is streamed with its redacted target and never
+// changes whether the slot counts as revealed.
+func TestBroadcastRevealTargetCopyKeepsSlotState(t *testing.T) {
+	m := newTestEventStreamManager()
+	m.slotStates[7] = &SlotStateEvent{Slot: 7}
+
+	ch := m.RegisterClient()
+	defer m.RemoveClient(ch)
+	drain(ch)
+
+	m.BroadcastReveal(&payload_bidder.RevealResult{Slot: 7, Success: true})
+	require.True(t, m.slotStates[7].Revealed)
+
+	m.BroadcastReveal(&payload_bidder.RevealResult{Slot: 7, Target: "https://user:pass@bn.example.org"})
+	require.True(t, m.slotStates[7].Revealed, "a failed copy leaves the slot revealed")
+
+	var copyEvent *RevealStreamEvent
+
+	for _, ev := range drain(ch) {
+		if data, ok := ev.Data.(RevealStreamEvent); ok && data.Target != "" {
+			copyEvent = &data
+		}
+	}
+
+	require.NotNil(t, copyEvent)
+	require.Equal(t, "https://***@bn.example.org", copyEvent.Target)
+	require.False(t, copyEvent.Success)
 }

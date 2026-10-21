@@ -373,37 +373,41 @@ func TestRuleCodecRoundTrip(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestSeedTransformRule(t *testing.T) {
-	svc := newTestService(newStubChain(), nil)
+// The startup transforms are a layer under every plan: they combine with a
+// rule-derived plan instead of competing with it, and a plan's own expression
+// for an object wins over the flag's.
+func TestStartupTransformsLayerUnderPlans(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EPBSEnabled = true
+	cfg.Transforms = config.TransformsConfig{Bid: ".value = 1", Envelope: ".builder_index = 7", FromEpoch: 6}
 
-	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "test")
+	svc := newTestService(newStubChain(), cfg)
+
+	rule := slot31Rule()
+	rule.Transforms = &TransformPlan{Envelope: ".builder_index = 9"}
+	_, err := svc.SetRules([]*SlotRule{rule}, "test")
 	require.NoError(t, err)
 
-	expr := `.payload.state_root = "0x" + ("00" * 32)`
-	require.NoError(t, svc.SeedTransformRule(&TransformPlan{Envelope: expr}, 6, "cli"))
+	require.Nil(t, svc.Freeze(5*32+3).Transforms, "before the flags' epoch")
 
-	rules := svc.Rules()
-	require.Len(t, rules, 2)
-	require.Equal(t, TransformRuleID, rules[0].ID)
-	require.Equal(t, "slot31-withhold", rules[1].ID)
+	plain := svc.Freeze(6*32 + 3).Transforms
+	require.Equal(t, &ResolvedTransforms{
+		Bid: ".value = 1", Envelope: ".builder_index = 7", FromFlags: []string{"bid", "envelope"},
+	}, plain)
 
-	seeded := rules[0]
-	require.Empty(t, seeded.SlotsInEpoch, "the startup rule matches every slot")
-	require.Equal(t, expr, seeded.Transforms.Envelope)
-	require.False(t, seeded.Matches(6*32-1, 32))
-	require.True(t, seeded.Matches(6*32, 32))
-	require.True(t, seeded.Matches(9*32+17, 32))
+	ruled := svc.Freeze(6*32 + 31)
+	require.Equal(t, "slot31-withhold", ruled.Plan.RuleID, "the rule still applies")
+	require.True(t, ruled.Reveal.Suppressed, "and withholds the reveal")
+	require.Equal(t, &ResolvedTransforms{
+		Bid: ".value = 1", Envelope: ".builder_index = 9", FromFlags: []string{"bid"},
+	}, ruled.Transforms)
+}
 
-	// Re-seeding replaces the startup rule and keeps the others.
-	require.NoError(t, svc.SeedTransformRule(&TransformPlan{Bid: ".value = 1"}, 2, "cli"))
-	rules = svc.Rules()
-	require.Len(t, rules, 2)
-	require.Equal(t, uint64(2), *rules[0].FromEpoch)
-	require.Empty(t, rules[0].Transforms.Envelope)
-
-	// A bad expression is refused and leaves the rule set untouched.
-	require.Error(t, svc.SeedTransformRule(&TransformPlan{Envelope: ".payload.state_root = ("}, 0, "cli"))
-	require.Equal(t, uint64(2), *svc.Rules()[0].FromEpoch)
+func TestValidateStartupTransforms(t *testing.T) {
+	require.NoError(t, ValidateStartupTransforms(&config.TransformsConfig{Payload: ".gas_limit = 1"}))
+	require.ErrorContains(t,
+		ValidateStartupTransforms(&config.TransformsConfig{Envelope: ".payload.state_root = ("}),
+		"--envelope-transform")
 }
 
 func TestSlotRuleEmptySlotsMatchEverySlot(t *testing.T) {
@@ -417,7 +421,7 @@ func TestSlotRuleEmptySlotsMatchEverySlot(t *testing.T) {
 	}
 }
 
-func TestParseRulesAndSeed(t *testing.T) {
+func TestParseRulesAndSeedStartupRules(t *testing.T) {
 	svc := newTestService(newStubChain(), nil)
 
 	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "test")
@@ -431,20 +435,44 @@ func TestParseRulesAndSeed(t *testing.T) {
 		]}
 	}, {"id": "slot31-withhold", "enabled": false, "slots_in_epoch": [31], "reveal": {"mode": "disabled"}}]`)
 	require.NoError(t, err)
-	require.NoError(t, svc.SeedRules(rules, "cli"))
+	require.NoError(t, svc.SeedStartupRules(rules, "cli"))
 
 	stored := svc.Rules()
 	require.Len(t, stored, 2)
 	require.Equal(t, "late-copy", stored[0].ID)
+	require.Equal(t, RuleSourceFlags, stored[0].Source)
 	require.Len(t, stored[0].Reveal.Targets, 1)
 	require.Equal(t, int64(5000), stored[0].Reveal.Targets[0].DelayMs)
 	require.False(t, stored[1].Enabled, "a seeded rule replaces the stored rule with the same id")
+	require.Equal(t, RuleSourceFlags, stored[1].Source)
 
 	_, err = ParseRules(`[{"id": "x", "bogus": 1}]`)
 	require.Error(t, err)
 
 	bad, err := ParseRules(`[{"id": "bad", "enabled": true, "reveal": {"mode": "custom", "targets": [{"urls": ["cl-1:4000"]}]}}]`)
 	require.NoError(t, err)
-	require.ErrorContains(t, svc.SeedRules(bad, "cli"), "not an http(s) URL")
+	require.ErrorContains(t, svc.SeedStartupRules(bad, "cli"), "not an http(s) URL")
 	require.Len(t, svc.Rules(), 2)
+
+	// A start without one of the flag's rules removes it; rules written
+	// through the API are never touched.
+	api := slot31Rule()
+	api.ID = "api-rule"
+	_, err = svc.SetRules(append(svc.Rules(), api), "test")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.SeedStartupRules(rules[:1], "cli"))
+	require.Equal(t, []string{"api-rule", "late-copy"}, ruleIDs(svc.Rules()))
+
+	require.NoError(t, svc.SeedStartupRules(nil, "cli"))
+	require.Equal(t, []string{"api-rule"}, ruleIDs(svc.Rules()))
+}
+
+func ruleIDs(rules []*SlotRule) []string {
+	ids := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		ids = append(ids, rule.ID)
+	}
+
+	return ids
 }

@@ -325,6 +325,11 @@ func (t RevealTarget) clone() RevealTarget {
 
 func (t RevealTarget) validate(index int, slotMs int64) error {
 	for i, raw := range t.URLs {
+		if strings.Contains(raw, config.RedactedMarker) {
+			return fmt.Errorf("reveal.targets[%d].urls[%d] was redacted for this reader (no login); "+
+				"reload the plan logged in before saving it", index, i)
+		}
+
 		u, err := url.Parse(raw)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return fmt.Errorf("reveal.targets[%d].urls[%d]: %q is not an http(s) URL", index, i, raw)
@@ -732,6 +737,22 @@ func (p *TransformPlan) validate() error {
 	} {
 		if err := jqtransform.Validate(expr); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+// ValidateStartupTransforms checks the startup transform flags' expressions
+// (see resolveTransforms for how they apply).
+func ValidateStartupTransforms(c *config.TransformsConfig) error {
+	for flag, expr := range map[string]string{
+		"--payload-transform":  c.Payload,
+		"--bid-transform":      c.Bid,
+		"--envelope-transform": c.Envelope,
+	} {
+		if err := jqtransform.Validate(expr); err != nil {
+			return fmt.Errorf("%s: %w", flag, err)
 		}
 	}
 

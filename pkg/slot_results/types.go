@@ -8,11 +8,13 @@ package slot_results
 
 import (
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 )
 
@@ -576,9 +578,10 @@ func (p *TxPlanResult) clone() *TxPlanResult {
 }
 
 // Redacted returns the result for readers without a login: the applied
-// plan loses its raw explicit transactions (see action_plan.SlotPlan.Redacted)
-// and the testing runs and the tx plan lose their transaction hashes (see
-// payload_builder.LocalBuildInfo.Public).
+// plan loses its private parts (see action_plan.SlotPlan.Redacted), the
+// testing runs and the tx plan lose their transaction hashes (see
+// payload_builder.LocalBuildInfo.Public) and the reveal target attempts
+// their URLs' credentials (payload_bidder.PublicRevealTarget).
 func (r *SlotResult) Redacted() *SlotResult {
 	if r == nil {
 		return nil
@@ -592,6 +595,22 @@ func (r *SlotResult) Redacted() *SlotResult {
 		plan := *r.TxPlan
 		plan.ExpectedHashes = nil
 		out.TxPlan = &plan
+	}
+
+	cloned := false
+
+	for i, attempt := range r.RevealAttempts {
+		public := payload_bidder.PublicRevealTarget(attempt.Target)
+		if public == attempt.Target {
+			continue
+		}
+
+		if !cloned {
+			out.RevealAttempts = slices.Clone(r.RevealAttempts)
+			cloned = true
+		}
+
+		out.RevealAttempts[i].Target = public
 	}
 
 	return &out

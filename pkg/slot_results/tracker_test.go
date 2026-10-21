@@ -863,3 +863,17 @@ func TestTxPlanVerdictBeforeSeed(t *testing.T) {
 
 	require.Equal(t, TxPlanPending, env.tracker.Get(2000).TxPlan.Status)
 }
+
+func TestRedactedHidesRevealTargetCredentials(t *testing.T) {
+	result := &SlotResult{Slot: 5, RevealAttempts: []RevealAttempt{
+		{Status: RevealStatusPublished},
+		{Status: RevealStatusPublished, Target: payload_bidder.RevealTargetPrimary},
+		{Status: RevealStatusFailed, Target: "https://user:pass@bn.example.org"},
+	}}
+
+	redacted := result.Redacted()
+	require.Equal(t, "", redacted.RevealAttempts[0].Target)
+	require.Equal(t, payload_bidder.RevealTargetPrimary, redacted.RevealAttempts[1].Target)
+	require.Equal(t, "https://***@bn.example.org", redacted.RevealAttempts[2].Target)
+	require.Equal(t, "https://user:pass@bn.example.org", result.RevealAttempts[2].Target, "the record is untouched")
+}
