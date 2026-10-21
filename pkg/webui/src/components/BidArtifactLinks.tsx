@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import type { SlotBidArtifactsResponse } from '../types';
 import { ArtifactButtons } from './ArtifactButtons';
+import { apiPath } from '../utils/api';
 
 interface BidArtifactLinksProps {
   slot: number;
@@ -20,7 +21,7 @@ export const BidArtifactLinks: React.FC<BidArtifactLinksProps> = ({ slot, transp
   useEffect(() => {
     let cancelled = false;
 
-    fetch(`/api/buildoor/slot-results/${slot}/bids`)
+    fetch(apiPath(`/slot-results/${slot}/bids`))
       .then(async res => {
         if (res.status === 404) throw new Error('none');
         if (!res.ok) throw new Error(`request failed (${res.status})`);
@@ -52,7 +53,7 @@ export const BidArtifactLinks: React.FC<BidArtifactLinksProps> = ({ slot, transp
       : null;
   }
 
-  const url = `/api/buildoor/slot-results/${slot}/bids/${index}`;
+  const url = apiPath(`/slot-results/${slot}/bids/${index}`);
   return (
     <ArtifactButtons
       url={url}

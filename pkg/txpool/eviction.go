@@ -126,7 +126,7 @@ func (p *Pool) evictIncluded(blockHash common.Hash) bool {
 	ctx, cancel := context.WithTimeout(p.ctx, evictionCallTimeout)
 	defer cancel()
 
-	block, found, err := p.elClient.BlockTransactions(ctx, blockHash)
+	block, found, err := p.IncludedBlock(ctx, blockHash)
 	if err != nil {
 		p.log.WithError(err).WithField("block", blockHash.Hex()).Debug("Cannot fetch included block")
 

@@ -77,7 +77,7 @@ func (h *APIHandler) requireLifecycle(w http.ResponseWriter) bool {
 // @Produce json
 // @Success 200 {object} BuilderKeysResponse
 // @Failure 404 {object} map[string]string "Lifecycle management not enabled"
-// @Router /api/buildoor/builder-keys [get]
+// @Router /builder-keys [get]
 func (h *APIHandler) GetBuilderKeys(w http.ResponseWriter, _ *http.Request) {
 	registry := h.keyRegistry()
 	if registry == nil {
@@ -117,7 +117,7 @@ func (h *APIHandler) builderKeysSettings() BuilderKeysSettings {
 // @Success 200 {object} BuilderKeysResponse
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/builder-keys/target [post]
+// @Router /builder-keys/target [post]
 func (h *APIHandler) UpdateBuilderKeyTarget(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -204,7 +204,7 @@ func (h *APIHandler) resolveKeyParam(w http.ResponseWriter, r *http.Request) *bu
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string "Invalid key index or deposit failed"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/builder-keys/{index}/deposit [post]
+// @Router /builder-keys/{index}/deposit [post]
 func (h *APIHandler) DepositBuilderKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -249,7 +249,7 @@ func (h *APIHandler) DepositBuilderKey(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string "Invalid key index or top-up failed"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/builder-keys/{index}/topup [post]
+// @Router /builder-keys/{index}/topup [post]
 func (h *APIHandler) TopupBuilderKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -304,7 +304,7 @@ func (h *APIHandler) TopupBuilderKey(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string "Invalid key index"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 409 {object} map[string]string "Key cannot be exited yet"
-// @Router /api/buildoor/builder-keys/{index}/exit [post]
+// @Router /builder-keys/{index}/exit [post]
 func (h *APIHandler) ExitBuilderKey(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {

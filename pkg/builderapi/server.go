@@ -5,18 +5,13 @@
 //   - pkg/builderapi/epbs — the post-Gloas dialect (Gloas/Heze+):
 //     getExecutionPayloadBid, submitBeaconBlock, submitBuilderPreferences
 //
-// plus Buildoor-specific debug/tooling endpoints under /buildoor/v1/*.
-//
 // Builder API follows https://github.com/ethereum/builder-specs
 package builderapi
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"sync/atomic"
-	"time"
 
 	apiv1 "github.com/ethpandaops/go-eth2-client/api/v1"
 	gloasspec "github.com/ethpandaops/go-eth2-client/spec/gloas"
@@ -88,7 +83,7 @@ type Server struct {
 	cfg             *config.BuilderAPIConfig
 	log             *logrus.Logger
 	chainSvc        chain.Service
-	payloadCache    *payload_builder.PayloadCache // debug endpoints + dialect construction
+	payloadCache    *payload_builder.PayloadCache // dialect construction
 	validatorsStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration]
 	legacy          *legacy.Handler  // pre-Gloas dialect (Electra/Fulu)
 	epbs            *epbsapi.Handler // post-Gloas dialect (Gloas/Heze+)
@@ -228,11 +223,6 @@ func (s *Server) RegisterRoutes(router *mux.Router) {
 		s.epbs.HandleSubmitBuilderPreferences,
 	).Methods(http.MethodPost)
 
-	// --- Buildoor API (debug / tooling) ---
-	buildoorAPI := router.PathPrefix("/buildoor/v1").Subrouter()
-	buildoorAPI.HandleFunc("/payloads/{slot}", s.handleGetPayloadBySlot).Methods(http.MethodGet)
-	buildoorAPI.HandleFunc("/validators", s.handleGetValidators).Methods(http.MethodGet)
-
 	// Unmatched /eth/* paths must answer with a JSON 404 rather than falling
 	// through to the WebUI SPA catch-all (which serves index.html with 200 —
 	// an API client decoding that HTML fails with a confusing parse error
@@ -266,85 +256,4 @@ func (s *Server) Handler() http.Handler {
 // Returns 200 OK if the builder is ready to accept requests.
 func (s *Server) handleBuilderStatus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-}
-
-// PayloadBySlotResponse is the JSON response for GET /buildoor/v1/payloads/{slot}.
-type PayloadBySlotResponse struct {
-	Slot            uint64          `json:"slot"`
-	BlockHash       string          `json:"block_hash"`
-	ParentBlockHash string          `json:"parent_block_hash"`
-	ParentBlockRoot string          `json:"parent_block_root"`
-	Payload         json.RawMessage `json:"payload"`
-	BlobsBundle     json.RawMessage `json:"blobs_bundle,omitempty"`
-	BlockValue      string          `json:"block_value"` // wei as string
-	FeeRecipient    string          `json:"fee_recipient"`
-	GasLimit        uint64          `json:"gas_limit"`
-	Timestamp       uint64          `json:"timestamp"`
-	ReadyAt         time.Time       `json:"ready_at"`
-}
-
-// handleGetPayloadBySlot handles GET /buildoor/v1/payloads/{slot}.
-// Returns the cached execution payload for the given slot, or 404 if not found.
-func (s *Server) handleGetPayloadBySlot(w http.ResponseWriter, r *http.Request) {
-	if s.payloadCache == nil {
-		http.Error(w, "buildoor payload API not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	vars := mux.Vars(r)
-	slotStr, ok := vars["slot"]
-	if !ok {
-		http.Error(w, "missing slot", http.StatusBadRequest)
-		return
-	}
-
-	slotU64, err := strconv.ParseUint(slotStr, 10, 64)
-	if err != nil {
-		http.Error(w, "invalid slot: must be a number", http.StatusBadRequest)
-		return
-	}
-
-	event := s.payloadCache.Get(phase0.Slot(slotU64))
-	if event == nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "payload not found for slot"})
-		return
-	}
-
-	marshalledPayload, err := event.ExecutionPayload.MarshalJSON()
-	if err != nil {
-		return
-	}
-
-	marshalledBlobsBundle, err := event.BlobsBundle.MarshalJSON()
-	if err != nil {
-		return
-	}
-
-	resp := PayloadBySlotResponse{
-		Slot:            uint64(event.Attributes.ProposalSlot),
-		BlockHash:       "0x" + hex.EncodeToString(event.BlockHash[:]),
-		ParentBlockHash: "0x" + hex.EncodeToString(event.Attributes.ParentBlockHash[:]),
-		ParentBlockRoot: "0x" + hex.EncodeToString(event.Attributes.ParentBlockRoot[:]),
-		Payload:         marshalledPayload,
-		BlobsBundle:     marshalledBlobsBundle,
-		BlockValue:      event.BlockValue.String(),
-		FeeRecipient:    event.FeeRecipient.Hex(),
-		GasLimit:        event.ExecutionPayload.GasLimit,
-		Timestamp:       event.Attributes.Timestamp,
-		ReadyAt:         event.ReadyAt,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
-}
-
-// handleGetValidators handles GET /buildoor/v1/validators.
-// Returns the list of validator registrations stored from POST /eth/v1/builder/validators.
-func (s *Server) handleGetValidators(w http.ResponseWriter, _ *http.Request) {
-	regs := s.validatorsStore.Values()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"validators": regs})
 }

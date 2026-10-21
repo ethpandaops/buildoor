@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CreateRPCKeyResponse, RPCAccessResponse, RPCKey } from '../types';
 import { authHeaders, useLoggedIn } from './authFetch';
+import { apiPath } from '../utils/api';
 
 const POLL_INTERVAL_MS = 10000;
 
@@ -44,7 +45,7 @@ export function useRPCAccess(active: boolean) {
 
   const fetchAccess = useCallback(async () => {
     try {
-      const response = await fetch('/api/buildoor/rpc-access', { headers: await authHeaders() });
+      const response = await fetch(apiPath('/rpc-access'), { headers: await authHeaders() });
       setUnauthorized(response.status === 401);
       setUnavailable(response.status === 404);
       if (response.status === 401 || response.status === 404) {
@@ -72,7 +73,7 @@ export function useRPCAccess(active: boolean) {
 
   const createKey = useCallback(
     async (label: string, rateLimit?: number): Promise<Outcome<CreateRPCKeyResponse>> => {
-      const result = await call<CreateRPCKeyResponse>('/api/buildoor/rpc-access/keys', 'POST', {
+      const result = await call<CreateRPCKeyResponse>(apiPath('/rpc-access/keys'), 'POST', {
         label,
         ...(rateLimit !== undefined ? { rate_limit: rateLimit } : {}),
       });
@@ -84,7 +85,7 @@ export function useRPCAccess(active: boolean) {
 
   const updateKey = useCallback(
     async (id: string, update: RPCKeyUpdate): Promise<Outcome<RPCKey>> => {
-      const result = await call<RPCKey>(`/api/buildoor/rpc-access/keys/${encodeURIComponent(id)}`, 'POST', update);
+      const result = await call<RPCKey>(apiPath(`/rpc-access/keys/${encodeURIComponent(id)}`), 'PATCH', update);
       if (result.ok) fetchAccess();
       return result;
     },
@@ -93,7 +94,7 @@ export function useRPCAccess(active: boolean) {
 
   const deleteKey = useCallback(
     async (id: string): Promise<Outcome<unknown>> => {
-      const result = await call<unknown>(`/api/buildoor/rpc-access/keys/${encodeURIComponent(id)}`, 'DELETE');
+      const result = await call<unknown>(apiPath(`/rpc-access/keys/${encodeURIComponent(id)}`), 'DELETE');
       if (result.ok) fetchAccess();
       return result;
     },

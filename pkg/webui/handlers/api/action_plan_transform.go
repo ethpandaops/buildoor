@@ -24,7 +24,7 @@ const (
 
 const testTransformTimeout = 2 * time.Second
 
-// TestTransformRequest is the body of POST /api/buildoor/action-plan/test-transform.
+// TestTransformRequest is the body of POST /api/v1/action-plan/test-transform.
 type TestTransformRequest struct {
 	// Target is one of payload | bid | envelope.
 	Target string `json:"target"`
@@ -67,7 +67,7 @@ type TestTransformResponse struct {
 // @Success 200 {object} TestTransformResponse
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/action-plan/test-transform [post]
+// @Router /action-plan/test-transform [post]
 func (h *APIHandler) TestTransform(w http.ResponseWriter, r *http.Request) {
 	// The sample input is a captured artifact, possibly a custom-built
 	// payload holding private transactions, and the endpoint runs jq: an

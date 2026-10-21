@@ -120,7 +120,8 @@ type ResolvedLocalBuildSettings struct {
 	Enabled bool `json:"enabled"`
 	// PayloadSource: el | local | local_or_el | higher_value.
 	PayloadSource string `json:"payload_source"`
-	// TxSource: txpool | empty | el_mempool | explicit.
+	// TxSource: txpool | private_first | most_profitable | empty |
+	// el_mempool | explicit | queued.
 	TxSource string `json:"tx_source"`
 	// Transactions is the explicit list (0x-hex) for the explicit source.
 	Transactions []string `json:"transactions,omitempty"`

@@ -172,6 +172,26 @@ func TestRetiredKeyOverrideIsAdopted(t *testing.T) {
 	require.NoError(t, store.Close())
 }
 
+// A UI override persisted with a retired value loads as its successor.
+func TestRetiredValueOverrideIsRenewed(t *testing.T) {
+	dir := t.TempDir()
+	store := db.NewDatabase(&db.Config{File: filepath.Join(dir, "state.db")}, testLogger())
+	require.NoError(t, store.Init())
+
+	require.NoError(t, store.PutSetting(db.SettingRow{
+		Key:     KeyLocalBuildTxSource,
+		UIValue: sql.NullString{String: `"txpool_el_fill"`, Valid: true},
+		UISeq:   3,
+		Actor:   "tester",
+	}))
+
+	svc := boot(t, store, defaultsConfig(), nil)
+	require.Equal(t, TxSourcePrivateFirst, svc.Load().LocalBuild.TxSource)
+	require.Equal(t, TxSourcePrivateFirst, NormalizedTxSource("txpool_el_fill", ""))
+
+	require.NoError(t, store.Close())
+}
+
 // Values the consuming module would silently replace with a fallback must be
 // rejected at write time.
 func TestSetRejectsValuesTheConsumerWouldIgnore(t *testing.T) {

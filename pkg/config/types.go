@@ -41,27 +41,31 @@ func (c TransformsConfig) IsZero() bool {
 }
 
 // Config represents the complete configuration for the buildoor application.
+//
+// The JSON form of the config is public: GET /api/v1/config and the SSE config
+// event serve it to anyone. Keys, secrets and the startup-only endpoints and
+// paths (whose URLs often carry credentials) are therefore json:"-"; YAML
+// config loading is unaffected.
 type Config struct {
-	BuilderPrivkey string `yaml:"builder_privkey" json:"builder_privkey,omitempty"`
+	BuilderPrivkey string `yaml:"builder_privkey" json:"-"`
 	// BuilderMnemonic, when set, derives the builder BLS key from this BIP-39 mnemonic and
 	// BuilderKeyIndex using the standard validator key path m/12381/3600/{index}/0/0.
-	// Mutually exclusive with BuilderPrivkey. json:"-" keeps the secret out of every JSON
-	// serialization path (WebUI REST + SSE); YAML config loading is unaffected.
+	// Mutually exclusive with BuilderPrivkey.
 	BuilderMnemonic string `yaml:"builder_mnemonic" json:"-"`
 	BuilderKeyIndex uint64 `yaml:"builder_key_index" json:"builder_key_index"`
 	// BuilderKeys configures the managed set of internally derived builder keys
 	// that the entry key (BuilderPrivkey / BuilderMnemonic+BuilderKeyIndex) roots.
 	BuilderKeys       BuilderKeysConfig `yaml:"builder_keys" json:"builder_keys"`
-	CLClient          string            `yaml:"cl_client" json:"cl_client,omitempty"`
-	ELEngineAPI       string            `yaml:"el_engine_api" json:"el_engine_api,omitempty"`   // Engine API URL (required for payload building)
-	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"el_jwt_secret,omitempty"`   // Path to JWT secret file for engine API auth
-	ELRPC             string            `yaml:"el_rpc" json:"el_rpc,omitempty"`                 // Optional: EL JSON-RPC for transactions (lifecycle only)
-	ELWS              string            `yaml:"el_ws" json:"el_ws,omitempty"`                   // Optional: EL websocket, follows the EL mempool live
-	WalletPrivkey     string            `yaml:"wallet_privkey" json:"wallet_privkey,omitempty"` // Optional: only if lifecycle enabled
-	APIPort           int               `yaml:"api_port" json:"api_port"`                       // Optional, 0 = disabled
-	AuthProviderURL   string            `yaml:"auth_provider_url" json:"auth_provider_url"`     // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
-	InjectHeadHTML    string            `yaml:"inject_head_html" json:"inject_head_html"`       // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
-	OverviewURL       string            `yaml:"overview_url" json:"overview_url"`               // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav and the brand logo links back to the overview, so operators get consistent navigation across instances.
+	CLClient          string            `yaml:"cl_client" json:"-"`
+	ELEngineAPI       string            `yaml:"el_engine_api" json:"-"`           // Engine API URL (required for payload building)
+	ELJWTSecret       string            `yaml:"el_jwt_secret" json:"-"`           // Path to JWT secret file for engine API auth
+	ELRPC             string            `yaml:"el_rpc" json:"-"`                  // Optional: EL JSON-RPC for transactions (lifecycle only)
+	ELWS              string            `yaml:"el_ws" json:"-"`                   // Optional: EL websocket, follows the EL mempool live
+	WalletPrivkey     string            `yaml:"wallet_privkey" json:"-"`          // Optional: only if lifecycle enabled
+	APIPort           int               `yaml:"api_port" json:"api_port"`         // Optional, 0 = disabled
+	AuthProviderURL   string            `yaml:"auth_provider_url" json:"-"`       // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
+	InjectHeadHTML    string            `yaml:"inject_head_html" json:"-"`        // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
+	OverviewURL       string            `yaml:"overview_url" json:"overview_url"` // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav and the brand logo links back to the overview, so operators get consistent navigation across instances.
 	LifecycleEnabled  bool              `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`
 	EPBSEnabled       bool              `yaml:"epbs_enabled" json:"epbs_enabled"`               // Initial enabled state for ePBS (service available if Gloas fork is scheduled)
 	BuilderAPIEnabled bool              `yaml:"builder_api_enabled" json:"builder_api_enabled"` // Initial enabled state for Builder API
@@ -96,12 +100,12 @@ type Config struct {
 	// (then padded with the EL's original extra data, truncated to 32 bytes). Used
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
-	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"validator_ranges"`
-	Transforms      TransformsConfig      `yaml:"transforms" json:"transforms"`
+	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"-"`
+	Transforms      TransformsConfig      `yaml:"transforms" json:"-"`
 	// RulesJSON is a JSON array of recurring action plan rules (the rules API's
 	// wire shape) seeded at startup: stored rules with the same id are
 	// replaced, others kept. Startup-only; an invalid rule fails the start.
-	RulesJSON string `yaml:"rules_json" json:"rules_json,omitempty"`
+	RulesJSON string `yaml:"rules_json" json:"-"`
 	// SlotResultRetentionEpochs is how many epochs of per-slot result history
 	// (plans + outcome summaries) are kept before pruning, in memory and in the
 	// state-db. Must be > 0.
@@ -118,7 +122,7 @@ type Config struct {
 	// It persists UI setting overrides, won blocks, validator registrations,
 	// proposer preferences and an audit log across restarts. Startup-only and
 	// never itself persisted. Empty disables persistence (in-memory only).
-	StateDBPath string `yaml:"state_db" json:"state_db,omitempty"`
+	StateDBPath string `yaml:"state_db" json:"-"`
 }
 
 // BuilderKeysConfig defines the managed builder key set: how many keys buildoor
@@ -630,12 +634,17 @@ const (
 	// TxSourceELMempool lets the EL fill the block from its own mempool
 	// through the testing path (transactions: null).
 	TxSourceELMempool = "el_mempool"
-	// TxSourceTxPoolELFill selects from the owned pool first, then fills the
-	// remaining gas with the EL mempool's pending transactions (read through
-	// txpool_content, checked against the parent state like pool
-	// transactions; blob transactions are left out, their sidecars are not
-	// exposed).
-	TxSourceTxPoolELFill = "txpool_el_fill"
+	// TxSourcePrivateFirst selects from the owned (private) pool first, in
+	// the pool's ordering, then fills the remaining gas with the EL (public)
+	// mempool's pending transactions, highest tip first. Both are checked
+	// against the parent state.
+	TxSourcePrivateFirst = "private_first"
+	// TxSourceMostProfitable merges the private pool and the EL mempool into
+	// one selection ordered by effective tip: the most profitable
+	// transactions of both, each sender in nonce order across the pools.
+	TxSourceMostProfitable = "most_profitable"
+	// txSourceRetiredELFill is private_first's former name, still accepted.
+	txSourceRetiredELFill = "txpool_el_fill"
 	// TxSourceExplicit uses the exact transaction list of the slot's action
 	// plan; only reachable through a plan, never as a global default.
 	TxSourceExplicit = "explicit"
@@ -650,11 +659,32 @@ const (
 // normalize, but it is meaningless as a global setting.
 func NormalizedTxSource(source, fallback string) string {
 	switch source {
-	case TxSourceTxPool, TxSourceTxPoolELFill, TxSourceEmpty, TxSourceELMempool, TxSourceExplicit, TxSourceQueued:
+	case TxSourceTxPool, TxSourcePrivateFirst, TxSourceMostProfitable, TxSourceEmpty, TxSourceELMempool,
+		TxSourceExplicit, TxSourceQueued:
 		return source
+	case txSourceRetiredELFill:
+		return TxSourcePrivateFirst
 	default:
 		return fallback
 	}
+}
+
+// TxSourceSelects reports whether the source is a pool selection (the
+// state-aware selection of pkg/txpool, as opposed to an exact list or the
+// EL's own choice).
+func TxSourceSelects(source string) bool {
+	switch source {
+	case TxSourceTxPool, TxSourcePrivateFirst, TxSourceMostProfitable:
+		return true
+	default:
+		return false
+	}
+}
+
+// TxSourceUsesELMempool reports whether the selection takes the EL (public)
+// mempool's pending transactions too.
+func TxSourceUsesELMempool(source string) bool {
+	return source == TxSourcePrivateFirst || source == TxSourceMostProfitable
 }
 
 // Blob transaction encodings handed to testing_buildBlockV1.
@@ -696,9 +726,10 @@ type LocalBuildConfig struct {
 	// higher_value (whichever of the two is worth more).
 	PayloadSource string `yaml:"payload_source" json:"payload_source"`
 
-	// TxSource is where the local build's transaction list comes from:
-	// txpool (default), txpool_el_fill, empty or el_mempool. Per-slot plans
-	// may also supply an explicit list.
+	// TxSource is where the local build's transaction list comes from, after
+	// the inclusion list: txpool (default; the private pool alone),
+	// private_first, most_profitable, empty or el_mempool. Per-slot plans may
+	// also supply an explicit list.
 	TxSource string `yaml:"tx_source" json:"tx_source"`
 
 	// AllowBlobsWithoutBundle includes blob transactions in local builds on
@@ -804,7 +835,7 @@ type TxPoolConfig struct {
 	// StoreDir is where the queued transactions persist across restarts (a
 	// pebble database of its own; empty = memory only). Startup-only: pool
 	// transactions never go into the state-db.
-	StoreDir string `yaml:"store_dir" json:"store_dir,omitempty"`
+	StoreDir string `yaml:"store_dir" json:"-"`
 
 	// RPCAnonRate limits anonymous /rpc calls per second (0 = unlimited), per
 	// client IP or shared by all anonymous callers (RPCAnonScope).
@@ -952,6 +983,10 @@ func ParseRPCUpstreams(spec string) ([]RPCUpstream, error) {
 				(u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ws" && u.Scheme != "wss") {
 				return nil, fmt.Errorf("upstream %q must be %q or an http(s)/ws(s) URL", upstream.Target, RPCUpstreamLocal)
 			}
+
+			if strings.Contains(upstream.Target, RedactedMarker) {
+				return nil, fmt.Errorf("upstream %q is redacted, enter the full URL", upstream.Target)
+			}
 		}
 
 		if seen[upstream.Target] {
@@ -967,6 +1002,61 @@ func ParseRPCUpstreams(spec string) ([]RPCUpstream, error) {
 	}
 
 	return upstreams, nil
+}
+
+// RedactedMarker replaces the hidden parts of a value in the public config.
+const RedactedMarker = "***"
+
+// RedactRPCUpstreams returns the upstream list as the public config shows it:
+// each URL keeps its scheme, host and priority, while the parts that carry
+// credentials (user info, path, query) are replaced by RedactedMarker. An
+// entry that does not parse is redacted whole.
+func RedactRPCUpstreams(spec string) string {
+	parts := strings.Split(spec, ",")
+	out := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		target, priority := part, ""
+		if at := strings.LastIndex(part, "@"); at > 0 && !strings.Contains(part[at:], "/") {
+			target, priority = strings.TrimSpace(part[:at]), part[at:]
+		}
+
+		if target != RPCUpstreamLocal {
+			target = redactURL(target)
+		}
+
+		out = append(out, target+priority)
+	}
+
+	return strings.Join(out, ",")
+}
+
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return RedactedMarker
+	}
+
+	redacted := u.Scheme + "://"
+	if u.User != nil {
+		redacted += RedactedMarker + "@"
+	}
+
+	redacted += u.Host
+
+	switch {
+	case (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "":
+		redacted += "/" + RedactedMarker
+	case u.Path == "/":
+		redacted += "/"
+	}
+
+	return redacted
 }
 
 // NormalizedOrdering applies the config's own ordering with the fifo fallback.

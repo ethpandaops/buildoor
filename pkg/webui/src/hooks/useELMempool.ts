@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ELMempoolResponse, FeeDistribution } from '../types';
 import { useAuth } from './useAuth';
+import { apiPath } from '../utils/api';
 
 interface ELMempoolQuery {
   offset: number;
@@ -32,8 +33,8 @@ export function useELMempool(query: ELMempoolQuery, active: boolean) {
 
     try {
       const [listRes, feesRes] = await Promise.all([
-        fetch(`/api/buildoor/txpool/el-mempool?${params.toString()}`),
-        fetch('/api/buildoor/txpool/fees', { headers }),
+        fetch(apiPath(`/txpool/el-mempool?${params.toString()}`)),
+        fetch(apiPath('/txpool/fees'), { headers }),
       ]);
       if (listRes.status === 404) {
         setData(null);

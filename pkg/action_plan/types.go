@@ -502,8 +502,9 @@ type LocalBuildPlan struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// PayloadSource: el | local | local_or_el | higher_value.
 	PayloadSource string `json:"payload_source,omitempty"`
-	// TxSource: txpool | empty | el_mempool | explicit (explicit requires
-	// Transactions; a non-empty Transactions list implies explicit).
+	// TxSource: txpool | private_first | most_profitable | empty |
+	// el_mempool | explicit (explicit requires Transactions; a non-empty
+	// Transactions list implies explicit).
 	TxSource string `json:"tx_source,omitempty"`
 	// Transactions is the exact raw transaction list (0x-hex, network
 	// encoding) the slot's local payload is built from.
@@ -580,7 +581,7 @@ func (p *LocalBuildPlan) validate() error {
 	}
 
 	if p.TxSource != "" && config.NormalizedTxSource(p.TxSource, "") == "" {
-		return fmt.Errorf("build.local.tx_source: must be txpool, empty, el_mempool or explicit (got %q)", p.TxSource)
+		return fmt.Errorf("build.local.tx_source: must be txpool, private_first, most_profitable, empty, el_mempool or explicit (got %q)", p.TxSource)
 	}
 
 	if p.TxSource == config.TxSourceExplicit && len(p.Transactions) == 0 {

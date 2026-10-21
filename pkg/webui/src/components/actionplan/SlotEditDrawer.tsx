@@ -1,11 +1,13 @@
 import { useLocalBuildStatus } from '../../hooks/useLocalBuildStatus';
 import React, { useEffect, useMemo, useState } from 'react';
 import type {
+  AttributesSnapshot,
   BuildRecord,
   BuildTargetRecord,
   FrozenPlan,
   PayloadRecord,
   PlanUpdate,
+  SelectionRecord,
   SlotPlan,
   SlotResult,
 } from '../../types';
@@ -45,6 +47,10 @@ import { InfoHint } from '../InfoHint';
 import { Tabs } from '../ui/Tabs';
 import { Tag } from '../ui/Tag';
 import { ArtifactButtons } from '../ArtifactButtons';
+import { apiPath } from '../../utils/api';
+import { useEventStream } from '../../hooks/useEventStream';
+import { CopyableHash } from '../CopyableHash';
+import { decodeExtraData } from '../../utils';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -65,8 +71,6 @@ function targetCount(target: ModalTarget): number {
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
-
-const formatDateTime = (iso: string): string => new Date(iso).toLocaleString();
 
 const formatGwei = (v?: number): string => (v === undefined ? '—' : `${v.toLocaleString()} gwei`);
 
@@ -134,25 +138,54 @@ const StatusBadge: React.FC<{ map: Record<string, string>; status: string }> = (
 );
 
 // ---------------------------------------------------------------------------
-// Artifact access (authenticated JSON / SSZ downloads via blob)
+// Past slot result: the outcome first (what happened, stage by stage), then
+// the builds, the bids and the reveal attempts, with the raw payload fields,
+// the payload attributes and the applied plan folded away.
 // ---------------------------------------------------------------------------
 
-const ArtifactLinks: React.FC<{
-  url: string;
-  filename: string;
-  onError: (message: string) => void;
-}> = ({ url, filename, onError }) => <ArtifactButtons url={url} filename={filename} onError={onError} />;
+// formatOffset renders a time relative to the slot start ("−3.00s", "+412ms").
+const formatOffset = (ms: number): string => {
+  const sign = ms < 0 ? '−' : '+';
+  const abs = Math.abs(Math.round(ms));
+  return abs < 1000 ? `${sign}${abs}ms` : `${sign}${(abs / 1000).toFixed(2)}s`;
+};
 
-// ---------------------------------------------------------------------------
-// Read-only frozen plan + result views
-// ---------------------------------------------------------------------------
+const formatDuration = (ms: number): string =>
+  ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(2)}s`;
 
-const KV: React.FC<{ label: string; hint?: React.ReactNode; children: React.ReactNode }> = ({
+// SlotClock places the records' wall-clock times on the slot's own clock, as
+// the slot graph does.
+interface SlotClock {
+  start?: number; // slot start, unix ms
+}
+
+const useSlotClock = (slot: number): SlotClock => {
+  const { chainInfo } = useEventStream();
+  return useMemo(
+    () => ({ start: chainInfo ? chainInfo.genesis_time + slot * chainInfo.seconds_per_slot : undefined }),
+    [chainInfo, slot]
+  );
+};
+
+// At renders a record time relative to the slot start, the absolute time on
+// hover.
+const At: React.FC<{ clock: SlotClock; at?: string }> = ({ clock, at }) => {
+  if (!at) return <span className="text-muted">—</span>;
+  const time = Date.parse(at);
+  return (
+    <span className="ap-time" title={new Date(time).toLocaleString()}>
+      {clock.start !== undefined ? formatOffset(time - clock.start) : new Date(time).toLocaleTimeString()}
+    </span>
+  );
+};
+
+const KV: React.FC<{ label: string; hint?: React.ReactNode; wide?: boolean; children: React.ReactNode }> = ({
   label,
   hint,
+  wide,
   children,
 }) => (
-  <div className="col-6 col-md-4">
+  <div className={wide ? 'col-12' : 'col-6'}>
     <div className="config-item">
       <div className="config-item-label">
         {label}
@@ -163,251 +196,249 @@ const KV: React.FC<{ label: string; hint?: React.ReactNode; children: React.Reac
   </div>
 );
 
-const FrozenPlanSection: React.FC<{ frozen: FrozenPlan }> = ({ frozen }) => (
+// HashList is a compact label/hash list; each hash copies on click.
+const HashList: React.FC<{ rows: [string, string | undefined][] }> = ({ rows }) => (
+  <dl className="ap-hashes mb-0">
+    {rows
+      .filter(([, value]) => !!value)
+      .map(([label, value]) => (
+        <React.Fragment key={label}>
+          <dt>{label}</dt>
+          <dd className="font-monospace">
+            <CopyableHash value={value!} chars={12} />
+          </dd>
+        </React.Fragment>
+      ))}
+  </dl>
+);
+
+// Fold is a collapsible section of the result view.
+const Fold: React.FC<{
+  title: React.ReactNode;
+  extra?: React.ReactNode;
+  open?: boolean;
+  children: React.ReactNode;
+}> = ({ title, extra, open, children }) => (
+  <details className="ap-fold" open={open}>
+    <summary>
+      <span className="ap-fold-title">{title}</span>
+      {extra && <span className="ap-fold-extra">{extra}</span>}
+    </summary>
+    <div className="ap-fold-body">{children}</div>
+  </details>
+);
+
+// ---------------------------------------------------------------------------
+// Outcome: one row per stage of the slot
+// ---------------------------------------------------------------------------
+
+interface OutcomeRow {
+  stage: string;
+  variant: string; // bootstrap color of the status badge
+  status: string;
+  detail?: React.ReactNode;
+}
+
+const sumBy = <T,>(items: T[], pick: (item: T) => number): number =>
+  items.reduce((max, item) => Math.max(max, pick(item)), 0);
+
+const outcomeRows = (result: SlotResult, clock: SlotClock, primary?: BuildTargetRecord): OutcomeRow[] => {
+  const rows: OutcomeRow[] = [];
+  const build = result.build;
+  const frozen = result.applied_plan;
+
+  // Build: the primary target's pick.
+  if (build) {
+    const picks = primary?.selections ?? [];
+    const pick = primary?.status === 'selected' ? picks[picks.length - 1] : undefined;
+    const payload = pick ? result.payloads?.[pick.payload_hash] : undefined;
+    const targets = build.targets?.length ?? 0;
+
+    rows.push({
+      stage: 'Build',
+      variant: BUILD_BADGES[build.status] || 'secondary',
+      status: build.status,
+      detail: build.skip_reason ? (
+        build.skip_reason
+      ) : payload ? (
+        <>
+          picked the <strong>{buildLabel(payload.build)}</strong> payload · {weiToEth(payload.block_value_wei)} ·{' '}
+          {payload.num_transactions} txs, {payload.num_blobs ?? 0} blobs
+          {targets > 1 && <span className="text-muted"> · {targets} parents built</span>}
+        </>
+      ) : (
+        build.error
+      ),
+    });
+  }
+
+  // Bids, per transport.
+  const bids = result.bids ?? [];
+  const p2p = bids.filter((bid) => bid.transport === 'p2p');
+  const api = bids.filter((bid) => bid.transport !== 'p2p');
+
+  if (p2p.length > 0) {
+    const sent = p2p.filter((bid) => bid.status === 'submitted');
+    const competitor = sumBy(p2p, (bid) => bid.competitor_high_gwei ?? 0);
+    rows.push({
+      stage: 'p2p bids',
+      variant: sent.length > 0 ? 'success' : 'danger',
+      status: sent.length > 0 ? `${sent.length} sent` : 'none sent',
+      detail: (
+        <>
+          top {sumBy(sent, (bid) => bid.total_value_gwei).toLocaleString()} gwei
+          {competitor > 0 && <> · competitor {competitor.toLocaleString()} gwei</>}
+          {p2p.length > sent.length && <span className="text-muted"> · {p2p.length - sent.length} not sent</span>}
+        </>
+      ),
+    });
+  }
+
+  if (api.length > 0) {
+    const served = api.filter((bid) => bid.status === 'served');
+    rows.push({
+      stage: 'Builder API',
+      variant: served.length > 0 ? 'success' : BID_BADGES[api[api.length - 1].status] || 'secondary',
+      status: served.length > 0 ? `${served.length}× served` : api[api.length - 1].status,
+      detail: served.length > 0 && (
+        <>
+          {sumBy(served, (bid) => bid.total_value_gwei).toLocaleString()} gwei at <At clock={clock} at={served[0].at} />
+        </>
+      ),
+    });
+  }
+
+  if (bids.length === 0 && build?.status !== 'skipped') {
+    rows.push({
+      stage: 'Bids',
+      variant: 'secondary',
+      status: 'none',
+      detail: [
+        frozen && !frozen.bid ? 'p2p bidding off for this slot' : 'no p2p bid',
+        frozen && !frozen.builder_api ? 'Builder API off' : 'no Builder API request',
+      ].join(' · '),
+    });
+  }
+
+  // Blocks the proposer submitted through the Builder API.
+  const submissions = result.block_submissions ?? [];
+  if (submissions.length > 0) {
+    const last = submissions[submissions.length - 1];
+    rows.push({
+      stage: 'Submission',
+      variant: SUBMISSION_BADGES[last.status] || 'secondary',
+      status: last.status,
+      detail: (
+        <>
+          {last.dialect} block,{' '}
+          {submissions.map((sub, i) => (
+            <span key={i}>
+              {i > 0 && ', '}
+              {sub.status} <At clock={clock} at={sub.at} />
+            </span>
+          ))}
+          {last.error && <div className="text-danger">{last.error}</div>}
+        </>
+      ),
+    });
+  }
+
+  // Inclusion and the payload verdict.
+  const inclusion = result.inclusion;
+  if (inclusion) {
+    rows.push({
+      stage: 'Inclusion',
+      variant: PAYLOAD_STATUS_BADGES[inclusion.payload_status ?? 'pending'] || 'secondary',
+      status: inclusion.payload_status ? `payload ${inclusion.payload_status}` : 'won',
+      detail: (
+        <>
+          won via {inclusion.source} · {parseFloat(inclusion.value_eth).toFixed(6)} ETH · {inclusion.num_transactions} txs,{' '}
+          {inclusion.num_blobs} blobs ·{' '}
+          <span className="font-monospace">
+            <CopyableHash value={inclusion.block_hash} chars={6} />
+          </span>
+          {inclusion.payload_check_slot !== undefined && (
+            <span className="text-muted"> · verdict from slot {String(inclusion.payload_check_slot)}</span>
+          )}
+        </>
+      ),
+    });
+  } else if (bids.some((bid) => bid.status === 'submitted' || bid.status === 'served')) {
+    rows.push({ stage: 'Inclusion', variant: 'secondary', status: 'not won' });
+  }
+
+  // Reveal (Gloas): the last attempt decides.
+  const reveals = result.reveal_attempts ?? [];
+  if (reveals.length > 0) {
+    const last = reveals[reveals.length - 1];
+    rows.push({
+      stage: 'Reveal',
+      variant: REVEAL_BADGES[last.status] || 'secondary',
+      status: last.status,
+      detail: (
+        <>
+          {last.skip_reason ?? last.transport} at <At clock={clock} at={last.at} />
+          {reveals.length > 1 && <span className="text-muted"> · {reveals.length} attempts</span>}
+          {last.error && <div className="text-danger">{last.error}</div>}
+        </>
+      ),
+    });
+  }
+
+  // Post-inclusion check of a locally built payload.
+  const plan = result.tx_plan;
+  if (plan) {
+    rows.push({
+      stage: 'Tx plan',
+      variant: TX_PLAN_BADGES[plan.status] || 'secondary',
+      status: plan.status,
+      detail: (
+        <>
+          {plan.expected_count} planned ({plan.tx_source})
+          {plan.included_count !== undefined && plan.status !== 'pending' && `, ${plan.included_count} in block`}
+          {(plan.first_mismatch ?? -1) >= 0 && `, first mismatch at ${plan.first_mismatch}`}
+          {plan.detail && plan.status !== 'match' && <div className="text-danger">{plan.detail}</div>}
+        </>
+      ),
+    });
+  }
+
+  return rows;
+};
+
+const OutcomeCard: React.FC<{ rows: OutcomeRow[]; envelope?: React.ReactNode }> = ({ rows, envelope }) => (
   <div className="card mb-3">
-    <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
+    <div className="card-header py-1 d-flex align-items-center gap-2">
       <strong className="small">
-        Applied Plan (frozen)
+        Outcome
         <InfoHint>
-          The immutable snapshot taken when execution for this slot began (about one slot ahead):
-          the slot's plan (or matching rule) merged with the global config of that moment. Every
-          module acted on exactly these values; later config or rule changes do not alter it.
+          What happened in the slot, stage by stage: the payload picked for the consumers, the bids
+          per transport, the block the proposer submitted (Builder API), the inclusion with the
+          payload verdict (canonical, missed, orphaned), the reveal and the tx plan check. Times are
+          relative to the slot start.
         </InfoHint>
       </strong>
-      <span className={badgeClass('secondary')}>{frozen.fork}</span>
-      <span className="text-muted small ms-auto">frozen {formatDateTime(frozen.frozen_at)}</span>
+      {envelope && <span className="ms-auto">{envelope}</span>}
     </div>
     <div className="card-body py-2">
-      <div className="row g-2 mb-2">
-        <KV
-          label="Build"
-          hint={
-            <>
-              The build decision for the slot.
-              <dl>
-                <dt>build</dt>
-                <dd>a payload was built; <em>forced</em> = the plan pushed it past the schedule (does not consume the next_n budget)</dd>
-                <dt>skip (schedule)</dt>
-                <dd>the global schedule (start slot, every_nth, exhausted next_n) excluded the slot</dd>
-                <dt>skip (plan_disabled)</dt>
-                <dd>the plan suppressed the consumers that would otherwise have been active</dd>
-                <dt>skip (no_consumer)</dt>
-                <dd>no bidding or serving was active for the slot, without a plan being responsible</dd>
-              </dl>
-            </>
-          }
-        >
-          {frozen.build.build ? (
-            <span className={badgeClass('success')}>build{frozen.build.forced ? ' (forced)' : ''}</span>
-          ) : (
-            <span className={badgeClass('secondary')}>skip ({frozen.build.skip_reason || '—'})</span>
-          )}
-          {frozen.build.reorg_parent_payload && (
-            <span className={`ms-1 ${badgeClass('warning')}`} title="Built on the grandparent (n-2) payload">
-              reorg parent
-            </span>
-          )}
-          {frozen.build.local?.enabled && (
-            <span
-              className={`ms-1 ${badgeClass('info')}`}
-              title={`Testing build via testing_buildBlockV1: bids with ${frozen.build.local.payload_source}, transactions from ${frozen.build.local.tx_source}${frozen.build.local.forced ? ' (forced by plan)' : ''}`}
-            >
-              custom: {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
-            </span>
-          )}
-          {frozen.build.local?.enabled && frozen.build.local.tx_source === 'explicit' && (
-            <span className="ms-1">
-              {frozen.build.local.transactions_redacted ? (
-                <HiddenTransactionsNote count={frozen.build.local.transactions_redacted} />
-              ) : (
-                <span className="text-muted small">{frozen.build.local.transactions?.length ?? 0} explicit transactions</span>
-              )}
-            </span>
-          )}
-        </KV>
-        <KV label="Build Start" hint="When the payload build starts, in ms relative to slot start (negative = before the slot starts).">
-          {frozen.build.build_start_time_ms} ms
-        </KV>
-      </div>
-
-      <div className="section-header mb-1">
-        Bid (p2p)
-        <InfoHint>
-          Effective p2p bid settings. &quot;suppressed for this slot&quot; means no p2p bidding: the
-          plan disabled it, or ePBS was globally off (or not applicable to the fork) without a custom
-          plan.
-        </InfoHint>
-      </div>
-      {frozen.bid ? (
-        <div className="row g-2 mb-2">
-          <KV label="Window" hint="Bid start – bid end, in ms relative to slot start.">
-            {frozen.bid.start_ms}–{frozen.bid.end_ms} ms
-          </KV>
-          <KV label="Interval" hint="Pause between successive bids of the same payload; 0 = a single bid.">
-            {frozen.bid.interval_ms} ms
-          </KV>
-          <KV label="Min / Increase" hint={<>Min: floor of <code>max(block value, min) + subsidy</code>. Increase: added per earlier bid of the same payload.</>}>
-            {formatGwei(frozen.bid.min_gwei)} / {formatGwei(frozen.bid.increase_gwei)}
-          </KV>
-          <KV label="Subsidy" hint="Added on top of max(block value, min); negative = the margin kept from the block value. Unused when a value override is set.">
-            {formatGwei(frozen.bid.subsidy_gwei)}
-          </KV>
-          <KV label="Value Override" hint="Absolute bid base replacing max(block value, min) + subsidy; — = none, the formula applied.">{formatGwei(frozen.bid.value_gwei)}</KV>
-          <KV
-            label="Flags"
-            hint={
-              <dl>
-                <dt>forced</dt>
-                <dd>a custom plan activated bidding although ePBS is globally disabled</dd>
-                <dt>ignore missing prefs</dt>
-                <dd>bids went out without gossip proposer preferences, using the payload's fee recipient</dd>
-              </dl>
-            }
-          >
-            {frozen.bid.forced && <span className={`${badgeClass('warning')} me-1`}>forced</span>}
-            {frozen.bid.ignore_missing_prefs && (
-              <span className={badgeClass('info')}>ignore missing prefs</span>
-            )}
-            {!frozen.bid.forced && !frozen.bid.ignore_missing_prefs && '—'}
-          </KV>
-        </div>
-      ) : (
-        <p className="text-muted small mb-2">suppressed for this slot</p>
-      )}
-
-      <div className="section-header mb-1">
-        Builder API
-        <InfoHint>
-          Effective Builder API serving settings. &quot;suppressed for this slot&quot; means bid
-          requests were answered with 204 (no bid): disabled by the plan, or the Builder API was
-          globally off without a custom plan.
-        </InfoHint>
-      </div>
-      {frozen.builder_api ? (
-        <div className="row g-2 mb-2">
-          <KV label="Subsidy" hint="Added to the block value of served bids; negative = the margin kept from it (Gloas only). Unused when a total value override is set.">
-            {formatGwei(frozen.builder_api.subsidy_gwei)}
-          </KV>
-          <KV label="Total Value Override" hint="Absolute total value served, replacing block value + subsidy; — = none.">
-            {formatGwei(frozen.builder_api.total_value_gwei)}
-          </KV>
-          <KV label="Response Delay" hint="How long each bid response was held before answering.">
-            {frozen.builder_api.delay_ms ?? 0} ms
-          </KV>
-          {frozen.builder_api.forced && (
-            <KV label="Flags" hint="forced: a custom plan activated serving although the Builder API is globally disabled.">
-              <span className={badgeClass('warning')}>forced</span>
-            </KV>
-          )}
-        </div>
-      ) : (
-        <p className="text-muted small mb-2">suppressed for this slot</p>
-      )}
-
-      <div className="section-header mb-1">Reveal</div>
-      {frozen.reveal ? (
-        <div className="row g-2 mb-2">
-          <KV
-            label="Status"
-            hint="suppressed: the reveal was withheld, by a disabled plan or because reveals are globally disabled. active: a won slot gets its envelope published once the gate opens."
-          >
-            {frozen.reveal.suppressed ? (
-              <span className={badgeClass('danger')}>suppressed</span>
-            ) : (
-              <span className={badgeClass('success')}>active</span>
-            )}
-          </KV>
-          <KV
-            label="Gate"
-            hint={
-              <dl>
-                <dt>time</dt>
-                <dd>reveal at the reveal time</dd>
-                <dt>vote</dt>
-                <dd>reveal once head votes on our block reach the threshold</dd>
-                <dt>vote_or_time</dt>
-                <dd>whichever opens first</dd>
-                <dt>vote_and_time</dt>
-                <dd>at the reveal time, once the threshold is also reached</dd>
-              </dl>
-            }
-          >
-            {frozen.reveal.gate_mode}
-          </KV>
-          <KV label="Reveal Time" hint="Time gate, in ms relative to slot start.">
-            {frozen.reveal.reveal_time_ms} ms
-          </KV>
-          {frozen.reveal.gate_mode !== 'time' && (
-            <KV label="Vote Threshold" hint="Head-vote participation on our block that opens the vote gate.">
-              {frozen.reveal.vote_threshold_pct}%
-            </KV>
-          )}
-          <KV
-            label="Broadcast Validation"
-            hint="Validation the beacon node applied before broadcasting the envelope: gossip, consensus, or consensus_and_equivocation (adds the equivocation check that protects against unbundling)."
-          >
-            {frozen.reveal.broadcast_validation}
-          </KV>
-          <KV label="Retries" hint="Publish attempts × wait between failed attempts.">
-            {frozen.reveal.max_attempts} × {frozen.reveal.retry_interval_ms} ms
-          </KV>
-          {frozen.reveal.bypass_deadline && (
-            <KV
-              label="Flags"
-              hint="bypass deadline: a custom reveal plan may publish after the slot end, at most one extra slot."
-            >
-              <span className={badgeClass('warning')}>bypass deadline</span>
-            </KV>
-          )}
-        </div>
-      ) : (
-        <p className="text-muted small mb-2">—</p>
-      )}
-
-      {frozen.transforms &&
-        (frozen.transforms.payload || frozen.transforms.bid || frozen.transforms.envelope) && (
-          <>
-            <div className="section-header mb-1">
-              Transforms (jq)
-              <InfoHint>
-                jq expressions applied to this slot&apos;s objects. <strong>payload</strong> rewrote the
-                built execution payload before it fed both the bid and the reveal.{' '}
-                <strong>bid</strong> / <strong>envelope</strong> rewrote the message just before
-                signing; the result was re-signed, so it is validly signed but customized.
-              </InfoHint>
-            </div>
-            <div className="mb-2">
-              {(['payload', 'bid', 'envelope'] as const).map((k) =>
-                frozen.transforms?.[k] ? (
-                  <div key={k} className="mb-1">
-                    <div className="ap-transform-io-label">{k}</div>
-                    <pre className="ap-transform-io mb-0">{frozen.transforms[k]}</pre>
-                  </div>
-                ) : null
-              )}
-            </div>
-          </>
-        )}
-
-      <div className="section-header mb-1">
-        Raw Plan
-        <InfoHint>
-          The slot plan as frozen (a rule-derived plan carries its <code>rule_id</code>). Absent
-          categories inherited the global config.
-        </InfoHint>
-      </div>
-      {frozen.plan ? (
-        <pre className="ap-raw-plan mb-0">{JSON.stringify(frozen.plan, null, 2)}</pre>
-      ) : (
-        <p className="text-muted small mb-0">No per-slot plan — global baseline applied.</p>
-      )}
+      <dl className="ap-outcome mb-0">
+        {rows.map((row) => (
+          <React.Fragment key={row.stage}>
+            <dt>{row.stage}</dt>
+            <dd>
+              <span className={badgeClass(row.variant)}>{row.status}</span>
+              {row.detail && <span className="ap-outcome-detail">{row.detail}</span>}
+            </dd>
+          </React.Fragment>
+        ))}
+      </dl>
     </div>
   </div>
 );
 
 // ---------------------------------------------------------------------------
-// Build targets: each target's builds and selections, each build with its own
-// payload (by block hash)
+// Builds: one table per build target, a row per build, each build with its
+// own payload (by block hash)
 // ---------------------------------------------------------------------------
 
 const TARGET_BADGES: Record<string, string> = {
@@ -425,77 +456,6 @@ const RUN_BADGES: Record<string, string> = {
   skipped: 'secondary',
 };
 
-// sinceMs renders a time relative to an earlier one ("+123ms").
-const sinceMs = (at: string, from: string): string => `+${Date.parse(at) - Date.parse(from)}ms`;
-
-const HashLine: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
-  value ? (
-    <div className="col-12">
-      <div className="config-item">
-        <div className="config-item-label">{label}</div>
-        <div className="config-item-value font-monospace ap-break">{value}</div>
-      </div>
-    </div>
-  ) : null;
-
-// PayloadDetails renders one payload record.
-const PayloadDetails: React.FC<{ payload: PayloadRecord }> = ({ payload }) => (
-  <div className="row g-2">
-    <HashLine label="Block Hash" value={payload.block_hash} />
-    <KV label="Value" hint="The block value the EL reported for this payload.">
-      {weiToEth(payload.block_value_wei)}
-    </KV>
-    <KV label="Contents">
-      {payload.num_transactions ?? 0} txs, {payload.num_blobs ?? 0} blobs, {payload.num_withdrawals ?? 0} wdrls,{' '}
-      {payload.num_execution_requests ?? 0} reqs
-    </KV>
-    {payload.block_number !== undefined && <KV label="Block #">{payload.block_number}</KV>}
-    {payload.gas_used !== undefined && (
-      <KV label="Gas">
-        {payload.gas_used.toLocaleString()} / {(payload.gas_limit ?? 0).toLocaleString()}
-      </KV>
-    )}
-    {payload.base_fee_per_gas && <KV label="Base Fee">{payload.base_fee_per_gas} wei</KV>}
-    {payload.blob_gas_used !== undefined && payload.blob_gas_used > 0 && (
-      <KV label="Blob Gas">
-        {payload.blob_gas_used.toLocaleString()} (excess {(payload.excess_blob_gas ?? 0).toLocaleString()})
-      </KV>
-    )}
-    {payload.timestamp !== undefined && <KV label="Timestamp">{payload.timestamp}</KV>}
-    {payload.extra_data && <KV label="Extra Data">{payload.extra_data}</KV>}
-    <KV label="Built At">{formatDateTime(payload.built_at)}</KV>
-    {payload.inclusion_list && (
-      <KV
-        label="Inclusion Lists"
-        hint={
-          <>
-            FOCIL (Heze): the committee lists of slot {payload.inclusion_list.slot} the payload was built
-            against — the gossiped lists merged with the beacon node&apos;s attributes list. Omitted
-            transactions were left out on purpose (omit mode or the plan&apos;s omit_txs).
-          </>
-        }
-      >
-        {payload.inclusion_list.lists} lists ({payload.inclusion_list.timely} timely),{' '}
-        {payload.inclusion_list.transactions} txs
-        {payload.inclusion_list.omitted ? `, ${payload.inclusion_list.omitted} omitted` : ''}
-        {payload.inclusion_list.mode === 'omit' && (
-          <span className={`ms-1 ${badgeClass('danger')}`} title="Built without the inclusion lists">
-            omitted
-          </span>
-        )}
-        {payload.inclusion_list.bits && (
-          <span className="ms-1 font-monospace text-secondary">bits {payload.inclusion_list.bits}</span>
-        )}
-      </KV>
-    )}
-    <HashLine label="Parent Hash" value={payload.parent_hash} />
-    <HashLine label="State Root" value={payload.state_root} />
-    <HashLine label="Receipts Root" value={payload.receipts_root} />
-    <HashLine label="Prev Randao" value={payload.prev_randao} />
-    <HashLine label="Fee Recipient" value={payload.fee_recipient} />
-  </div>
-);
-
 // payloadUsage lists what the consumers did with one payload (by block
 // hash): the bids that committed to it and its inclusion.
 const payloadUsage = (result: SlotResult, hash: string): string[] => {
@@ -503,225 +463,780 @@ const payloadUsage = (result: SlotResult, hash: string): string[] => {
   const usage: string[] = [];
   const bids = (result.bids ?? []).filter((bid) => same(bid.block_hash));
 
-  for (const transport of ['p2p', 'builder-api']) {
-    const sent = bids.filter((bid) => bid.transport === transport && (bid.status === 'submitted' || bid.status === 'served'));
-    if (sent.length === 0) continue;
+  const p2p = bids.filter((bid) => bid.transport === 'p2p' && bid.status === 'submitted').length;
+  if (p2p > 0) usage.push(p2p > 1 ? `${p2p} bids` : 'bid');
 
-    const times = sent.map((bid) => new Date(bid.at).toLocaleTimeString()).join(', ');
-    usage.push(transport === 'p2p'
-      ? `${sent.length} p2p bid${sent.length > 1 ? 's' : ''} (${times})`
-      : `served to the proposer ${sent.length}× (${times})`);
-  }
+  const served = bids.filter((bid) => bid.transport !== 'p2p' && bid.status === 'served').length;
+  if (served > 0) usage.push(served > 1 ? `served ${served}×` : 'served');
 
-  if (same(result.inclusion?.block_hash)) {
-    usage.push(`included${result.inclusion?.payload_status ? ` (${result.inclusion.payload_status})` : ''}`);
-  }
+  if (same(result.inclusion?.block_hash)) usage.push('included');
 
   return usage;
 };
 
-// BuildPayloadLine is a build's payload in one line: hash, value, contents,
-// whether it is the target's pick, what the consumers did with it, and its
-// download.
-const BuildPayloadLine: React.FC<{
+// buildInfo is a testing run's transaction summary (the row's tooltip).
+const buildInfo = (build: BuildRecord): string[] => {
+  const info = build.info;
+  if (!info) return [];
+
+  const lines = [`submitted ${info.submitted_txs < 0 ? 'the EL mempool' : `${info.submitted_txs} txs`} (${info.tx_source})`];
+  if (info.selection) lines.push(`selected ${info.selection.selected} of ${info.selection.pool_size} pooled`);
+  if (info.fill_txs) lines.push(`${info.fill_txs} EL mempool fill txs`);
+  if (info.explicit_txs) lines.push(`explicit list of ${info.explicit_txs}`);
+  if (info.inclusion_list_txs) lines.push(`${info.inclusion_list_txs} inclusion-list txs`);
+
+  return lines;
+};
+
+// buildWarnings are the testing run facts worth a line of their own.
+const buildWarnings = (build: BuildRecord): string[] => {
+  const info = build.info;
+  const warnings: string[] = [];
+
+  if (build.error) warnings.push(build.error);
+  if (!info) return warnings;
+  if (info.inclusion_list_dropped) warnings.push('inclusion list dropped');
+  if (info.dropped_by_el) warnings.push(`${info.dropped_by_el} txs dropped by the EL`);
+  if (info.attempts && info.attempts > 1) warnings.push(`${info.attempts} attempts`);
+  if (info.dropped?.length) {
+    warnings.push(
+      `dropped after EL refusal: ${info.dropped.map((d) => (d.hash ? `${d.hash.slice(0, 10)}… (${d.reason})` : d.reason)).join(', ')}`
+    );
+  }
+  if (info.fill_error) warnings.push(`EL mempool fill failed: ${info.fill_error}`);
+  if (info.fill_blobs_dropped) warnings.push('fill blob txs dropped');
+  if (info.fill_dropped) warnings.push('fill dropped');
+
+  return warnings;
+};
+
+const engineTiming = (build: BuildRecord): string | undefined => {
+  const calls = build.calls;
+  if (!calls) return undefined;
+  const span = (from: string, to: string) => formatDuration(Date.parse(to) - Date.parse(from));
+  return `forkchoiceUpdated ${span(calls.forkchoice_start, calls.forkchoice_end)}, EL build wait ${span(calls.forkchoice_end, calls.get_payload_start)}, getPayload ${span(calls.get_payload_start, calls.get_payload_end)}`;
+};
+
+const BuildRow: React.FC<{
   slot: number;
+  clock: SlotClock;
   build: BuildRecord;
-  payload?: PayloadRecord;
-  selected: 'current' | 'earlier' | null;
-  usage: string[];
+  result: SlotResult;
+  picks: SelectionRecord[];
+  current?: SelectionRecord;
   onArtifactError: (message: string) => void;
-}> = ({ slot, build, payload, selected, usage, onArtifactError }) => {
-  if (!build.payload_hash) return null;
+}> = ({ slot, clock, build, result, picks, current, onArtifactError }) => {
+  const payload = build.payload_hash ? result.payloads?.[build.payload_hash] : undefined;
+  const usage = build.payload_hash ? payloadUsage(result, build.payload_hash) : [];
+  const picked = picks.filter((pick) => sameBuild(pick.build, build));
+  const isCurrent = sameBuild(current?.build, build);
+  const warnings = buildWarnings(build);
+  const details = [...buildInfo(build), engineTiming(build)].filter(Boolean).join('\n');
 
   return (
-    <div className="d-flex flex-wrap align-items-center gap-2 small">
-      <span className="font-monospace ap-break">{build.payload_hash}</span>
-      {payload && (
-        <span className="text-muted">
-          {payload.num_transactions} txs, {payload.num_blobs ?? 0} blobs, {weiToEth(payload.block_value_wei)}
-        </span>
+    <>
+      <tr className={isCurrent ? 'ap-build-current' : undefined}>
+        <td title={details || undefined}>
+          <span className="ap-build-name">{buildLabel(build)}</span>
+          {build.status !== 'ready' && (
+            <span className={`ms-1 ${badgeClass(RUN_BADGES[build.status] || 'secondary')}`}>
+              {build.skip_reason ? `${build.status}: ${build.skip_reason}` : build.status}
+            </span>
+          )}
+        </td>
+        <td className="font-monospace">
+          {build.payload_hash ? <CopyableHash value={build.payload_hash} chars={6} headOnly /> : <span className="text-muted">—</span>}
+        </td>
+        <td>
+          <At clock={clock} at={build.started_at} />
+        </td>
+        <td className="text-end" title={engineTiming(build)}>
+          {build.status !== 'started' && build.status !== 'building'
+            ? formatDuration(Date.parse(build.at) - Date.parse(build.started_at))
+            : '…'}
+        </td>
+        <td className="text-end">{payload ? `${payload.num_transactions} / ${payload.num_blobs ?? 0}` : '—'}</td>
+        <td className="text-end">{payload?.block_value_wei ? weiToEth(payload.block_value_wei).replace(' ETH', '') : '—'}</td>
+        <td>
+          <span className="d-inline-flex flex-wrap gap-1">
+            {isCurrent && (
+              <Tag tone="ok" title={`picked at ${picked.map((p) => formatOffsetFrom(clock, p.at)).join(', ')}`}>
+                pick
+              </Tag>
+            )}
+            {!isCurrent && picked.length > 0 && (
+              <Tag tone="neutral" title={`picked at ${picked.map((p) => formatOffsetFrom(clock, p.at)).join(', ')}, replaced later`}>
+                earlier
+              </Tag>
+            )}
+            {picked.some((p) => p.fallback) && <Tag tone="warn">fallback</Tag>}
+            {usage.map((use) => (
+              <Tag key={use} tone={use === 'included' ? 'ok' : 'info'}>
+                {use}
+              </Tag>
+            ))}
+          </span>
+        </td>
+        <td className="text-end">
+          {payload?.captured && build.payload_hash && (
+            <ArtifactButtons
+              url={payloadArtifactUrl(slot, build.payload_hash)}
+              filename={`slot-${slot}-${build.kind}${build.run ? `-${build.run}` : ''}-${build.payload_hash.slice(0, 10)}.ssz`}
+              onError={onArtifactError}
+            />
+          )}
+        </td>
+      </tr>
+      {warnings.length > 0 && (
+        <tr className="ap-build-note">
+          <td colSpan={8} className={build.status === 'failed' ? 'text-danger' : 'text-warning'}>
+            {warnings.join(' · ')}
+          </td>
+        </tr>
       )}
-      {selected === 'current' && <span className={badgeClass('success')}>current pick</span>}
-      {selected === 'earlier' && <span className={badgeClass('secondary')}>picked earlier</span>}
-      {payload?.captured && (
-        <span className="ms-auto">
-          <ArtifactLinks
-            url={payloadArtifactUrl(slot, build.payload_hash)}
-            filename={`slot-${slot}-${build.kind}${build.run ? `-${build.run}` : ''}-${build.payload_hash.slice(0, 10)}.ssz`}
-            onError={onArtifactError}
-          />
-        </span>
+    </>
+  );
+};
+
+const formatOffsetFrom = (clock: SlotClock, at: string): string =>
+  clock.start !== undefined ? formatOffset(Date.parse(at) - clock.start) : new Date(at).toLocaleTimeString();
+
+// PayloadFacts is a payload's header in short: the numbers in a grid, the
+// hashes in a compact list.
+const PayloadFacts: React.FC<{ payload: PayloadRecord; clock: SlotClock }> = ({ payload, clock }) => (
+  <>
+    <div className="row g-2 mb-2">
+      {payload.block_number !== undefined && <KV label="Block #">{payload.block_number.toLocaleString()}</KV>}
+      <KV label="Contents">
+        {payload.num_transactions ?? 0} txs, {payload.num_blobs ?? 0} blobs, {payload.num_withdrawals ?? 0} wdrls,{' '}
+        {payload.num_execution_requests ?? 0} reqs
+      </KV>
+      {payload.gas_used !== undefined && (
+        <KV label="Gas used">
+          {payload.gas_used.toLocaleString()}
+          {payload.gas_limit ? (
+            <span className="text-muted fw-normal"> ({((payload.gas_used / payload.gas_limit) * 100).toFixed(1)}% of {payload.gas_limit.toLocaleString()})</span>
+          ) : null}
+        </KV>
       )}
-      <div className="w-100 text-muted">used by: {usage.length > 0 ? usage.join(' · ') : 'nothing'}</div>
+      {payload.base_fee_per_gas && (
+        <KV label="Base fee">{(Number(payload.base_fee_per_gas) / 1e9).toLocaleString(undefined, { maximumFractionDigits: 4 })} gwei</KV>
+      )}
+      {payload.blob_gas_used !== undefined && payload.blob_gas_used > 0 && (
+        <KV label="Blob gas">
+          {payload.blob_gas_used.toLocaleString()}
+          <span className="text-muted fw-normal"> (excess {(payload.excess_blob_gas ?? 0).toLocaleString()})</span>
+        </KV>
+      )}
+      {payload.extra_data && (
+        <KV label="Extra data">
+          <span title={payload.extra_data}>{decodeExtraData(payload.extra_data)}</span>
+        </KV>
+      )}
+      {payload.timestamp !== undefined && <KV label="Timestamp">{payload.timestamp}</KV>}
+      <KV label="Built">
+        <At clock={clock} at={payload.built_at} />
+      </KV>
+      {payload.inclusion_list && (
+        <KV
+          label="Inclusion lists"
+          wide
+          hint={
+            <>
+              FOCIL (Heze): the committee lists of slot {payload.inclusion_list.slot} the payload was built
+              against — the gossiped lists merged with the beacon node&apos;s attributes list. Omitted
+              transactions were left out on purpose (omit mode or the plan&apos;s omit_txs).
+            </>
+          }
+        >
+          {payload.inclusion_list.lists} lists ({payload.inclusion_list.timely} timely), {payload.inclusion_list.transactions} txs
+          {payload.inclusion_list.omitted ? `, ${payload.inclusion_list.omitted} omitted` : ''}
+          {payload.inclusion_list.mode === 'omit' && (
+            <span className={`ms-1 ${badgeClass('danger')}`} title="Built without the inclusion lists">
+              omitted
+            </span>
+          )}
+          {payload.inclusion_list.bits && <span className="ms-1 font-monospace text-secondary">bits {payload.inclusion_list.bits}</span>}
+        </KV>
+      )}
     </div>
+    <HashList
+      rows={[
+        ['Block hash', payload.block_hash],
+        ['Parent hash', payload.parent_hash],
+        ['State root', payload.state_root],
+        ['Receipts root', payload.receipts_root],
+        ['Prev randao', payload.prev_randao],
+        ['Fee recipient', payload.fee_recipient],
+      ]}
+    />
+  </>
+);
+
+const AttributesFacts: React.FC<{ attributes: AttributesSnapshot }> = ({ attributes }) => {
+  // The beacon parent root is the parent root on every fork but the
+  // parent-payload reorg; show it only when it differs.
+  const beaconRoot =
+    attributes.parent_beacon_block_root &&
+    attributes.parent_beacon_block_root.toLowerCase() !== attributes.parent_block_root.toLowerCase()
+      ? attributes.parent_beacon_block_root
+      : undefined;
+
+  return (
+    <>
+      <div className="row g-2 mb-2">
+        <KV label="Proposer">{attributes.proposer_index}</KV>
+        <KV label="Parent block #">{attributes.parent_block_number.toLocaleString()}</KV>
+        <KV label="Timestamp">{attributes.timestamp}</KV>
+        <KV label="Contents">
+          {attributes.num_withdrawals} wdrls
+          {attributes.num_inclusion_list_txs ? `, ${attributes.num_inclusion_list_txs} IL txs` : ''}
+        </KV>
+        {attributes.target_gas_limit !== undefined && attributes.target_gas_limit > 0 && (
+          <KV label="Target gas limit">{attributes.target_gas_limit.toLocaleString()}</KV>
+        )}
+      </div>
+      <HashList
+        rows={[
+          ['Parent hash', attributes.parent_block_hash],
+          ['Parent root', attributes.parent_block_root],
+          ['Beacon parent root', beaconRoot],
+          ['Prev randao', attributes.prev_randao],
+          ['Fee recipient', attributes.suggested_fee_recipient],
+        ]}
+      />
+    </>
   );
 };
 
 const BuildTargetView: React.FC<{
   slot: number;
+  clock: SlotClock;
   target: BuildTargetRecord;
   primary: boolean;
+  multiple: boolean;
   result: SlotResult;
   onArtifactError: (message: string) => void;
-}> = ({ slot, target, primary, result, onArtifactError }) => {
-  const payloads = result.payloads ?? {};
-  const selections = target.selections ?? [];
-  const current = target.status === 'selected' ? selections[selections.length - 1] : undefined;
-  // Picks name builds: a rebuild of a picked block is not picked itself.
-  const selectedState = (build: BuildRecord): 'current' | 'earlier' | null =>
-    sameBuild(current?.build, build) ? 'current' : selections.some((s) => sameBuild(s.build, build)) ? 'earlier' : null;
-  const selectedPayload = current ? payloads[current.payload_hash] : undefined;
-  const engine = target.engine;
-  const runs = target.testing ?? [];
+}> = ({ slot, clock, target, primary, multiple, result, onArtifactError }) => {
+  const picks = target.selections ?? [];
+  const current = target.status === 'selected' ? picks[picks.length - 1] : undefined;
+  const picked = current ? result.payloads?.[current.payload_hash] : undefined;
+  const builds = [...(target.engine ? [target.engine] : []), ...(target.testing ?? [])];
 
   return (
-    <div className={`border rounded p-2 mb-2${primary ? '' : ' opacity-75'}`}>
-      <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+    <div className={`ap-target${primary ? '' : ' ap-target-secondary'}`}>
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-1">
         <strong className="small">{target.candidate || 'unclassified'}</strong>
-        {primary && <span className={badgeClass('info')}>primary</span>}
+        {multiple && primary && <span className={badgeClass('info')}>primary</span>}
         <StatusBadge map={TARGET_BADGES} status={target.status} />
-        <span className="text-muted small">started {formatDateTime(target.started_at)}</span>
+        <span className="text-muted small ms-auto">
+          attributes at <At clock={clock} at={target.started_at} />
+        </span>
       </div>
       {target.error && <div className="alert alert-danger small py-1 px-2 mb-2">{target.error}</div>}
 
-      <div className="section-header mb-1">Engine Build</div>
-      {engine ? (
-        <div className="mb-2">
-          <div className="d-flex flex-wrap align-items-center gap-2 small">
-            <StatusBadge map={RUN_BADGES} status={engine.status} />
-            {engine.status !== 'started' && <span className="text-muted">took {sinceMs(engine.at, engine.started_at)}</span>}
-            {engine.calls && (
-              <span className="text-muted">
-                forkchoiceUpdated {sinceMs(engine.calls.forkchoice_end, engine.calls.forkchoice_start)}, EL build wait{' '}
-                {sinceMs(engine.calls.get_payload_start, engine.calls.forkchoice_end)}, getPayload{' '}
-                {sinceMs(engine.calls.get_payload_end, engine.calls.get_payload_start)}
-              </span>
-            )}
-          </div>
-          {engine.error && <div className="text-danger small">{engine.error}</div>}
-          <BuildPayloadLine
-            slot={slot}
-            build={engine}
-            payload={engine.payload_hash ? payloads[engine.payload_hash] : undefined}
-            selected={selectedState(engine)}
-            usage={engine.payload_hash ? payloadUsage(result, engine.payload_hash) : []}
-            onArtifactError={onArtifactError}
-          />
-        </div>
+      {builds.length === 0 ? (
+        <div className="text-muted small mb-2">no build ran</div>
       ) : (
-        <div className="text-muted small mb-2">did not run</div>
-      )}
-
-      <div className="section-header mb-1">
-        Testing Builds
-        <InfoHint>
-          testing_buildBlockV1 runs from buildoor&apos;s transaction list (tx source{' '}
-          <code>{target.tx_source || '—'}</code>, payload source <code>{target.payload_source || '—'}</code>).
-          Every run builds its own payload; payloads never picked are recorded but not captured.
-        </InfoHint>
-      </div>
-      {runs.length === 0 ? (
-        <div className="text-muted small mb-2">
-          {target.testing_skip_reason ? `skipped (${target.testing_skip_reason})` : 'none'}
-        </div>
-      ) : (
-        <div className="mb-2">
-          {runs.map((run) => (
-            <div key={run.run} className="border-top pt-1 mt-1">
-              <div className="d-flex flex-wrap align-items-center gap-2 small">
-                <strong>#{run.run}</strong>
-                <StatusBadge map={RUN_BADGES} status={run.status} />
-                {run.skip_reason && <span className="text-muted">({run.skip_reason})</span>}
-                <span className="text-muted">
-                  started {sinceMs(run.started_at, target.started_at)} after the target, took {sinceMs(run.at, run.started_at)}
-                </span>
-                {run.info && (
-                  <span className="text-muted">
-                    submitted {run.info.submitted_txs < 0 ? 'EL mempool' : `${run.info.submitted_txs} txs`}
-                    {run.info.selection &&
-                      ` · selected ${run.info.selection.selected} of ${run.info.selection.pool_size} pooled`}
-                    {run.info.explicit_txs ? ` · explicit list of ${run.info.explicit_txs}` : ''}
-                    {run.info.inclusion_list_txs ? ` · ${run.info.inclusion_list_txs} inclusion-list txs` : ''}
-                    {run.info.inclusion_list_dropped ? ' · inclusion list dropped!' : ''}
-                    {run.info.dropped_by_el ? ` · ${run.info.dropped_by_el} dropped by the EL` : ''}
-                    {run.info.attempts && run.info.attempts > 1 ? ` · ${run.info.attempts} attempts` : ''}
-                    {run.info.dropped?.length
-                      ? ` · dropped after EL refusal: ${run.info.dropped
-                          .map((d) => (d.hash ? `${d.hash.slice(0, 10)}… (${d.reason})` : d.reason))
-                          .join(', ')}`
-                      : ''}
-                  </span>
-                )}
-              </div>
-              {run.error && <div className="text-danger small">{run.error}</div>}
-              <BuildPayloadLine
-                slot={slot}
-                build={run}
-                payload={run.payload_hash ? payloads[run.payload_hash] : undefined}
-                selected={selectedState(run)}
-                usage={run.payload_hash ? payloadUsage(result, run.payload_hash) : []}
-                onArtifactError={onArtifactError}
-              />
-            </div>
-          ))}
+        <div className="table-responsive">
+          <table className="table table-sm small mb-1 ap-build-table">
+            <thead>
+              <tr>
+                <th>
+                  Build
+                  <InfoHint>
+                    The engine build (forkchoiceUpdated → getPayload) and the testing_buildBlockV1 runs (tx
+                    source <code>{target.tx_source || '—'}</code>, payload source{' '}
+                    <code>{target.payload_source || '—'}</code>). Every build has its own payload; hover a
+                    build for its timings and transactions. <strong>pick</strong> marks the payload the
+                    consumers got last, <strong>earlier</strong> one they got before; the other tags say
+                    what the consumers did with a payload.
+                  </InfoHint>
+                </th>
+                <th>Block</th>
+                <th>Start</th>
+                <th className="text-end">Took</th>
+                <th className="text-end" title="Transactions / blobs">
+                  Txs
+                </th>
+                <th className="text-end">ETH</th>
+                <th>Use</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {builds.map((build) => (
+                <BuildRow
+                  key={buildLabel(build)}
+                  slot={slot}
+                  clock={clock}
+                  build={build}
+                  result={result}
+                  picks={picks}
+                  current={current}
+                  onArtifactError={onArtifactError}
+                />
+              ))}
+            </tbody>
+          </table>
+          {!target.testing?.length && target.testing_skip_reason && (
+            <div className="text-muted small mb-1">testing build skipped: {target.testing_skip_reason}</div>
+          )}
         </div>
       )}
 
-      <div className="section-header mb-1">
-        Picks
-        <InfoHint>
-          The payload the cache hands to the consumers for this target, re-evaluated whenever one of
-          its builds finishes (by the payload source). Each consumer takes the pick of its own
-          moment — what it used is listed with each payload.
-        </InfoHint>
-      </div>
-      {selections.length === 0 ? (
-        <div className="text-muted small mb-2">no payload was picked</div>
-      ) : (
-        <ul className="small mb-2 ps-3">
-          {selections.map((selection, i) => (
-            <li key={i}>
-              {sinceMs(selection.at, target.started_at)}: {selection.reason === 'first' ? 'first pick' : 'better pick'}, the{' '}
-              <strong>{buildLabel(selection.build)}</strong> payload{' '}
-              <span className="font-monospace">{selection.payload_hash.slice(0, 18)}…</span>
-              {selection.fallback && <span className={`ms-1 ${badgeClass('warning')}`}>fallback</span>}
-            </li>
-          ))}
-        </ul>
+      {picked && (
+        <Fold title="Picked payload" extra={`${buildLabel(picked.build)} · ${weiToEth(picked.block_value_wei)}`}>
+          <PayloadFacts payload={picked} clock={clock} />
+        </Fold>
       )}
-
-      {selectedPayload && (
-        <>
-          <div className="section-header mb-1">Current Pick ({buildLabel(selectedPayload.build)})</div>
-          <PayloadDetails payload={selectedPayload} />
-        </>
-      )}
-
       {target.attributes && (
-        <>
-          <div className="section-header mt-3 mb-1">Payload Attributes</div>
-          <div className="row g-2">
-            <KV label="Proposer">{target.attributes.proposer_index}</KV>
-            <KV label="Parent Block #">{target.attributes.parent_block_number}</KV>
-            <KV label="Timestamp">{target.attributes.timestamp}</KV>
-            {target.attributes.target_gas_limit !== undefined && target.attributes.target_gas_limit > 0 && (
-              <KV label="Target Gas Limit">{target.attributes.target_gas_limit.toLocaleString()}</KV>
-            )}
-            <KV label="Contents">
-              {target.attributes.num_withdrawals} wdrls
-              {target.attributes.num_inclusion_list_txs ? `, ${target.attributes.num_inclusion_list_txs} IL txs` : ''}
-            </KV>
-            <HashLine label="Parent Hash" value={target.attributes.parent_block_hash} />
-            <HashLine label="Parent Root" value={target.attributes.parent_block_root} />
-            <HashLine label="Beacon Parent Root" value={target.attributes.parent_beacon_block_root} />
-            <HashLine label="Prev Randao" value={target.attributes.prev_randao} />
-            <HashLine label="Suggested Fee Recipient" value={target.attributes.suggested_fee_recipient} />
-          </div>
-        </>
+        <Fold title="Payload attributes" extra={`proposer ${target.attributes.proposer_index}`}>
+          <AttributesFacts attributes={target.attributes} />
+        </Fold>
       )}
     </div>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Applied plan (folded): the frozen settings every module acted on
+// ---------------------------------------------------------------------------
+
+const planSummary = (frozen: FrozenPlan): string =>
+  [
+    frozen.build.build ? 'build' : `skip (${frozen.build.skip_reason || '—'})`,
+    frozen.bid ? 'p2p bid' : 'no p2p bid',
+    frozen.builder_api ? 'Builder API' : 'no Builder API',
+    frozen.reveal?.suppressed ? 'reveal withheld' : 'reveal',
+  ].join(' · ');
+
+const FrozenPlanSection: React.FC<{ frozen: FrozenPlan; clock: SlotClock }> = ({ frozen, clock }) => (
+  <Fold
+    title={
+      <>
+        Applied plan
+        <InfoHint>
+          The immutable snapshot taken when execution for this slot began (about one slot ahead): the
+          slot&apos;s plan (or matching rule) merged with the global config of that moment. Every module
+          acted on exactly these values; later config or rule changes do not alter it.
+        </InfoHint>
+      </>
+    }
+    extra={
+      <>
+        {frozen.plan ? (frozen.plan.rule_id ? `rule ${frozen.plan.rule_id}` : 'slot plan') : 'global baseline'} ·{' '}
+        {planSummary(frozen)}
+      </>
+    }
+  >
+    <div className="d-flex flex-wrap align-items-center gap-2 small text-muted mb-2">
+      <span className={badgeClass('secondary')}>{frozen.fork}</span>
+      frozen at <At clock={clock} at={frozen.frozen_at} />
+    </div>
+
+    <div className="section-header mb-1">Build</div>
+    <div className="row g-2 mb-1">
+      <KV
+        label="Decision"
+        hint={
+          <dl>
+            <dt>build</dt>
+            <dd>a payload was built; <em>forced</em> = the plan pushed it past the schedule (does not consume the next_n budget)</dd>
+            <dt>skip (schedule)</dt>
+            <dd>the global schedule (start slot, every_nth, exhausted next_n) excluded the slot</dd>
+            <dt>skip (plan_disabled)</dt>
+            <dd>the plan suppressed the consumers that would otherwise have been active</dd>
+            <dt>skip (no_consumer)</dt>
+            <dd>no bidding or serving was active for the slot, without a plan being responsible</dd>
+          </dl>
+        }
+      >
+        {frozen.build.build ? (
+          <span className={badgeClass('success')}>build{frozen.build.forced ? ' (forced)' : ''}</span>
+        ) : (
+          <span className={badgeClass('secondary')}>skip ({frozen.build.skip_reason || '—'})</span>
+        )}
+        {frozen.build.reorg_parent_payload && (
+          <span className={`ms-1 ${badgeClass('warning')}`} title="Built on the grandparent (n-2) payload">
+            reorg parent
+          </span>
+        )}
+      </KV>
+      <KV label="Start" hint="When the payload build starts, in ms relative to slot start (negative = before the slot starts).">
+        {frozen.build.build_start_time_ms} ms
+      </KV>
+      {frozen.build.local?.enabled && (
+        <KV
+          label="Testing build"
+          wide
+          hint="testing_buildBlockV1: the transaction source it builds from and the rule that picks the payload the consumers get."
+        >
+          {frozen.build.local.tx_source} → {frozen.build.local.payload_source}
+          {frozen.build.local.forced && <span className={`ms-1 ${badgeClass('info')}`}>forced by plan</span>}
+          {frozen.build.local.tx_source === 'explicit' && (
+            <span className="ms-1 fw-normal">
+              {frozen.build.local.transactions_redacted ? (
+                <HiddenTransactionsNote count={frozen.build.local.transactions_redacted} />
+              ) : (
+                <span className="text-muted small">{frozen.build.local.transactions?.length ?? 0} explicit transactions</span>
+              )}
+            </span>
+          )}
+        </KV>
+      )}
+    </div>
+
+    <div className="section-header mb-1 mt-2">
+      Bid (p2p)
+      <InfoHint>
+        Effective p2p bid settings. &quot;off for this slot&quot; means no p2p bidding: the plan disabled
+        it, or ePBS was globally off (or not applicable to the fork) without a custom plan.
+      </InfoHint>
+    </div>
+    {frozen.bid ? (
+      <div className="row g-2 mb-1">
+        <KV label="Window" hint="Bid start – bid end, in ms relative to slot start.">
+          {frozen.bid.start_ms} – {frozen.bid.end_ms} ms
+        </KV>
+        <KV label="Interval" hint="Pause between successive bids of the same payload; 0 = a single bid.">
+          {frozen.bid.interval_ms} ms
+        </KV>
+        <KV label="Min / increase" hint={<>Min: floor of <code>max(block value, min) + subsidy</code>. Increase: added per earlier bid of the same payload.</>}>
+          {formatGwei(frozen.bid.min_gwei)} / {formatGwei(frozen.bid.increase_gwei)}
+        </KV>
+        <KV label="Subsidy" hint="Added on top of max(block value, min); negative = the margin kept from the block value. Unused when a value override is set.">
+          {formatGwei(frozen.bid.subsidy_gwei)}
+        </KV>
+        <KV label="Value override" hint="Absolute bid base replacing max(block value, min) + subsidy; — = none, the formula applied.">
+          {formatGwei(frozen.bid.value_gwei)}
+        </KV>
+        {(frozen.bid.forced || frozen.bid.ignore_missing_prefs) && (
+          <KV
+            label="Flags"
+            hint={
+              <dl>
+                <dt>forced</dt>
+                <dd>a custom plan activated bidding although ePBS is globally disabled</dd>
+                <dt>ignore missing prefs</dt>
+                <dd>bids went out without gossip proposer preferences, using the payload&apos;s fee recipient</dd>
+              </dl>
+            }
+          >
+            {frozen.bid.forced && <span className={`${badgeClass('warning')} me-1`}>forced</span>}
+            {frozen.bid.ignore_missing_prefs && <span className={badgeClass('info')}>ignore missing prefs</span>}
+          </KV>
+        )}
+      </div>
+    ) : (
+      <p className="text-muted small mb-1">off for this slot</p>
+    )}
+
+    <div className="section-header mb-1 mt-2">
+      Builder API
+      <InfoHint>
+        Effective Builder API serving settings. &quot;off for this slot&quot; means bid requests were
+        answered with 204 (no bid): disabled by the plan, or the Builder API was globally off without a
+        custom plan.
+      </InfoHint>
+    </div>
+    {frozen.builder_api ? (
+      <div className="row g-2 mb-1">
+        <KV label="Subsidy" hint="Added to the block value of served bids; negative = the margin kept from it (Gloas only). Unused when a total value override is set.">
+          {formatGwei(frozen.builder_api.subsidy_gwei)}
+        </KV>
+        <KV label="Total value override" hint="Absolute total value served, replacing block value + subsidy; — = none.">
+          {formatGwei(frozen.builder_api.total_value_gwei)}
+        </KV>
+        <KV label="Response delay" hint="How long each bid response was held before answering.">
+          {frozen.builder_api.delay_ms ?? 0} ms
+        </KV>
+        {frozen.builder_api.forced && (
+          <KV label="Flags" hint="forced: a custom plan activated serving although the Builder API is globally disabled.">
+            <span className={badgeClass('warning')}>forced</span>
+          </KV>
+        )}
+      </div>
+    ) : (
+      <p className="text-muted small mb-1">off for this slot</p>
+    )}
+
+    <div className="section-header mb-1 mt-2">Reveal</div>
+    {frozen.reveal ? (
+      <div className="row g-2 mb-1">
+        <KV
+          label="Status"
+          hint="withheld: by a disabled plan or because reveals are globally disabled. active: a won slot gets its envelope published once the gate opens."
+        >
+          {frozen.reveal.suppressed ? (
+            <span className={badgeClass('danger')}>withheld</span>
+          ) : (
+            <span className={badgeClass('success')}>active</span>
+          )}
+          {frozen.reveal.bypass_deadline && (
+            <span
+              className={`ms-1 ${badgeClass('warning')}`}
+              title="A custom reveal plan may publish after the slot end, at most one extra slot."
+            >
+              bypass deadline
+            </span>
+          )}
+        </KV>
+        <KV
+          label="Gate"
+          hint={
+            <dl>
+              <dt>time</dt>
+              <dd>reveal at the reveal time</dd>
+              <dt>vote</dt>
+              <dd>reveal once head votes on our block reach the threshold</dd>
+              <dt>vote_or_time</dt>
+              <dd>whichever opens first</dd>
+              <dt>vote_and_time</dt>
+              <dd>at the reveal time, once the threshold is also reached</dd>
+            </dl>
+          }
+        >
+          {frozen.reveal.gate_mode}
+          <span className="text-muted fw-normal">
+            {' '}
+            · {frozen.reveal.reveal_time_ms} ms
+            {frozen.reveal.gate_mode !== 'time' && ` · ${frozen.reveal.vote_threshold_pct}% votes`}
+          </span>
+        </KV>
+        <KV
+          label="Broadcast validation"
+          hint="Validation the beacon node applied before broadcasting the envelope: gossip, consensus, or consensus_and_equivocation (adds the equivocation check that protects against unbundling)."
+        >
+          {frozen.reveal.broadcast_validation}
+        </KV>
+        <KV label="Retries" hint="Publish attempts × wait between failed attempts.">
+          {frozen.reveal.max_attempts} × {frozen.reveal.retry_interval_ms} ms
+        </KV>
+      </div>
+    ) : (
+      <p className="text-muted small mb-1">—</p>
+    )}
+
+    {frozen.transforms && (frozen.transforms.payload || frozen.transforms.bid || frozen.transforms.envelope) && (
+      <>
+        <div className="section-header mb-1 mt-2">
+          Transforms (jq)
+          <InfoHint>
+            jq expressions applied to this slot&apos;s objects. <strong>payload</strong> rewrote the built
+            execution payload before it fed both the bid and the reveal. <strong>bid</strong> /{' '}
+            <strong>envelope</strong> rewrote the message just before signing; the result was re-signed,
+            so it is validly signed but customized.
+          </InfoHint>
+        </div>
+        <div className="mb-1">
+          {(['payload', 'bid', 'envelope'] as const).map((k) =>
+            frozen.transforms?.[k] ? (
+              <div key={k} className="mb-1">
+                <div className="ap-transform-io-label">{k}</div>
+                <pre className="ap-transform-io mb-0">{frozen.transforms[k]}</pre>
+              </div>
+            ) : null
+          )}
+        </div>
+      </>
+    )}
+
+    {frozen.plan && (
+      <>
+        <div className="section-header mb-1 mt-2">
+          Raw plan
+          <InfoHint>
+            The slot plan as frozen (a rule-derived plan carries its <code>rule_id</code>). Absent
+            categories inherited the global config.
+          </InfoHint>
+        </div>
+        <pre className="ap-raw-plan mb-0">{JSON.stringify(frozen.plan, null, 2)}</pre>
+      </>
+    )}
+  </Fold>
+);
+
+// ---------------------------------------------------------------------------
+// Bids and reveal attempts
+// ---------------------------------------------------------------------------
+
+const BidsCard: React.FC<{
+  slot: number;
+  clock: SlotClock;
+  result: SlotResult;
+  onArtifactError: (message: string) => void;
+}> = ({ slot, clock, result, onArtifactError }) => {
+  const bids = result.bids ?? [];
+  const hasCompetitor = bids.some((bid) => bid.competitor_high_gwei !== undefined && bid.competitor_high_gwei !== null);
+  const hasExecPayment = bids.some((bid) => (bid.execution_payment_gwei ?? 0) > 0);
+
+  return (
+    <div className="card mb-3">
+      <div className="card-header py-1">
+        <strong className="small">
+          Bids ({bids.length})
+          <InfoHint>
+            Every bid attempt of the slot, both transports; hover a row for the bid&apos;s parent,
+            randao, fee recipient, gas limit and blobs. Values in gwei. Status:
+            <dl>
+              <dt>submitted</dt>
+              <dd>p2p bid gossiped</dd>
+              <dt>served</dt>
+              <dd>Builder API bid returned to the proposer</dd>
+              <dt>constructed</dt>
+              <dd>p2p bid built and signed, but the gossip submission failed</dd>
+              <dt>suppressed</dt>
+              <dd>no bid made: Builder API serving suppressed for the slot, or a p2p bid skipped before construction (e.g. missing proposer preferences)</dd>
+              <dt>failed</dt>
+              <dd>bid construction (or the Builder API response) failed; hover the warning icon</dd>
+              <dt>cancelled</dt>
+              <dd>the Builder API request ended during the planned response delay</dd>
+            </dl>
+            <strong>Exec payment</strong> (Builder API, Gloas): the part of the total claimed as unbacked{' '}
+            <code>execution_payment</code>. <strong>Competitor</strong> (p2p): the highest other
+            builder&apos;s bid known when the bid went out (our own keys excluded).
+          </InfoHint>
+        </strong>
+        {result.dropped_attempts?.['bids'] ? (
+          <span className="text-muted small ms-2">(+{result.dropped_attempts['bids']} dropped)</span>
+        ) : null}
+      </div>
+      <div className="table-responsive">
+        <table className="table table-sm table-hover small mb-0 ap-compact-table">
+          <thead>
+            <tr>
+              <th>At</th>
+              <th>Status</th>
+              <th>Via</th>
+              <th className="text-end">Value</th>
+              {hasExecPayment && <th className="text-end">Exec payment</th>}
+              {hasCompetitor && <th className="text-end">Competitor</th>}
+              <th>Block</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {bids.map((bid, i) => (
+              <tr
+                key={i}
+                title={[
+                  bid.parent_block_hash ? `parent hash: ${bid.parent_block_hash}` : '',
+                  bid.parent_block_root ? `parent root: ${bid.parent_block_root}` : '',
+                  bid.prev_randao ? `prev randao: ${bid.prev_randao}` : '',
+                  bid.fee_recipient ? `fee recipient: ${bid.fee_recipient}` : '',
+                  bid.gas_limit ? `gas limit: ${bid.gas_limit.toLocaleString()}` : '',
+                  `blobs: ${bid.num_blob_commitments ?? 0}`,
+                  bid.builder_index !== undefined ? `builder index: ${bid.builder_index}` : '',
+                  bid.key_index !== undefined ? `key: #${bid.key_index}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n')}
+              >
+                <td>
+                  <At clock={clock} at={bid.at} />
+                </td>
+                <td>
+                  <StatusBadge map={BID_BADGES} status={bid.status} />
+                  {bid.error && <i className="fas fa-triangle-exclamation text-danger ms-1" title={bid.error}></i>}
+                </td>
+                <td>{bid.transport === 'p2p' ? 'p2p' : 'API'}</td>
+                <td className="text-end font-monospace">{bid.total_value_gwei.toLocaleString()}</td>
+                {hasExecPayment && (
+                  <td className="text-end font-monospace">{(bid.execution_payment_gwei ?? 0).toLocaleString()}</td>
+                )}
+                {hasCompetitor && (
+                  <td className="text-end font-monospace">
+                    {bid.competitor_high_gwei !== undefined && bid.competitor_high_gwei !== null
+                      ? bid.competitor_high_gwei.toLocaleString()
+                      : '—'}
+                  </td>
+                )}
+                <td className="font-monospace">
+                  {bid.block_hash ? <CopyableHash value={bid.block_hash} chars={6} headOnly /> : '—'}
+                </td>
+                <td className="text-end">
+                  {bid.artifact_index !== undefined && (
+                    <ArtifactButtons
+                      url={apiPath(`/slot-results/${slot}/bids/${bid.artifact_index}`)}
+                      filename={`slot-${slot}-bid-${bid.artifact_index}.ssz`}
+                      onError={onArtifactError}
+                    />
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const RevealAttemptsCard: React.FC<{ clock: SlotClock; result: SlotResult }> = ({ clock, result }) => (
+  <div className="card mb-3">
+    <div className="card-header py-1">
+      <strong className="small">
+        Reveal attempts
+        <InfoHint>
+          <dl>
+            <dt>published</dt>
+            <dd>the envelope was accepted by the beacon node</dd>
+            <dt>failed</dt>
+            <dd>the publish attempt failed (retried up to the attempt limit)</dd>
+            <dt>suppressed</dt>
+            <dd>withheld by the slot&apos;s plan (<code>plan_disabled</code>)</dd>
+            <dt>skipped</dt>
+            <dd>
+              <code>disabled</code> (reveals globally off), <code>late</code> (the reveal request arrived
+              after the slot ended) or <code>vote_gate_timeout</code> (the vote gate never opened)
+            </dd>
+          </dl>
+          The envelope artifact is kept even when the reveal was withheld or failed.
+        </InfoHint>
+      </strong>
+    </div>
+    <div className="table-responsive">
+      <table className="table table-sm small mb-0 ap-compact-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Status</th>
+            <th>Via</th>
+            <th>Started</th>
+            <th>At</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {(result.reveal_attempts ?? []).map((attempt, i) => (
+            <tr key={i}>
+              <td>{attempt.attempt}</td>
+              <td>
+                <StatusBadge map={REVEAL_BADGES} status={attempt.status} />
+              </td>
+              <td>{attempt.transport}</td>
+              <td>
+                <At clock={clock} at={attempt.started_at} />
+              </td>
+              <td>
+                <At clock={clock} at={attempt.at} />
+              </td>
+              <td className="ap-wrap">
+                {attempt.skip_reason && <span className="text-muted">{attempt.skip_reason}</span>}
+                {attempt.error && <span className="text-danger"> {attempt.error}</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+// ---------------------------------------------------------------------------
+// Result view
+// ---------------------------------------------------------------------------
 
 const ResultView: React.FC<{
   slot: number;
@@ -729,6 +1244,8 @@ const ResultView: React.FC<{
   storedPlan?: SlotPlan;
   onArtifactError: (message: string) => void;
 }> = ({ slot, result, storedPlan, onArtifactError }) => {
+  const clock = useSlotClock(slot);
+
   if (!result) {
     return (
       <>
@@ -743,21 +1260,35 @@ const ResultView: React.FC<{
     );
   }
 
-  const baseUrl = `/api/buildoor/slot-results/${slot}`;
   const build = result.build;
   const primary = primaryTargetRecord(build);
-  const reveals = result.reveal_attempts || [];
+  const reveals = result.reveal_attempts ?? [];
   const envelopeExists = reveals.some((r) => r.status === 'published' || r.status === 'failed');
+  const targets = [...(build?.targets ?? [])].sort((a, b) => (a === primary ? -1 : b === primary ? 1 : 0));
 
   return (
     <>
-      {result.applied_plan && <FrozenPlanSection frozen={result.applied_plan} />}
+      <OutcomeCard
+        rows={outcomeRows(result, clock, primary)}
+        envelope={
+          envelopeExists ? (
+            <span className="d-inline-flex align-items-center gap-1 small text-muted">
+              envelope
+              <ArtifactButtons
+                url={apiPath(`/slot-results/${slot}/envelope`)}
+                filename={`slot-${slot}-envelope.ssz`}
+                onError={onArtifactError}
+              />
+            </span>
+          ) : undefined
+        }
+      />
 
       {build && (
         <div className="card mb-3">
           <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
             <strong className="small">
-              Build
+              Builds
               <InfoHint>
                 <dl>
                   <dt>waiting_attributes</dt>
@@ -773,9 +1304,8 @@ const ResultView: React.FC<{
                   <dt>skipped</dt>
                   <dd>the build decision skipped the slot (schedule, plan_disabled, no_consumer)</dd>
                 </dl>
-                Each build target (a parent the slot built on) lists its engine build, its testing runs
-                and its picks: which build&apos;s payload the consumers got from when on. Every build has
-                its own payload, named by block hash, with what the consumers did with it.
+                One table per build target (a parent the slot built on): its engine build and testing
+                runs, each with its own payload.
               </InfoHint>
             </strong>
             <StatusBadge map={BUILD_BADGES} status={build.status} />
@@ -783,367 +1313,34 @@ const ResultView: React.FC<{
           </div>
           <div className="card-body py-2">
             {build.error && <div className="alert alert-danger small py-1 px-2 mb-2">{build.error}</div>}
-            {(build.targets ?? []).length === 0 && (
-              <div className="text-muted small">No build target ran.</div>
-            )}
-            {[...(build.targets ?? [])]
-              .sort((a, b) => (a === primary ? -1 : b === primary ? 1 : 0))
-              .map((target, i) => (
-                <BuildTargetView
-                  key={`${target.candidate ?? ''}-${i}`}
-                  slot={slot}
-                  target={target}
-                  primary={target === primary}
-                  result={result}
-                  onArtifactError={onArtifactError}
-                />
-              ))}
+            {targets.length === 0 && <div className="text-muted small">No build target ran.</div>}
+            {targets.map((target, i) => (
+              <BuildTargetView
+                key={`${target.candidate ?? ''}-${i}`}
+                slot={slot}
+                clock={clock}
+                target={target}
+                primary={target === primary}
+                multiple={targets.length > 1}
+                result={result}
+                onArtifactError={onArtifactError}
+              />
+            ))}
           </div>
         </div>
       )}
 
-      {(result.bids?.length || 0) > 0 && (
-        <div className="card mb-3">
-          <div className="card-header py-1">
-            <strong className="small">
-              Bids
-              <InfoHint>
-                Every bid attempt of the slot, both transports. Status:
-                <dl>
-                  <dt>submitted</dt>
-                  <dd>p2p bid gossiped</dd>
-                  <dt>served</dt>
-                  <dd>Builder API bid returned to the proposer</dd>
-                  <dt>constructed</dt>
-                  <dd>p2p bid built and signed, but the gossip submission failed</dd>
-                  <dt>suppressed</dt>
-                  <dd>no bid made: Builder API serving suppressed for the slot, or a p2p bid skipped before construction (e.g. missing proposer preferences)</dd>
-                  <dt>failed</dt>
-                  <dd>bid construction (or the Builder API response) failed; hover the warning icon</dd>
-                  <dt>cancelled</dt>
-                  <dd>the Builder API request ended during the planned response delay</dd>
-                </dl>
-              </InfoHint>
-            </strong>
-            {result.dropped_attempts?.['bids'] ? (
-              <span className="text-muted small ms-2">
-                (+{result.dropped_attempts['bids']} dropped)
-              </span>
-            ) : null}
-          </div>
-          <div className="table-responsive">
-            <table className="table table-sm table-hover small mb-0">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Status</th>
-                  <th>Transport</th>
-                  <th className="text-end">
-                    Value
-                    <InfoHint>Total bid value, gwei.</InfoHint>
-                  </th>
-                  <th className="text-end">
-                    Exec Payment
-                    <InfoHint>
-                      Builder API (Gloas) only: the part of the total claimed as unbacked{' '}
-                      <code>execution_payment</code>, gwei. p2p bids always carry 0.
-                    </InfoHint>
-                  </th>
-                  <th className="text-end">
-                    Competitor High
-                    <InfoHint alignEnd>
-                      p2p only: the highest other builder&apos;s bid known when this bid went out, gwei
-                      (our own keys excluded).
-                    </InfoHint>
-                  </th>
-                  <th>Block Hash</th>
-                  <th className="text-end">Gas Limit</th>
-                  <th className="text-end">Blobs</th>
-                  <th>Artifact</th>
-                  <th className="text-end">At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.bids!.map((bid, i) => (
-                  <tr
-                    key={i}
-                    title={[
-                      bid.parent_block_hash ? `parent hash: ${bid.parent_block_hash}` : '',
-                      bid.parent_block_root ? `parent root: ${bid.parent_block_root}` : '',
-                      bid.prev_randao ? `prev randao: ${bid.prev_randao}` : '',
-                      bid.fee_recipient ? `fee recipient: ${bid.fee_recipient}` : '',
-                      bid.builder_index !== undefined ? `builder index: ${bid.builder_index}` : ''
-                    ].filter(Boolean).join('\n')}
-                  >
-                    <td>{i + 1}</td>
-                    <td>
-                      <StatusBadge map={BID_BADGES} status={bid.status} />
-                      {bid.error && (
-                        <i className="fas fa-triangle-exclamation text-danger ms-1" title={bid.error}></i>
-                      )}
-                    </td>
-                    <td>{bid.transport}</td>
-                    <td className="text-end font-monospace">{bid.total_value_gwei.toLocaleString()}</td>
-                    <td className="text-end font-monospace">
-                      {bid.execution_payment_gwei !== undefined
-                        ? bid.execution_payment_gwei.toLocaleString()
-                        : '—'}
-                    </td>
-                    <td className="text-end font-monospace">
-                      {bid.competitor_high_gwei !== undefined
-                        ? bid.competitor_high_gwei.toLocaleString()
-                        : '—'}
-                    </td>
-                    <td className="font-monospace">
-                      {bid.block_hash ? `${bid.block_hash.slice(0, 10)}…` : '—'}
-                    </td>
-                    <td className="text-end font-monospace">
-                      {bid.gas_limit !== undefined && bid.gas_limit > 0 ? bid.gas_limit.toLocaleString() : '—'}
-                    </td>
-                    <td className="text-end font-monospace">
-                      {bid.num_blob_commitments ?? 0}
-                    </td>
-                    <td>
-                      {bid.artifact_index !== undefined ? (
-                        <ArtifactLinks
-                          url={`${baseUrl}/bids/${bid.artifact_index}`}
-                          filename={`slot-${slot}-bid-${bid.artifact_index}.ssz`}
-                          onError={onArtifactError}
-                        />
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                    </td>
-                    <td className="text-end text-muted">{formatDateTime(bid.at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+      {(result.bids?.length ?? 0) > 0 && (
+        <BidsCard slot={slot} clock={clock} result={result} onArtifactError={onArtifactError} />
       )}
 
-      {(result.block_submissions?.length || 0) > 0 && (
-        <div className="card mb-3">
-          <div className="card-header py-1">
-            <strong className="small">
-              Block Submissions
-              <InfoHint>
-                Signed blocks proposers submitted through the Builder API. Dialect{' '}
-                <strong>legacy</strong> = pre-Gloas blinded block (unblinded and published by
-                buildoor), <strong>epbs</strong> = Gloas signed beacon block (broadcast, reveal
-                scheduled). Status: <strong>received</strong> (block decoded),{' '}
-                <strong>accepted</strong> (published; for epbs also handed to the reveal),{' '}
-                <strong>failed</strong>.
-              </InfoHint>
-            </strong>
-          </div>
-          <div className="table-responsive">
-            <table className="table table-sm small mb-0">
-              <thead>
-                <tr>
-                  <th>Dialect</th>
-                  <th>Status</th>
-                  <th>Error</th>
-                  <th className="text-end">At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.block_submissions!.map((sub, i) => (
-                  <tr key={i}>
-                    <td>{sub.dialect}</td>
-                    <td>
-                      <StatusBadge map={SUBMISSION_BADGES} status={sub.status} />
-                    </td>
-                    <td className="text-danger small">{sub.error || ''}</td>
-                    <td className="text-end text-muted">{formatDateTime(sub.at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+      {reveals.length > 1 && <RevealAttemptsCard clock={clock} result={result} />}
 
-      {(reveals.length > 0 || envelopeExists) && (
+      {result.applied_plan && (
         <div className="card mb-3">
-          <div className="card-header py-1 d-flex flex-wrap align-items-center gap-2">
-            <strong className="small">
-              Reveal Attempts
-              <InfoHint>
-                <dl>
-                  <dt>published</dt>
-                  <dd>the envelope was accepted by the beacon node</dd>
-                  <dt>failed</dt>
-                  <dd>the publish attempt failed (retried up to the attempt limit)</dd>
-                  <dt>suppressed</dt>
-                  <dd>withheld by the slot&apos;s plan (<code>plan_disabled</code>)</dd>
-                  <dt>skipped</dt>
-                  <dd>
-                    <code>disabled</code> (reveals globally off), <code>late</code> (the reveal
-                    request arrived after the slot ended) or <code>vote_gate_timeout</code> (the vote gate never opened)
-                  </dd>
-                </dl>
-                The envelope artifact is kept even when the reveal was withheld or failed.
-              </InfoHint>
-            </strong>
-            {envelopeExists && (
-              <span className="ms-auto">
-                <ArtifactLinks
-                  url={`${baseUrl}/envelope`}
-                  filename={`slot-${slot}-envelope.ssz`}
-                  onError={onArtifactError}
-                />
-              </span>
-            )}
-          </div>
-          <div className="table-responsive">
-            <table className="table table-sm small mb-0">
-              <thead>
-                <tr>
-                  <th>Attempt</th>
-                  <th>Status</th>
-                  <th>Transport</th>
-                  <th>Detail</th>
-                  <th className="text-end">Started</th>
-                  <th className="text-end">At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reveals.map((attempt, i) => (
-                  <tr key={i}>
-                    <td>{attempt.attempt}</td>
-                    <td>
-                      <StatusBadge map={REVEAL_BADGES} status={attempt.status} />
-                    </td>
-                    <td>{attempt.transport}</td>
-                    <td className="small">
-                      {attempt.skip_reason && <span className="text-muted">{attempt.skip_reason}</span>}
-                      {attempt.error && <span className="text-danger"> {attempt.error}</span>}
-                    </td>
-                    <td className="text-end text-muted">
-                      {attempt.started_at ? formatDateTime(attempt.started_at) : '—'}
-                    </td>
-                    <td className="text-end text-muted">{formatDateTime(attempt.at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {result.inclusion && (
-        <div className="card mb-3">
-          <div className="card-header py-1 d-flex align-items-center gap-2">
-            <strong className="small">
-              Inclusion
-              <InfoHint>
-                Our payload was committed to by a block seen at the head (source:{' '}
-                <strong>builder_api</strong> when the payload was served through the Builder API,{' '}
-                <strong>epbs</strong> otherwise). Payload verdict, from the next
-                canonical block and revised on reorgs:
-                <dl>
-                  <dt>pending</dt>
-                  <dd>no follow-up block seen yet</dd>
-                  <dt>canonical</dt>
-                  <dd>the next block builds on our payload</dd>
-                  <dt>missed</dt>
-                  <dd>the block stayed but the next one builds on an older payload: withheld, too late, or voted empty</dd>
-                  <dt>orphaned</dt>
-                  <dd>our block itself was reorged out</dd>
-                </dl>
-              </InfoHint>
-            </strong>
-            <span className={badgeClass('success')}>{result.inclusion.source}</span>
-            {result.inclusion.payload_status && (
-              <span
-                className={badgeClass(
-                  PAYLOAD_STATUS_BADGES[result.inclusion.payload_status] || 'secondary'
-                )}
-                title="Canonical payload verdict from the next canonical block's committed parent hash (revised on reorgs)"
-              >
-                payload {result.inclusion.payload_status}
-              </span>
-            )}
-          </div>
           <div className="card-body py-2">
-            <div className="row g-2">
-              <div className="col-12">
-                <div className="config-item">
-                  <div className="config-item-label">Block Hash</div>
-                  <div className="config-item-value font-monospace ap-break">
-                    {result.inclusion.block_hash}
-                  </div>
-                </div>
-              </div>
-              <KV label="Txs / Blobs">
-                {result.inclusion.num_transactions} / {result.inclusion.num_blobs}
-              </KV>
-              <KV label="Value">{parseFloat(result.inclusion.value_eth).toFixed(6)} ETH</KV>
-              <KV label="At">{formatDateTime(result.inclusion.timestamp)}</KV>
-              {result.inclusion.payload_check_slot !== undefined && (
-                <KV label="Verdict from slot" hint="The slot of the follow-up block the payload verdict was taken from.">{String(result.inclusion.payload_check_slot)}</KV>
-              )}
-            </div>
+            <FrozenPlanSection frozen={result.applied_plan} clock={clock} />
           </div>
-        </div>
-      )}
-
-      {result.tx_plan && (
-        <div className="card mb-3">
-          <div className="card-header py-1 d-flex align-items-center gap-2">
-            <strong className="small">
-              Tx plan check
-              <InfoHint>
-                Post-inclusion check of a testing build: does the canonical block hold exactly the
-                planned transactions, in order?
-                <dl>
-                  <dt>pending</dt>
-                  <dd>included, the EL check has not run yet</dd>
-                  <dt>match</dt>
-                  <dd>exactly the plan, in order</dd>
-                  <dt>mismatch</dt>
-                  <dd>the block&apos;s transaction list differs</dd>
-                  <dt>block_not_found</dt>
-                  <dd>the EL did not serve the block in time</dd>
-                  <dt>not_included</dt>
-                  <dd>the slot passed without our payload on chain</dd>
-                  <dt>missed</dt>
-                  <dd>won, but the next block built on an older payload</dd>
-                  <dt>orphaned</dt>
-                  <dd>the won block was reorged out</dd>
-                </dl>
-              </InfoHint>
-            </strong>
-            <span
-              className={badgeClass(TX_PLAN_BADGES[result.tx_plan.status] || 'secondary')}
-              title="Post-inclusion check: does the canonical block hold exactly the transactions buildoor submitted, in order?"
-            >
-              {result.tx_plan.status}
-            </span>
-            <span className="text-muted small">
-              {result.tx_plan.expected_count} planned ({result.tx_plan.tx_source})
-              {result.tx_plan.included_count !== undefined && result.tx_plan.status !== 'pending'
-                ? `, ${result.tx_plan.included_count} in block`
-                : ''}
-            </span>
-            {result.tx_plan.verified_at && (
-              <span className="text-muted small ms-auto">checked {formatDateTime(result.tx_plan.verified_at)}</span>
-            )}
-          </div>
-          {(result.tx_plan.detail || (result.tx_plan.first_mismatch ?? -1) >= 0) && (
-            <div className="card-body py-2">
-              {(result.tx_plan.first_mismatch ?? -1) >= 0 && (
-                <KV label="First mismatch">position {result.tx_plan.first_mismatch}</KV>
-              )}
-              {result.tx_plan.detail && (
-                <div className={`small ${result.tx_plan.status === 'match' ? 'text-muted' : 'text-danger'}`}>
-                  {result.tx_plan.detail}
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
     </>

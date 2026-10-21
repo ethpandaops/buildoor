@@ -5,15 +5,53 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version Number ('0.x.y')"
+        description: "Version Number ('x.y.z' or 'x.y.z-rc.n', without the v)"
         required: true
 
 permissions:
   contents: write
 
 jobs:
+  # A release is cut from main only, under a new semver tag. Everything
+  # below waits for this check, so nothing is built or pushed otherwise.
+  verify_release:
+    name: Verify release input
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        fetch-depth: 1
+    - name: Check branch, version and tag
+      env:
+        VERSION: ${{ inputs.version }}
+        REF: ${{ github.ref }}
+      run: |
+        if [ "$REF" != "refs/heads/main" ]; then
+          echo "::error::Releases are cut from main, not $REF"
+          exit 1
+        fi
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::Version '$VERSION' is not semver (x.y.z or x.y.z-rc.n, without the v)"
+          exit 1
+        fi
+        if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" > /dev/null; then
+          echo "::error::Tag v$VERSION already exists"
+          exit 1
+        fi
+
+  check_source:
+    name: "Run code checks"
+    needs: [verify_release]
+    uses: ./.github/workflows/_shared-check.yaml
+
+  e2e:
+    name: "Run E2E test"
+    needs: [check_source]
+    uses: ./.github/workflows/_shared-e2e.yaml
+
   build_binaries:
     name: "Build Buildoor"
+    needs: [check_source, e2e]
     uses: ./.github/workflows/_shared-build.yaml
     with:
       release: "v${{ inputs.version }}"
@@ -82,6 +120,11 @@ jobs:
         cd buildoor_darwin_arm64
         tar -czf ../buildoor_${{ inputs.version }}_darwin_arm64.tar.gz .
 
+    - name: "Generate release checksums: SHA256SUMS"
+      run: |
+        sha256sum buildoor_${{ inputs.version }}_*.zip buildoor_${{ inputs.version }}_*.tar.gz > SHA256SUMS
+        cat SHA256SUMS
+
     # create release with all artifacts
     - name: Create latest release
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -90,6 +133,9 @@ jobs:
         prerelease: false
         name: "v${{ inputs.version }}"
         tag_name: "v${{ inputs.version }}"
+        # The tag goes on the tested commit, not on whatever main moved to
+        # while the checks ran.
+        target_commitish: ${{ github.sha }}
         body: |
           ### Major Changes
           ${{ steps.ai_release_notes.outputs.release_notes }}
@@ -102,15 +148,19 @@ jobs:
           </details>
 
           ### Release Artifacts
-          Please read through the [wiki](https://github.com/ethpandaops/buildoor/wiki) for setup & configuration instructions.
+          Please read through the [README](https://github.com/ethpandaops/buildoor/blob/v${{ inputs.version }}/README.md) for setup & configuration instructions.
           | Release File  | Description |
           | ------------- | ------------- |
           | [buildoor_${{ inputs.version }}_windows_amd64.zip](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_windows_amd64.zip) | buildoor executables for windows/amd64 |
           | [buildoor_${{ inputs.version }}_linux_amd64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_linux_amd64.tar.gz) | buildoor executables for linux/amd64 |
           | [buildoor_${{ inputs.version }}_linux_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_linux_arm64.tar.gz) | buildoor executables for linux/arm64 |
           | [buildoor_${{ inputs.version }}_darwin_arm64.tar.gz](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/buildoor_${{ inputs.version }}_darwin_arm64.tar.gz) | buildoor executable for macos/arm64 |
+          | [SHA256SUMS](https://github.com/ethpandaops/buildoor/releases/download/v${{ inputs.version }}/SHA256SUMS) | SHA-256 checksums of the release files (`sha256sum -c SHA256SUMS`) |
+
+          Docker image: `ethpandaops/buildoor:v${{ inputs.version }}`
         files: |
           buildoor_${{ inputs.version }}_windows_amd64.zip
           buildoor_${{ inputs.version }}_linux_amd64.tar.gz
           buildoor_${{ inputs.version }}_linux_arm64.tar.gz
           buildoor_${{ inputs.version }}_darwin_arm64.tar.gz
+          SHA256SUMS

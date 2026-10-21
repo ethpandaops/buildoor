@@ -185,7 +185,7 @@ with payload source `local`, produce no payload (`local_or_el` falls back).
 | `--engine-build-enabled` | `true` | Run the engine-API build (forkchoiceUpdated → getPayload); off, the testing build alone feeds the bids and slots without one are skipped |
 | `--local-build-enabled` | `false` | Build the additional local payload per slot |
 | `--local-build-payload-source` | `el` | Which payload feeds bids/reveals: `el` (local is a shadow), `local`, `local_or_el`, `higher_value` (whichever block is worth more) |
-| `--local-build-tx-source` | `txpool` | Transaction source: `txpool`, `txpool_el_fill` (pool first, then the EL mempool's pending txs fill the block), `empty`, `el_mempool` (per-slot plans may set an explicit list) |
+| `--local-build-tx-source` | `txpool` | Transaction source after the inclusion list: `txpool` (private pool only), `private_first` (private pool, then the EL mempool's pending txs fill the block; formerly `txpool_el_fill`), `most_profitable` (both pools merged by effective tip), `empty`, `el_mempool` (the EL picks) (per-slot plans may set an explicit list) |
 | `--local-build-allow-blobs-without-bundle` | `false` | Include blob txs on ELs whose testing path returns no blobs bundle (reth, ethrex) |
 | `--local-build-blob-encoding` | `auto` | Blob tx encoding for the EL: `auto`, `network`, `canonical` |
 | `--local-build-start-time` | `0` | Start of the testing build window in ms relative to the slot start (0 = auto: 20% of the slot before it) |

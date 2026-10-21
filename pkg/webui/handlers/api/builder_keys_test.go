@@ -52,7 +52,7 @@ func TestGetBuilderKeysWithoutRegistry(t *testing.T) {
 	h := &APIHandler{}
 
 	rec := httptest.NewRecorder()
-	h.GetBuilderKeys(rec, httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-keys", nil))
+	h.GetBuilderKeys(rec, httptest.NewRequest(http.MethodGet, "/api/v1/builder-keys", nil))
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 
@@ -67,7 +67,7 @@ func TestGetBuilderKeysWithoutLifecycle(t *testing.T) {
 	h := keysTestHandler(t, 3)
 
 	rec := httptest.NewRecorder()
-	h.GetBuilderKeys(rec, httptest.NewRequest(http.MethodGet, "/api/buildoor/builder-keys", nil))
+	h.GetBuilderKeys(rec, httptest.NewRequest(http.MethodGet, "/api/v1/builder-keys", nil))
 
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -95,7 +95,7 @@ func TestMutatingBuilderKeyEndpointsRequireLifecycle(t *testing.T) {
 
 	for action, handler := range handlers {
 		t.Run(action, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/buildoor/builder-keys/1/"+action, nil)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/builder-keys/1/"+action, nil)
 			req = mux.SetURLVars(req, map[string]string{"index": "1"})
 
 			rec := httptest.NewRecorder()
@@ -119,7 +119,7 @@ func TestResolveKeyParamRejectsBadIndices(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/api/buildoor/builder-keys/x/topup", nil)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/builder-keys/x/topup", nil)
 			req = mux.SetURLVars(req, map[string]string{"index": test.index})
 
 			rec := httptest.NewRecorder()

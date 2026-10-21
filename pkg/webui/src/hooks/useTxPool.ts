@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { TxPoolPreviewResponse, TxPoolResponse } from '../types';
+import type { TxPoolResponse } from '../types';
 import { useAuth } from './useAuth';
+import { apiPath } from '../utils/api';
 
 interface TxPoolQuery {
   offset: number;
@@ -9,20 +10,15 @@ interface TxPoolQuery {
   sort: string;
 }
 
-// Fetches a page of the transaction pool while `active` and, on demand, the
-// dry-run selection preview. refreshKey (the SSE pool version) triggers a
-// refetch of the page.
+// Fetches a page of the transaction pool while `active`. refreshKey (the SSE
+// pool version) triggers a refetch of the page.
 export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unknown) {
   const [data, setData] = useState<TxPoolResponse | null>(null);
-  const [preview, setPreview] = useState<TxPoolPreviewResponse | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // True when the backend refused the pool read (or the preview) without a
-  // login (401): the pool holds private transactions, readable by operators
-  // only.
+  // True when the backend refused the pool read without a login (401): the
+  // pool holds private transactions, readable by operators only.
   const [unauthorized, setUnauthorized] = useState(false);
-  const [previewUnauthorized, setPreviewUnauthorized] = useState(false);
   const { getAuthHeader, isLoggedIn } = useAuth();
 
   const authHeaders = useCallback(async (): Promise<HeadersInit> => {
@@ -41,7 +37,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
     if (query.sort) params.set('sort', query.sort);
 
     try {
-      const response = await fetch(`/api/buildoor/txpool?${params.toString()}`, { headers: await authHeaders() });
+      const response = await fetch(apiPath(`/txpool?${params.toString()}`), { headers: await authHeaders() });
       if (response.status === 401) {
         setData(null);
         setUnauthorized(true);
@@ -67,29 +63,6 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
     // isLoggedIn re-runs the fetch once a login completes.
   }, [query.offset, query.limit, query.sender, query.sort, authHeaders, isLoggedIn]);
 
-  const fetchPreview = useCallback(async () => {
-    try {
-      const response = await fetch('/api/buildoor/txpool/preview', { headers: await authHeaders() });
-      if (response.status === 401) {
-        setPreview(null);
-        setPreviewError(null);
-        setPreviewUnauthorized(true);
-        return;
-      }
-      setPreviewUnauthorized(false);
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setPreview(null);
-        setPreviewError(body.error || response.statusText);
-        return;
-      }
-      setPreview(body);
-      setPreviewError(null);
-    } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : 'Unknown error');
-    }
-  }, [authHeaders, isLoggedIn]);
-
   useEffect(() => {
     if (!active) return;
     fetchPool();
@@ -97,7 +70,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
 
   const clear = useCallback(async (): Promise<string | null> => {
     try {
-      const response = await fetch('/api/buildoor/txpool', { method: 'DELETE', headers: await authHeaders() });
+      const response = await fetch(apiPath('/txpool'), { method: 'DELETE', headers: await authHeaders() });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) return body.error || response.statusText;
     } catch (err) {
@@ -109,7 +82,7 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
 
   const drop = useCallback(async (hash: string): Promise<string | null> => {
     try {
-      const response = await fetch(`/api/buildoor/txpool/${hash}`, { method: 'DELETE', headers: await authHeaders() });
+      const response = await fetch(apiPath(`/txpool/${hash}`), { method: 'DELETE', headers: await authHeaders() });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) return body.error || response.statusText;
     } catch (err) {
@@ -125,10 +98,6 @@ export function useTxPool(query: TxPoolQuery, active: boolean, refreshKey?: unkn
     error,
     unauthorized,
     refresh: fetchPool,
-    preview,
-    previewError,
-    previewUnauthorized,
-    fetchPreview,
     clear,
     drop,
   };

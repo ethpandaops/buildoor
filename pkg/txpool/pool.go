@@ -153,6 +153,8 @@ type Pool struct {
 	elClient ELClient
 	chainSvc chain.Service
 	clClient *beacon.Client
+	// blocks shares the recent blocks' transactions (blocks.go).
+	blocks blockCache
 
 	enabled atomic.Bool
 	version atomic.Uint64 // bumped on every content change (UI refresh hint)
@@ -384,6 +386,12 @@ func (p *Pool) restore() error {
 // call started the mirror (a full read: a slow, untypical selection).
 func (p *Pool) ELMempool(ctx context.Context) (txs []*PooledTx, started bool, err error) {
 	return p.mirror.Pending(ctx)
+}
+
+// ELMempoolIfActive returns the mirrored EL mempool while the mirror runs
+// (ok false otherwise), without starting it or keeping it alive.
+func (p *Pool) ELMempoolIfActive() (txs []*PooledTx, ok bool) {
+	return p.mirror.PendingIfActive()
 }
 
 // ContentVersion changes whenever a build could find something new: the

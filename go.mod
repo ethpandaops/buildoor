@@ -1,12 +1,12 @@
 module github.com/ethpandaops/buildoor
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/cockroachdb/pebble/v2 v2.1.7
 	github.com/ethereum/go-ethereum v1.17.8
-	github.com/ethpandaops/go-eth-engine-client v0.0.2-0.20260703151703-9761c6187b28
+	github.com/ethpandaops/go-eth-engine-client v0.0.2
 	github.com/ethpandaops/go-eth2-client v0.1.11
 	github.com/ethpandaops/service-authenticatoor v0.0.3
 	github.com/glebarez/go-sqlite v1.23.0

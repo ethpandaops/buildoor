@@ -7,6 +7,7 @@ import {
   getConnectionGeneration,
   subscribeConnectionGeneration,
 } from './useEventStream';
+import { apiPath } from '../utils/api';
 
 export interface SaveRulesResult {
   ok: boolean;
@@ -42,7 +43,7 @@ export function useActionPlanRules(): UseActionPlanRulesResult {
     setError(null);
 
     try {
-      const response = await fetch('/api/buildoor/action-plan/rules', { headers: await authHeaders() });
+      const response = await fetch(apiPath('/action-plan/rules'), { headers: await authHeaders() });
       if (!response.ok) {
         throw new Error(`Failed to fetch action plan rules: ${response.statusText}`);
       }
@@ -97,7 +98,7 @@ export function useActionPlanRules(): UseActionPlanRulesResult {
     }
 
     try {
-      const response = await fetch('/api/buildoor/action-plan/rules', {
+      const response = await fetch(apiPath('/action-plan/rules'), {
         method: 'POST',
         headers,
         body: JSON.stringify({ rules: next }),

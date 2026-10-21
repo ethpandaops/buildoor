@@ -115,7 +115,7 @@ func (h *APIHandler) parseSlotRange(w http.ResponseWriter, r *http.Request) (min
 // @Success 200 {object} ActionPlanResponse
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 503 {object} map[string]string "Plan service unavailable"
-// @Router /api/buildoor/action-plan [get]
+// @Router /action-plan [get]
 func (h *APIHandler) GetActionPlan(w http.ResponseWriter, r *http.Request) {
 	if h.planSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "action plan service not available")
@@ -163,7 +163,7 @@ func (h *APIHandler) GetActionPlan(w http.ResponseWriter, r *http.Request) {
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 409 {object} map[string]string "Slot in the past or frozen"
 // @Failure 503 {object} map[string]string "Plan service unavailable"
-// @Router /api/buildoor/action-plan [post]
+// @Router /action-plan [post]
 func (h *APIHandler) UpdateActionPlan(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -220,7 +220,7 @@ func (h *APIHandler) UpdateActionPlan(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Success 200 {object} ActionPlanRulesResponse
 // @Failure 503 {object} map[string]string "Plan service unavailable"
-// @Router /api/buildoor/action-plan/rules [get]
+// @Router /action-plan/rules [get]
 func (h *APIHandler) GetActionPlanRules(w http.ResponseWriter, r *http.Request) {
 	if h.planSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "action plan service not available")
@@ -257,7 +257,7 @@ func (h *APIHandler) GetActionPlanRules(w http.ResponseWriter, r *http.Request) 
 // @Failure 400 {object} map[string]string "Validation error"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 503 {object} map[string]string "Plan service unavailable"
-// @Router /api/buildoor/action-plan/rules [post]
+// @Router /action-plan/rules [post]
 func (h *APIHandler) UpdateActionPlanRules(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -308,7 +308,7 @@ func (h *APIHandler) UpdateActionPlanRules(w http.ResponseWriter, r *http.Reques
 // @Success 200 {object} SlotResultsResponse
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 503 {object} map[string]string "Results tracker unavailable"
-// @Router /api/buildoor/slot-results [get]
+// @Router /slot-results [get]
 func (h *APIHandler) GetSlotResults(w http.ResponseWriter, r *http.Request) {
 	if h.resultTracker == nil {
 		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")
@@ -342,53 +342,4 @@ func (h *APIHandler) GetSlotResults(w http.ResponseWriter, r *http.Request) {
 		MinSlot: minSlot,
 		MaxSlot: maxSlot,
 	})
-}
-
-// UpdateSettingsRequest is a generic path-based settings mutation: keys are
-// the canonical settings registry keys (e.g. "epbs.bid_subsidy",
-// "schedule.mode", "builder_api.value_override_gwei"), values their JSON
-// encodings. Any subset of settings updates in one call.
-type UpdateSettingsRequest map[string]json.RawMessage
-
-// UpdateSettings godoc
-// @Id updateSettings
-// @Summary Update global settings by key path
-// @Tags Config
-// @Description Applies partial global settings updates keyed by canonical
-// @Description settings paths (e.g. {"epbs.bid_subsidy": 1000,
-// @Description "schedule.mode": "all"}) without requiring full config
-// @Description objects. Unknown keys are rejected. Requires authentication.
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer token"
-// @Param request body object true "Map of settings key paths to values"
-// @Success 200 {object} map[string]string "Success"
-// @Failure 400 {object} map[string]string "Unknown key or invalid value"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/config/settings [post]
-func (h *APIHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxPlanUpdateBodyBytes)
-
-	var req UpdateSettingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-
-	if len(req) == 0 {
-		writeError(w, http.StatusBadRequest, "no settings provided")
-		return
-	}
-
-	if !h.applySettings(w, r, token, "config.settings", req, req) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }

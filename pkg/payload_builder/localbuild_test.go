@@ -591,7 +591,7 @@ func TestBuildLocalELFill(t *testing.T) {
 	}
 
 	req := &LocalBuildRequest{
-		TxSource:    config.TxSourceTxPoolELFill,
+		TxSource:    config.TxSourcePrivateFirst,
 		MaxAttempts: 3,
 		Ordering:    config.TxOrderingFIFO,
 		GasFillPct:  100,
@@ -726,9 +726,10 @@ func TestLocalBuildInfoPrivateTxs(t *testing.T) {
 	}
 }
 
-// TestWithoutFillBlobTxs drops the fill's blob transactions and the later
-// fill transactions of their senders, keeping everyone else's.
-func TestWithoutFillBlobTxs(t *testing.T) {
+// TestWithoutSenderTails drops the picked transactions and every later
+// transaction of their senders (pool and fill alike: most_profitable
+// interleaves them), keeping everyone else's.
+func TestWithoutSenderTails(t *testing.T) {
 	blobSender, other := common.Address{0x01}, common.Address{0x02}
 
 	entry := func(sender common.Address, nonce uint64, blob bool) *txpool.PooledTx {
@@ -747,5 +748,12 @@ func TestWithoutFillBlobTxs(t *testing.T) {
 	after := entry(blobSender, 2, false)
 	kept := entry(other, 0, false)
 
-	require.Equal(t, []*txpool.PooledTx{before, kept}, withoutFillBlobTxs([]*txpool.PooledTx{before, blob, kept, after}))
+	isBlob := func(tx *txpool.PooledTx) bool { return tx.Tx.Type() == types.BlobTxType }
+
+	require.Equal(t, []*txpool.PooledTx{before, kept},
+		withoutSenderTails([]*txpool.PooledTx{before, blob, kept, after}, isBlob))
+
+	fill := map[common.Hash]struct{}{blob.Hash: {}}
+	require.True(t, hasFillBlobTxs([]*txpool.PooledTx{before, blob}, fill))
+	require.False(t, hasFillBlobTxs([]*txpool.PooledTx{before, after}, fill))
 }

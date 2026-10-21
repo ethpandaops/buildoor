@@ -60,7 +60,7 @@ export const ELMempoolTab: React.FC<ELMempoolTabProps> = ({
           <div className="bd-mp-toolbar mb-3">
             <div>
               <h3 className="bd-card-title">
-                EL mempool mirror{' '}
+                Public mempool (EL mirror){' '}
                 {stats && !stats.active && <Tag title="Starts with the first testing build that fills from the EL mempool">idle</Tag>}
                 {mode && <Tag tone={mode.tone} title={mode.title}>{mode.label}</Tag>}
               </h3>

@@ -29,6 +29,8 @@ type SPAHandler struct {
 type RuntimeConfig struct {
 	AuthProviderURL string `json:"authProviderURL"`
 	OverviewURL     string `json:"overviewURL,omitempty"`
+	// Version is the build version shown in the page footer.
+	Version string `json:"version"`
 }
 
 // NewSPAHandler creates a new SPA handler. The runtimeConfig is encoded
