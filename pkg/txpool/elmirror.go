@@ -122,6 +122,29 @@ func (m *elMirror) Pending(ctx context.Context) (txs []*PooledTx, started bool, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.snapshotLocked(), started, nil
+}
+
+// PendingIfActive returns the mirrored pending transactions while the mirror
+// runs, without starting it or counting as a use: a reader that must not
+// keep the mirror alive on its own (the public next block preview).
+func (m *elMirror) PendingIfActive() ([]*PooledTx, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.active {
+		return nil, false
+	}
+
+	return m.snapshotLocked(), true
+}
+
+// snapshotLocked lists the mirrored pending transactions, each sender's in
+// nonce order, up to the sender's first cold one: a cold transaction is far
+// below the base fee, so neither it nor any later nonce of its sender can
+// execute (they would only show up as nonce gaps, each costing a state
+// read). Must hold mu.
+func (m *elMirror) snapshotLocked() []*PooledTx {
 	senders := make([]common.Address, 0, len(m.bySender))
 	for sender := range m.bySender {
 		senders = append(senders, sender)
@@ -142,13 +165,16 @@ func (m *elMirror) Pending(ctx context.Context) (txs []*PooledTx, started bool, 
 		sort.Slice(nonces, func(i, j int) bool { return nonces[i] < nonces[j] })
 
 		for _, nonce := range nonces {
-			if tx := byNonce[nonce].tx; !tx.Cold() {
-				out = append(out, tx)
+			tx := byNonce[nonce].tx
+			if tx.Cold() {
+				break
 			}
+
+			out = append(out, tx)
 		}
 	}
 
-	return out, started, nil
+	return out
 }
 
 // noteBaseFee records the base fee the latest selection used: arrivals
@@ -497,7 +523,7 @@ func (m *elMirror) noteBlock(ctx context.Context, blockHash common.Hash) {
 	callCtx, cancel := context.WithTimeout(ctx, mirrorCallTimeout)
 	defer cancel()
 
-	block, found, err := m.pool.elClient.BlockTransactions(callCtx, blockHash)
+	block, found, err := m.pool.IncludedBlock(callCtx, blockHash)
 	if err != nil || !found {
 		return
 	}

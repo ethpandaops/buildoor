@@ -80,7 +80,7 @@ type OverviewBuilders struct {
 	TotalEffectiveGwei uint64               `json:"total_effective_gwei"`
 }
 
-// OverviewResponse is the response payload of /api/buildoor/overview — a compact
+// OverviewResponse is the response payload of /api/v1/overview — a compact
 // summary used by the multi-instance overview UI.
 //
 // BuilderPubkey/BuilderIndex/IsRegistered describe the PRIMARY key only and are
@@ -109,7 +109,7 @@ type OverviewResponse struct {
 // @Description services, balances, and recent build stats.
 // @Produce json
 // @Success 200 {object} OverviewResponse "Success"
-// @Router /api/buildoor/overview [get]
+// @Router /overview [get]
 func (h *APIHandler) GetOverview(w http.ResponseWriter, r *http.Request) {
 	// Allow the overview UI (served from a separate origin) to read this endpoint.
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -130,7 +130,7 @@ func (h *APIHandler) GetOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Service availability + enabled flags mirror /api/services/toggle response.
+	// Service availability + enabled flags, as in the service_status event.
 	resp.Services = OverviewServices{
 		EPBSAvailable:       h.epbsSvc != nil,
 		EPBSEnabled:         h.epbsSvc != nil && h.epbsSvc.IsEnabled(),

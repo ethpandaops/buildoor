@@ -1,3 +1,14 @@
+// Package api implements buildoor's REST API.
+//
+// @title Buildoor API
+// @description REST API of buildoor, the Ethereum builder testing tool: status,
+// @description settings, per-slot action plans and outcomes, builder keys, the
+// @description transaction pool and registrations. Mutating endpoints need a
+// @description login (Bearer token) when an auth provider is configured. The
+// @description Builder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)
+// @description follow their own specifications and are not listed here. The
+// @description pre-v1 paths stay served as deprecated aliases until 2.0.
+// @BasePath /api/v1
 package api
 
 import (
@@ -44,6 +55,9 @@ type APIHandler struct {
 	planSvc          *action_plan.PlanService         // May be nil
 	resultTracker    *slot_results.Tracker            // May be nil
 	planVerifier     *tx_plan_verifier.Verifier       // May be nil (no --el-rpc)
+
+	// nextBlockCache shares the next block estimate between viewers.
+	nextBlockCache nextBlockCache
 
 	// The /rpc ingress (nil without --el-rpc).
 	rpcIngress   *txpoolrpc.Server
@@ -111,6 +125,8 @@ func NewAPIHandler(
 		)
 		h.eventStreamMgr.AttachSources(settingsSvc, validatorStore, propPrefSvc, valRanges)
 		h.eventStreamMgr.Start()
+
+		go h.runNextBlockFeed(h.eventStreamMgr.ctx)
 	}
 
 	return h

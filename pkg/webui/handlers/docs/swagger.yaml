@@ -1,3 +1,4 @@
+basePath: /api/v1
 definitions:
   action_plan.BidPlan:
     properties:
@@ -237,8 +238,9 @@ definitions:
         type: integer
       tx_source:
         description: |-
-          TxSource: txpool | empty | el_mempool | explicit (explicit requires
-          Transactions; a non-empty Transactions list implies explicit).
+          TxSource: txpool | private_first | most_profitable | empty |
+          el_mempool | explicit (explicit requires Transactions; a non-empty
+          Transactions list implies explicit).
         type: string
     type: object
   action_plan.Mode:
@@ -527,7 +529,9 @@ definitions:
           hidden from a reader without a login (output only).
         type: integer
       tx_source:
-        description: 'TxSource: txpool | empty | el_mempool | explicit.'
+        description: |-
+          TxSource: txpool | private_first | most_profitable | empty |
+          el_mempool | explicit | queued.
         type: string
     type: object
   action_plan.ResolvedRevealSettings:
@@ -859,23 +863,6 @@ definitions:
       seen:
         type: integer
     type: object
-  api.LifecycleStatusResponse:
-    properties:
-      balance_gwei:
-        type: integer
-      builder_index:
-        type: integer
-      deposit_epoch:
-        type: integer
-      effective_balance_gwei:
-        type: integer
-      is_registered:
-        type: boolean
-      pending_payments_gwei:
-        type: integer
-      withdrawable_epoch:
-        type: integer
-    type: object
   api.LocalBuildStatusResponse:
     properties:
       availability:
@@ -896,6 +883,108 @@ definitions:
         type: string
       txpool:
         $ref: '#/definitions/api.TxPoolStatus'
+    type: object
+  api.NextBlockEstimates:
+    properties:
+      computed_at:
+        type: integer
+      estimates:
+        items:
+          $ref: '#/definitions/api.NextBlockResponse'
+        type: array
+      version:
+        description: |-
+          Version counts the estimate sets: the next_block event carries it, so
+          a logged-in reader fetches the transactions of exactly that set.
+        type: integer
+    type: object
+  api.NextBlockResponse:
+    properties:
+      basis:
+        description: |-
+          Basis is what the estimated block follows: head (a block on the
+          current head), candidate (the slot after our current slot candidate,
+          BasisBlock, assumed included) or head_only (the slot after a current
+          slot block nobody here built: nothing assumed).
+        type: string
+      basis_block:
+        type: string
+      computed_at:
+        type: integer
+      gas_limit:
+        type: integer
+      local_build_enabled:
+        description: |-
+          LocalBuildEnabled is false when the testing build is off: the estimate
+          then shows what it would select.
+        type: boolean
+      max_blobs:
+        type: integer
+      note:
+        description: |-
+          Note explains an estimate that cannot be made (the source leaves the
+          choice to the EL, or builds empty blocks).
+        type: string
+      ordering:
+        type: string
+      parent_hash:
+        type: string
+      public_mempool:
+        description: |-
+          PublicMempool is mirrored (the EL mempool is part of the estimate),
+          idle (the source takes it, but the mirror is not running: no build
+          asked for it lately) or unused (the source does not take it).
+        type: string
+      selection:
+        allOf:
+        - $ref: '#/definitions/txpool.Summary'
+        description: |-
+          Selection carries the aggregates (counts, gas, blobs, skips and the
+          split by origin); its pool transaction hashes need a login.
+      slot:
+        description: |-
+          Slot is the slot of the block that extends the current head (the slot
+          after the head, or the current slot after missed slots).
+        type: integer
+      tx_source:
+        description: |-
+          TxSource is the configured transaction source; Ordering the private
+          pool's order (private_first and txpool).
+        type: string
+      txs:
+        description: |-
+          Txs are the block's transactions in block order (login only, at most
+          nextBlockMaxTxs).
+        items:
+          $ref: '#/definitions/api.NextBlockTx'
+        type: array
+      txs_total:
+        type: integer
+    type: object
+  api.NextBlockTx:
+    properties:
+      blobs:
+        type: integer
+      from:
+        type: string
+      gas:
+        type: integer
+      gas_used:
+        description: GasUsed is the gas the transaction used (on-chain blocks only).
+        type: integer
+      hash:
+        type: string
+      nonce:
+        type: integer
+      origin:
+        description: inclusion_list, private or public
+        type: string
+      tip:
+        description: Tip is the effective priority fee per gas over the base fee,
+          wei.
+        type: string
+      type:
+        type: integer
     type: object
   api.OverviewBalances:
     properties:
@@ -1023,6 +1112,37 @@ definitions:
         type: integer
       slots_built:
         type: integer
+    type: object
+  api.PayloadTransactionsResponse:
+    properties:
+      base_fee:
+        type: string
+      block_hash:
+        type: string
+      gas_limit:
+        type: integer
+      gas_used:
+        type: integer
+      on_chain:
+        type: boolean
+      ours:
+        description: |-
+          Ours marks one of our payloads (classified by its build's own
+          accounting); OnChain that the EL has the block.
+        type: boolean
+      txs:
+        description: |-
+          Txs are in block order. Origin is inclusion_list (on the list the
+          block had to satisfy), private (from our private mempool) or public.
+        items:
+          $ref: '#/definitions/api.NextBlockTx'
+        type: array
+      value:
+        description: |-
+          Value is what the block pays its fee recipient in priority fees, wei:
+          our build's reported block value, or the effective tips times the gas
+          the transactions used (empty while unknown).
+        type: string
     type: object
   api.ProposerPreferencesEntry:
     properties:
@@ -1185,19 +1305,6 @@ definitions:
       target:
         type: string
     type: object
-  api.TxPoolPreviewResponse:
-    properties:
-      gas_limit:
-        type: integer
-      max_blobs:
-        type: integer
-      ordering:
-        type: string
-      parent_hash:
-        type: string
-      selection:
-        $ref: '#/definitions/txpool.Summary'
-    type: object
   api.TxPoolResponse:
     properties:
       limit:
@@ -1252,27 +1359,6 @@ definitions:
       target:
         type: integer
     type: object
-  api.UpdateEPBSRequest:
-    properties:
-      bid_end_time:
-        type: integer
-      bid_increase:
-        type: integer
-      bid_interval:
-        type: integer
-      bid_min_amount:
-        type: integer
-      bid_start_time:
-        type: integer
-      bid_subsidy:
-        type: integer
-      build_start_time:
-        type: integer
-      payload_build_delay:
-        type: integer
-      reveal_time:
-        type: integer
-    type: object
   api.UpdateRPCKeyRequest:
     properties:
       default_rate_limit:
@@ -1287,20 +1373,7 @@ definitions:
           DefaultRateLimit returns it to txpool.rpc_key_rate.
         type: integer
     type: object
-  api.UpdateScheduleRequest:
-    properties:
-      every_nth:
-        type: integer
-      mode:
-        type: string
-      next_n:
-        type: integer
-      start_slot:
-        type: integer
-    type: object
   api.ValidatorRegistrationResponse:
-    description: Returns the list of validators registered via the Builder API (fee
-      recipient preferences). Not paginated.
     properties:
       fee_recipient:
         description: Hex-encoded Ethereum address
@@ -1570,8 +1643,9 @@ definitions:
         type: string
       fill_txs:
         description: |-
-          FillTxs is how many EL mempool transactions the txpool_el_fill source
-          appended after the pool selection; FillError is why the EL mempool
+          FillTxs is how many EL mempool transactions the private_first source
+          placed after the pool selection (most_profitable: among it); FillError
+          is why the EL mempool
           could not be read (the build then used the pool alone); FillDropped
           marks that the EL refused the list and the build retried without the
           fill; FillBlobsDropped that a refused list was first retried without
@@ -2236,6 +2310,31 @@ definitions:
       txs:
         type: integer
     type: object
+  txpool.OriginStats:
+    properties:
+      blobs:
+        type: integer
+      gas:
+        description: gas limit sum
+        type: integer
+      tips:
+        description: |-
+          Tips is the effective tip times the gas limit, summed, in wei: the
+          most the origin's transactions can pay the builder (they pay for the
+          gas they use).
+        type: string
+      txs:
+        type: integer
+    type: object
+  txpool.SelectionOrigins:
+    properties:
+      inclusion_list:
+        $ref: '#/definitions/txpool.OriginStats'
+      private:
+        $ref: '#/definitions/txpool.OriginStats'
+      public:
+        $ref: '#/definitions/txpool.OriginStats'
+    type: object
   txpool.Stats:
     properties:
       admitted:
@@ -2301,7 +2400,7 @@ definitions:
       fill_blobs:
         type: integer
       fill_candidates:
-        description: EL mempool fill (tx source txpool_el_fill).
+        description: EL mempool fill (tx sources private_first, most_profitable).
         type: integer
       fill_gas_sum:
         type: integer
@@ -2328,6 +2427,11 @@ definitions:
         type: object
       inclusion_list_txs:
         type: integer
+      origins:
+        allOf:
+        - $ref: '#/definitions/txpool.SelectionOrigins'
+        description: Origins accounts the block's transactions by where they came
+          from.
       pool_size:
         type: integer
       selected:
@@ -2376,8 +2480,17 @@ definitions:
     type: object
 info:
   contact: {}
+  description: |-
+    REST API of buildoor, the Ethereum builder testing tool: status,
+    settings, per-slot action plans and outcomes, builder keys, the
+    transaction pool and registrations. Mutating endpoints need a
+    login (Bearer token) when an auth provider is configured. The
+    Builder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)
+    follow their own specifications and are not listed here. The
+    pre-v1 paths stay served as deprecated aliases until 2.0.
+  title: Buildoor API
 paths:
-  /api/buildoor/action-plan:
+  /action-plan:
     get:
       description: Returns all per-slot action plans within the inclusive slot range.
       operationId: getActionPlan
@@ -2472,7 +2585,7 @@ paths:
       summary: Update per-slot action plans
       tags:
       - ActionPlan
-  /api/buildoor/action-plan/rules:
+  /action-plan/rules:
     get:
       description: |-
         Returns the recurring slot rules, id-ascending (which is also
@@ -2547,7 +2660,7 @@ paths:
       summary: Replace the recurring action plan rules
       tags:
       - ActionPlan
-  /api/buildoor/action-plan/test-transform:
+  /action-plan/test-transform:
     post:
       consumes:
       - application/json
@@ -2588,7 +2701,7 @@ paths:
       summary: Evaluate a jq transform against a sample builder object
       tags:
       - ActionPlan
-  /api/buildoor/audit-log:
+  /audit-log:
     get:
       description: Returns a paginated list of authenticated mutating actions. Empty
         when no state-db is configured.
@@ -2631,7 +2744,7 @@ paths:
       summary: Get the audit log
       tags:
       - Buildoor
-  /api/buildoor/bids-won:
+  /bids-won:
     get:
       description: Returns a paginated list of won blocks (Builder API and p2p ePBS)
         with transaction counts, blob counts, and values, read from the shared inclusion
@@ -2664,7 +2777,7 @@ paths:
       summary: Get bids won (blocks of ours included on chain)
       tags:
       - Buildoor
-  /api/buildoor/builder-api-status:
+  /builder-api/status:
     get:
       description: Returns the current status of the Builder API including configuration
         and validator count.
@@ -2685,7 +2798,7 @@ paths:
       summary: Get Builder API status
       tags:
       - Buildoor
-  /api/buildoor/builder-keys:
+  /builder-keys:
     get:
       description: |-
         Returns every managed builder key with its lifecycle status,
@@ -2708,7 +2821,7 @@ paths:
       summary: Get the managed builder key set
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/deposit:
+  /builder-keys/{index}/deposit:
     post:
       description: |-
         Submits a builder deposit for the given key and waits for it to
@@ -2744,7 +2857,7 @@ paths:
       summary: Deposit for a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/exit:
+  /builder-keys/{index}/exit:
     post:
       consumes:
       - application/json
@@ -2796,7 +2909,7 @@ paths:
       summary: Exit a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/{index}/topup:
+  /builder-keys/{index}/topup:
     post:
       consumes:
       - application/json
@@ -2834,7 +2947,7 @@ paths:
       summary: Top up a builder key
       tags:
       - Builder Keys
-  /api/buildoor/builder-keys/target:
+  /builder-keys/target:
     post:
       consumes:
       - application/json
@@ -2872,28 +2985,102 @@ paths:
       summary: Set the target builder key count
       tags:
       - Builder Keys
-  /api/buildoor/builder-preferences:
+  /config:
     get:
-      description: Returns all builder preferences currently in the cache, submitted
-        by proposers via the submitBuilderPreferences API.
-      operationId: getBuilderPreferences
+      description: Returns the buildoor configuration in use. Keys, secrets and the
+        client endpoints are left out; the credentials in the RPC upstream URLs are
+        masked.
+      operationId: getConfig
       produces:
       - application/json
       responses:
         "200":
           description: Success
           schema:
-            $ref: '#/definitions/api.BuilderPreferencesResponse'
-        "404":
-          description: Builder API not enabled
+            additionalProperties: true
+            type: object
+        "500":
+          description: Server Error
           schema:
             additionalProperties:
               type: string
             type: object
-      summary: Get cached builder preferences
+      summary: Get buildoor configuration
       tags:
-      - Buildoor
-  /api/buildoor/head-votes/{slot}:
+      - Config
+    patch:
+      consumes:
+      - application/json
+      description: |-
+        Applies partial global settings updates keyed by canonical
+        settings paths (e.g. {"epbs.bid_subsidy": 1000,
+        "schedule.mode": "all"}) without requiring full config
+        objects. Unknown keys are rejected. The module enable flags
+        (epbs_enabled, builder_api_enabled, lifecycle_enabled) are
+        settings too; enabling a module this instance cannot run is
+        refused. Requires authentication.
+      operationId: updateSettings
+      parameters:
+      - description: Bearer token
+        in: header
+        name: Authorization
+        required: true
+        type: string
+      - description: Map of settings key paths to values
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "400":
+          description: Unknown key or invalid value
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Update global settings by key path
+      tags:
+      - Config
+  /events:
+    get:
+      description: |-
+        The live event stream of the WebUI (text/event-stream): every
+        event is a JSON object with type, timestamp, data and (for
+        replayable events) seq. A new connection first receives the
+        initial state and a replay of the recent slots.
+      operationId: eventStream
+      produces:
+      - text/event-stream
+      responses:
+        "200":
+          description: Event stream
+          schema:
+            type: string
+        "429":
+          description: Too many open streams
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Server-sent event stream
+      tags:
+      - Events
+  /head-votes/{slot}:
     get:
       description: |-
         Returns the slot's raw single-attestation arrivals grouped by
@@ -2944,7 +3131,7 @@ paths:
       summary: Per-name head-vote arrival heatmap for a slot
       tags:
       - Stats
-  /api/buildoor/local-build/probe:
+  /local-build/probe:
     post:
       description: |-
         Probes the EL RPC for the testing namespace now (instead of
@@ -2967,7 +3154,7 @@ paths:
       summary: Re-probe the EL for testing_buildBlockV1
       tags:
       - LocalBuild
-  /api/buildoor/local-build/status:
+  /local-build/status:
     get:
       description: |-
         Returns whether the EL exposes testing_buildBlockV1 (probed),
@@ -2984,7 +3171,44 @@ paths:
       summary: Get the local build (testing_buildBlockV1) status
       tags:
       - LocalBuild
-  /api/buildoor/overview:
+  /next-block:
+    get:
+      description: |-
+        Runs the testing build's transaction selection with the live
+        settings — the inclusion list first, then the configured
+        transaction source (txpool, private_first or most_profitable)
+        — without building: for the block on the current head and,
+        while the current slot's block is not on chain yet, for the
+        slot after it, assuming our current slot candidate gets
+        included (its transactions out, their senders' nonces and
+        balances past them, the base fee after it). Public: the
+        aggregates; the transactions and pool hashes need a login.
+        Estimates are shared between viewers and pushed as the
+        next_block event.
+      operationId: getNextBlock
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.NextBlockEstimates'
+        "404":
+          description: Pool not configured or no head
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Selection failed
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Estimate the next blocks
+      tags:
+      - LocalBuild
+  /overview:
     get:
       description: |-
         Returns a single-payload summary used by the multi-instance overview UI:
@@ -3001,7 +3225,71 @@ paths:
       summary: Get a compact overview of this buildoor instance
       tags:
       - Buildoor
-  /api/buildoor/proposer-preferences:
+  /payloads/{blockHash}/transactions:
+    get:
+      description: |-
+        The transactions of one of our recent payloads or of any
+        recent block on chain, in block order, with their origin
+        (inclusion list, private, public), effective tip and gas
+        used. A testing build's payload may hold private
+        transactions: before it is on chain it needs a login.
+      operationId: getPayloadTransactions
+      parameters:
+      - description: Block hash
+        in: path
+        name: blockHash
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.PayloadTransactionsResponse'
+        "400":
+          description: Invalid block hash
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "401":
+          description: Testing build payload not on chain yet, without a login
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Unknown block
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List a block's transactions
+      tags:
+      - LocalBuild
+  /registrations/builder-preferences:
+    get:
+      description: Returns all builder preferences currently in the cache, submitted
+        by proposers via the submitBuilderPreferences API.
+      operationId: getBuilderPreferences
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.BuilderPreferencesResponse'
+        "404":
+          description: Builder API not enabled
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get cached builder preferences
+      tags:
+      - Buildoor
+  /registrations/proposer-preferences:
     get:
       description: Returns all proposer preferences currently in the cache, received
         via P2P gossip.
@@ -3022,7 +3310,28 @@ paths:
       summary: Get cached proposer preferences
       tags:
       - Buildoor
-  /api/buildoor/rpc-access:
+  /registrations/validators:
+    get:
+      description: Returns the list of validators registered via the Builder API (fee
+        recipient preferences). Not paginated.
+      operationId: getValidators
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.GetValidatorsResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: List registered validators
+      tags:
+      - Buildoor
+  /rpc-access:
     get:
       description: 'API keys (without secrets), per-caller call stats (anonymous per
         IP or shared, per key, static token, WebUI login) and the read upstreams.
@@ -3049,7 +3358,7 @@ paths:
       summary: /rpc ingress access state
       tags:
       - Buildoor
-  /api/buildoor/rpc-access/keys:
+  /rpc-access/keys:
     post:
       consumes:
       - application/json
@@ -3085,7 +3394,7 @@ paths:
       summary: Create a /rpc API key
       tags:
       - Buildoor
-  /api/buildoor/rpc-access/keys/{id}:
+  /rpc-access/keys/{id}:
     delete:
       description: Deletes the key; callers using it are refused from the next request
         on.
@@ -3119,7 +3428,7 @@ paths:
       summary: Delete a /rpc API key
       tags:
       - Buildoor
-    post:
+    patch:
       consumes:
       - application/json
       description: Changes a key's label, enabled flag or rate limit. A disabled key
@@ -3164,7 +3473,7 @@ paths:
       summary: Update a /rpc API key
       tags:
       - Buildoor
-  /api/buildoor/slot-results:
+  /slot-results:
     get:
       description: |-
         Returns the recorded outcome history (build, bids, block
@@ -3209,7 +3518,7 @@ paths:
       summary: Get per-slot results
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/bids:
+  /slot-results/{slot}/bids:
     get:
       description: |-
         Lists the metadata of every signed bid stored for the slot
@@ -3244,7 +3553,7 @@ paths:
       summary: List a slot's signed bid artifacts
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/bids/{index}:
+  /slot-results/{slot}/bids/{index}:
     get:
       description: |-
         Returns one signed bid created for the slot, addressed by its
@@ -3293,7 +3602,7 @@ paths:
       summary: Get one signed bid of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/envelope:
+  /slot-results/{slot}/envelope:
     get:
       description: |-
         Returns the signed execution payload envelope constructed for
@@ -3337,7 +3646,7 @@ paths:
       summary: Get the signed payload envelope of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/payload:
+  /slot-results/{slot}/payload:
     get:
       description: |-
         Returns the payload the slot's primary build target selected
@@ -3389,7 +3698,7 @@ paths:
       summary: Get the selected execution payload of a slot
       tags:
       - ActionPlan
-  /api/buildoor/slot-results/{slot}/payloads/{blockHash}:
+  /slot-results/{slot}/payloads/{blockHash}:
     get:
       description: |-
         Returns one execution payload built for the slot, addressed by
@@ -3440,7 +3749,51 @@ paths:
       summary: Get one of a slot's built payloads by block hash
       tags:
       - ActionPlan
-  /api/buildoor/txpool:
+  /stats:
+    get:
+      description: |-
+        Returns builder statistics including slots built, bids submitted/won,
+        total paid, and reveal success/failure counts.
+      operationId: getStats
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatsResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder statistics
+      tags:
+      - Stats
+  /status:
+    get:
+      description: |-
+        Returns the current builder status including running state, current slot,
+        builder index and public key.
+      operationId: getStatus
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Success
+          schema:
+            $ref: '#/definitions/api.StatusResponse'
+        "500":
+          description: Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Get builder status
+      tags:
+      - Status
+  /txpool:
     delete:
       description: Clears the transaction pool. Requires authentication; audited.
       operationId: clearTxPool
@@ -3513,7 +3866,7 @@ paths:
       summary: List the transaction pool content
       tags:
       - LocalBuild
-  /api/buildoor/txpool/{hash}:
+  /txpool/{hash}:
     delete:
       description: |-
         Removes the transaction with the given hash from the pool.
@@ -3555,7 +3908,7 @@ paths:
       summary: Drop one queued transaction
       tags:
       - LocalBuild
-  /api/buildoor/txpool/el-mempool:
+  /txpool/el-mempool:
     get:
       description: |-
         Returns the state of the mirror of the EL mempool's pending
@@ -3597,7 +3950,7 @@ paths:
       summary: List the EL mempool mirror
       tags:
       - LocalBuild
-  /api/buildoor/txpool/fees:
+  /txpool/fees:
     get:
       description: |-
         Buckets the pending transactions of the EL mempool mirror by
@@ -3627,451 +3980,7 @@ paths:
       summary: Pending gas by max fee
       tags:
       - LocalBuild
-  /api/buildoor/txpool/preview:
-    get:
-      description: |-
-        Runs the pool selection against the current head with the
-        live settings and returns what a local block built now would
-        contain (count, gas sum, skipped-by-reason), without building.
-      operationId: getTxPoolPreview
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/api.TxPoolPreviewResponse'
-        "401":
-          description: Unauthorized (the pool holds private transactions)
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Pool not configured or no head
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Selection failed
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Preview the next local block's selection
-      tags:
-      - LocalBuild
-  /api/buildoor/validators:
-    get:
-      description: Returns the list of validators registered via the Builder API (fee
-        recipient preferences). Not paginated.
-      operationId: getValidators
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.GetValidatorsResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: List registered validators
-      tags:
-      - Buildoor
-  /api/config:
-    get:
-      description: Returns the buildoor configuration in use. Sensitive fields (builder
-        key, wallet key, JWT secret) are redacted.
-      operationId: getConfig
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get buildoor configuration
-      tags:
-      - Config
-  /api/config/epbs:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Updates the EPBS (enshrined PBS) configuration including timing and bid
-        parameters. Requires authentication.
-      operationId: updateEPBS
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: EPBS configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/api.UpdateEPBSRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update EPBS configuration
-      tags:
-      - Config
-  /api/config/schedule:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Updates the builder schedule configuration including mode, every_nth, and next_n
-        settings. Requires authentication.
-      operationId: updateSchedule
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Schedule configuration
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/api.UpdateScheduleRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update schedule configuration
-      tags:
-      - Config
-  /api/config/settings:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Applies partial global settings updates keyed by canonical
-        settings paths (e.g. {"epbs.bid_subsidy": 1000,
-        "schedule.mode": "all"}) without requiring full config
-        objects. Unknown keys are rejected. Requires authentication.
-      operationId: updateSettings
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Map of settings key paths to values
-        in: body
-        name: request
-        required: true
-        schema:
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Unknown key or invalid value
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Update global settings by key path
-      tags:
-      - Config
-  /api/lifecycle/deposit:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Initiates a builder registration deposit. If the builder is not yet
-        registered, this will register it with the specified amount. Requires authentication.
-      operationId: postDeposit
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      - description: Deposit amount in gwei
-        in: body
-        name: request
-        required: true
-        schema:
-          properties:
-            amount_gwei:
-              type: integer
-          type: object
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "400":
-          description: Bad Request
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger builder deposit
-      tags:
-      - Lifecycle
-  /api/lifecycle/exit:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Initiates a voluntary exit for the builder. This will begin the withdrawal
-        process and the builder will stop being eligible for block building after
-        the exit is processed. Requires authentication.
-      operationId: postExit
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger voluntary exit
-      tags:
-      - Lifecycle
-  /api/lifecycle/status:
-    get:
-      description: |-
-        Returns the builder lifecycle status including registration state, balance,
-        pending payments, and epoch information.
-      operationId: getLifecycleStatus
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.LifecycleStatusResponse'
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get lifecycle status
-      tags:
-      - Lifecycle
-  /api/lifecycle/topup:
-    post:
-      consumes:
-      - application/json
-      description: |-
-        Checks the builder balance and initiates a top-up if needed based on
-        configured thresholds. Requires authentication.
-      operationId: postTopup
-      parameters:
-      - description: Bearer token
-        in: header
-        name: Authorization
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "401":
-          description: Unauthorized
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "404":
-          description: Lifecycle management not enabled
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Trigger balance top-up
-      tags:
-      - Lifecycle
-  /api/stats:
-    get:
-      description: |-
-        Returns builder statistics including slots built, bids submitted/won,
-        total paid, and reveal success/failure counts.
-      operationId: getStats
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.StatsResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get builder statistics
-      tags:
-      - Stats
-  /api/status:
-    get:
-      description: |-
-        Returns the current builder status including running state, current slot,
-        builder index and public key.
-      operationId: getStatus
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: Success
-          schema:
-            $ref: '#/definitions/api.StatusResponse'
-        "500":
-          description: Server Error
-          schema:
-            additionalProperties:
-              type: string
-            type: object
-      summary: Get builder status
-      tags:
-      - Status
-  /api/version:
+  /version:
     get:
       description: Returns the current version
       operationId: getVersion

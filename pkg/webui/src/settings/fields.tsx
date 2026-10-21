@@ -89,6 +89,7 @@ export function validateUpstreams(spec: string): string | null {
         valid = false;
       }
       if (!valid) return `Upstream "${row.target}" must be "local" or an http(s)/ws(s) URL.`;
+      if (row.target.includes('***')) return `Upstream "${row.target}" is masked, enter the full URL.`;
     }
     if (seen.has(row.target)) return `Upstream "${row.target}" is listed twice.`;
     seen.add(row.target);
@@ -121,8 +122,9 @@ const PAYLOAD_SOURCES = [
 ];
 
 const TX_SOURCES = [
-  { value: 'txpool', label: 'buildoor mempool', short: 'buildoor mempool', hint: "Transactions from buildoor's own mempool (sent to /rpc, see the Mempool tab). The EL's mempool is not used." },
-  { value: 'txpool_el_fill', label: 'buildoor mempool, then EL mempool', short: 'buildoor + EL mempool', hint: "buildoor's mempool first; the remaining gas is filled with the EL mempool's pending transactions (highest tip first, checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs). If the EL refuses the list, the build retries once without the EL part." },
+  { value: 'txpool', label: 'Private mempool only', short: 'private only', hint: "Transactions from buildoor's own (private) mempool, sent to /rpc, in the pool ordering. The public (EL) mempool is not used." },
+  { value: 'private_first', label: 'Private first, then public', short: 'private first', hint: "The private mempool first, in the pool ordering; the remaining gas is filled from the public (EL) mempool, highest tip first (checked against the parent state like ours; blob transactions get their blobs from the EL's blob pool through engine_getBlobs). If the EL refuses the list, the build retries without the public part." },
+  { value: 'most_profitable', label: 'Most profitable of both', short: 'most profitable', hint: 'The private and the public (EL) mempool as one, highest effective tip first: each sender in nonce order across both pools, of two transactions at one nonce the higher tip. The pool ordering does not apply. If the EL refuses the list, the build retries without the public transactions (and the senders\' transactions after them).' },
   { value: 'el_mempool', label: 'EL mempool', short: 'EL mempool', hint: 'The EL fills the block from its own mempool, like the engine build does (useful to compare the two build paths).' },
   { value: 'empty', label: 'None (empty block)', short: 'empty', hint: 'No transactions at all.' },
 ];
@@ -187,13 +189,12 @@ const candidateField = (
 // ---------------------------------------------------------------------------
 
 export const SETTING_FIELDS: Record<string, SettingField> = {
-  // ----- Module enable flags (POST /api/services/toggle) -----
+  // ----- Module enable flags -----
   'epbs_enabled': {
     label: 'ePBS p2p bidding',
     short: 'P2P bidding',
     kind: 'bool',
     path: 'service_status.epbs_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'inactive' },
     hint: 'Needs the Gloas fork scheduled on the beacon node.',
     help: (
@@ -209,7 +210,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     label: 'Builder API',
     kind: 'bool',
     path: 'service_status.builder_api_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'inactive' },
     hint: 'Needs --api-port.',
     help: (
@@ -227,7 +227,6 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     short: 'Lifecycle',
     kind: 'bool',
     path: 'service_status.lifecycle_enabled',
-    writer: 'service-toggle',
     boolLabels: { on: 'active', off: 'paused' },
     hint: 'Needs --el-rpc and --wallet-privkey.',
     help: (
@@ -1231,13 +1230,13 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     hint: 'testing_buildBlockV1 calls per mempool build: a refused list drops the offending transactions and retries. Exact lists never retry.',
     inactiveWhen: (draft) => {
       const source = str(draft, 'local_build.tx_source');
-      return source === 'txpool' || source === 'txpool_el_fill'
+      return source === 'txpool' || source === 'private_first' || source === 'most_profitable'
         ? null
-        : 'Only used for the buildoor mempool transaction sources.';
+        : 'Only used for the mempool transaction sources (private only, private first, most profitable).';
     },
     help: (
       <>
-        For the buildoor mempool sources (<code>local_build.max_attempts</code>): when the EL
+        For the mempool sources (<code>local_build.max_attempts</code>): when the EL
         refuses the list, the offending transactions are dropped (and get a strike in the pool) and
         the build retries, up to this many calls. Exact lists from action plans never retry.
       </>
@@ -1537,7 +1536,8 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
         <strong>local</strong> is the EL behind <code>--el-rpc</code>; other entries are
         http(s)/ws(s) URLs. The lowest priority is tried first, endpoints of equal priority take
         turns (round robin), and a transport failure moves on to the next endpoint. JSON-RPC errors
-        are answers, not failures.
+        are answers, not failures. The config is public, so URLs are shown with their credentials,
+        path and query masked (<code>***</code>): re-enter the full URL of an entry you edit.
       </>
     ),
   },
@@ -1545,7 +1545,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
   // ----- Builder keys & lifecycle -----
   // The config value is the configured target; the registry clamps it to
   // [1, max_index + 1] (BuilderKeysConfig.EffectiveTargetCount). The clamped
-  // value is served as settings.target_count by GET /api/buildoor/builder-keys
+  // value is served as settings.target_count by GET /api/v1/builder-keys
   // and as key_target in the builder_info SSE event.
   'builder_keys.target_count': {
     label: 'Target keys',

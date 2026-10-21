@@ -192,7 +192,7 @@ func parseArtifactSlot(w http.ResponseWriter, r *http.Request) (phase0.Slot, boo
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this slot"
 // @Failure 406 {object} map[string]string "No acceptable content type"
-// @Router /api/buildoor/slot-results/{slot}/payload [get]
+// @Router /slot-results/{slot}/payload [get]
 func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Request) {
 	if h.resultTracker == nil {
 		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")
@@ -249,7 +249,7 @@ func (h *APIHandler) GetSlotPayloadArtifact(w http.ResponseWriter, r *http.Reque
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this block hash"
 // @Failure 406 {object} map[string]string "No acceptable content type"
-// @Router /api/buildoor/slot-results/{slot}/payloads/{blockHash} [get]
+// @Router /slot-results/{slot}/payloads/{blockHash} [get]
 func (h *APIHandler) GetSlotPayloadArtifactByHash(w http.ResponseWriter, r *http.Request) {
 	if h.resultTracker == nil {
 		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")
@@ -295,7 +295,7 @@ func (h *APIHandler) servePayloadByHash(w http.ResponseWriter, r *http.Request, 
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this slot"
 // @Failure 406 {object} map[string]string "No acceptable content type"
-// @Router /api/buildoor/slot-results/{slot}/envelope [get]
+// @Router /slot-results/{slot}/envelope [get]
 func (h *APIHandler) GetSlotEnvelopeArtifact(w http.ResponseWriter, r *http.Request) {
 	h.serveArtifact(w, r, slot_results.ArtifactKindEnvelope, 0)
 }
@@ -315,7 +315,7 @@ func (h *APIHandler) GetSlotEnvelopeArtifact(w http.ResponseWriter, r *http.Requ
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No artifact for this slot/index"
 // @Failure 406 {object} map[string]string "No acceptable content type"
-// @Router /api/buildoor/slot-results/{slot}/bids/{index} [get]
+// @Router /slot-results/{slot}/bids/{index} [get]
 func (h *APIHandler) GetSlotBidArtifact(w http.ResponseWriter, r *http.Request) {
 	index, err := strconv.Atoi(mux.Vars(r)["index"])
 	if err != nil || index < 0 {
@@ -378,7 +378,7 @@ func (h *APIHandler) writeGuardedArtifact(w http.ResponseWriter, r *http.Request
 // @Success 200 {object} SlotBidArtifactsResponse
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 503 {object} map[string]string "Results tracker unavailable"
-// @Router /api/buildoor/slot-results/{slot}/bids [get]
+// @Router /slot-results/{slot}/bids [get]
 func (h *APIHandler) GetSlotBidArtifacts(w http.ResponseWriter, r *http.Request) {
 	if h.resultTracker == nil {
 		writeError(w, http.StatusServiceUnavailable, "slot results tracker not available")

@@ -83,7 +83,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
         <div className="card">
           <div className="card-body bd-mp-toolbar">
             <h3 className="bd-card-title">
-              Queued transactions <Tag tone="accent">{(data?.total ?? 0).toLocaleString()}</Tag>
+              Private transactions <Tag tone="accent">{(data?.total ?? 0).toLocaleString()}</Tag>
             </h3>
             <div className="bd-mp-toolbar-controls">
               <input

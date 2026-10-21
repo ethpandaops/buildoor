@@ -161,7 +161,7 @@ npm run clean
      runtime transform failure fails that construction (loud, recorded). Round-trip is
      MarshalJSON→gojq→UnmarshalJSON into a fresh object with Version preset (via
      `jqtransform.ApplyTyped`). Live-tested from the UI through
-     `POST /api/buildoor/action-plan/test-transform` (target+expression+optional
+     `POST /api/v1/action-plan/test-transform` (target+expression+optional
      sample_slot → runs the exact production gojq against a captured artifact, else
      the latest buffered one, else an illustrative template; bid/envelope reduced to
      `.message`).
@@ -262,8 +262,17 @@ npm run clean
      plan `build.local.build_el_payload`; the toggle of the Engine builder
      card) turns the engine build off: only the head-pinning FCU remains, the
      testing build alone feeds the consumers whatever the payload source, and
-     a target without a testing build is skipped quietly. Tx source:
-     `txpool` | `txpool_el_fill` (pool selection first, then the EL mempool's
+     a target without a testing build is skipped quietly. Tx source (the
+     FOCIL inclusion list always goes first, see 0e):
+     `txpool` (the private pool alone, in `txpool.ordering`) |
+     `most_profitable` (private pool and EL mempool merged into one
+     selection by effective tip: one queue per sender across both pools in
+     nonce order, of two txs at one nonce the higher tip; the ordering does
+     not apply; a refusal retries without the public txs and their senders'
+     later txs, `withoutSenderTails`) |
+     `private_first` (formerly `txpool_el_fill`, the old value still maps:
+     `NormalizedTxSource`, persisted overrides via `retiredValues`; pool
+     selection first, then the EL mempool's
      pending txs fill the remaining gas — same parent-state checks, each
      sender continuing at the nonce/balance the pool left, highest tip first,
      pool duplicates skipped, txs below the next base fee dropped BEFORE any
@@ -327,7 +336,7 @@ npm run clean
    - **Availability gating**: `execution.Client.ProbeTestingAPI` calls the method
      with garbage params — `-32601` = unavailable, anything else = available —
      at startup, every 5 min (with the EL client version refresh) and via
-     `POST /api/buildoor/local-build/probe`. The builder service implements
+     `POST /api/v1/local-build/probe`. The builder service implements
      `config.SettingGuard`: `local_build.enabled=true` is refused (400) while
      unavailable, `txpool.enabled=true` without `--el-rpc`. At build time
      availability wins over plans (skip reason `unavailable`, engine payload used).
@@ -378,7 +387,7 @@ npm run clean
      their own override, logins unlimited; over the limit = `-32005`. Per-caller
      stats (calls, errors, rate-limited, per-method) in memory, anonymous IPs
      LRU-bounded, served with the keys and upstreams by
-     `GET /api/buildoor/rpc-access`. **Reads** go through the upstream pool
+     `GET /api/v1/rpc-access`. **Reads** go through the upstream pool
      (`upstream.go`, `txpool.rpc_upstreams` = `<local|url>@<priority>,…`):
      lowest priority first, equal priorities round robin, transport failures
      fail over, JSON-RPC errors are answers; the local EL is just a member.
@@ -395,7 +404,7 @@ npm run clean
      node-local answers (accounts, coinbase, the EL's pending txs), no filters or
      subscriptions; everything else
      `-32601`. The same privacy rule covers the WebUI: the pool REST
-     (`/api/buildoor/txpool[/preview]`) needs a login, custom-built payload
+     (`/api/v1/txpool[/preview]`) needs a login, custom-built payload
      artifacts (and the envelope of a slot that has one) need a login, and
      explicit plan transaction lists are redacted to `transactions_redacted`
      for readers without a login (REST) and always on SSE; saving a redacted
@@ -413,7 +422,7 @@ npm run clean
      `SlotResult.tx_plan` (pending → match | mismatch | block_not_found |
      not_included after 20 slots | missed | orphaned mirrored from the Gloas
      payload verdicts), `buildoor_tx_plan_checks_total`, and a `TX PLAN CHECK
-     FAILED` error log. Counters on `GET /api/buildoor/local-build/status`.
+     FAILED` error log. Counters on `GET /api/v1/local-build/status`.
      `pkg/metrics` holds the Prometheus collectors. The EL RPC client tees
      every lifecycle transaction it sends into the pool while the pool is
      enabled (`execution.Client.SetTxTee`), so deposits land in pool-built
@@ -789,9 +798,16 @@ npm run clean
      target, auto exit) need a confirmation. Fields come from the registry in
      `settings/fields.tsx` (one entry per backend setting key: label, kind,
      unit/scale, options, validation, help text) and are written through
-     `settings/write.ts` (generic settings endpoint, service toggle, key target)
-   - Mempool page (tabs Queue / Next block / EL mempool / Access / Settings;
-     EL mempool = the mirror's state, a pending-gas-by-max-fee chart against
+     `settings/write.ts` (generic settings endpoint, key target)
+   - Mempool page (tabs Next block / Public mempool / Private mempool /
+     Access / Settings; old sub paths `queue`, `el-mempool` still route).
+     Next block = two cards: the current slot's pick (live from the build
+     events; split by origin from the testing run's selection summary
+     `origins`) and the next slot's estimate (`GET /api/v1/next-block`): a
+     gas bar and blob slots by origin (inclusion list / private / public),
+     key stats, skips, and for logged-in readers a block map (width = gas,
+     height = effective tip) and the transaction list. Public mempool = the
+     mirror's state, a pending-gas-by-max-fee chart against
      the next base fee and one block of gas, buildoor's private txs
      highlighted for logged-in readers, and the mirrored txs) and one tabbed
      Registrations page (Builder API registrations, proposer preferences,
@@ -926,7 +942,7 @@ Key config sections:
   consensus_and_equivocation, default consensus_and_equivocation — the
   builder anti-unbundling protection), `--reveal-max-attempts` (default 3),
   `--reveal-retry-interval` (default 500 ms). All mutable via
-  `POST /api/config/settings` with `reveal.*` keys; per-slot overridable
+  `PATCH /api/v1/config` with `reveal.*` keys; per-slot overridable
   through the action plan's reveal category (gate_mode, vote_threshold_pct,
   broadcast_validation, reveal_time_ms)
 - **Slot history**: `--slot-result-retention-epochs` (default 100),
@@ -939,7 +955,7 @@ Key config sections:
   testing rebuilds, 0 = one build timed to the window end; see "Testing
   build timing" in 0d),
   `--local-build-payload-source`
-  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | txpool_el_fill | empty |
+  (el | local | local_or_el | higher_value), `--local-build-tx-source` (txpool | private_first | most_profitable | empty |
   el_mempool), `--local-build-allow-blobs-without-bundle`,
   `--local-build-blob-encoding` (startup-only); `--txpool-enabled`,
   `--txpool-auth` (open | api_key), `--txpool-auth-token` (static API key, startup-only),
@@ -972,7 +988,7 @@ CLI vs UI is resolved by **recency** (a monotonic seq), not fixed priority:
 **Every registered setting must be editable from the WebUI.** Every key needs an
 entry in the frontend field registry (`pkg/webui/src/settings/fields.tsx`) and a
 place in a flow's drawer tabs (`settings/flows.ts`); the drawer writes it by its
-canonical registry key through `POST /api/config/settings`, and
+canonical registry key through `PATCH /api/v1/config`, and
 `pkg/webui/settings_coverage_test.go` fails when a registry key has no editor — never add a setting that is only reachable by CLI
 flag, and never add a second setting for something an existing one already
 means (deposits and top-ups share the single `deposit_amount`). Operator values
@@ -1160,7 +1176,7 @@ When adding features that interact with the builder:
 
 Frontend is a React/TypeScript app using Webpack:
 - Entry point: `pkg/webui/src/index.tsx`
-- Real-time updates via SSE at `/api/events`
+- Real-time updates via SSE at `/api/v1/events`
 - Custom hook `useEventStream()` manages app state from events
 - Backend serves static files via `pkg/webui/static/`
 - **Navigation**: `stores/viewStore.ts` maps paths to views (sub paths like
@@ -1175,50 +1191,72 @@ To make frontend changes:
 
 #### WebUI API Endpoints
 
+**Path layout** (`pkg/webui/routes.go`, one table): buildoor's own REST API
+lives under `/api/v1` (`APIBasePath`; the frontend builds every URL through
+`src/utils/api.ts` `apiPath`), its Swagger UI at `/api/docs/` (`@BasePath
+/api/v1`). The spec-owned and ops paths keep their own: the Builder API
+(`/eth/v1/builder/*`, `/eth/v2/builder/blinded_blocks`), the JSON-RPC
+ingress (`/rpc`), `/metrics`, `/debug/pprof/*`. Every pre-v1 path (`/api/...`,
+`/api/buildoor/...`) of a v1 route stays served as an alias until 2.0, with
+`Deprecation: true` and a `Link: <successor>; rel="successor-version"`
+header. Nothing under `/api/` falls through to the SPA: an unmatched path is
+a JSON 404, a wrong method a JSON 405 with `Allow` (computed by
+`apiFallback`, as gorilla/mux loses method mismatches inside subrouters).
+Settings, the module enable flags included, are written with one
+`PATCH /api/v1/config`; key lifecycle actions go through
+`/api/v1/builder-keys/{index}/…` (index 0 = the entry key). The `overview`
+command polls `/api/v1/overview` and falls back to the pre-v1
+`/api/buildoor/overview` of older instances.
+
 **Buildoor-specific endpoints:**
-- `GET /api/buildoor/validators` - List registered validators
-- `GET /api/buildoor/bids-won` - Paginated list of won blocks (read from the slot
+- `GET /api/v1/registrations/validators` - List registered validators
+- `GET /api/v1/bids-won` - Paginated list of won blocks (read from the slot
   results tracker's included-slot view; Builder API and p2p ePBS wins alike)
   - Query params: `offset` (default: 0), `limit` (default: 20, max: 100)
   - Returns: `{ bids_won: [], total: number, offset: number, limit: number }`
-- `GET /api/buildoor/builder-api-status` - Builder API configuration and validator count
-- `GET /api/buildoor/action-plan?min_slot=&max_slot=` - EFFECTIVE per-slot action
+- `GET /api/v1/builder-api/status` - Builder API configuration and validator count
+- `GET /api/v1/action-plan?min_slot=&max_slot=` - EFFECTIVE per-slot action
   plans in the inclusive range (max span 320 epochs): stored plans plus the
   rule-derived plans of the still-open slots (those carry `rule_id`)
-- `POST /api/buildoor/action-plan` - Atomic bulk plan mutation (auth + audit).
+- `POST /api/v1/action-plan` - Atomic bulk plan mutation (auth + audit).
   Body `{updates: [...]}`; each update targets `slots` and/or `from_slot..to_slot`,
   with three-state category members (absent/null/object) and fine-grained `set`
   paths (`{"bid.bid_min_amount": 5000}`) plus the top-level `ignore_rules`
   member (per-slot recurring-rule opt-out). Past/frozen slots → 409. Returns the
   authoritative normalized plans
-- `GET /api/buildoor/action-plan/rules` - Recurring rules, id-ascending (= match
+- `GET /api/v1/action-plan/rules` - Recurring rules, id-ascending (= match
   order)
-- `POST /api/buildoor/action-plan/rules` - Atomically replaces the WHOLE rule set
+- `POST /api/v1/action-plan/rules` - Atomically replaces the WHOLE rule set
   (auth + audit). Body `{rules: [...]}`; each rule has an id slug, `enabled`,
   `slots_in_epoch`, optional `from_epoch`/`to_epoch` and the same categories as a
   slot plan. All-or-nothing validation (400 on any bad rule); max 32 rules
-- `GET /api/buildoor/slot-results?min_slot=&max_slot=&view=` - Attempt-level outcome
+- `GET /api/v1/slot-results?min_slot=&max_slot=&view=` - Attempt-level outcome
   history per slot (build, bids, submissions, reveals, inclusion, applied plan);
   `view=summary` trims each record to what overview grids need (no applied
   plan, attributes, testing build runs or per-candidate builds)
-- `GET /api/buildoor/slot-results/{slot}/payloads/{blockHash}|payload|envelope|bids|bids/{index}` - Raw
+- `GET /api/v1/slot-results/{slot}/payloads/{blockHash}|payload|envelope|bids|bids/{index}` - Raw
   SSZ artifacts (`payloads/{blockHash}`: any captured payload of the slot;
   `payload`: the primary target's current pick, `?candidate=` another
   target's; a testing payload, and the envelope revealing one, need a login) with beacon-API content negotiation: `Accept:
   application/octet-stream` → exact SSZ bytes, otherwise `{"version", "data"}`
   JSON; responses carry `Eth-Consensus-Version` + `Vary: Accept`; the bid listing
   is JSON-only metadata
-- `GET /api/buildoor/local-build/status` - Probed `testing_buildBlockV1`
+- `GET /api/v1/local-build/status` - Probed `testing_buildBlockV1`
   availability (+ per-EL enable hint, blob handling), effective local build
-  settings, pool availability/toggle. `POST /api/buildoor/local-build/probe`
+  settings, pool availability/toggle. `POST /api/v1/local-build/probe`
   re-probes now (auth + audit)
-- `GET /api/buildoor/txpool?offset=&limit=&sender=&sort=` - Pool stats (pending,
+- `GET /api/v1/txpool?offset=&limit=&sender=&sort=` - Pool stats (pending,
   senders, gas sum, value, blobs, lifetime counters) + a page of queued txs;
-  `GET /api/buildoor/txpool/preview` dry-runs the selection on the current head;
-  `DELETE /api/buildoor/txpool` / `DELETE /api/buildoor/txpool/{hash}` drop
-  (auth + audit); `GET /api/buildoor/txpool/el-mempool?offset=&limit=&sender=&sort=`
+  `GET /api/v1/next-block` estimates the next slot's testing build on the
+  current head with the live settings (inclusion list view, tx source; the
+  EL mempool only while the mirror runs — the public endpoint never starts
+  it): public aggregates incl. `selection.origins`, txs and pool hashes with
+  a login; one shared estimate per head, recomputed at most every 2 s or on
+  a pool change (the pre-v1 alias is `/api/buildoor/txpool/preview`);
+  `DELETE /api/v1/txpool` / `DELETE /api/v1/txpool/{hash}` drop
+  (auth + audit); `GET /api/v1/txpool/el-mempool?offset=&limit=&sender=&sort=`
   the EL mempool mirror's stats + a page of it (public: the EL's public txs;
-  reading never starts the mirror); `GET /api/buildoor/txpool/fees` pending
+  reading never starts the mirror); `GET /api/v1/txpool/fees` pending
   gas by max fee in log buckets (8/decade) + next base fee + gas limit, the
   pool's private txs as their own series only with a login
 - `POST /rpc` - Transaction pool JSON-RPC ingress (NOT under `/api`; see 0d)
@@ -1227,18 +1265,18 @@ To make frontend changes:
   WebUI's gate page (`pages/DebugLoginPage.tsx`), which sets the cookie from
   the session (path-scoped, SameSite=Strict, ≤ 30 min) and reloads. Every
   profile download (not the index page) is audited as `debug.pprof`
-- `GET /api/buildoor/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
+- `GET /api/v1/head-votes/{slot}?root=&bucket_ms=` - Per-name head-vote
   arrival heatmap: raw single-attestation arrivals grouped by validator-ranges
   client name into fixed-width time buckets from the slot start (default
   slot_ms/24), plus per-name seen/members and the count of attesters that
   landed on chain without being seen as singles. Zero/absent root resolves the
   slot's primary root; only tracker-retained slots (8) are served (404
   otherwise). Fetched by the Head Vote Participation popover's heatmap
-- `POST /api/config/settings` - Generic path-based global settings update keyed by
+- `PATCH /api/v1/config` - Generic path-based global settings update keyed by
   canonical registry keys (`{"epbs.bid_subsidy": 1000, "schedule.mode": "all"}`);
   atomic, unknown keys rejected (auth + audit)
 
-**Real-time events via SSE** (`/api/events`):
+**Real-time events via SSE** (`/api/v1/events`):
 - **Connect-time replay burst**: every slot-scoped event is kept in a server-side
   replay cache for the last 5 slots (hard cap 2000 entries) and prefilled into a
   new client's channel at registration, so the UI restores the slot graph and
@@ -1285,7 +1323,7 @@ To make frontend changes:
   hash, the UI's `payloads[hash]`), and the pick changes naming the payload
   the consumers get from then on by hash
 - `local_build_status` - The local build status (the `GET
-  /api/buildoor/local-build/status` body: probed EL availability, effective
+  /api/v1/local-build/status` body: probed EL availability, effective
   settings, pool state, plan check counters), sent at connect and whenever
   its encoding changed (checked once per second, forced after a probe). The
   UI reads it from the stream only, never polls the REST endpoint
@@ -1354,7 +1392,7 @@ proposer.
   records), num_blobs, value_wei, value_eth, timestamp
 
 - **REST API** (`pkg/webui/handlers/api/api.go`):
-  - Endpoint: `GET /api/buildoor/bids-won?offset=0&limit=20`
+  - Endpoint: `GET /api/v1/bids-won?offset=0&limit=20`
   - Reads `resultTracker.GetWonBlocks(offset, limit)` (slot-descending);
     offset-based pagination
   - Returns: `BidsWonResponse` with entries array, total count, offset, limit
@@ -1367,7 +1405,7 @@ proposer.
 
 - **Data Flow**:
   1. `useBidsWon` hook fetches paginated data on mount and when offset/limit changes
-  2. `BidsWonView` component subscribes to SSE `/api/events`
+  2. `BidsWonView` component subscribes to SSE `/api/v1/events`
   3. On `bid_won` event, auto-refreshes if on first page (offset === 0)
   4. Other pages require manual navigation/refresh to avoid pagination disruption
 
@@ -1434,17 +1472,17 @@ Rule-derived cells draw dashed chips; opening one pre-fills the rule's values an
 saving detaches that slot into an explicit plan.
 
 **Testing the feature:**
-1. Plan a future slot: `curl -X POST .../api/buildoor/action-plan -d
+1. Plan a future slot: `curl -X POST .../api/v1/action-plan -d
    '{"updates":[{"slots":[N],"set":{"bid.bid_value_gwei":5000}}]}'`
 2. Watch the slot execute (grid cell updates live; `slot_results` records the
    bid attempts with the frozen applied plan)
 3. Fetch the exact gossiped bid: `curl -H 'Accept: application/octet-stream'
-   .../api/buildoor/slot-results/N/bids/0 > bid.ssz`
+   .../api/v1/slot-results/N/bids/0 > bid.ssz`
 4. Test a withheld reveal: `{"set":{"reveal.mode":"disabled"}}` on a future slot →
    the reveal attempt records `suppressed`/`plan_disabled`, the envelope artifact
    still exists
 5. Run it for every epoch instead (the "slot 31 missing" devnet scenario):
-   `curl -X POST .../api/buildoor/action-plan/rules -d '{"rules":[{
+   `curl -X POST .../api/v1/action-plan/rules -d '{"rules":[{
    "id":"slot31-withhold","enabled":true,"slots_in_epoch":[31],
    "bid":{"mode":"custom","bid_subsidy":200000000},
    "reveal":{"mode":"disabled"}}]}'` → every slot 31 is bid for and, once won,

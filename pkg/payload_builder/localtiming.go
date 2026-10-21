@@ -141,7 +141,7 @@ func (b *PayloadBuilder) runLocalBuilds(
 	}
 
 	rebuild := local.RebuildInterval > 0 && b.txPool != nil &&
-		(local.TxSource == config.TxSourceTxPool || local.TxSource == config.TxSourceTxPoolELFill)
+		config.TxSourceSelects(local.TxSource)
 
 	start := latestStart()
 	if rebuild || start.Before(windowStart) {

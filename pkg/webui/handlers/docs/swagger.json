@@ -1,10 +1,13 @@
 {
     "swagger": "2.0",
     "info": {
+        "description": "REST API of buildoor, the Ethereum builder testing tool: status,\nsettings, per-slot action plans and outcomes, builder keys, the\ntransaction pool and registrations. Mutating endpoints need a\nlogin (Bearer token) when an auth provider is configured. The\nBuilder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)\nfollow their own specifications and are not listed here. The\npre-v1 paths stay served as deprecated aliases until 2.0.",
+        "title": "Buildoor API",
         "contact": {}
     },
+    "basePath": "/api/v1",
     "paths": {
-        "/api/buildoor/action-plan": {
+        "/action-plan": {
             "get": {
                 "description": "Returns all per-slot action plans within the inclusive slot range.",
                 "produces": [
@@ -135,7 +138,7 @@
                 }
             }
         },
-        "/api/buildoor/action-plan/rules": {
+        "/action-plan/rules": {
             "get": {
                 "description": "Returns the recurring slot rules, id-ascending (which is also\ntheir match order). A rule applies its categories to every slot\nwhose index within the epoch matches, unless the slot carries\nan explicit plan.",
                 "produces": [
@@ -232,7 +235,7 @@
                 }
             }
         },
-        "/api/buildoor/action-plan/test-transform": {
+        "/action-plan/test-transform": {
             "post": {
                 "description": "Runs an operator jq expression against a sample payload / bid /\nenvelope (a captured artifact when sample_slot is given and\navailable, otherwise a zero-value template of the object) and\nreturns the transformed JSON, so expressions can be built and\ntested live before being saved to a slot plan. Bid and envelope\ntransforms operate on the MESSAGE, matching production.",
                 "consumes": [
@@ -285,7 +288,7 @@
                 }
             }
         },
-        "/api/buildoor/audit-log": {
+        "/audit-log": {
             "get": {
                 "description": "Returns a paginated list of authenticated mutating actions. Empty when no state-db is configured.",
                 "produces": [
@@ -347,7 +350,7 @@
                 }
             }
         },
-        "/api/buildoor/bids-won": {
+        "/bids-won": {
             "get": {
                 "description": "Returns a paginated list of won blocks (Builder API and p2p ePBS) with transaction counts, blob counts, and values, read from the shared inclusion tracker.",
                 "produces": [
@@ -393,7 +396,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-api-status": {
+        "/builder-api/status": {
             "get": {
                 "description": "Returns the current status of the Builder API including configuration and validator count.",
                 "produces": [
@@ -423,7 +426,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-keys": {
+        "/builder-keys": {
             "get": {
                 "description": "Returns every managed builder key with its lifecycle status,\non-chain builder index, balances and usage history, plus fleet\naggregates and the mutable key-set settings.",
                 "produces": [
@@ -453,7 +456,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-keys/target": {
+        "/builder-keys/target": {
             "post": {
                 "description": "Sets how many builder keys are kept registered and funded.\nRaising it deposits new keys; lowering it exits surplus keys\nwhen auto-exit is on — an exited key can never be reactivated.",
                 "consumes": [
@@ -506,7 +509,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-keys/{index}/deposit": {
+        "/builder-keys/{index}/deposit": {
             "post": {
                 "description": "Submits a builder deposit for the given key and waits for it to\nregister on the beacon chain.",
                 "produces": [
@@ -557,7 +560,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-keys/{index}/exit": {
+        "/builder-keys/{index}/exit": {
             "post": {
                 "description": "Submits a builder exit request for the given key. Irreversible:\nan exited key cannot be reactivated until its registry entry is\nreused by another builder's deposit. With lower_target the\ntarget key count is decremented in the same write, so the\nreconciler does not deposit a replacement.",
                 "consumes": [
@@ -628,7 +631,7 @@
                 }
             }
         },
-        "/api/buildoor/builder-keys/{index}/topup": {
+        "/builder-keys/{index}/topup": {
             "post": {
                 "description": "Submits a top-up deposit for the given key when its balance is\nbelow the configured threshold.",
                 "consumes": [
@@ -682,26 +685,88 @@
                 }
             }
         },
-        "/api/buildoor/builder-preferences": {
+        "/config": {
             "get": {
-                "description": "Returns all builder preferences currently in the cache, submitted by proposers via the submitBuilderPreferences API.",
+                "description": "Returns the buildoor configuration in use. Keys, secrets and the client endpoints are left out; the credentials in the RPC upstream URLs are masked.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "Buildoor"
+                    "Config"
                 ],
-                "summary": "Get cached builder preferences",
-                "operationId": "getBuilderPreferences",
+                "summary": "Get buildoor configuration",
+                "operationId": "getConfig",
                 "responses": {
                     "200": {
                         "description": "Success",
                         "schema": {
-                            "$ref": "#/definitions/api.BuilderPreferencesResponse"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
-                    "404": {
-                        "description": "Builder API not enabled",
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
+                "description": "Applies partial global settings updates keyed by canonical\nsettings paths (e.g. {\"epbs.bid_subsidy\": 1000,\n\"schedule.mode\": \"all\"}) without requiring full config\nobjects. Unknown keys are rejected. The module enable flags\n(epbs_enabled, builder_api_enabled, lifecycle_enabled) are\nsettings too; enabling a module this instance cannot run is\nrefused. Requires authentication.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Config"
+                ],
+                "summary": "Update global settings by key path",
+                "operationId": "updateSettings",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bearer token",
+                        "name": "Authorization",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Map of settings key paths to values",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "object"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Unknown key or invalid value",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -712,7 +777,37 @@
                 }
             }
         },
-        "/api/buildoor/head-votes/{slot}": {
+        "/events": {
+            "get": {
+                "description": "The live event stream of the WebUI (text/event-stream): every\nevent is a JSON object with type, timestamp, data and (for\nreplayable events) seq. A new connection first receives the\ninitial state and a replay of the recent slots.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Events"
+                ],
+                "summary": "Server-sent event stream",
+                "operationId": "eventStream",
+                "responses": {
+                    "200": {
+                        "description": "Event stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many open streams",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/head-votes/{slot}": {
             "get": {
                 "description": "Returns the slot's raw single-attestation arrivals grouped by\nvalidator-ranges client name into fixed-width time buckets\nfrom the slot start, plus per-name totals and the count of\nattesters that landed on chain without being seen as singles.\nOnly slots still retained by the head vote tracker are served.",
                 "produces": [
@@ -781,7 +876,7 @@
                 }
             }
         },
-        "/api/buildoor/local-build/probe": {
+        "/local-build/probe": {
             "post": {
                 "description": "Probes the EL RPC for the testing namespace now (instead of\nwaiting for the periodic check) and returns the resulting\navailability. Requires authentication; audited.",
                 "produces": [
@@ -811,7 +906,7 @@
                 }
             }
         },
-        "/api/buildoor/local-build/status": {
+        "/local-build/status": {
             "get": {
                 "description": "Returns whether the EL exposes testing_buildBlockV1 (probed),\nthe per-EL blob handling, the effective local build settings\nand the transaction pool's availability and toggle state.",
                 "produces": [
@@ -832,7 +927,46 @@
                 }
             }
         },
-        "/api/buildoor/overview": {
+        "/next-block": {
+            "get": {
+                "description": "Runs the testing build's transaction selection with the live\nsettings — the inclusion list first, then the configured\ntransaction source (txpool, private_first or most_profitable)\n— without building: for the block on the current head and,\nwhile the current slot's block is not on chain yet, for the\nslot after it, assuming our current slot candidate gets\nincluded (its transactions out, their senders' nonces and\nbalances past them, the base fee after it). Public: the\naggregates; the transactions and pool hashes need a login.\nEstimates are shared between viewers and pushed as the\nnext_block event.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "Estimate the next blocks",
+                "operationId": "getNextBlock",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.NextBlockEstimates"
+                        }
+                    },
+                    "404": {
+                        "description": "Pool not configured or no head",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Selection failed",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/overview": {
             "get": {
                 "description": "Returns a single-payload summary used by the multi-instance overview UI:\nrunning state, builder pubkey, current slot, EL client info, available/enabled\nservices, balances, and recent build stats.",
                 "produces": [
@@ -853,7 +987,94 @@
                 }
             }
         },
-        "/api/buildoor/proposer-preferences": {
+        "/payloads/{blockHash}/transactions": {
+            "get": {
+                "description": "The transactions of one of our recent payloads or of any\nrecent block on chain, in block order, with their origin\n(inclusion list, private, public), effective tip and gas\nused. A testing build's payload may hold private\ntransactions: before it is on chain it needs a login.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "LocalBuild"
+                ],
+                "summary": "List a block's transactions",
+                "operationId": "getPayloadTransactions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Block hash",
+                        "name": "blockHash",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.PayloadTransactionsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid block hash",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Testing build payload not on chain yet, without a login",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Unknown block",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/registrations/builder-preferences": {
+            "get": {
+                "description": "Returns all builder preferences currently in the cache, submitted by proposers via the submitBuilderPreferences API.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Get cached builder preferences",
+                "operationId": "getBuilderPreferences",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.BuilderPreferencesResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Builder API not enabled",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/registrations/proposer-preferences": {
             "get": {
                 "description": "Returns all proposer preferences currently in the cache, received via P2P gossip.",
                 "produces": [
@@ -883,7 +1104,37 @@
                 }
             }
         },
-        "/api/buildoor/rpc-access": {
+        "/registrations/validators": {
+            "get": {
+                "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "List registered validators",
+                "operationId": "getValidators",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.GetValidatorsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/rpc-access": {
             "get": {
                 "description": "API keys (without secrets), per-caller call stats (anonymous per IP or shared, per key, static token, WebUI login) and the read upstreams. Requires authentication: the stats carry client IPs.",
                 "produces": [
@@ -921,7 +1172,7 @@
                 }
             }
         },
-        "/api/buildoor/rpc-access/keys": {
+        "/rpc-access/keys": {
             "post": {
                 "description": "Creates an API key for the /rpc ingress. The secret is returned once and never stored (only its SHA-256). Send it as \"X-API-Key: \u003ckey\u003e\", \"Authorization: Bearer \u003ckey\u003e\" or in the URL as /rpc/\u003ckey\u003e.",
                 "consumes": [
@@ -973,8 +1224,56 @@
                 }
             }
         },
-        "/api/buildoor/rpc-access/keys/{id}": {
-            "post": {
+        "/rpc-access/keys/{id}": {
+            "delete": {
+                "description": "Deletes the key; callers using it are refused from the next request on.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Buildoor"
+                ],
+                "summary": "Delete a /rpc API key",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Key id",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            },
+            "patch": {
                 "description": "Changes a key's label, enabled flag or rate limit. A disabled key is refused (401) without being deleted.",
                 "consumes": [
                     "application/json"
@@ -1039,57 +1338,9 @@
                         }
                     }
                 }
-            },
-            "delete": {
-                "description": "Deletes the key; callers using it are refused from the next request on.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Buildoor"
-                ],
-                "summary": "Delete a /rpc API key",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Key id",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
             }
         },
-        "/api/buildoor/slot-results": {
+        "/slot-results": {
             "get": {
                 "description": "Returns the recorded outcome history (build, bids, block\nsubmissions, reveals, inclusion, applied plan) for every\nactive slot within the inclusive slot range.",
                 "produces": [
@@ -1150,7 +1401,7 @@
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/bids": {
+        "/slot-results/{slot}/bids": {
             "get": {
                 "description": "Lists the metadata of every signed bid stored for the slot\n(JSON only; fetch individual bids by index for SSZ). Returns\nan empty list for slots without bid artifacts.",
                 "produces": [
@@ -1198,7 +1449,7 @@
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/bids/{index}": {
+        "/slot-results/{slot}/bids/{index}": {
             "get": {
                 "description": "Returns one signed bid created for the slot, addressed by its\nartifact index (see the bid listing endpoint). Pre-Gloas bids\nare SignedBuilderBid, Gloas+ bids SignedExecutionPayloadBid.\nContent negotiation as with the payload artifact endpoint.",
                 "produces": [
@@ -1264,7 +1515,7 @@
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/envelope": {
+        "/slot-results/{slot}/envelope": {
             "get": {
                 "description": "Returns the signed execution payload envelope constructed for\nthe slot's reveal (stored at construction time, so failed\npublishes remain inspectable). Content negotiation as with the\npayload artifact endpoint.",
                 "produces": [
@@ -1323,7 +1574,7 @@
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/payload": {
+        "/slot-results/{slot}/payload": {
             "get": {
                 "description": "Returns the payload the slot's primary build target selected\nlast (the one that fed the bids), or with ?candidate= the\nselection of that target. Every other payload the slot built\nis served by block hash (payloads/{blockHash}). With\n\"Accept: application/octet-stream\" the raw SSZ bytes are\nserved; otherwise a {\"version\", \"data\"} JSON envelope. The\nEth-Consensus-Version response header carries the fork name.",
                 "produces": [
@@ -1388,7 +1639,7 @@
                 }
             }
         },
-        "/api/buildoor/slot-results/{slot}/payloads/{blockHash}": {
+        "/slot-results/{slot}/payloads/{blockHash}": {
             "get": {
                 "description": "Returns one execution payload built for the slot, addressed by\nits block hash (the slot result's payloads, builds and\nselections name payloads by it). The engine payload and every\nselected payload are captured; a testing run's payload nobody\nselected is not. Content negotiation as with the selected\npayload endpoint.",
                 "produces": [
@@ -1454,7 +1705,67 @@
                 }
             }
         },
-        "/api/buildoor/txpool": {
+        "/stats": {
+            "get": {
+                "description": "Returns builder statistics including slots built, bids submitted/won,\ntotal paid, and reveal success/failure counts.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Stats"
+                ],
+                "summary": "Get builder statistics",
+                "operationId": "getStats",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.StatsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "description": "Returns the current builder status including running state, current slot,\nbuilder index and public key.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Status"
+                ],
+                "summary": "Get builder status",
+                "operationId": "getStatus",
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "#/definitions/api.StatusResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/txpool": {
             "get": {
                 "description": "Returns the pool's aggregate stats (pending count, senders, gas\nsum, value, blobs, lifetime counters) and a page of queued\ntransactions.",
                 "produces": [
@@ -1559,7 +1870,7 @@
                 }
             }
         },
-        "/api/buildoor/txpool/el-mempool": {
+        "/txpool/el-mempool": {
             "get": {
                 "description": "Returns the state of the mirror of the EL mempool's pending\ntransactions (the testing build's fill source) and a page of\nits content. Public: these are the EL's public transactions.\nReading it never starts the mirror, which runs only while\nbuilds use it.",
                 "produces": [
@@ -1615,7 +1926,7 @@
                 }
             }
         },
-        "/api/buildoor/txpool/fees": {
+        "/txpool/fees": {
             "get": {
                 "description": "Buckets the pending transactions of the EL mempool mirror by\nmax fee per gas (log scale) against the next base fee and the\nblock gas limit. buildoor's own (private) transactions are\nincluded, as their own series, only for logged-in readers.",
                 "produces": [
@@ -1654,55 +1965,7 @@
                 }
             }
         },
-        "/api/buildoor/txpool/preview": {
-            "get": {
-                "description": "Runs the pool selection against the current head with the\nlive settings and returns what a local block built now would\ncontain (count, gas sum, skipped-by-reason), without building.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "LocalBuild"
-                ],
-                "summary": "Preview the next local block's selection",
-                "operationId": "getTxPoolPreview",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/api.TxPoolPreviewResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized (the pool holds private transactions)",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Pool not configured or no head",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Selection failed",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/buildoor/txpool/{hash}": {
+        "/txpool/{hash}": {
             "delete": {
                 "description": "Removes the transaction with the given hash from the pool.\nRequires authentication; audited.",
                 "produces": [
@@ -1762,586 +2025,7 @@
                 }
             }
         },
-        "/api/buildoor/validators": {
-            "get": {
-                "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Buildoor"
-                ],
-                "summary": "List registered validators",
-                "operationId": "getValidators",
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "$ref": "#/definitions/api.GetValidatorsResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/config": {
-            "get": {
-                "description": "Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Config"
-                ],
-                "summary": "Get buildoor configuration",
-                "operationId": "getConfig",
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/config/epbs": {
-            "post": {
-                "description": "Updates the EPBS (enshrined PBS) configuration including timing and bid\nparameters. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Config"
-                ],
-                "summary": "Update EPBS configuration",
-                "operationId": "updateEPBS",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "description": "EPBS configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.UpdateEPBSRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/config/schedule": {
-            "post": {
-                "description": "Updates the builder schedule configuration including mode, every_nth, and next_n\nsettings. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Config"
-                ],
-                "summary": "Update schedule configuration",
-                "operationId": "updateSchedule",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "description": "Schedule configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/api.UpdateScheduleRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/config/settings": {
-            "post": {
-                "description": "Applies partial global settings updates keyed by canonical\nsettings paths (e.g. {\"epbs.bid_subsidy\": 1000,\n\"schedule.mode\": \"all\"}) without requiring full config\nobjects. Unknown keys are rejected. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Config"
-                ],
-                "summary": "Update global settings by key path",
-                "operationId": "updateSettings",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "description": "Map of settings key paths to values",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Unknown key or invalid value",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/lifecycle/deposit": {
-            "post": {
-                "description": "Initiates a builder registration deposit. If the builder is not yet\nregistered, this will register it with the specified amount. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Lifecycle"
-                ],
-                "summary": "Trigger builder deposit",
-                "operationId": "postDeposit",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    },
-                    {
-                        "description": "Deposit amount in gwei",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "amount_gwei": {
-                                    "type": "integer"
-                                }
-                            }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Lifecycle management not enabled",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/lifecycle/exit": {
-            "post": {
-                "description": "Initiates a voluntary exit for the builder. This will begin the withdrawal\nprocess and the builder will stop being eligible for block building after\nthe exit is processed. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Lifecycle"
-                ],
-                "summary": "Trigger voluntary exit",
-                "operationId": "postExit",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Lifecycle management not enabled",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/lifecycle/status": {
-            "get": {
-                "description": "Returns the builder lifecycle status including registration state, balance,\npending payments, and epoch information.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Lifecycle"
-                ],
-                "summary": "Get lifecycle status",
-                "operationId": "getLifecycleStatus",
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "$ref": "#/definitions/api.LifecycleStatusResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Lifecycle management not enabled",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/lifecycle/topup": {
-            "post": {
-                "description": "Checks the builder balance and initiates a top-up if needed based on\nconfigured thresholds. Requires authentication.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Lifecycle"
-                ],
-                "summary": "Trigger balance top-up",
-                "operationId": "postTopup",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bearer token",
-                        "name": "Authorization",
-                        "in": "header",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "404": {
-                        "description": "Lifecycle management not enabled",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/stats": {
-            "get": {
-                "description": "Returns builder statistics including slots built, bids submitted/won,\ntotal paid, and reveal success/failure counts.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Stats"
-                ],
-                "summary": "Get builder statistics",
-                "operationId": "getStats",
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "$ref": "#/definitions/api.StatsResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/status": {
-            "get": {
-                "description": "Returns the current builder status including running state, current slot,\nbuilder index and public key.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Status"
-                ],
-                "summary": "Get builder status",
-                "operationId": "getStatus",
-                "responses": {
-                    "200": {
-                        "description": "Success",
-                        "schema": {
-                            "$ref": "#/definitions/api.StatusResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Server Error",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/version": {
+        "/version": {
             "get": {
                 "description": "Returns the current version",
                 "produces": [
@@ -2617,7 +2301,7 @@
                     "type": "integer"
                 },
                 "tx_source": {
-                    "description": "TxSource: txpool | empty | el_mempool | explicit (explicit requires\nTransactions; a non-empty Transactions list implies explicit).",
+                    "description": "TxSource: txpool | private_first | most_profitable | empty |\nel_mempool | explicit (explicit requires Transactions; a non-empty\nTransactions list implies explicit).",
                     "type": "string"
                 }
             }
@@ -2934,7 +2618,7 @@
                     "type": "integer"
                 },
                 "tx_source": {
-                    "description": "TxSource: txpool | empty | el_mempool | explicit.",
+                    "description": "TxSource: txpool | private_first | most_profitable | empty |\nel_mempool | explicit | queued.",
                     "type": "string"
                 }
             }
@@ -3401,32 +3085,6 @@
                 }
             }
         },
-        "api.LifecycleStatusResponse": {
-            "type": "object",
-            "properties": {
-                "balance_gwei": {
-                    "type": "integer"
-                },
-                "builder_index": {
-                    "type": "integer"
-                },
-                "deposit_epoch": {
-                    "type": "integer"
-                },
-                "effective_balance_gwei": {
-                    "type": "integer"
-                },
-                "is_registered": {
-                    "type": "boolean"
-                },
-                "pending_payments_gwei": {
-                    "type": "integer"
-                },
-                "withdrawable_epoch": {
-                    "type": "integer"
-                }
-            }
-        },
         "api.LocalBuildStatusResponse": {
             "type": "object",
             "properties": {
@@ -3455,6 +3113,124 @@
                 },
                 "txpool": {
                     "$ref": "#/definitions/api.TxPoolStatus"
+                }
+            }
+        },
+        "api.NextBlockEstimates": {
+            "type": "object",
+            "properties": {
+                "computed_at": {
+                    "type": "integer"
+                },
+                "estimates": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockResponse"
+                    }
+                },
+                "version": {
+                    "description": "Version counts the estimate sets: the next_block event carries it, so\na logged-in reader fetches the transactions of exactly that set.",
+                    "type": "integer"
+                }
+            }
+        },
+        "api.NextBlockResponse": {
+            "type": "object",
+            "properties": {
+                "basis": {
+                    "description": "Basis is what the estimated block follows: head (a block on the\ncurrent head), candidate (the slot after our current slot candidate,\nBasisBlock, assumed included) or head_only (the slot after a current\nslot block nobody here built: nothing assumed).",
+                    "type": "string"
+                },
+                "basis_block": {
+                    "type": "string"
+                },
+                "computed_at": {
+                    "type": "integer"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "local_build_enabled": {
+                    "description": "LocalBuildEnabled is false when the testing build is off: the estimate\nthen shows what it would select.",
+                    "type": "boolean"
+                },
+                "max_blobs": {
+                    "type": "integer"
+                },
+                "note": {
+                    "description": "Note explains an estimate that cannot be made (the source leaves the\nchoice to the EL, or builds empty blocks).",
+                    "type": "string"
+                },
+                "ordering": {
+                    "type": "string"
+                },
+                "parent_hash": {
+                    "type": "string"
+                },
+                "public_mempool": {
+                    "description": "PublicMempool is mirrored (the EL mempool is part of the estimate),\nidle (the source takes it, but the mirror is not running: no build\nasked for it lately) or unused (the source does not take it).",
+                    "type": "string"
+                },
+                "selection": {
+                    "description": "Selection carries the aggregates (counts, gas, blobs, skips and the\nsplit by origin); its pool transaction hashes need a login.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/txpool.Summary"
+                        }
+                    ]
+                },
+                "slot": {
+                    "description": "Slot is the slot of the block that extends the current head (the slot\nafter the head, or the current slot after missed slots).",
+                    "type": "integer"
+                },
+                "tx_source": {
+                    "description": "TxSource is the configured transaction source; Ordering the private\npool's order (private_first and txpool).",
+                    "type": "string"
+                },
+                "txs": {
+                    "description": "Txs are the block's transactions in block order (login only, at most\nnextBlockMaxTxs).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockTx"
+                    }
+                },
+                "txs_total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "api.NextBlockTx": {
+            "type": "object",
+            "properties": {
+                "blobs": {
+                    "type": "integer"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "gas": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "description": "GasUsed is the gas the transaction used (on-chain blocks only).",
+                    "type": "integer"
+                },
+                "hash": {
+                    "type": "string"
+                },
+                "nonce": {
+                    "type": "integer"
+                },
+                "origin": {
+                    "description": "inclusion_list, private or public",
+                    "type": "string"
+                },
+                "tip": {
+                    "description": "Tip is the effective priority fee per gas over the base fee, wei.",
+                    "type": "string"
+                },
+                "type": {
+                    "type": "integer"
                 }
             }
         },
@@ -3642,6 +3418,41 @@
                 },
                 "slots_built": {
                     "type": "integer"
+                }
+            }
+        },
+        "api.PayloadTransactionsResponse": {
+            "type": "object",
+            "properties": {
+                "base_fee": {
+                    "type": "string"
+                },
+                "block_hash": {
+                    "type": "string"
+                },
+                "gas_limit": {
+                    "type": "integer"
+                },
+                "gas_used": {
+                    "type": "integer"
+                },
+                "on_chain": {
+                    "type": "boolean"
+                },
+                "ours": {
+                    "description": "Ours marks one of our payloads (classified by its build's own\naccounting); OnChain that the EL has the block.",
+                    "type": "boolean"
+                },
+                "txs": {
+                    "description": "Txs are in block order. Origin is inclusion_list (on the list the\nblock had to satisfy), private (from our private mempool) or public.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/api.NextBlockTx"
+                    }
+                },
+                "value": {
+                    "description": "Value is what the block pays its fee recipient in priority fees, wei:\nour build's reported block value, or the effective tips times the gas\nthe transactions used (empty while unknown).",
+                    "type": "string"
                 }
             }
         },
@@ -3878,26 +3689,6 @@
                 }
             }
         },
-        "api.TxPoolPreviewResponse": {
-            "type": "object",
-            "properties": {
-                "gas_limit": {
-                    "type": "integer"
-                },
-                "max_blobs": {
-                    "type": "integer"
-                },
-                "ordering": {
-                    "type": "string"
-                },
-                "parent_hash": {
-                    "type": "string"
-                },
-                "selection": {
-                    "$ref": "#/definitions/txpool.Summary"
-                }
-            }
-        },
         "api.TxPoolResponse": {
             "type": "object",
             "properties": {
@@ -3978,38 +3769,6 @@
                 }
             }
         },
-        "api.UpdateEPBSRequest": {
-            "type": "object",
-            "properties": {
-                "bid_end_time": {
-                    "type": "integer"
-                },
-                "bid_increase": {
-                    "type": "integer"
-                },
-                "bid_interval": {
-                    "type": "integer"
-                },
-                "bid_min_amount": {
-                    "type": "integer"
-                },
-                "bid_start_time": {
-                    "type": "integer"
-                },
-                "bid_subsidy": {
-                    "type": "integer"
-                },
-                "build_start_time": {
-                    "type": "integer"
-                },
-                "payload_build_delay": {
-                    "type": "integer"
-                },
-                "reveal_time": {
-                    "type": "integer"
-                }
-            }
-        },
         "api.UpdateRPCKeyRequest": {
             "type": "object",
             "properties": {
@@ -4028,25 +3787,7 @@
                 }
             }
         },
-        "api.UpdateScheduleRequest": {
-            "type": "object",
-            "properties": {
-                "every_nth": {
-                    "type": "integer"
-                },
-                "mode": {
-                    "type": "string"
-                },
-                "next_n": {
-                    "type": "integer"
-                },
-                "start_slot": {
-                    "type": "integer"
-                }
-            }
-        },
         "api.ValidatorRegistrationResponse": {
-            "description": "Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.",
             "type": "object",
             "properties": {
                 "fee_recipient": {
@@ -4397,7 +4138,7 @@
                     "type": "string"
                 },
                 "fill_txs": {
-                    "description": "FillTxs is how many EL mempool transactions the txpool_el_fill source\nappended after the pool selection; FillError is why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
+                    "description": "FillTxs is how many EL mempool transactions the private_first source\nplaced after the pool selection (most_profitable: among it); FillError\nis why the EL mempool\ncould not be read (the build then used the pool alone); FillDropped\nmarks that the EL refused the list and the build retried without the\nfill; FillBlobsDropped that a refused list was first retried without\nthe fill's blob transactions (and their senders' later fill txs).",
                     "type": "integer"
                 },
                 "inclusion_list": {
@@ -5287,6 +5028,39 @@
                 }
             }
         },
+        "txpool.OriginStats": {
+            "type": "object",
+            "properties": {
+                "blobs": {
+                    "type": "integer"
+                },
+                "gas": {
+                    "description": "gas limit sum",
+                    "type": "integer"
+                },
+                "tips": {
+                    "description": "Tips is the effective tip times the gas limit, summed, in wei: the\nmost the origin's transactions can pay the builder (they pay for the\ngas they use).",
+                    "type": "string"
+                },
+                "txs": {
+                    "type": "integer"
+                }
+            }
+        },
+        "txpool.SelectionOrigins": {
+            "type": "object",
+            "properties": {
+                "inclusion_list": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                },
+                "private": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                },
+                "public": {
+                    "$ref": "#/definitions/txpool.OriginStats"
+                }
+            }
+        },
         "txpool.Stats": {
             "type": "object",
             "properties": {
@@ -5381,7 +5155,7 @@
                     "type": "integer"
                 },
                 "fill_candidates": {
-                    "description": "EL mempool fill (tx source txpool_el_fill).",
+                    "description": "EL mempool fill (tx sources private_first, most_profitable).",
                     "type": "integer"
                 },
                 "fill_gas_sum": {
@@ -5417,6 +5191,14 @@
                 },
                 "inclusion_list_txs": {
                     "type": "integer"
+                },
+                "origins": {
+                    "description": "Origins accounts the block's transactions by where they came from.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/txpool.SelectionOrigins"
+                        }
+                    ]
                 },
                 "pool_size": {
                     "type": "integer"

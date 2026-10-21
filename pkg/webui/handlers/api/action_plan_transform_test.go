@@ -29,7 +29,7 @@ func postTransform(t *testing.T, body string) *TestTransformResponse {
 
 	h := openTransformHandler(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/buildoor/action-plan/test-transform",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/action-plan/test-transform",
 		bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 

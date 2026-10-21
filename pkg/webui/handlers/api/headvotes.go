@@ -55,7 +55,7 @@ type HeadVoteDetailRow struct {
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 404 {object} map[string]string "No vote detail retained for this slot"
 // @Failure 503 {object} map[string]string "Head vote tracker unavailable"
-// @Router /api/buildoor/head-votes/{slot} [get]
+// @Router /head-votes/{slot} [get]
 func (h *APIHandler) GetHeadVoteDetail(w http.ResponseWriter, r *http.Request) {
 	slot, ok := parseArtifactSlot(w, r)
 	if !ok {

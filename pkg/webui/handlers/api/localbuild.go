@@ -83,7 +83,7 @@ func fillLocalBuildStatus(status *ServiceStatusEvent, builderSvc *payload_builde
 // @Description and the transaction pool's availability and toggle state.
 // @Produce json
 // @Success 200 {object} LocalBuildStatusResponse
-// @Router /api/buildoor/local-build/status [get]
+// @Router /local-build/status [get]
 func (h *APIHandler) GetLocalBuildStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, localBuildStatus(h.builderSvc, h.planVerifier))
 }
@@ -124,7 +124,7 @@ func localBuildStatus(builderSvc *payload_builder.Service, verifier *tx_plan_ver
 // @Produce json
 // @Success 200 {object} payload_builder.LocalBuildAvailability
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Router /api/buildoor/local-build/probe [post]
+// @Router /local-build/probe [post]
 func (h *APIHandler) ProbeLocalBuild(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -168,7 +168,7 @@ type TxPoolResponse struct {
 // @Success 200 {object} TxPoolResponse
 // @Failure 401 {object} map[string]string "Unauthorized (the pool holds private transactions)"
 // @Failure 404 {object} map[string]string "Pool not configured"
-// @Router /api/buildoor/txpool [get]
+// @Router /txpool [get]
 func (h *APIHandler) GetTxPool(w http.ResponseWriter, r *http.Request) {
 	// The pool holds private transactions: only logged-in readers see it.
 	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
@@ -228,7 +228,7 @@ type ELMempoolResponse struct {
 // @Param sort query string false "arrival | sender | tip"
 // @Success 200 {object} ELMempoolResponse
 // @Failure 404 {object} map[string]string "Pool not configured"
-// @Router /api/buildoor/txpool/el-mempool [get]
+// @Router /txpool/el-mempool [get]
 func (h *APIHandler) GetELMempool(w http.ResponseWriter, r *http.Request) {
 	pool := h.builderSvc.TxPool()
 	if pool == nil {
@@ -269,7 +269,7 @@ func (h *APIHandler) GetELMempool(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} txpool.FeeDistribution
 // @Failure 404 {object} map[string]string "Pool not configured or no head"
 // @Failure 500 {object} map[string]string "EL unavailable"
-// @Router /api/buildoor/txpool/fees [get]
+// @Router /txpool/fees [get]
 func (h *APIHandler) GetTxPoolFees(w http.ResponseWriter, r *http.Request) {
 	pool := h.builderSvc.TxPool()
 	if pool == nil {
@@ -319,82 +319,6 @@ func listOptions(w http.ResponseWriter, r *http.Request) (txpool.ListOptions, bo
 	return opts, true
 }
 
-// TxPoolPreviewResponse is a dry-run selection against the current head.
-type TxPoolPreviewResponse struct {
-	Selection  *txpool.Summary `json:"selection"`
-	ParentHash string          `json:"parent_hash"`
-	GasLimit   uint64          `json:"gas_limit"`
-	MaxBlobs   uint64          `json:"max_blobs"`
-	Ordering   string          `json:"ordering"`
-}
-
-// GetTxPoolPreview godoc
-// @Id getTxPoolPreview
-// @Summary Preview the next local block's selection
-// @Tags LocalBuild
-// @Description Runs the pool selection against the current head with the
-// @Description live settings and returns what a local block built now would
-// @Description contain (count, gas sum, skipped-by-reason), without building.
-// @Produce json
-// @Success 200 {object} TxPoolPreviewResponse
-// @Failure 401 {object} map[string]string "Unauthorized (the pool holds private transactions)"
-// @Failure 404 {object} map[string]string "Pool not configured or no head"
-// @Failure 500 {object} map[string]string "Selection failed"
-// @Router /api/buildoor/txpool/preview [get]
-func (h *APIHandler) GetTxPoolPreview(w http.ResponseWriter, r *http.Request) {
-	// The pool holds private transactions: only logged-in readers see it.
-	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	pool := h.builderSvc.TxPool()
-	if pool == nil {
-		writeError(w, http.StatusNotFound, "transaction pool not configured (no --el-rpc)")
-		return
-	}
-
-	headTracker := h.chainSvc.GetHeadTracker()
-	if headTracker == nil || headTracker.CurrentHead() == nil {
-		writeError(w, http.StatusNotFound, "no chain head yet")
-		return
-	}
-
-	head := headTracker.CurrentHead()
-	cfg := h.builderSvc.GetConfig()
-	availability := h.builderSvc.LocalBuildAvailability()
-	slot := h.chainSvc.GetCurrentSlot() + 1
-	maxBlobs := h.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(h.chainSvc.GetEpochOfSlot(slot))
-
-	params := &txpool.SelectParams{
-		ParentHash:     common.Hash(head.ExecutionBlockHash),
-		GasLimit:       head.GasLimit,
-		MaxBlobs:       maxBlobs,
-		MaxTxs:         cfg.TxPool.MaxTxsPerBlock,
-		GasFillPct:     cfg.TxPool.EffectiveGasFillPct(),
-		BaseFeeCeiling: gweiToWei(cfg.TxPool.BaseFeeCeilingGwei),
-		Ordering:       cfg.TxPool.NormalizedOrdering(),
-		Seed:           uint64(slot),
-		IncludeBlobTxs: availability.BlobBundle || cfg.LocalBuild.AllowBlobsWithoutBundle,
-		BlobEncoding:   availability.BlobEncoding,
-		CellProofs:     pool.CellProofsActive(),
-	}
-
-	selection, err := pool.Select(r.Context(), params)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "selection failed: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, TxPoolPreviewResponse{
-		Selection:  selection.Summary(),
-		ParentHash: common.Hash(head.ExecutionBlockHash).Hex(),
-		GasLimit:   head.GasLimit,
-		MaxBlobs:   maxBlobs,
-		Ordering:   params.Ordering,
-	})
-}
-
 // gweiToWei converts a gwei amount to wei (nil for 0).
 func gweiToWei(gwei uint64) *big.Int {
 	if gwei == 0 {
@@ -413,7 +337,7 @@ func gweiToWei(gwei uint64) *big.Int {
 // @Success 200 {object} map[string]int "dropped count"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "Pool not configured"
-// @Router /api/buildoor/txpool [delete]
+// @Router /txpool [delete]
 func (h *APIHandler) ClearTxPool(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
@@ -446,7 +370,7 @@ func (h *APIHandler) ClearTxPool(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Failure 404 {object} map[string]string "Not found"
-// @Router /api/buildoor/txpool/{hash} [delete]
+// @Router /txpool/{hash} [delete]
 func (h *APIHandler) DropTxPoolTx(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {

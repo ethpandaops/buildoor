@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useEventStream } from '../hooks/useEventStream';
 import { useTxPool } from '../hooks/useTxPool';
 import { useLocalBuildStatus } from '../hooks/useLocalBuildStatus';
@@ -13,37 +13,42 @@ import { NextBlockTab } from './mempool/NextBlockTab';
 import { AccessTab } from './mempool/AccessTab';
 import { ELMempoolTab } from './mempool/ELMempoolTab';
 import { useELMempool } from '../hooks/useELMempool';
+import { useNextBlock } from '../hooks/useNextBlock';
 import { usePageVisible } from './mempool/usePageVisible';
 import type { TxPoolStats } from '../types';
 import '../styles/mempool.css';
 
 const PAGE_LIMIT = 50;
-const PREVIEW_POLL_MS = 10000;
 const BASE_PATH = '/mempool';
 
-type MempoolTab = 'queue' | 'next-block' | 'el-mempool' | 'access' | 'settings';
+type MempoolTab = 'next-block' | 'public' | 'private' | 'access' | 'settings';
 
-const TAB_IDS: MempoolTab[] = ['queue', 'next-block', 'el-mempool', 'access', 'settings'];
+const TAB_IDS: MempoolTab[] = ['next-block', 'public', 'private', 'access', 'settings'];
 
-// Each tab owns a sub path of /mempool (the queue is the bare path), so tabs
-// are linkable and survive a reload.
+// Former sub paths of the tabs, kept working.
+const RETIRED_TABS: Record<string, MempoolTab> = { queue: 'private', 'el-mempool': 'public' };
+
+// Each tab owns a sub path of /mempool (the next block is the bare path), so
+// tabs are linkable and survive a reload.
 function tabFromPath(path: string): MempoolTab {
   const sub = path.startsWith(BASE_PATH + '/') ? path.slice(BASE_PATH.length + 1) : '';
-  return (TAB_IDS as string[]).includes(sub) ? (sub as MempoolTab) : 'queue';
+  if ((TAB_IDS as string[]).includes(sub)) return sub as MempoolTab;
+  return RETIRED_TABS[sub] ?? 'next-block';
 }
 
 function tabPath(tab: MempoolTab): string {
-  return tab === 'queue' ? BASE_PATH : `${BASE_PATH}/${tab}`;
+  return tab === 'next-block' ? BASE_PATH : `${BASE_PATH}/${tab}`;
 }
 
-// MempoolView is the owned transaction pool page: state + ingress header
-// with the accept switch and clear action, the pool aggregates, and tabs for
-// the queued transactions, the next-block selection preview, /rpc access
-// (API keys, callers, upstreams) and the pool settings summary. Pool
-// contents, the preview, keys and callers are operator-only; settings are
-// edited in the settings drawer.
+// MempoolView is the mempool page: state + ingress header with the accept
+// switch and clear action, the private pool's aggregates, and tabs for the
+// next block (the latest pick and the next slot's estimate), the public (EL)
+// mempool, the private mempool (buildoor's own pool), /rpc access (API keys,
+// callers, upstreams) and the pool settings summary. Private transactions,
+// keys and callers are operator-only; settings are edited in the settings
+// drawer.
 export const MempoolView: React.FC = () => {
-  const { txPoolStats, serviceStatus } = useEventStream();
+  const { txPoolStats, serviceStatus, currentSlot, slotStates, nextBlock: streamedEstimate } = useEventStream();
   const { isLoggedIn } = useAuthContext();
   const { status: localStatus } = useLocalBuildStatus();
   const visible = usePageVisible();
@@ -63,29 +68,12 @@ export const MempoolView: React.FC = () => {
     () => ({ offset: elOffset, limit: PAGE_LIMIT, sender: elSender.trim(), sort: elSort }),
     [elOffset, elSender, elSort],
   );
-  const elMempool = useELMempool(elQuery, tab === 'el-mempool' && visible);
-  const {
-    data,
-    loading,
-    error,
-    unauthorized,
-    preview,
-    previewError,
-    previewUnauthorized,
-    fetchPreview,
-    clear,
-    drop,
-  } = useTxPool(query, tab === 'queue', txPoolStats?.version);
+  const elMempool = useELMempool(elQuery, tab === 'public' && visible);
+  const { data, loading, error, unauthorized, clear, drop } = useTxPool(query, tab === 'private', txPoolStats?.version);
 
-  // The preview feeds the Next block tab and the drain estimate of the
-  // stats, so it refreshes on every pool change and periodically while the
-  // page is visible. Without a login it would only answer 401.
-  useEffect(() => {
-    if (!isLoggedIn || !visible) return undefined;
-    fetchPreview();
-    const interval = setInterval(fetchPreview, PREVIEW_POLL_MS);
-    return () => clearInterval(interval);
-  }, [fetchPreview, isLoggedIn, visible, txPoolStats?.version]);
+  // The estimate arrives over the event stream (new head, new slot, pool
+  // changes); logged-in readers get its transactions once per estimate.
+  const nextBlock = useNextBlock(streamedEstimate, visible && tab === 'next-block');
 
   const stats: TxPoolStats | null = txPoolStats ?? data?.stats ?? null;
   const enabled = stats?.enabled ?? serviceStatus?.txpool_enabled ?? false;
@@ -94,15 +82,15 @@ export const MempoolView: React.FC = () => {
   const pending = stats?.pending ?? 0;
 
   const tabs: TabItem<MempoolTab>[] = [
-    { id: 'queue', label: 'Queue', extra: <span className="bd-mp-tab-count">{pending.toLocaleString()}</span> },
     { id: 'next-block', label: 'Next block' },
     {
-      id: 'el-mempool',
-      label: 'EL mempool',
+      id: 'public',
+      label: 'Public mempool',
       extra: elMempool.data?.stats.active
         ? <span className="bd-mp-tab-count">{elMempool.data.stats.txs.toLocaleString()}</span>
         : undefined,
     },
+    { id: 'private', label: 'Private mempool', extra: <span className="bd-mp-tab-count">{pending.toLocaleString()}</span> },
     { id: 'access', label: 'Access' },
     { id: 'settings', label: 'Settings' },
   ];
@@ -118,12 +106,12 @@ export const MempoolView: React.FC = () => {
         onClear={clear}
       />
 
-      <MempoolStats stats={stats} gasLimit={preview?.gas_limit ?? 0} />
+      <MempoolStats stats={stats} gasLimit={nextBlock?.estimates[0]?.gas_limit ?? 0} />
 
       <Tabs tabs={tabs} active={tab} onChange={(id) => navigate(tabPath(id))} label="Mempool sections" />
 
       <div className="bd-mp-tab-panel" role="tabpanel">
-        {tab === 'queue' && (
+        {tab === 'private' && (
           <QueueTab
             ingressUrl={ingressUrl}
             data={data}
@@ -143,13 +131,13 @@ export const MempoolView: React.FC = () => {
         )}
         {tab === 'next-block' && (
           <NextBlockTab
-            preview={preview}
-            error={previewError}
-            locked={!isLoggedIn || previewUnauthorized}
-            onRefresh={fetchPreview}
+            currentSlot={currentSlot}
+            slotStates={slotStates}
+            estimates={nextBlock}
+            isLoggedIn={isLoggedIn}
           />
         )}
-        {tab === 'el-mempool' && (
+        {tab === 'public' && (
           <ELMempoolTab
             data={elMempool.data}
             fees={elMempool.fees}

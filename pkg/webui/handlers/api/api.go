@@ -1,14 +1,12 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
-	"github.com/ethpandaops/buildoor/pkg/p2p_bidder"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
 	"github.com/ethpandaops/buildoor/version"
 )
@@ -46,57 +44,6 @@ type StatsResponse struct {
 	BuilderAPIRegisteredValidators int    `json:"builder_api_registered_validators"`
 }
 
-// UpdateScheduleRequest is the request for updating schedule config.
-type UpdateScheduleRequest struct {
-	Mode      string  `json:"mode"`
-	EveryNth  uint64  `json:"every_nth,omitempty"`
-	NextN     uint64  `json:"next_n,omitempty"`
-	StartSlot *uint64 `json:"start_slot,omitempty"`
-}
-
-// UpdateEPBSRequest is the request for updating EPBS config.
-type UpdateEPBSRequest struct {
-	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
-	BidStartTime      *int64  `json:"bid_start_time,omitempty"`
-	BidEndTime        *int64  `json:"bid_end_time,omitempty"`
-	RevealTime        *int64  `json:"reveal_time,omitempty"`
-	BidMinAmount      *uint64 `json:"bid_min_amount,omitempty"`
-	BidIncrease       *uint64 `json:"bid_increase,omitempty"`
-	BidInterval       *int64  `json:"bid_interval,omitempty"`
-	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
-	BidSubsidy        *int64  `json:"bid_subsidy,omitempty"`
-}
-
-// UpdateBuilderConfigRequest is the request for updating shared builder config.
-type UpdateBuilderConfigRequest struct {
-	BuildStartTime    *int64  `json:"build_start_time,omitempty"`
-	PayloadBuildDelay *int64  `json:"payload_build_delay,omitempty"`
-	ExtraData         *string `json:"extra_data,omitempty"`
-}
-
-// UpdateBuilderAPIConfigRequest is the request for updating Builder API config.
-type UpdateBuilderAPIConfigRequest struct {
-	BlockValueSubsidyGwei *int64 `json:"block_value_subsidy_gwei,omitempty"`
-}
-
-// UpdateLifecycleConfigRequest is the request for updating lifecycle config.
-type UpdateLifecycleConfigRequest struct {
-	DepositAmount  *uint64 `json:"deposit_amount,omitempty"`  // Gwei; every deposit and top-up
-	TopupThreshold *uint64 `json:"topup_threshold,omitempty"` // Gwei
-	DepositMaxFee  *uint64 `json:"deposit_max_fee,omitempty"` // Gwei
-}
-
-// LifecycleStatusResponse is the response for lifecycle status.
-type LifecycleStatusResponse struct {
-	IsRegistered      bool   `json:"is_registered"`
-	BuilderIndex      uint64 `json:"builder_index"`
-	Balance           uint64 `json:"balance_gwei"`
-	EffectiveBalance  uint64 `json:"effective_balance_gwei"`
-	PendingPayments   uint64 `json:"pending_payments_gwei"`
-	DepositEpoch      uint64 `json:"deposit_epoch"`
-	WithdrawableEpoch uint64 `json:"withdrawable_epoch"`
-}
-
 // GetVersion godoc
 // @Id getVersion
 // @Summary Get the current version
@@ -105,7 +52,7 @@ type LifecycleStatusResponse struct {
 // @Produce json
 // @Success 200 {string} string "Success"
 // @Failure 500 {string} string "Server Error"
-// @Router /api/version [get]
+// @Router /version [get]
 func (h *APIHandler) GetVersion(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"version": version.GetBuildVersion()})
 }
@@ -119,7 +66,7 @@ func (h *APIHandler) GetVersion(w http.ResponseWriter, _ *http.Request) {
 // @Produce json
 // @Success 200 {object} StatusResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/status [get]
+// @Router /status [get]
 func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	resp := StatusResponse{
 		Running:     true,
@@ -178,7 +125,7 @@ func (h *APIHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Success 200 {object} StatsResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/stats [get]
+// @Router /stats [get]
 func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 	stats := h.builderSvc.GetStats()
 
@@ -207,11 +154,11 @@ func (h *APIHandler) GetStats(w http.ResponseWriter, _ *http.Request) {
 // @Id getConfig
 // @Summary Get buildoor configuration
 // @Tags Config
-// @Description Returns the buildoor configuration in use. Sensitive fields (builder key, wallet key, JWT secret) are redacted.
+// @Description Returns the buildoor configuration in use. Keys, secrets and the client endpoints are left out; the credentials in the RPC upstream URLs are masked.
 // @Produce json
 // @Success 200 {object} map[string]interface{} "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/config [get]
+// @Router /config [get]
 func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
 	// Redact sensitive fields before returning
@@ -219,307 +166,105 @@ func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// UpdateSchedule godoc
-// @Id updateSchedule
-// @Summary Update schedule configuration
+// UpdateSettingsRequest is a generic path-based settings mutation: keys are
+// the canonical settings registry keys (e.g. "epbs.bid_subsidy",
+// "schedule.mode", "builder_api.value_override_gwei"), values their JSON
+// encodings. Any subset of settings updates in one call.
+type UpdateSettingsRequest map[string]json.RawMessage
+
+// UpdateSettings godoc
+// @Id updateSettings
+// @Summary Update global settings by key path
 // @Tags Config
-// @Description Updates the builder schedule configuration including mode, every_nth, and next_n
-// @Description settings. Requires authentication.
+// @Description Applies partial global settings updates keyed by canonical
+// @Description settings paths (e.g. {"epbs.bid_subsidy": 1000,
+// @Description "schedule.mode": "all"}) without requiring full config
+// @Description objects. Unknown keys are rejected. The module enable flags
+// @Description (epbs_enabled, builder_api_enabled, lifecycle_enabled) are
+// @Description settings too; enabling a module this instance cannot run is
+// @Description refused. Requires authentication.
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer token"
-// @Param request body UpdateScheduleRequest true "Schedule configuration"
+// @Param request body object true "Map of settings key paths to values"
 // @Success 200 {object} map[string]string "Success"
-// @Failure 400 {object} map[string]string "Bad Request"
+// @Failure 400 {object} map[string]string "Unknown key or invalid value"
 // @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/config/schedule [post]
-func (h *APIHandler) UpdateSchedule(w http.ResponseWriter, r *http.Request) {
+// @Router /config [patch]
+func (h *APIHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
 	if token == nil {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	var req UpdateScheduleRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxPlanUpdateBodyBytes)
+
+	var req UpdateSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 
-	updates := map[string]json.RawMessage{}
-	if req.Mode != "" {
-		updates[config.KeyScheduleMode] = mustJSON(req.Mode)
-	}
-
-	if req.EveryNth > 0 {
-		updates[config.KeyScheduleEveryNth] = mustJSON(req.EveryNth)
-	}
-
-	if req.NextN > 0 {
-		updates[config.KeyScheduleNextN] = mustJSON(req.NextN)
-	}
-
-	if req.StartSlot != nil {
-		updates[config.KeyScheduleStartSlot] = mustJSON(*req.StartSlot)
-	}
-
-	if !h.applySettings(w, r, token, "config.schedule", req, updates) {
+	if len(req) == 0 {
+		writeError(w, http.StatusBadRequest, "no settings provided")
 		return
+	}
+
+	toggled, err := h.checkModuleToggles(req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if !h.applySettings(w, r, token, "config.settings", req, req) {
+		return
+	}
+
+	if toggled && h.eventStreamMgr != nil {
+		h.eventStreamMgr.BroadcastServiceStatus()
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
 }
 
-// UpdateEPBS godoc
-// @Id updateEPBS
-// @Summary Update EPBS configuration
-// @Tags Config
-// @Description Updates the EPBS (enshrined PBS) configuration including timing and bid
-// @Description parameters. Requires authentication.
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer token"
-// @Param request body UpdateEPBSRequest true "EPBS configuration"
-// @Success 200 {object} map[string]string "Success"
-// @Failure 400 {object} map[string]string "Bad Request"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/config/epbs [post]
-func (h *APIHandler) UpdateEPBS(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
+// checkModuleToggles refuses to enable a module this instance cannot run (no
+// Gloas fork scheduled, no API port, no lifecycle prerequisites) and reports
+// whether the update touches any module enable flag.
+func (h *APIHandler) checkModuleToggles(req UpdateSettingsRequest) (bool, error) {
+	modules := []struct {
+		key       string
+		name      string
+		available bool
+	}{
+		{config.KeyEPBSEnabled, "ePBS", h.epbsSvc != nil},
+		{config.KeyBuilderAPIEnabled, "the Builder API", h.builderAPISvc != nil},
+		{config.KeyLifecycleEnabled, "lifecycle management", h.lifecycleMgr != nil},
 	}
 
-	var req UpdateEPBSRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
+	toggled := false
 
-	updates := map[string]json.RawMessage{}
-	if req.BuildStartTime != nil {
-		updates[config.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
-	}
+	for _, module := range modules {
+		raw, ok := req[module.key]
+		if !ok {
+			continue
+		}
 
-	if req.BidStartTime != nil {
-		updates[config.KeyEPBSBidStartTime] = mustJSON(*req.BidStartTime)
-	}
+		toggled = true
 
-	if req.BidEndTime != nil {
-		updates[config.KeyEPBSBidEndTime] = mustJSON(*req.BidEndTime)
-	}
+		var enable bool
+		if err := json.Unmarshal(raw, &enable); err != nil {
+			return false, fmt.Errorf("%s must be a boolean", module.key)
+		}
 
-	// reveal_time maps to the standalone reveal section's time gate (the
-	// reveal is no longer an ePBS-only concern); kept on this endpoint for
-	// wire compatibility.
-	if req.RevealTime != nil {
-		updates[config.KeyRevealTimeMs] = mustJSON(*req.RevealTime)
-	}
-
-	if req.BidMinAmount != nil {
-		updates[config.KeyEPBSBidMinAmount] = mustJSON(*req.BidMinAmount)
-	}
-
-	if req.BidIncrease != nil {
-		updates[config.KeyEPBSBidIncrease] = mustJSON(*req.BidIncrease)
-	}
-
-	if req.BidInterval != nil {
-		updates[config.KeyEPBSBidInterval] = mustJSON(*req.BidInterval)
-	}
-
-	if req.PayloadBuildDelay != nil {
-		updates[config.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
-	}
-
-	if req.BidSubsidy != nil {
-		updates[config.KeyEPBSBidSubsidy] = mustJSON(*req.BidSubsidy)
-	}
-
-	if !h.applySettings(w, r, token, "config.epbs", req, updates) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
-
-// GetLifecycleStatus godoc
-// @Id getLifecycleStatus
-// @Summary Get lifecycle status
-// @Tags Lifecycle
-// @Description Returns the builder lifecycle status including registration state, balance,
-// @Description pending payments, and epoch information.
-// @Produce json
-// @Success 200 {object} LifecycleStatusResponse "Success"
-// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/lifecycle/status [get]
-func (h *APIHandler) GetLifecycleStatus(w http.ResponseWriter, _ *http.Request) {
-	if h.lifecycleMgr == nil {
-		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
-		return
-	}
-
-	state := h.lifecycleMgr.GetBuilderState()
-
-	resp := LifecycleStatusResponse{
-		IsRegistered:      state.IsRegistered,
-		BuilderIndex:      state.Index,
-		Balance:           state.Balance,
-		DepositEpoch:      state.DepositEpoch,
-		WithdrawableEpoch: state.WithdrawableEpoch,
-	}
-
-	// Get pending payments from the shared payment tracker
-	if h.payments != nil {
-		resp.PendingPayments = h.payments.GetTotalPendingPayments()
-
-		if resp.Balance > resp.PendingPayments {
-			resp.EffectiveBalance = resp.Balance - resp.PendingPayments
+		if enable && !module.available {
+			return false, fmt.Errorf("%s is not available on this instance", module.name)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	return toggled, nil
 }
 
-// PostDeposit godoc
-// @Id postDeposit
-// @Summary Trigger builder deposit
-// @Tags Lifecycle
-// @Description Initiates a builder registration deposit. If the builder is not yet
-// @Description registered, this will register it with the specified amount. Requires authentication.
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer token"
-// @Param request body object{amount_gwei=uint64} true "Deposit amount in gwei"
-// @Success 200 {object} map[string]string "Success"
-// @Failure 400 {object} map[string]string "Bad Request"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/lifecycle/deposit [post]
-func (h *APIHandler) PostDeposit(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	if h.lifecycleMgr == nil {
-		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
-		return
-	}
-
-	var req struct {
-		Amount uint64 `json:"amount_gwei"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if err := h.lifecycleMgr.EnsureBuilderRegistered(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
-		h.audit(r, token, "lifecycle.deposit", "", req, "error: "+err.Error())
-		writeError(w, http.StatusInternalServerError, err.Error())
-
-		return
-	}
-
-	h.audit(r, token, "lifecycle.deposit", "", req, "ok")
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deposit initiated"})
-}
-
-// PostTopup godoc
-// @Id postTopup
-// @Summary Trigger balance top-up
-// @Tags Lifecycle
-// @Description Checks the builder balance and initiates a top-up if needed based on
-// @Description configured thresholds. Requires authentication.
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer token"
-// @Success 200 {object} map[string]string "Success"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/lifecycle/topup [post]
-func (h *APIHandler) PostTopup(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	if h.lifecycleMgr == nil {
-		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
-		return
-	}
-
-	if err := h.lifecycleMgr.CheckAndTopup(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
-		h.audit(r, token, "lifecycle.topup", "", nil, "error: "+err.Error())
-		writeError(w, http.StatusInternalServerError, err.Error())
-
-		return
-	}
-
-	h.audit(r, token, "lifecycle.topup", "", nil, "ok")
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "topup initiated"})
-}
-
-// PostExit godoc
-// @Id postExit
-// @Summary Trigger voluntary exit
-// @Tags Lifecycle
-// @Description Initiates a voluntary exit for the builder. This will begin the withdrawal
-// @Description process and the builder will stop being eligible for block building after
-// @Description the exit is processed. Requires authentication.
-// @Accept json
-// @Produce json
-// @Param Authorization header string true "Bearer token"
-// @Success 200 {object} map[string]string "Success"
-// @Failure 401 {object} map[string]string "Unauthorized"
-// @Failure 404 {object} map[string]string "Lifecycle management not enabled"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/lifecycle/exit [post]
-func (h *APIHandler) PostExit(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	if h.lifecycleMgr == nil {
-		writeError(w, http.StatusNotFound, "lifecycle management not enabled")
-		return
-	}
-
-	if err := h.lifecycleMgr.InitiateExit(context.Background(), h.lifecycleMgr.Registry().Primary()); err != nil {
-		h.audit(r, token, "lifecycle.exit", "", nil, "error: "+err.Error())
-		writeError(w, http.StatusInternalServerError, err.Error())
-
-		return
-	}
-
-	h.audit(r, token, "lifecycle.exit", "", nil, "ok")
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "exit initiated"})
-}
-
-// GetValidators godoc
-// @Id getValidators
-// @Summary List registered validators
-// @Tags Buildoor
-// @Description Returns the list of validators registered via the Builder API (fee recipient preferences). Not paginated.
-// @Produce json
-// @Success 200 {object} map[string][]object "Success"
-// @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/buildoor/validators [get]
 // ValidatorRegistrationResponse represents a formatted validator registration for the UI.
 type ValidatorRegistrationResponse struct {
 	Pubkey       string `json:"pubkey"`        // Hex-encoded BLS public key
@@ -541,7 +286,7 @@ type GetValidatorsResponse struct {
 // @Produce json
 // @Success 200 {object} GetValidatorsResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/buildoor/validators [get]
+// @Router /registrations/validators [get]
 func (h *APIHandler) GetValidators(w http.ResponseWriter, _ *http.Request) {
 	if h.validatorStore == nil {
 		writeJSON(w, http.StatusOK, GetValidatorsResponse{Validators: []ValidatorRegistrationResponse{}})
@@ -578,7 +323,7 @@ type BuilderAPIStatusResponse struct {
 // @Produce json
 // @Success 200 {object} BuilderAPIStatusResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/buildoor/builder-api-status [get]
+// @Router /builder-api/status [get]
 func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request) {
 	cfg := h.builderSvc.GetConfig()
 	validatorCount := 0
@@ -591,180 +336,6 @@ func (h *APIHandler) GetBuilderAPIStatus(w http.ResponseWriter, _ *http.Request)
 		ValidatorCount:        validatorCount,
 		BlockValueSubsidyGwei: cfg.BuilderAPI.BlockValueSubsidyGwei,
 	}
-	writeJSON(w, http.StatusOK, status)
-}
-
-// UpdateBuilderConfig updates the shared builder configuration (build start time, payload build delay).
-func (h *APIHandler) UpdateBuilderConfig(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var req UpdateBuilderConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	updates := map[string]json.RawMessage{}
-	if req.BuildStartTime != nil {
-		updates[config.KeyEPBSBuildStartTime] = mustJSON(*req.BuildStartTime)
-	}
-
-	if req.PayloadBuildDelay != nil {
-		updates[config.KeyPayloadBuildTime] = mustJSON(uint64(*req.PayloadBuildDelay))
-	}
-
-	if req.ExtraData != nil {
-		updates[config.KeyExtraData] = mustJSON(*req.ExtraData)
-	}
-
-	if !h.applySettings(w, r, token, "config.builder", req, updates) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
-
-// UpdateBuilderAPIConfig updates the Builder API configuration.
-func (h *APIHandler) UpdateBuilderAPIConfig(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var req UpdateBuilderAPIConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	updates := map[string]json.RawMessage{}
-	if req.BlockValueSubsidyGwei != nil {
-		updates[config.KeyBuilderAPISubsidy] = mustJSON(*req.BlockValueSubsidyGwei)
-	}
-
-	if !h.applySettings(w, r, token, "config.builder-api", req, updates) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
-
-// UpdateLifecycleConfig updates the lifecycle configuration (deposit amount,
-// top-up threshold, max deposit fee). Unknown members are rejected rather than
-// dropped, so a client sending a setting that does not exist hears about it.
-func (h *APIHandler) UpdateLifecycleConfig(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var req UpdateLifecycleConfigRequest
-
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return
-	}
-
-	updates := map[string]json.RawMessage{}
-	if req.DepositAmount != nil {
-		updates[config.KeyDepositAmount] = mustJSON(*req.DepositAmount)
-	}
-
-	if req.TopupThreshold != nil {
-		updates[config.KeyTopupThreshold] = mustJSON(*req.TopupThreshold)
-	}
-
-	if req.DepositMaxFee != nil {
-		updates[config.KeyDepositMaxFee] = mustJSON(*req.DepositMaxFee)
-	}
-
-	if !h.applySettings(w, r, token, "config.lifecycle", req, updates) {
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
-}
-
-// ToggleServiceRequest is the request for toggling services.
-type ToggleServiceRequest struct {
-	EPBSEnabled       *bool `json:"epbs_enabled,omitempty"`
-	BuilderAPIEnabled *bool `json:"builder_api_enabled,omitempty"`
-	LifecycleEnabled  *bool `json:"lifecycle_enabled,omitempty"`
-}
-
-// ToggleServices toggles the enabled state of ePBS and/or Builder API services.
-func (h *APIHandler) ToggleServices(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
-	var req ToggleServiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	// The enable flags are ordinary settings; persist them through the settings
-	// service (which triggers the module SetEnabled callbacks via OnChange).
-	// Only toggle modules that are actually available.
-	updates := map[string]json.RawMessage{}
-	if req.EPBSEnabled != nil && h.epbsSvc != nil {
-		updates[config.KeyEPBSEnabled] = mustJSON(*req.EPBSEnabled)
-	}
-
-	if req.BuilderAPIEnabled != nil && h.builderAPISvc != nil {
-		updates[config.KeyBuilderAPIEnabled] = mustJSON(*req.BuilderAPIEnabled)
-	}
-
-	if req.LifecycleEnabled != nil && h.lifecycleMgr != nil {
-		updates[config.KeyLifecycleEnabled] = mustJSON(*req.LifecycleEnabled)
-	}
-
-	if len(updates) > 0 {
-		if err := h.settingsSvc.SetMany(updates, actorFromToken(token)); err != nil {
-			h.audit(r, token, "services.toggle", "", req, "error: "+err.Error())
-			writeError(w, http.StatusBadRequest, err.Error())
-
-			return
-		}
-	}
-
-	h.audit(r, token, "services.toggle", "", req, "ok")
-
-	// Broadcast updated status to all connected clients
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastServiceStatus()
-	}
-
-	// Return current status
-	regState := "unknown"
-	if h.epbsSvc != nil {
-		regState = p2p_bidder.RegistrationStateName(h.epbsSvc.GetRegistrationState())
-	}
-
-	status := ServiceStatusEvent{
-		EPBSAvailable:         h.epbsSvc != nil,
-		EPBSEnabled:           h.epbsSvc != nil && h.epbsSvc.IsEnabled(),
-		EPBSRegistrationState: regState,
-		BuilderAPIAvailable:   h.builderAPISvc != nil,
-		BuilderAPIEnabled:     h.builderAPISvc != nil && h.builderAPISvc.IsEnabled(),
-		LifecycleAvailable:    h.lifecycleMgr != nil,
-		LifecycleEnabled:      h.lifecycleMgr != nil && h.lifecycleMgr.IsEnabled(),
-	}
-
-	fillLocalBuildStatus(&status, h.builderSvc)
-
 	writeJSON(w, http.StatusOK, status)
 }
 
@@ -786,7 +357,7 @@ type BidsWonResponse struct {
 // @Param limit query int false "Limit for pagination (max 100)" default(20)
 // @Success 200 {object} BidsWonResponse "Success"
 // @Failure 500 {object} map[string]string "Server Error"
-// @Router /api/buildoor/bids-won [get]
+// @Router /bids-won [get]
 func (h *APIHandler) GetBidsWon(w http.ResponseWriter, r *http.Request) {
 	// Parse query params
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -839,7 +410,7 @@ type ProposerPreferencesResponse struct {
 // @Produce json
 // @Success 200 {object} ProposerPreferencesResponse "Success"
 // @Failure 404 {object} map[string]string "Proposer preferences not enabled"
-// @Router /api/buildoor/proposer-preferences [get]
+// @Router /registrations/proposer-preferences [get]
 func (h *APIHandler) GetProposerPreferences(w http.ResponseWriter, _ *http.Request) {
 	if h.propPrefSvc == nil {
 		writeError(w, http.StatusNotFound, "proposer preferences service not enabled")
@@ -888,7 +459,7 @@ type BuilderPreferencesResponse struct {
 // @Produce json
 // @Success 200 {object} BuilderPreferencesResponse "Success"
 // @Failure 404 {object} map[string]string "Builder API not enabled"
-// @Router /api/buildoor/builder-preferences [get]
+// @Router /registrations/builder-preferences [get]
 func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Request) {
 	if h.builderAPISvc == nil || h.builderAPISvc.GetBuilderPreferencesStore() == nil {
 		writeError(w, http.StatusNotFound, "builder API not enabled")
@@ -907,9 +478,11 @@ func (h *APIHandler) GetBuilderPreferences(w http.ResponseWriter, _ *http.Reques
 	writeJSON(w, http.StatusOK, BuilderPreferencesResponse{Preferences: result})
 }
 
-// configToMap returns the config as a map with sensitive fields redacted. It
-// is the only form in which the config may leave the process: both the REST
-// endpoint and the (unauthenticated) SSE config event serve it.
+// configToMap returns the public form of the config. It is the only form in
+// which the config may leave the process: both the REST endpoint and the
+// (unauthenticated) SSE config event serve it. Keys, secrets and the
+// startup-only endpoints are json:"-" on the config itself; the upstream
+// list, a setting the UI edits, keeps its hosts with the credentials masked.
 func configToMap(cfg *config.Config) map[string]any {
 	if cfg == nil {
 		return nil
@@ -922,14 +495,9 @@ func configToMap(cfg *config.Config) map[string]any {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil
 	}
-	redact := func(key string) {
-		if v, ok := m[key].(string); ok && v != "" {
-			m[key] = "***"
-		}
+	if txpool, ok := m["txpool"].(map[string]any); ok {
+		txpool["rpc_upstreams"] = config.RedactRPCUpstreams(cfg.TxPool.RPCUpstreams)
 	}
-	redact("builder_privkey")
-	redact("wallet_privkey")
-	redact("el_jwt_secret")
 	return m
 }
 

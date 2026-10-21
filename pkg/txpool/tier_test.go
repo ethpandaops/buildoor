@@ -122,3 +122,21 @@ func TestMirrorKeepsColdArrivalsWithoutBodies(t *testing.T) {
 	pool.mirror.retier(ctx, floorsFor(big.NewInt(300)))
 	require.Equal(t, 1, pool.ELMempoolStats().Txs)
 }
+
+// A cold EL mempool transaction blocks its sender's later nonces: the fill
+// never sees them (they could only fail on the nonce gap, each after a state
+// read).
+func TestELMirrorStopsSendersAtTheirColdNonce(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+	pool.floors.Store(floorsFor(big.NewInt(1_000_000_000)))
+
+	stuck := newAccount(t)
+	cheap, _ := signTx(t, stuck, txOpts{nonce: 0, feeCap: 100, tip: 1})
+	behind, _ := signTx(t, stuck, txOpts{nonce: 1})
+	normal, _ := signTx(t, newAccount(t), txOpts{nonce: 0})
+	el.pending = []*types.Transaction{cheap, behind, normal}
+
+	require.Equal(t, []common.Hash{normal.Hash()}, mirrorHashes(t, pool))
+	require.Equal(t, 3, pool.ELMempoolStats().Txs, "the blocked transactions stay mirrored")
+}

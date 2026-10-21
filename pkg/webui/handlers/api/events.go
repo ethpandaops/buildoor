@@ -66,6 +66,7 @@ const (
 	EventTypeBuilderAPISubmitBlockDlvd   EventType = "builder_api_submit_block_delivered"
 	EventTypeServiceStatus               EventType = "service_status"
 	EventTypeTxPoolStats                 EventType = "txpool_stats"
+	EventTypeNextBlock                   EventType = "next_block"
 	EventTypeLocalBuildStatus            EventType = "local_build_status"
 	EventTypeActionPlanUpdated           EventType = "action_plan_updated"
 	EventTypeActionPlanRulesUpdated      EventType = "action_plan_rules_updated"
@@ -457,7 +458,7 @@ type HeadVotesStreamEvent struct {
 }
 
 // SlotResultUpdatedEvent tells viewers that a slot's result record changed;
-// the record itself is served by GET /api/buildoor/slot-results.
+// the record itself is served by GET /api/v1/slot-results.
 type SlotResultUpdatedEvent struct {
 	Slot uint64 `json:"slot"`
 }
@@ -685,7 +686,10 @@ type EventStreamManager struct {
 
 	// The local build status is re-sent when its encoding changed (a probe,
 	// a setting, a plan check verdict).
-	planVerifier           atomic.Pointer[tx_plan_verifier.Verifier]
+	planVerifier atomic.Pointer[tx_plan_verifier.Verifier]
+	// lastNextBlock is the latest next block estimates (public form), sent
+	// to new connections.
+	lastNextBlock          atomic.Pointer[NextBlockEstimates]
 	lastLocalBuildStatus   []byte
 	lastLocalBuildStatusMu sync.Mutex
 }
@@ -1175,6 +1179,26 @@ func (m *EventStreamManager) RemoveClient(ch chan *StreamEvent) {
 
 	delete(m.clients, ch)
 	close(ch)
+}
+
+// ClientCount is the number of connected stream clients.
+func (m *EventStreamManager) ClientCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return len(m.clients)
+}
+
+// BroadcastNextBlock sends a new next block estimate (its public form) and
+// keeps it for the initial state of new connections.
+func (m *EventStreamManager) BroadcastNextBlock(estimate *NextBlockEstimates) {
+	m.lastNextBlock.Store(estimate)
+
+	m.Broadcast(&StreamEvent{
+		Type:      EventTypeNextBlock,
+		Timestamp: time.Now().UnixMilli(),
+		Data:      estimate,
+	})
 }
 
 // Broadcast sends an event to all connected clients. Events sent through
@@ -2145,6 +2169,17 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 		}
 	}
 
+	// Send the latest next block estimate (the feed only runs with viewers)
+	if estimate := m.lastNextBlock.Load(); estimate != nil {
+		if !send(&StreamEvent{
+			Type:      EventTypeNextBlock,
+			Timestamp: time.Now().UnixMilli(),
+			Data:      estimate,
+		}) {
+			return
+		}
+	}
+
 	// Send current status
 	if !send(&StreamEvent{
 		Type:      EventTypeStatus,
@@ -2254,7 +2289,18 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 	}
 }
 
-// EventStream handles the SSE endpoint for real-time events.
+// EventStream godoc
+// @Id eventStream
+// @Summary Server-sent event stream
+// @Tags Events
+// @Description The live event stream of the WebUI (text/event-stream): every
+// @Description event is a JSON object with type, timestamp, data and (for
+// @Description replayable events) seq. A new connection first receives the
+// @Description initial state and a replay of the recent slots.
+// @Produce text/event-stream
+// @Success 200 {string} string "Event stream"
+// @Failure 429 {object} map[string]string "Too many open streams"
+// @Router /events [get]
 func (h *APIHandler) EventStream(w http.ResponseWriter, r *http.Request) {
 	// Check if event stream manager is available
 	if h.eventStreamMgr == nil {

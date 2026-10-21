@@ -8,6 +8,7 @@ import { CurrentTimeIndicator } from './CurrentTimeIndicator';
 import { BuildDelayLine } from './BuildDelayLine';
 import { engineBuildView, payloadOwnerItems, testingRunViews } from './slotGraphBuilds';
 import { primaryTarget } from '../buildTargets';
+import { apiPath } from '../utils/api';
 
 const ROW_HEIGHT = 22;
 const ROW_PAD = 3;
@@ -894,7 +895,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
               wide: !!state.payloadAvailableDetail,
               ...(state.bidWon ? {
                 artifact: {
-                  url: `/api/buildoor/slot-results/${slot}/envelope`,
+                  url: apiPath(`/slot-results/${slot}/envelope`),
                   filename: `slot-${slot}-envelope.ssz`
                 }
               } : {}),
@@ -1111,7 +1112,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
                       wide: !!att.envelope,
                       ...(!att.skipped ? {
                         artifact: {
-                          url: `/api/buildoor/slot-results/${slot}/envelope`,
+                          url: apiPath(`/slot-results/${slot}/envelope`),
                           filename: `slot-${slot}-envelope.ssz`
                         }
                       } : {}),

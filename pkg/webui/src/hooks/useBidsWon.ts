@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BidWonEntry, BidsWonResponse } from '../types';
 import { authStore } from '../stores/authStore';
+import { apiPath } from '../utils/api';
 
 export function useBidsWon(offset: number, limit: number) {
   const [bidsWon, setBidsWon] = useState<BidWonEntry[]>([]);
@@ -20,7 +21,7 @@ export function useBidsWon(offset: number, limit: number) {
       }
 
       const response = await fetch(
-        `/api/buildoor/bids-won?offset=${offset}&limit=${limit}`,
+        apiPath(`/bids-won?offset=${offset}&limit=${limit}`),
         { headers }
       );
 

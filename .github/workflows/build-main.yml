@@ -120,7 +120,7 @@ jobs:
           ## Latest automatically built executables. (Unstable development snapshot)
           Built from main branch (commit: ${{ github.sha }})
 
-          Please read the [wiki](https://github.com/ethpandaops/buildoor/wiki) for setup / configuration instructions.
+          Please read the [README](https://github.com/ethpandaops/buildoor/blob/main/README.md) for setup / configuration instructions.
 
           ### Release Artifacts
           | Release File  | Description |

@@ -932,3 +932,114 @@ func fillOf(t *testing.T, txs ...*types.Transaction) []*PooledTx {
 
 	return out
 }
+
+// TestSelectMostProfitable merges the private pool and the EL mempool into
+// one selection by effective tip: a sender's chain continues across the
+// pools in nonce order, of two transactions at one nonce the higher tip
+// wins, and the origins stay accounted apart.
+func TestSelectMostProfitable(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	const gwei = 1_000_000_000
+
+	low, high, mid, top, cross, conflict := newAccount(t), newAccount(t), newAccount(t), newAccount(t), newAccount(t), newAccount(t)
+	for _, acc := range []account{low, high, mid, top, cross, conflict} {
+		fund(el, acc, 0, 100)
+	}
+
+	opts := func(nonce uint64, tip int64) txOpts { return txOpts{nonce: nonce, tip: tip * gwei, feeCap: 100 * gwei} }
+
+	addPrivate := func(acc account, o txOpts) *types.Transaction {
+		tx, raw := signTx(t, acc, o)
+		_, err := pool.Add(raw)
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	privLow := addPrivate(low, opts(0, 1))
+	privHigh := addPrivate(high, opts(0, 5))
+	privCross := addPrivate(cross, opts(1, 8))       // after the public nonce 0
+	privConflict := addPrivate(conflict, opts(0, 2)) // the public one pays more
+
+	pubMid, _ := signTx(t, mid, opts(0, 3))
+	pubTop, _ := signTx(t, top, opts(0, 9))
+	pubCross, _ := signTx(t, cross, opts(0, 4))
+	pubConflict, _ := signTx(t, conflict, opts(0, 6))
+
+	sel, err := pool.Select(context.Background(), &SelectParams{
+		ParentHash:     common.Hash{0xaa},
+		GasLimit:       6 * 21000, // the lowest tip does not fit
+		Ordering:       config.TxOrderingFIFO,
+		Fill:           fillOf(t, pubMid, pubTop, pubCross, pubConflict),
+		MostProfitable: true,
+	})
+	require.NoError(t, err)
+
+	order := make([]common.Hash, 0, len(sel.Ordered))
+	for _, tx := range sel.Ordered {
+		order = append(order, tx.Hash)
+	}
+
+	require.Equal(t, []common.Hash{
+		pubTop.Hash(),      // 9
+		pubConflict.Hash(), // 6, wins its nonce over the private 2
+		privHigh.Hash(),    // 5
+		pubCross.Hash(),    // 4, then its sender's private nonce 1 is the head
+		privCross.Hash(),   // 8
+		pubMid.Hash(),      // 3
+	}, order)
+	require.Len(t, sel.Txs, 6)
+
+	require.Equal(t, []*PooledTx{pool.Get(privHigh.Hash()), pool.Get(privCross.Hash())}, sel.Selected)
+	require.Len(t, sel.Fill, 4)
+	require.Equal(t, 1, sel.Skipped[SkipNonceTaken], "the private transaction at the public one's nonce")
+	require.Equal(t, 1, sel.Skipped[SkipGasFull])
+	require.NotNil(t, pool.Get(privLow.Hash()))
+	require.NotNil(t, pool.Get(privConflict.Hash()), "a taken nonce never evicts")
+
+	require.Equal(t, uint64(2*21000), sel.GasSum, "the pool's share")
+	require.Equal(t, uint64(4*21000), sel.FillGasSum)
+
+	origins := sel.Summary().Origins
+	require.Equal(t, 2, origins.Private.Txs)
+	require.Equal(t, 4, origins.Public.Txs)
+	require.Equal(t, uint64(4*21000), origins.Public.Gas)
+	require.Equal(t, new(big.Int).Mul(big.NewInt((9+6+4+3)*gwei), big.NewInt(21000)).String(), origins.Public.Tips)
+}
+
+// TestSelectAfterPrecedingBlock estimates the block after one that is not
+// on chain yet: its transactions are left out, their senders continue after
+// them, the base fee override applies and nothing is evicted.
+func TestSelectAfterPrecedingBlock(t *testing.T) {
+	el := newFakeEL()
+	pool, _, _ := newTestPool(t, el)
+
+	acc := newAccount(t)
+	fund(el, acc, 0, 100)
+
+	first, raw0 := signTx(t, acc, txOpts{nonce: 0})
+	_, err := pool.Add(raw0)
+	require.NoError(t, err)
+
+	second, raw1 := signTx(t, acc, txOpts{nonce: 1})
+	_, err = pool.Add(raw1)
+	require.NoError(t, err)
+
+	baseFee := big.NewInt(7)
+
+	sel, err := pool.Select(context.Background(), &SelectParams{
+		ParentHash: common.Hash{0xaa},
+		Ordering:   config.TxOrderingFIFO,
+		Preceding:  []*PooledTx{{Hash: first.Hash(), Tx: first, Sender: acc.addr}},
+		BaseFee:    baseFee,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, sel.Selected, 1)
+	require.Equal(t, second.Hash(), sel.Selected[0].Hash, "continues after the preceding block's nonce")
+	require.Equal(t, 1, sel.Skipped[SkipInPrecedingBlock])
+	require.Equal(t, 0, baseFee.Cmp(sel.BaseFee))
+	require.NotNil(t, pool.Get(first.Hash()), "a speculative selection evicts nothing")
+}

@@ -985,10 +985,11 @@ export const LocalBuildForm: React.FC<{
             <label className="form-label small mb-0">
               Custom block transactions
               <InfoHint>
-                <strong>buildoor mempool</strong>: transactions sent to <code>/rpc</code>.{' '}
-                <strong>buildoor mempool, then EL mempool</strong>: ours first, the EL&apos;s pending
-                transactions fill the remaining gas (highest tip first, no blob transactions).{' '}
-                <strong>EL mempool</strong>: the EL fills the block itself.{' '}
+                The inclusion list always goes first. <strong>private only</strong>: transactions
+                sent to <code>/rpc</code>. <strong>private first</strong>: ours first, the public
+                (EL) mempool fills the remaining gas, highest tip first.{' '}
+                <strong>most profitable</strong>: both mempools as one, highest effective tip
+                first. <strong>EL mempool</strong>: the EL fills the block itself.{' '}
                 <strong>explicit</strong>: exactly the raw transactions below.{' '}
                 <strong>queued</strong>: exactly these buildoor-mempool hashes, in this order. Any
                 deviation fails the build instead of trimming the list.
@@ -1001,8 +1002,9 @@ export const LocalBuildForm: React.FC<{
               onChange={(e) => set({ tx_source: e.target.value })}
             >
               <option value="">inherit</option>
-              <option value="txpool">buildoor mempool</option>
-              <option value="txpool_el_fill">buildoor mempool, then EL mempool</option>
+              <option value="txpool">private mempool only</option>
+              <option value="private_first">private first, then public</option>
+              <option value="most_profitable">most profitable of both</option>
               <option value="el_mempool">EL mempool</option>
               <option value="empty">none (empty block)</option>
               <option value="explicit">explicit list (raw txs)</option>

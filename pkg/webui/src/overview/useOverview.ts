@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { InstanceStatus, OverviewHost, OverviewResponse } from './types';
+import { apiPath } from '../utils/api';
 
 const POLL_INTERVAL_MS = 60_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 
 async function fetchOverview(host: OverviewHost, signal: AbortSignal): Promise<OverviewResponse> {
-  const resp = await fetch(`/api/overview/proxy/${host.id}`, { signal });
+  const resp = await fetch(apiPath(`/hosts/${host.id}/overview`), { signal });
   if (!resp.ok) {
     let detail = `HTTP ${resp.status}`;
     try {
@@ -27,7 +28,7 @@ export function useOverviewHosts() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/overview/hosts')
+    fetch(apiPath('/hosts'))
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;

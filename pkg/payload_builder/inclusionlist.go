@@ -135,6 +135,21 @@ func (b *PayloadBuilder) resolveInclusionList(
 	return build
 }
 
+// TransactionHashes are the hashes of the list transactions the build
+// carried (nil before Heze).
+func (i *InclusionListBuild) TransactionHashes() map[common.Hash]struct{} {
+	if i == nil {
+		return nil
+	}
+
+	hashes := make(map[common.Hash]struct{}, len(i.txs))
+	for _, tx := range i.txs {
+		hashes[crypto.Keccak256Hash(tx)] = struct{}{}
+	}
+
+	return hashes
+}
+
 // listTransactions is the list a build carries (nil before Heze).
 func (i *InclusionListBuild) listTransactions() [][]byte {
 	if i == nil {

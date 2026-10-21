@@ -135,7 +135,7 @@ func init() {
 	// Local block building extension (testing_buildBlockV1) and the owned transaction pool
 	rootCmd.PersistentFlags().Bool("local-build-enabled", defaults.LocalBuild.Enabled, "Build an additional local payload per slot through the EL's testing_buildBlockV1 (requires --el-rpc and the EL's testing namespace)")
 	rootCmd.PersistentFlags().String("local-build-payload-source", defaults.LocalBuild.PayloadSource, "Which payload feeds bids and reveals when the local build is enabled: el (local payload is a shadow), local, local_or_el, or higher_value (whichever is worth more)")
-	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build: txpool, txpool_el_fill (pool first, then the EL mempool's pending txs), empty or el_mempool")
+	rootCmd.PersistentFlags().String("local-build-tx-source", defaults.LocalBuild.TxSource, "Transaction source of the local build, after the inclusion list: txpool (private pool only), private_first (private pool, then the EL mempool), most_profitable (both pools by effective tip), empty or el_mempool (the EL decides)")
 	rootCmd.PersistentFlags().Bool("local-build-allow-blobs-without-bundle", defaults.LocalBuild.AllowBlobsWithoutBundle, "Include blob transactions in local builds on ELs whose testing endpoint returns no blobs bundle (reth, ethrex) — the blobs cannot be revealed")
 	rootCmd.PersistentFlags().Uint64("local-build-max-attempts", defaults.LocalBuild.MaxAttempts, "testing_buildBlockV1 attempts per build for the txpool source: an attributed EL refusal drops the offending transactions and retries (exact lists never retry)")
 	rootCmd.PersistentFlags().Uint64("local-build-rebuild-interval", defaults.LocalBuild.RebuildIntervalMs, "Minimum gap in ms between testing builds: build at the window start, then rebuild whenever new transactions arrived, until the window end (0 = one build, timed to finish at the window end)")
@@ -413,6 +413,11 @@ func initConfig(root *cobra.Command) error {
 	// The retired /rpc auth modes auth_token (WebUI login) and static (shared
 	// secret) both required authentication; api_key accepts either.
 	cfg.TxPool.Auth = config.NormalizeRetiredTxPoolAuth(cfg.TxPool.Auth)
+
+	// txpool_el_fill is private_first's former name.
+	if source := config.NormalizedTxSource(cfg.LocalBuild.TxSource, ""); source != "" {
+		cfg.LocalBuild.TxSource = source
+	}
 
 	// Operator-supplied values pass the same validation as UI overrides, so a
 	// typo fails the start instead of being replaced by a module's fallback.

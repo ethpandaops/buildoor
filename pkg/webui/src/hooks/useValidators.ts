@@ -1,12 +1,13 @@
 import { REFRESH_INTERVAL_SLOW_MS } from './refreshIntervals';
 import { usePolledList } from './usePolledList';
 import type { ValidatorRegistration, ValidatorsResponse } from '../types';
+import { apiPath } from '../utils/api';
 
 // useValidators lists the Builder API validator registrations, newest
 // registration first.
 export function useValidators() {
   return usePolledList<ValidatorRegistration, ValidatorsResponse>({
-    url: '/api/buildoor/validators',
+    url: apiPath('/registrations/validators'),
     intervalMs: REFRESH_INTERVAL_SLOW_MS,
     select: (body) => body.validators,
     compare: (a, b) => b.timestamp - a.timestamp || a.pubkey.localeCompare(b.pubkey),
