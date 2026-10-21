@@ -61,7 +61,7 @@ func TestSlotRuleValidate(t *testing.T) {
 	chainSvc := newStubChain()
 	spec := chainSvc.spec
 
-	require.NoError(t, slot31Rule().Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot))
+	require.NoError(t, slot31Rule().Validate(spec))
 
 	tests := []struct {
 		name   string
@@ -104,7 +104,7 @@ func TestSlotRuleValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rule := slot31Rule()
 			tt.mutate(rule)
-			require.ErrorContains(t, rule.Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot), tt.errMsg)
+			require.ErrorContains(t, rule.Validate(spec), tt.errMsg)
 		})
 	}
 }

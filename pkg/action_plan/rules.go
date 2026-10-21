@@ -2,10 +2,12 @@ package action_plan
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"time"
 
+	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
@@ -110,8 +112,11 @@ func (r *SlotRule) planFor(slot phase0.Slot) *SlotPlan {
 }
 
 // Validate checks the matcher and, through a materialized plan, every category
-// against the chain spec.
-func (r *SlotRule) Validate(slotsPerEpoch uint64, secondsPerSlot time.Duration) error {
+// against the chain spec: against each slot duration within the rule's epoch
+// window.
+func (r *SlotRule) Validate(spec *chain.ChainSpec) error {
+	slotsPerEpoch := spec.SlotsPerEpoch
+
 	if !ruleIDPattern.MatchString(r.ID) {
 		return fmt.Errorf("rule id %q must match %s", r.ID, ruleIDPattern.String())
 	}
@@ -144,8 +149,21 @@ func (r *SlotRule) Validate(slotsPerEpoch uint64, secondsPerSlot time.Duration) 
 		return fmt.Errorf("rule %q carries no instruction", r.ID)
 	}
 
-	if err := plan.Validate(secondsPerSlot); err != nil {
-		return fmt.Errorf("rule %q: %w", r.ID, err)
+	fromSlot, toSlot := phase0.Slot(0), phase0.Slot(math.MaxUint64)
+	if r.FromEpoch != nil {
+		fromSlot = spec.EpochStartSlot(phase0.Epoch(*r.FromEpoch))
+	}
+
+	if r.ToEpoch != nil && *r.ToEpoch < math.MaxUint64 {
+		if next := spec.EpochStartSlot(phase0.Epoch(*r.ToEpoch + 1)); next > 0 {
+			toSlot = next - 1
+		}
+	}
+
+	for _, duration := range spec.SlotDurationsBetween(fromSlot, toSlot) {
+		if err := plan.Validate(duration); err != nil {
+			return fmt.Errorf("rule %q: %w", r.ID, err)
+		}
 	}
 
 	return nil

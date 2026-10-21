@@ -62,9 +62,9 @@ func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
 	return &chain.ChainSpec{
-		SecondsPerSlot: m.slotDuration,
-		SlotsPerEpoch:  32,
-		ForkSchedule:   m.forkSchedule,
+		SlotDuration:  m.slotDuration,
+		SlotsPerEpoch: 32,
+		ForkSchedule:  m.forkSchedule,
 	}
 }
 func (m *stubChainService) GetGenesis() *beacon.Genesis { return &m.genesis }

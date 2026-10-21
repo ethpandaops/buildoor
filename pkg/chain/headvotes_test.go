@@ -88,7 +88,7 @@ func newVoteTestTracker(
 ) (*HeadVoteTracker, *stubChainService) {
 	t.Helper()
 
-	spec := &ChainSpec{SlotsPerEpoch: 4, SecondsPerSlot: 12 * time.Second}
+	spec := &ChainSpec{SlotsPerEpoch: 4, SlotDuration: 12 * time.Second}
 
 	stats := make(map[phase0.Epoch]*EpochStats, 2)
 

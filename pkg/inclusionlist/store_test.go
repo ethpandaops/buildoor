@@ -23,7 +23,7 @@ type stubChain struct {
 
 func (s *stubChain) GetChainSpec() *chain.ChainSpec {
 	return &chain.ChainSpec{
-		SecondsPerSlot:             12 * time.Second,
+		SlotDuration:               12 * time.Second,
 		SlotsPerEpoch:              32,
 		MinSeedLookahead:           1,
 		InclusionListCommitteeSize: 16,

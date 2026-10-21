@@ -21,6 +21,11 @@ type Field struct {
 	// viper.IsSet for CLI-change detection.
 	FlagKey string
 
+	// SlotScaled marks a millisecond timing within or sized to the slot: it
+	// is rescaled with the slot duration when the duration changes (see
+	// Service.RescaleSlotTiming).
+	SlotScaled bool
+
 	get    func(*Config) any
 	set    func(*Config, any) error
 	decode func(json.RawMessage) (any, error)
@@ -76,10 +81,37 @@ func newField[T comparable](key, flag string, ptr func(*Config) *T) Field {
 	}
 }
 
+// slotScaledKeys are the millisecond timings positioned in or sized to the
+// slot. Durations of external processes that do not follow the slot length
+// (retry intervals) are not listed.
+var slotScaledKeys = map[string]struct{}{
+	KeyEPBSBuildStartTime:          {},
+	KeyEPBSBidStartTime:            {},
+	KeyEPBSBidEndTime:              {},
+	KeyEPBSBidInterval:             {},
+	KeyRevealTimeMs:                {},
+	KeyBuildSpeculativeBuildTime:   {},
+	KeyLocalBuildRebuildIntervalMs: {},
+	KeyLocalBuildStartTimeMs:       {},
+	KeyLocalBuildEndTimeMs:         {},
+	KeyPayloadBuildTime:            {},
+	KeyBuilderAPIRespondAtMs:       {},
+}
+
 // Fields returns the registry of all mutable settings, including the per-module
 // enable flags (which are configured via CLI flags exactly like other settings
 // and therefore follow the same default/cli/ui resolution).
 func Fields() []Field {
+	fields := registeredFields()
+	for i := range fields {
+		_, fields[i].SlotScaled = slotScaledKeys[fields[i].Key]
+	}
+
+	return fields
+}
+
+// registeredFields lists every mutable setting.
+func registeredFields() []Field {
 	return []Field{
 		newField(KeyScheduleMode, "schedule-mode", func(c *Config) *ScheduleMode { return &c.Schedule.Mode }),
 		newField(KeyScheduleEveryNth, "schedule-every-nth", func(c *Config) *uint64 { return &c.Schedule.EveryNth }),

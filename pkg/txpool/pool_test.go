@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -26,8 +27,9 @@ var testChainID = big.NewInt(1234)
 // stubChainService provides the minimal chain.Service surface the pool uses.
 type stubChainService struct {
 	chain.Service
-	slot phase0.Slot
-	fork version.DataVersion
+	slot     phase0.Slot
+	fork     version.DataVersion
+	hezeSlot phase0.Slot
 }
 
 func (s *stubChainService) GetCurrentSlot() phase0.Slot { return s.slot }
@@ -37,6 +39,26 @@ func (s *stubChainService) GetEpochOfSlot(slot phase0.Slot) phase0.Epoch {
 func (s *stubChainService) ActiveForkAtEpoch(phase0.Epoch) version.DataVersion { return s.fork }
 func (s *stubChainService) GetHeadTracker() *chain.HeadTracker {
 	return nil
+}
+
+// The stub chain runs 12s slots from genesis at unix 0, 9s slots from the
+// slot set in hezeSlot (0 = never).
+func (s *stubChainService) SlotToTime(slot phase0.Slot) time.Time {
+	return time.Unix(0, 0).Add(s.spec().SlotStartOffset(slot))
+}
+
+func (s *stubChainService) TimeToSlot(t time.Time) phase0.Slot {
+	return s.spec().SlotAtOffset(t.Sub(time.Unix(0, 0)))
+}
+
+func (s *stubChainService) spec() *chain.ChainSpec {
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
+	if s.hezeSlot > 0 {
+		spec.ForkSchedule = []chain.ForkSchedule{{Fork: version.DataVersionHeze, Epoch: phase0.Epoch(s.hezeSlot / 32)}}
+		spec.ForkSlotDurations = map[version.DataVersion]time.Duration{version.DataVersionHeze: 9 * time.Second}
+	}
+
+	return spec
 }
 
 // fakeEL is an in-memory ELClient.

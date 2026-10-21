@@ -2,13 +2,13 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMe
 import type { SlotState, Config, ChainInfo, ServiceStatus } from '../types';
 import { SlotGraph, slotGraphHeight } from './SlotGraph';
 import { SLOT_HISTORY } from '../hooks/useEventStream';
-import { calculateSlotTiming } from '../utils';
+import { calculateSlotTiming, slotAtTime, slotDurationAt, slotStartTime } from '../utils';
 
 // Offset into the current slot at which the next slot's row appears: where its
 // graph range begins (it starts before the slot), so the time indicator enters
 // the new row at its left edge.
-function nextSlotAppearsAt(chainInfo: ChainInfo): number {
-  return chainInfo.seconds_per_slot + calculateSlotTiming(chainInfo, 0).rangeStart;
+function nextSlotAppearsAt(chainInfo: ChainInfo, slot: number): number {
+  return slotDurationAt(chainInfo, slot) + calculateSlotTiming(chainInfo, slot + 1).rangeStart;
 }
 
 interface SlotTimelineProps {
@@ -74,10 +74,9 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     if (!chainInfo || chainInfo.genesis_time === 0) {
       return { displaySlot: 0, showNextSlot: false };
     }
-    const slotDuration = chainInfo.seconds_per_slot;
-    const elapsed = Date.now() - chainInfo.genesis_time;
-    const displaySlot = Math.floor(elapsed / slotDuration);
-    const showNextSlot = elapsed % slotDuration >= nextSlotAppearsAt(chainInfo);
+    const now = Date.now();
+    const displaySlot = slotAtTime(chainInfo, now);
+    const showNextSlot = now - slotStartTime(chainInfo, displaySlot) >= nextSlotAppearsAt(chainInfo, displaySlot);
     return { displaySlot, showNextSlot };
   }, [chainInfo]);
 
@@ -89,9 +88,11 @@ export const SlotTimeline: React.FC<SlotTimelineProps> = ({
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
       setSlotDisplay(calculateSlotDisplay());
-      const slotDuration = chainInfo.seconds_per_slot;
-      const intoSlot = (Date.now() - chainInfo.genesis_time) % slotDuration;
-      const appearsAt = nextSlotAppearsAt(chainInfo);
+      const now = Date.now();
+      const slot = slotAtTime(chainInfo, now);
+      const slotDuration = slotDurationAt(chainInfo, slot);
+      const intoSlot = now - slotStartTime(chainInfo, slot);
+      const appearsAt = nextSlotAppearsAt(chainInfo, slot);
       const nextChange = intoSlot < appearsAt ? appearsAt : slotDuration;
       timer = setTimeout(schedule, nextChange - intoSlot + 5);
     };
