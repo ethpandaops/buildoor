@@ -197,11 +197,10 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 		return
 	}
 
-	elapsed := now.Sub(genesisTime)
 	currentSlot := s.chainSvc.TimeToSlot(now)
 	// msIntoSlot is the offset within the current slot (not the time since
 	// genesis) — the bid windows are slot-relative.
-	msIntoSlot := (elapsed % s.chainSvc.GetChainSpec().SecondsPerSlot).Milliseconds()
+	msIntoSlot := now.Sub(s.chainSvc.SlotToTime(currentSlot)).Milliseconds()
 
 	// ePBS bids are only valid from the Gloas fork onwards.
 	if s.chainSvc.GetCurrentFork() < version.DataVersionGloas {
@@ -216,7 +215,7 @@ func (s *Scheduler) ProcessTick(ctx context.Context) {
 
 	// Check slots that might need bidding (current slot + next slot for negative bid start times)
 	s.checkSlotForBidding(ctx, currentSlot, now, msIntoSlot)
-	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-int64(s.chainSvc.GetChainSpec().SecondsPerSlot.Milliseconds()))
+	s.checkSlotForBidding(ctx, currentSlot+1, now, msIntoSlot-s.chainSvc.GetChainSpec().SlotDurationAt(currentSlot).Milliseconds())
 }
 
 // effectiveBidSettings returns the effective bid parameters for the slot, or

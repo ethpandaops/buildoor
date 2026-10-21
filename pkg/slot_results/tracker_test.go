@@ -38,8 +38,8 @@ type stubChainService struct {
 func newStubChain() *stubChainService {
 	return &stubChainService{
 		spec: &chain.ChainSpec{
-			SecondsPerSlot: 12 * time.Second,
-			SlotsPerEpoch:  32,
+			SlotDuration:  12 * time.Second,
+			SlotsPerEpoch: 32,
 		},
 		genesisTime: time.Now().Add(-12000 * time.Second),
 		currentSlot: 1000,
@@ -58,7 +58,7 @@ func (s *stubChainService) ActiveForkAtEpoch(_ phase0.Epoch) version.DataVersion
 }
 
 func (s *stubChainService) SlotToTime(slot phase0.Slot) time.Time {
-	return s.genesisTime.Add(time.Duration(slot) * s.spec.SecondsPerSlot)
+	return s.genesisTime.Add(time.Duration(slot) * s.spec.SlotDuration)
 }
 
 func (s *stubChainService) SubscribeEpochStats() *utils.Subscription[*chain.EpochStats] {

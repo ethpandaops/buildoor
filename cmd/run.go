@@ -182,7 +182,7 @@ and begins building blocks according to configuration.`,
 		}
 
 		// Apply slot-relative timing defaults now that we know the slot duration
-		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
+		slotTimeMs := chainSpec.ShortestSlotDuration().Milliseconds()
 		cfg.ApplySlotDefaults(slotTimeMs)
 
 		logger.WithFields(logrus.Fields{

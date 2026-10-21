@@ -1,4 +1,4 @@
-import type { ScheduleConfig } from './types';
+import type { ChainInfo, ScheduleConfig } from './types';
 
 // formatEventTime renders a timestamp (ms epoch) as HH:mm:ss.mmm in 24h format
 // using the local timezone.
@@ -127,20 +127,56 @@ export const EVENT_CATEGORIES: EventCategory[] = [
   { key: 'other', label: 'Other', color: '#6c757d' }
 ];
 
+type SlotClock = Pick<ChainInfo, 'genesis_time' | 'seconds_per_slot' | 'heze_fork_slot' | 'slot_duration_heze'>;
+
+function hezeForkSlot(chainInfo: SlotClock | null): number | null {
+  if (chainInfo?.heze_fork_slot == null || !chainInfo.slot_duration_heze) return null;
+  return chainInfo.heze_fork_slot;
+}
+
+// slotDurationAt returns the duration (ms) of the given slot.
+export function slotDurationAt(chainInfo: SlotClock | null, slot: number): number {
+  const forkSlot = hezeForkSlot(chainInfo);
+  if (forkSlot !== null && slot >= forkSlot) return chainInfo!.slot_duration_heze!;
+  return chainInfo?.seconds_per_slot || 12000;
+}
+
+// slotStartTime returns the start (unix ms) of the given slot.
+export function slotStartTime(chainInfo: SlotClock | null, slot: number): number {
+  const genesisTime = chainInfo?.genesis_time || 0;
+  const slotDuration = chainInfo?.seconds_per_slot || 12000;
+  const forkSlot = hezeForkSlot(chainInfo);
+  if (forkSlot !== null && slot > forkSlot) {
+    return genesisTime + forkSlot * slotDuration + (slot - forkSlot) * chainInfo!.slot_duration_heze!;
+  }
+  return genesisTime + slot * slotDuration;
+}
+
+// slotAtTime returns the slot in progress at the given unix ms time.
+export function slotAtTime(chainInfo: SlotClock | null, timeMs: number): number {
+  const elapsed = timeMs - (chainInfo?.genesis_time || 0);
+  if (elapsed < 0) return 0;
+  const slotDuration = chainInfo?.seconds_per_slot || 12000;
+  const forkSlot = hezeForkSlot(chainInfo);
+  if (forkSlot !== null && elapsed >= forkSlot * slotDuration) {
+    return forkSlot + Math.floor((elapsed - forkSlot * slotDuration) / chainInfo!.slot_duration_heze!);
+  }
+  return Math.floor(elapsed / slotDuration);
+}
+
 export function calculateSlotTiming(
-  chainInfo: { genesis_time: number; seconds_per_slot: number } | null,
+  chainInfo: SlotClock | null,
   slot: number
 ): { slotStartTime: number; rangeStart: number; rangeEnd: number; totalRange: number } {
-  const slotDuration = chainInfo?.seconds_per_slot || 12000;
-  const genesisTime = chainInfo?.genesis_time || 0;
-  const slotStartTime = genesisTime + (slot * slotDuration);
+  const slotDuration = slotDurationAt(chainInfo, slot);
+  const startTime = slotStartTime(chainInfo, slot);
   // A third of the slot before its start keeps the payload builds visible:
   // they start ahead of the slot (default -28% of the slot time).
   const rangeStart = -slotDuration / 3;
   const rangeEnd = slotDuration;
   const totalRange = rangeEnd - rangeStart;
 
-  return { slotStartTime, rangeStart, rangeEnd, totalRange };
+  return { slotStartTime: startTime, rangeStart, rangeEnd, totalRange };
 }
 
 export function calculatePosition(

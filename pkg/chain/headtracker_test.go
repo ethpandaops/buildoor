@@ -21,9 +21,9 @@ func newTestHeadTracker(genesisTime time.Time, fork version.DataVersion) *HeadTr
 	log.SetLevel(logrus.PanicLevel)
 
 	spec := &ChainSpec{
-		SecondsPerSlot: 12 * time.Second,
-		SlotsPerEpoch:  32,
-		PayloadDueBps:  5000,
+		SlotDuration:  12 * time.Second,
+		SlotsPerEpoch: 32,
+		PayloadDueBps: 5000,
 		ForkSchedule: []ForkSchedule{
 			{Fork: fork, Version: phase0.Version{0x01}, Epoch: 0},
 		},
@@ -209,4 +209,15 @@ func TestHeadTracker_ResolveReorg(t *testing.T) {
 	depth, ancestor := tracker.resolveReorg(parent, competing)
 	assert.Equal(t, uint64(1), depth)
 	assert.Equal(t, gp.Root, ancestor)
+}
+
+func TestHeadTracker_PayloadDueTimeAcrossHeze(t *testing.T) {
+	genesis := time.Unix(1_700_000_000, 0)
+	h := newTestHeadTracker(genesis, version.DataVersionGloas)
+	h.chainSpec.SlotDurationHeze = 9 * time.Second
+	h.chainSpec.ForkSchedule = append(h.chainSpec.ForkSchedule, ForkSchedule{Fork: version.DataVersionHeze, Epoch: 5})
+
+	assert.Equal(t, genesis.Add(159*12*time.Second+6*time.Second), h.payloadDueTime(159))
+	assert.Equal(t, genesis.Add(160*12*time.Second+4500*time.Millisecond), h.payloadDueTime(160))
+	assert.Equal(t, genesis.Add(160*12*time.Second+9*time.Second+4500*time.Millisecond), h.payloadDueTime(161))
 }

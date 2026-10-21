@@ -30,7 +30,7 @@ func (m *stubChainService) Start(context.Context) error { return nil }
 func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
-	return &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	return &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 }
 func (m *stubChainService) GetGenesis() *beacon.Genesis { return &m.genesis }
 

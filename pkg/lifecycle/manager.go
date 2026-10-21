@@ -350,7 +350,7 @@ func (m *Manager) WaitForRegistration(
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(m.chainSvc.GetChainSpec().SecondsPerSlot) // Check every slot
+	ticker := time.NewTicker(m.chainSvc.GetChainSpec().SlotDurationAt(m.chainSvc.GetCurrentSlot())) // Check every slot
 	defer ticker.Stop()
 
 	pubkey := key.Pubkey()
