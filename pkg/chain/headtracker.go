@@ -444,8 +444,8 @@ func (h *HeadTracker) payloadStatusLocked(info *beacon.BlockInfo) PayloadStatus 
 
 // payloadDueTime returns the wall-clock payload reveal deadline of a slot.
 func (h *HeadTracker) payloadDueTime(slot phase0.Slot) time.Time {
-	slotStart := h.genesis.GenesisTime.Add(time.Duration(uint64(slot)) * h.chainSpec.SecondsPerSlot)
-	dueOffset := h.chainSpec.SecondsPerSlot * time.Duration(h.chainSpec.PayloadDueBps) / 10000
+	slotStart := h.genesis.GenesisTime.Add(h.chainSpec.SlotStartOffset(slot))
+	dueOffset := h.chainSpec.SlotDurationAt(slot) * time.Duration(h.chainSpec.PayloadDueBps) / 10000
 
 	return slotStart.Add(dueOffset)
 }

@@ -1255,7 +1255,7 @@ func (m *EventStreamManager) handleSlotStart(slot phase0.Slot) {
 	}
 
 	chainSpec := m.builderSvc.GetChainSpec()
-	slotStartTime := genesis.GenesisTime.Add(time.Duration(slot) * chainSpec.SecondsPerSlot)
+	slotStartTime := genesis.GenesisTime.Add(chainSpec.SlotStartOffset(slot))
 
 	m.broadcastForSlot(slot, &StreamEvent{
 		Type:      EventTypeSlotStart,
@@ -2221,11 +2221,13 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 			Type:      "chain_info",
 			Timestamp: time.Now().UnixMilli(),
 			Data: map[string]any{
-				"genesis_time":     genesis.GenesisTime.UnixMilli(),
-				"seconds_per_slot": int64(chainSpec.SecondsPerSlot.Milliseconds()),
-				"slots_per_epoch":  chainSpec.SlotsPerEpoch,
-				"network":          chainSpec.ConfigName,
-				"gloas_fork_epoch": gloasForkEpoch(chainSpec),
+				"genesis_time":       genesis.GenesisTime.UnixMilli(),
+				"seconds_per_slot":   chainSpec.SlotDuration.Milliseconds(),
+				"slots_per_epoch":    chainSpec.SlotsPerEpoch,
+				"network":            chainSpec.ConfigName,
+				"gloas_fork_epoch":   gloasForkEpoch(chainSpec),
+				"heze_fork_slot":     hezeForkSlot(chainSpec),
+				"slot_duration_heze": chainSpec.SlotDurationHeze.Milliseconds(),
 			},
 		}) {
 			return
@@ -2601,6 +2603,19 @@ func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) 
 			Status:  status,
 		},
 	})
+}
+
+// hezeForkSlot returns the first slot of the Heze fork when the slot duration
+// changes there, or nil.
+func hezeForkSlot(spec *chain.ChainSpec) *uint64 {
+	forkSlot, ok := spec.HezeForkSlot()
+	if !ok {
+		return nil
+	}
+
+	slot := uint64(forkSlot)
+
+	return &slot
 }
 
 // gloasForkEpoch returns the scheduled Gloas fork epoch, or nil when the

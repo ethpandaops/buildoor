@@ -395,7 +395,7 @@ func (s *PlanService) ApplyUpdates(updates []*PlanUpdate, actor string) (*PlanCh
 		return nil, errors.New("no updates provided")
 	}
 
-	secondsPerSlot := s.chainSvc.GetChainSpec().SecondsPerSlot
+	spec := s.chainSvc.GetChainSpec()
 	currentSlot := s.chainSvc.GetCurrentSlot()
 	now := time.Now()
 
@@ -444,7 +444,7 @@ func (s *PlanService) ApplyUpdates(updates []*PlanUpdate, actor string) (*PlanCh
 				result.UpdatedAt = now
 				result.UpdatedBy = actor
 
-				if err := result.Validate(secondsPerSlot); err != nil {
+				if err := result.Validate(spec.SlotDurationAt(slot)); err != nil {
 					return nil, fmt.Errorf("update %d: slot %d: %w", i, slot, err)
 				}
 			}
@@ -525,7 +525,7 @@ func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, er
 			return nil, fmt.Errorf("rule %d: must not be null", i)
 		}
 
-		if err := rule.Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot); err != nil {
+		if err := rule.Validate(spec); err != nil {
 			return nil, err
 		}
 

@@ -353,19 +353,12 @@ func (s *service) GetGenesis() *beacon.Genesis {
 
 // SlotToTime converts a slot number to a timestamp.
 func (s *service) SlotToTime(slot phase0.Slot) time.Time {
-	slotDuration := time.Duration(uint64(slot)) * s.chainSpec.SecondsPerSlot
-	return s.genesis.GenesisTime.Add(slotDuration)
+	return s.genesis.GenesisTime.Add(s.chainSpec.SlotStartOffset(slot))
 }
 
 // TimeToSlot converts a timestamp to a slot number.
 func (s *service) TimeToSlot(t time.Time) phase0.Slot {
-	if t.Before(s.genesis.GenesisTime) {
-		return 0
-	}
-
-	elapsed := t.Sub(s.genesis.GenesisTime)
-
-	return phase0.Slot(elapsed / s.chainSpec.SecondsPerSlot)
+	return s.chainSpec.SlotAtOffset(t.Sub(s.genesis.GenesisTime))
 }
 
 // GetCurrentEpoch calculates the current epoch from the head slot.

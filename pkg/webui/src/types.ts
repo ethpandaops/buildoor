@@ -425,6 +425,10 @@ export interface ChainInfo {
   network?: string;
   // Scheduled Gloas fork epoch (null/absent when not scheduled).
   gloas_fork_epoch?: number | null;
+  // First slot of HEZE_FORK_EPOCH and the slot duration (ms) from there on
+  // (null/absent when the slot duration does not change at Heze).
+  heze_fork_slot?: number | null;
+  slot_duration_heze?: number | null;
 }
 
 export interface Stats {

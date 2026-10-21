@@ -51,8 +51,8 @@ func (s *stubChainService) GetHeadTracker() *chain.HeadTracker { return nil }
 func newStubChainService() *stubChainService {
 	return &stubChainService{
 		spec: &chain.ChainSpec{
-			SecondsPerSlot: 12 * time.Second,
-			SlotsPerEpoch:  32,
+			SlotDuration:  12 * time.Second,
+			SlotsPerEpoch: 32,
 			ForkSchedule: []chain.ForkSchedule{
 				{Fork: version.DataVersionGloas, Version: phase0.Version{0x0a, 0x00, 0x00, 0x00}, Epoch: 0},
 			},

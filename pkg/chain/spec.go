@@ -18,12 +18,16 @@ import (
 
 // ChainSpec holds chain specification parameters.
 type ChainSpec struct {
-	// SecondsPerSlot is the slot duration, taken from SLOT_DURATION_MS when the
-	// beacon node serves it (EIP-7782 networks keep serving a stale
+	// SlotDuration is the genesis slot duration, taken from SLOT_DURATION_MS
+	// when the beacon node serves it (EIP-7782 networks keep serving a stale
 	// SECONDS_PER_SLOT preset default alongside it) and from SECONDS_PER_SLOT
-	// otherwise.
-	SecondsPerSlot time.Duration
-	SlotsPerEpoch  uint64
+	// otherwise. Use SlotDurationAt / SlotStartOffset / SlotAtOffset for slot
+	// timing; they follow SlotDurationHeze from the Heze fork onwards.
+	SlotDuration time.Duration
+	// SlotDurationHeze is SLOT_DURATION_MS_HEZE, the slot duration from
+	// HEZE_FORK_EPOCH onwards (zero when not served: no change at Heze).
+	SlotDurationHeze time.Duration
+	SlotsPerEpoch    uint64
 
 	// ConfigName is the network's CONFIG_NAME (e.g. "hoodi"; empty when the
 	// beacon node does not serve it).
@@ -107,6 +111,70 @@ func (s *ChainSpec) MaxBlobsPerBlockAt(epoch phase0.Epoch) uint64 {
 	return denebMaxBlobs
 }
 
+// HezeForkSlot returns the first slot of HEZE_FORK_EPOCH and whether the slot
+// duration changes there.
+func (s *ChainSpec) HezeForkSlot() (phase0.Slot, bool) {
+	if s.SlotDurationHeze == 0 || s.SlotDurationHeze == s.SlotDuration || s.SlotDuration <= 0 || s.SlotsPerEpoch == 0 {
+		return 0, false
+	}
+
+	forkEpoch := uint64(s.GetForkEpoch(version.DataVersionHeze))
+	if forkEpoch > math.MaxUint64/s.SlotsPerEpoch {
+		return 0, false
+	}
+
+	forkSlot := forkEpoch * s.SlotsPerEpoch
+	if forkSlot > uint64(math.MaxInt64/s.SlotDuration) {
+		return 0, false
+	}
+
+	return phase0.Slot(forkSlot), true
+}
+
+// ShortestSlotDuration returns the shortest slot duration the chain runs with,
+// across the Heze slot duration change when it is scheduled.
+func (s *ChainSpec) ShortestSlotDuration() time.Duration {
+	if _, ok := s.HezeForkSlot(); ok {
+		return min(s.SlotDuration, s.SlotDurationHeze)
+	}
+
+	return s.SlotDuration
+}
+
+// SlotDurationAt returns the duration of the given slot.
+func (s *ChainSpec) SlotDurationAt(slot phase0.Slot) time.Duration {
+	if forkSlot, ok := s.HezeForkSlot(); ok && slot >= forkSlot {
+		return s.SlotDurationHeze
+	}
+
+	return s.SlotDuration
+}
+
+// SlotStartOffset returns the start of the given slot relative to genesis.
+func (s *ChainSpec) SlotStartOffset(slot phase0.Slot) time.Duration {
+	if forkSlot, ok := s.HezeForkSlot(); ok && slot > forkSlot {
+		return time.Duration(forkSlot)*s.SlotDuration + time.Duration(slot-forkSlot)*s.SlotDurationHeze
+	}
+
+	return time.Duration(slot) * s.SlotDuration
+}
+
+// SlotAtOffset returns the slot in progress at the given offset from genesis.
+func (s *ChainSpec) SlotAtOffset(elapsed time.Duration) phase0.Slot {
+	if elapsed < 0 || s.SlotDuration == 0 {
+		return 0
+	}
+
+	if forkSlot, ok := s.HezeForkSlot(); ok {
+		forkOffset := time.Duration(forkSlot) * s.SlotDuration
+		if elapsed >= forkOffset {
+			return forkSlot + phase0.Slot((elapsed-forkOffset)/s.SlotDurationHeze)
+		}
+	}
+
+	return phase0.Slot(elapsed / s.SlotDuration)
+}
+
 // BlobScheduleEntry represents a single entry in the BLOB_SCHEDULE.
 type BlobScheduleEntry struct {
 	Epoch            uint64
@@ -138,7 +206,7 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 			return fmt.Errorf("invalid SLOT_DURATION_MS: 0")
 		}
 
-		s.SecondsPerSlot = time.Duration(slotDurationMs) * time.Millisecond
+		s.SlotDuration = time.Duration(slotDurationMs) * time.Millisecond
 	} else {
 		secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
 		if !ok {
@@ -150,7 +218,11 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 			return fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
 		}
 
-		s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
+		s.SlotDuration = time.Duration(secondsPerSlot) * time.Second
+	}
+
+	if v, err := parseSpecUint64(specData, "SLOT_DURATION_MS_HEZE"); err == nil {
+		s.SlotDurationHeze = time.Duration(v) * time.Millisecond
 	}
 
 	s.ConfigName = specData["CONFIG_NAME"]

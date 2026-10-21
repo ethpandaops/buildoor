@@ -29,9 +29,9 @@ func candidateTestSetup(t *testing.T, gp, parent *beacon.BlockInfo) *Service {
 	log.SetLevel(logrus.PanicLevel)
 
 	spec := &chain.ChainSpec{
-		SecondsPerSlot: 12 * time.Second,
-		SlotsPerEpoch:  32,
-		PayloadDueBps:  5000,
+		SlotDuration:  12 * time.Second,
+		SlotsPerEpoch: 32,
+		PayloadDueBps: 5000,
 	}
 	chainSvc := &stubChainService{spec: spec}
 	chainSvc.headTracker = newPrimedHeadTracker(spec, gp)

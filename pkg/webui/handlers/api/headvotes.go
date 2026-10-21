@@ -85,7 +85,7 @@ func (h *APIHandler) GetHeadVoteDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slotMs := h.chainSvc.GetChainSpec().SecondsPerSlot.Milliseconds()
+	slotMs := h.chainSvc.GetChainSpec().SlotDurationAt(slot).Milliseconds()
 
 	bucketMs := slotMs / 24
 	if v := r.URL.Query().Get("bucket_ms"); v != "" {

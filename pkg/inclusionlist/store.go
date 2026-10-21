@@ -152,7 +152,7 @@ func (s *Store) isTimely(slot phase0.Slot, receivedAt time.Time) bool {
 
 	spec := s.chainSvc.GetChainSpec()
 	start := s.chainSvc.SlotToTime(slot)
-	due := start.Add(spec.SecondsPerSlot * time.Duration(spec.InclusionListDueBps) / 10000)
+	due := start.Add(spec.SlotDurationAt(slot) * time.Duration(spec.InclusionListDueBps) / 10000)
 
 	return !receivedAt.Before(start) && receivedAt.Before(due)
 }

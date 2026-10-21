@@ -1,6 +1,7 @@
 import { createContext, createElement, useContext, useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { Config, ChainInfo, Stats, SlotState, LogEvent, OurBid, ExternalBid, BuilderInfo, HeadVoteDataPoint, ServiceStatus, RevealAttempt, VoteCoverage, BuilderKeyState, BuilderKeysAggregate, TxPoolStats, LocalBuildStatus, SlotOutlook, PayloadInfo, TargetState, EngineCalls, LocalBuildInfo, BuildRef, CandidateKey } from '../types';
 import { buildLabel } from '../buildTargets';
+import { slotAtTime } from '../utils';
 
 // ---------------------------------------------------------------------------
 // Module-level SSE fan-out: lets other hooks/components subscribe to raw
@@ -142,9 +143,7 @@ function useEventStreamConnection(): UseEventStreamResult {
     if (!chainInfo) return;
 
     const calculateCurrentSlot = () => {
-      const now = Date.now();
-      const elapsed = now - chainInfo.genesis_time;
-      const slot = Math.floor(elapsed / chainInfo.seconds_per_slot);
+      const slot = slotAtTime(chainInfo, Date.now());
       if (slot !== currentSlotRef.current) {
         setCurrentSlot(slot);
       }
@@ -474,9 +473,7 @@ function useEventStreamConnection(): UseEventStreamResult {
           // Calculate actual slot from time for the log
           const info = chainInfoRef.current;
           if (info) {
-            const now = Date.now();
-            const elapsed = now - info.genesis_time;
-            const actualSlot = Math.floor(elapsed / info.seconds_per_slot);
+            const actualSlot = slotAtTime(info, Date.now());
             addEvent('slot_start', `Preparing for slot ${data.slot} (current: ${actualSlot})`, event.timestamp);
           } else {
             addEvent('slot_start', `Preparing for slot ${data.slot}`, event.timestamp);

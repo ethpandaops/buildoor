@@ -515,7 +515,7 @@ func TestBuildLocalAttributedRetry(t *testing.T) {
 }
 
 func TestResolveLocalBuildRequestBuildsCanonicalCandidateOnly(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 	svc.cfg.LocalBuild.Enabled = true
 	svc.cfg.LocalBuild.RebuildIntervalMs = 400

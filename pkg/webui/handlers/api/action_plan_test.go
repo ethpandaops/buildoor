@@ -43,8 +43,8 @@ type planTestChain struct {
 func newPlanTestChain() *planTestChain {
 	return &planTestChain{
 		spec: &chain.ChainSpec{
-			SecondsPerSlot: 12 * time.Second,
-			SlotsPerEpoch:  32,
+			SlotDuration:  12 * time.Second,
+			SlotsPerEpoch: 32,
 		},
 		currentSlot: 1000,
 	}
