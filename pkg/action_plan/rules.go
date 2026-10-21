@@ -1,10 +1,12 @@
 package action_plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ethpandaops/buildoor/pkg/chain"
@@ -22,6 +24,26 @@ const MaxRules = 32
 // ruleIDPattern constrains rule ids to stable, url/kv-safe slugs.
 var ruleIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// RuleSourceFlags marks a rule owned by the --rules-json startup flag: the
+// next start replaces it with the flag's rule of the same id, or removes it
+// when the flag no longer carries that id.
+const RuleSourceFlags = "cli"
+
+// ParseRules decodes a JSON array of rules (the rules API's wire shape) with
+// unknown fields rejected; the result is validated by SetRules /
+// SeedStartupRules.
+func ParseRules(raw string) ([]*SlotRule, error) {
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+
+	var rules []*SlotRule
+	if err := dec.Decode(&rules); err != nil {
+		return nil, fmt.Errorf("parse rules: %w", err)
+	}
+
+	return rules, nil
+}
+
 // SlotRule is a recurring plan template: every slot whose index within the
 // epoch matches gets the rule's categories as its plan. It exists for
 // scenarios that must repeat for a whole devnet run — e.g. "win slot 31 of
@@ -37,8 +59,12 @@ type SlotRule struct {
 	Enabled     bool   `json:"enabled"`
 	Description string `json:"description,omitempty"`
 
+	// Source is RuleSourceFlags for a rule seeded from --rules-json, empty for
+	// a rule written through the API.
+	Source string `json:"source,omitempty"`
+
 	// SlotsInEpoch are the matched slot indices within an epoch (0-based, so
-	// 31 is the last slot of a 32-slot epoch).
+	// 31 is the last slot of a 32-slot epoch); empty matches every slot.
 	SlotsInEpoch []uint64 `json:"slots_in_epoch"`
 
 	// FromEpoch / ToEpoch bound the rule to an inclusive epoch window; nil is
@@ -92,7 +118,7 @@ func (r *SlotRule) Matches(slot phase0.Slot, slotsPerEpoch uint64) bool {
 		return false
 	}
 
-	return slices.Contains(r.SlotsInEpoch, uint64(slot)%slotsPerEpoch)
+	return len(r.SlotsInEpoch) == 0 || slices.Contains(r.SlotsInEpoch, uint64(slot)%slotsPerEpoch)
 }
 
 // planFor materializes the rule as the slot's plan. The result is marked with
@@ -119,10 +145,6 @@ func (r *SlotRule) Validate(spec *chain.ChainSpec) error {
 
 	if !ruleIDPattern.MatchString(r.ID) {
 		return fmt.Errorf("rule id %q must match %s", r.ID, ruleIDPattern.String())
-	}
-
-	if len(r.SlotsInEpoch) == 0 {
-		return fmt.Errorf("rule %q: slots_in_epoch must not be empty", r.ID)
 	}
 
 	seen := make(map[uint64]struct{}, len(r.SlotsInEpoch))

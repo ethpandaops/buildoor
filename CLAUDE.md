@@ -179,7 +179,23 @@ npm run clean
      it is synthesized on every read, never persisted per slot. Several matching
      rules: lowest id wins. The set is replaced atomically (`SetRules`, max 32),
      persisted via the `kv_store` `slot_rules` namespace, and fires
-     `RuleChangeEvent`
+     `RuleChangeEvent`. An empty `slots_in_epoch` matches every slot. Rules
+     can be seeded at startup: `--rules-json` takes the rules API's JSON array
+     (`SeedStartupRules`): its rules are FLAG-OWNED (`source: "cli"`, a `cli`
+     badge in the rules panel) — each replaces the stored rule with its id,
+     and a flag-owned rule the flag no longer carries is removed on the next
+     start (also when the flag is gone), so the state-db never keeps a
+     scenario the command line dropped; API-written rules are never touched.
+     The startup transforms `--payload-transform` / `--bid-transform` /
+     `--envelope-transform` + `--transform-from-epoch`
+     (`config.TransformsConfig`) are NO rule: every frozen plan resolves
+     them as a layer UNDER the slot's plan, per object (`resolveTransforms`:
+     the plan's own expression wins, `FrozenPlan.Transforms.from_flags` names
+     the objects the flags filled), so they combine with any rule instead of
+     competing in the lowest-id-wins match, and nothing of them is persisted.
+     Both are startup-only and fail the start on an invalid rule or
+     expression, so a whole devnet scenario is expressible as process
+     arguments
    - **Freeze semantics**: `Freeze(slot)` resolves the immutable `FrozenPlan` (raw plan
      + effective settings merged from the live global config + target-slot fork + the
      COMPLETE build decision incl. schedule modes and next_n accounting) the first time
@@ -560,7 +576,24 @@ npm run clean
      deadline, clamped to slot end + 1 slot). Envelope construction is split from
      publish (`buildEnvelope`) so every per-attempt `RevealResult` carries the
      built envelope — failed publishes stay inspectable; envelope signing uses
-     the TARGET slot's fork
+     the TARGET slot's fork. **Reveal targets** (`reveal.targets` on a slot
+     plan or rule, `reveal_targets.go`): additional publications of the slot's
+     envelope after the primary reveal succeeded, each with its own beacon
+     node URLs (empty = the primary node, clients opened lazily and kept),
+     `delay_ms` (at most two slots), `transform` (jq on this copy's message
+     before re-signing; "" = the envelope as built, even when the primary
+     reveal is transformed) and optional `broadcast_validation`. Each
+     publication is its own `RevealResult`/`RevealAttempt` with `target` set
+     (the URL or `primary`); the envelope artifact stays the primary
+     reveal's, and a copy never changes the slot's reveal state (SSE `reveal`
+     events carry `target`; the slot graph, the grid cell and the drawer's
+     outcome row follow the reveal itself, the attempts table lists the
+     copies). Target URLs may carry beacon credentials: readers without a
+     login (REST) and every SSE event get them through `config.RedactURL`
+     (plans, rules, frozen plans, slot-result attempts), and a redacted URL
+     sent back is refused. Edited in the plan drawer and the rule editor
+     (custom reveal). This makes delivery experiments plain configuration: a
+     delayed copy to a subset of nodes, or a transformed copy to a test node
    - `InclusionTracker`: own head-event loop; detects inclusion of our payloads (all
      forks), requests the p2p-side reveal, fires `PayloadIncludedEvent` (carries the
      `WonBlock` summary — storage is owned by the slot results tracker). Reorg-aware

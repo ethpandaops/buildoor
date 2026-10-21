@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -289,6 +291,67 @@ type RevealPlan struct {
 	// BroadcastValidation overrides the envelope submission's broadcast
 	// validation level: gossip | consensus | consensus_and_equivocation.
 	BroadcastValidation *string `json:"broadcast_validation,omitempty"`
+
+	// Targets are additional publications of the slot's envelope after the
+	// primary reveal succeeded, each to its own set of beacon nodes.
+	Targets []RevealTarget `json:"targets,omitempty"`
+}
+
+// RevealTarget is one additional publication of a revealed slot's envelope:
+// the envelope is rebuilt with the target's own transform ("" = the
+// untransformed envelope), re-signed and submitted to every listed beacon
+// node DelayMs after the primary publish. It makes delivery experiments — a
+// delayed copy to a subset of nodes, a transformed copy to a test node —
+// plain plan configuration.
+type RevealTarget struct {
+	// URLs are beacon REST base URLs; empty = the primary beacon node.
+	URLs []string `json:"urls,omitempty"`
+	// DelayMs is the wait after the primary publish (at most two slots).
+	DelayMs int64 `json:"delay_ms,omitempty"`
+	// Transform is the jq expression applied to this copy's envelope message
+	// before signing; "" publishes the envelope as built.
+	Transform string `json:"transform,omitempty"`
+	// BroadcastValidation overrides the slot's level for this publication.
+	BroadcastValidation *string `json:"broadcast_validation,omitempty"`
+}
+
+func (t RevealTarget) clone() RevealTarget {
+	c := t
+	c.URLs = slices.Clone(t.URLs)
+	c.BroadcastValidation = cloneScalar(t.BroadcastValidation)
+
+	return c
+}
+
+func (t RevealTarget) validate(index int, slotMs int64) error {
+	for i, raw := range t.URLs {
+		if strings.Contains(raw, config.RedactedMarker) {
+			return fmt.Errorf("reveal.targets[%d].urls[%d] was redacted for this reader (no login); "+
+				"reload the plan logged in before saving it", index, i)
+		}
+
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("reveal.targets[%d].urls[%d]: %q is not an http(s) URL", index, i, raw)
+		}
+	}
+
+	if t.DelayMs < 0 || t.DelayMs > 2*slotMs {
+		return fmt.Errorf("reveal.targets[%d].delay_ms must be within [0, %d], got %d", index, 2*slotMs, t.DelayMs)
+	}
+
+	if err := jqtransform.Validate(t.Transform); err != nil {
+		return fmt.Errorf("reveal.targets[%d].transform: %w", index, err)
+	}
+
+	if t.BroadcastValidation != nil {
+		probe := config.RevealConfig{BroadcastValidation: *t.BroadcastValidation}
+		if probe.NormalizedBroadcastValidation() != *t.BroadcastValidation {
+			return fmt.Errorf("reveal.targets[%d].broadcast_validation: invalid value %q", index, *t.BroadcastValidation)
+		}
+	}
+
+	return nil
 }
 
 func (p *RevealPlan) clone() *RevealPlan {
@@ -302,6 +365,13 @@ func (p *RevealPlan) clone() *RevealPlan {
 	c.VoteThresholdPct = cloneScalar(p.VoteThresholdPct)
 	c.BroadcastValidation = cloneScalar(p.BroadcastValidation)
 
+	if p.Targets != nil {
+		c.Targets = make([]RevealTarget, len(p.Targets))
+		for i, target := range p.Targets {
+			c.Targets[i] = target.clone()
+		}
+	}
+
 	return &c
 }
 
@@ -311,8 +381,14 @@ func (p *RevealPlan) validate(slotMs int64) error {
 	}
 
 	if p.Mode == ModeDisabled && (p.RevealTimeMs != nil || p.GateMode != nil ||
-		p.VoteThresholdPct != nil || p.BroadcastValidation != nil) {
+		p.VoteThresholdPct != nil || p.BroadcastValidation != nil || len(p.Targets) > 0) {
 		return errors.New("reveal: overrides are only allowed in custom mode")
+	}
+
+	for i, target := range p.Targets {
+		if err := target.validate(i, slotMs); err != nil {
+			return err
+		}
 	}
 
 	if p.GateMode != nil {
@@ -661,6 +737,22 @@ func (p *TransformPlan) validate() error {
 	} {
 		if err := jqtransform.Validate(expr); err != nil {
 			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+// ValidateStartupTransforms checks the startup transform flags' expressions
+// (see resolveTransforms for how they apply).
+func ValidateStartupTransforms(c *config.TransformsConfig) error {
+	for flag, expr := range map[string]string{
+		"--payload-transform":  c.Payload,
+		"--bid-transform":      c.Bid,
+		"--envelope-transform": c.Envelope,
+	} {
+		if err := jqtransform.Validate(expr); err != nil {
+			return fmt.Errorf("%s: %w", flag, err)
 		}
 	}
 

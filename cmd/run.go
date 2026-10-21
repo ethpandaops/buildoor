@@ -276,6 +276,27 @@ and begins building blocks according to configuration.`,
 		// final flush (inside Stop) runs while the state-db is still open.
 		defer planSvc.Stop()
 
+		// The --rules-json rules replace the ones an earlier start seeded;
+		// without the flag those are removed.
+		var startupRules []*action_plan.SlotRule
+
+		if cfg.RulesJSON != "" {
+			startupRules, err = action_plan.ParseRules(cfg.RulesJSON)
+			if err != nil {
+				return fmt.Errorf("invalid --rules-json: %w", err)
+			}
+		}
+
+		if err := planSvc.SeedStartupRules(startupRules, "cli"); err != nil {
+			return fmt.Errorf("failed to seed --rules-json: %w", err)
+		}
+
+		// The startup transforms are no rule: every frozen plan resolves them
+		// from the config, under the slot's own expressions.
+		if err := action_plan.ValidateStartupTransforms(&cfg.Transforms); err != nil {
+			return fmt.Errorf("invalid startup transform: %w", err)
+		}
+
 		// 8. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
 

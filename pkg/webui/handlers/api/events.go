@@ -317,6 +317,10 @@ type RevealStreamEvent struct {
 	StartedAt   int64  `json:"started_at,omitempty"`
 	Timestamp   int64  `json:"timestamp"`
 
+	// Target names a reveal target publication (its redacted beacon URL, or
+	// "primary"); empty on the slot's reveal itself.
+	Target string `json:"target,omitempty"`
+
 	// Envelope is the summary of the built (possibly unpublished) envelope;
 	// absent on skips and pre-construction failures.
 	Envelope *EnvelopeDetail `json:"envelope,omitempty"`
@@ -2466,6 +2470,7 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 		MaxAttempts: event.MaxAttempts,
 		StartedAt:   startedAt,
 		Timestamp:   completedAt,
+		Target:      payload_bidder.PublicRevealTarget(event.Target),
 	}
 
 	if event.Envelope != nil {
@@ -2479,7 +2484,12 @@ func (m *EventStreamManager) BroadcastReveal(event *payload_bidder.RevealResult)
 		Data:      data,
 	})
 
-	// Update slot state
+	// A reveal target copy goes out after the slot's reveal succeeded; its
+	// outcome never changes whether the slot was revealed.
+	if event.Target != "" {
+		return
+	}
+
 	m.slotStatesMu.Lock()
 	state, ok := m.slotStates[event.Slot]
 	if ok {

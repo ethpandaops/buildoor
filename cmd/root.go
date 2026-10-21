@@ -179,6 +179,14 @@ func init() {
 	rootCmd.PersistentFlags().Uint64("slot-artifact-retention-epochs", defaults.SlotArtifactRetentionEpochs, "Epochs of raw SSZ artifacts (payloads, signed bids, envelopes) to keep in the state-db; raw payloads dominate disk usage (must be > 0)")
 	rootCmd.PersistentFlags().Bool("slot-artifact-capture-enabled", defaults.SlotArtifactCaptureEnabled, "Capture raw SSZ artifacts (payloads, signed bids, envelopes) per slot; result summaries are recorded regardless")
 
+	// Startup transforms: jq expressions applied to every slot from
+	// --transform-from-epoch on, under the slot's own plan
+	rootCmd.PersistentFlags().String("payload-transform", "", "jq expression applied to every built execution payload from --transform-from-epoch on, unless the slot's plan sets its own (block hash recomputed unless the expression sets block_hash)")
+	rootCmd.PersistentFlags().String("bid-transform", "", "jq expression applied to every bid message before signing from --transform-from-epoch on, unless the slot's plan sets its own")
+	rootCmd.PersistentFlags().String("envelope-transform", "", "jq expression applied to every envelope message before signing from --transform-from-epoch on, unless the slot's plan sets its own")
+	rootCmd.PersistentFlags().Uint64("transform-from-epoch", 0, "First epoch the --*-transform expressions apply to")
+	rootCmd.PersistentFlags().String("rules-json", "", "JSON array of recurring action plan rules owned by this flag (same shape as POST /api/v1/action-plan/rules; an empty slots_in_epoch matches every slot): each replaces the stored rule with its id, and rules an earlier start seeded are removed once the flag no longer carries them")
+
 	// Validator ranges
 	rootCmd.PersistentFlags().String("validator-ranges-file", "", "Path to validator ranges YAML file (format: '0-127: client-name')")
 	rootCmd.PersistentFlags().String("validator-ranges-url", "", "URL to fetch validator ranges JSON (format: {\"ranges\": {\"0-127\": \"client-name\"}})")
@@ -403,6 +411,13 @@ func initConfig(root *cobra.Command) error {
 			File: v.GetString("validator-ranges-file"),
 			URL:  v.GetString("validator-ranges-url"),
 		},
+		Transforms: config.TransformsConfig{
+			Payload:   v.GetString("payload-transform"),
+			Bid:       v.GetString("bid-transform"),
+			Envelope:  v.GetString("envelope-transform"),
+			FromEpoch: v.GetUint64("transform-from-epoch"),
+		},
+		RulesJSON:   v.GetString("rules-json"),
 		StateDBPath: v.GetString("state-db"),
 	}
 

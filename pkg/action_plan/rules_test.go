@@ -69,7 +69,6 @@ func TestSlotRuleValidate(t *testing.T) {
 		errMsg string
 	}{
 		{"bad id", func(r *SlotRule) { r.ID = "Not A Slug" }, "must match"},
-		{"no slots", func(r *SlotRule) { r.SlotsInEpoch = nil }, "must not be empty"},
 		{"slot out of range", func(r *SlotRule) { r.SlotsInEpoch = []uint64{32} }, "out of range"},
 		{"duplicate slot", func(r *SlotRule) { r.SlotsInEpoch = []uint64{31, 31} }, "duplicate slot index"},
 		{
@@ -371,4 +370,108 @@ func TestRuleCodecRoundTrip(t *testing.T) {
 
 	_, err = codec.DecodeKey("")
 	require.Error(t, err)
+}
+
+// The startup transforms are a layer under every plan: they combine with a
+// rule-derived plan instead of competing with it, and a plan's own expression
+// for an object wins over the flag's.
+func TestStartupTransformsLayerUnderPlans(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.EPBSEnabled = true
+	cfg.Transforms = config.TransformsConfig{Bid: ".value = 1", Envelope: ".builder_index = 7", FromEpoch: 6}
+
+	svc := newTestService(newStubChain(), cfg)
+
+	rule := slot31Rule()
+	rule.Transforms = &TransformPlan{Envelope: ".builder_index = 9"}
+	_, err := svc.SetRules([]*SlotRule{rule}, "test")
+	require.NoError(t, err)
+
+	require.Nil(t, svc.Freeze(5*32+3).Transforms, "before the flags' epoch")
+
+	plain := svc.Freeze(6*32 + 3).Transforms
+	require.Equal(t, &ResolvedTransforms{
+		Bid: ".value = 1", Envelope: ".builder_index = 7", FromFlags: []string{"bid", "envelope"},
+	}, plain)
+
+	ruled := svc.Freeze(6*32 + 31)
+	require.Equal(t, "slot31-withhold", ruled.Plan.RuleID, "the rule still applies")
+	require.True(t, ruled.Reveal.Suppressed, "and withholds the reveal")
+	require.Equal(t, &ResolvedTransforms{
+		Bid: ".value = 1", Envelope: ".builder_index = 9", FromFlags: []string{"bid"},
+	}, ruled.Transforms)
+}
+
+func TestValidateStartupTransforms(t *testing.T) {
+	require.NoError(t, ValidateStartupTransforms(&config.TransformsConfig{Payload: ".gas_limit = 1"}))
+	require.ErrorContains(t,
+		ValidateStartupTransforms(&config.TransformsConfig{Envelope: ".payload.state_root = ("}),
+		"--envelope-transform")
+}
+
+func TestSlotRuleEmptySlotsMatchEverySlot(t *testing.T) {
+	rule := slot31Rule()
+	rule.SlotsInEpoch = nil
+
+	require.NoError(t, rule.Validate(newStubChain().spec))
+
+	for slot := uint64(0); slot < 64; slot++ {
+		require.True(t, rule.Matches(phase0.Slot(slot), 32))
+	}
+}
+
+func TestParseRulesAndSeedStartupRules(t *testing.T) {
+	svc := newTestService(newStubChain(), nil)
+
+	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "test")
+	require.NoError(t, err)
+
+	rules, err := ParseRules(`[{
+		"id": "late-copy", "enabled": true, "from_epoch": 6,
+		"transforms": {"envelope": ".payload.state_root = \"0x\" + (\"00\" * 32)"},
+		"reveal": {"mode": "custom", "targets": [
+			{"urls": ["http://cl-1-lighthouse-geth:4000"], "delay_ms": 5000}
+		]}
+	}, {"id": "slot31-withhold", "enabled": false, "slots_in_epoch": [31], "reveal": {"mode": "disabled"}}]`)
+	require.NoError(t, err)
+	require.NoError(t, svc.SeedStartupRules(rules, "cli"))
+
+	stored := svc.Rules()
+	require.Len(t, stored, 2)
+	require.Equal(t, "late-copy", stored[0].ID)
+	require.Equal(t, RuleSourceFlags, stored[0].Source)
+	require.Len(t, stored[0].Reveal.Targets, 1)
+	require.Equal(t, int64(5000), stored[0].Reveal.Targets[0].DelayMs)
+	require.False(t, stored[1].Enabled, "a seeded rule replaces the stored rule with the same id")
+	require.Equal(t, RuleSourceFlags, stored[1].Source)
+
+	_, err = ParseRules(`[{"id": "x", "bogus": 1}]`)
+	require.Error(t, err)
+
+	bad, err := ParseRules(`[{"id": "bad", "enabled": true, "reveal": {"mode": "custom", "targets": [{"urls": ["cl-1:4000"]}]}}]`)
+	require.NoError(t, err)
+	require.ErrorContains(t, svc.SeedStartupRules(bad, "cli"), "not an http(s) URL")
+	require.Len(t, svc.Rules(), 2)
+
+	// A start without one of the flag's rules removes it; rules written
+	// through the API are never touched.
+	api := slot31Rule()
+	api.ID = "api-rule"
+	_, err = svc.SetRules(append(svc.Rules(), api), "test")
+	require.NoError(t, err)
+
+	require.NoError(t, svc.SeedStartupRules(rules[:1], "cli"))
+	require.Equal(t, []string{"api-rule", "late-copy"}, ruleIDs(svc.Rules()))
+
+	require.NoError(t, svc.SeedStartupRules(nil, "cli"))
+	require.Equal(t, []string{"api-rule"}, ruleIDs(svc.Rules()))
+}
+
+func ruleIDs(rules []*SlotRule) []string {
+	ids := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		ids = append(ids, rule.ID)
+	}
+
+	return ids
 }

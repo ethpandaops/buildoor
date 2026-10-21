@@ -3,6 +3,12 @@ import React, { useState } from 'react';
 import type { BidPlan, BuilderAPIPlan, RevealPlan, SlotRule } from '../../types';
 import { TransformEditor, type TransformState } from './TransformEditor';
 import {
+  RevealTargetsForm,
+  initRevealTargets,
+  revealTargetsFromRows,
+  type RevealTargetFormRow,
+} from './RevealTargetsForm';
+import {
   BID_FIELDS,
   BUILDER_API_FIELDS,
   REVEAL_FIELDS,
@@ -70,7 +76,8 @@ const PRESETS: Preset[] = [
   },
 ];
 
-// parseSlotList reads a "31" / "0,15,31" / "28-31" slot-index list.
+// parseSlotList reads a "31" / "0,15,31" / "28-31" slot-index list; an empty
+// list matches every slot.
 function parseSlotList(raw: string, slotsPerEpoch: number): { slots: number[]; error: string | null } {
   const slots: number[] = [];
 
@@ -95,8 +102,6 @@ function parseSlotList(raw: string, slotsPerEpoch: number): { slots: number[]; e
       if (!slots.includes(s)) slots.push(s);
     }
   }
-
-  if (slots.length === 0) return { slots, error: 'at least one slot index is required' };
 
   return { slots: slots.sort((a, b) => a - b), error: null };
 }
@@ -152,6 +157,9 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
   const [revealState, setRevealState] = useState<CategoryFormState>(() =>
     initCategoryState(rule?.reveal, REVEAL_FIELDS, false)
   );
+  const [revealTargets, setRevealTargets] = useState<RevealTargetFormRow[]>(() =>
+    initRevealTargets(rule?.reveal?.targets)
+  );
   const [buildReorg, setBuildReorg] = useState<BuildFlagMode>(
     rule?.build?.reorg_parent_payload ? 'on' : 'off'
   );
@@ -184,6 +192,7 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     setBidState(initCategoryState(filled.bid, BID_FIELDS, false));
     setApiState(initCategoryState(filled.builder_api, BUILDER_API_FIELDS, false));
     setRevealState(initCategoryState(filled.reveal, REVEAL_FIELDS, false));
+    setRevealTargets(initRevealTargets(filled.reveal?.targets));
     setBuildReorg(filled.build?.reorg_parent_payload ? 'on' : 'off');
     setLocalBuild(initLocalBuildState(filled.build?.local));
     setInclusionList(initInclusionListState(filled.build?.inclusion_list));
@@ -235,10 +244,14 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     const api = resolveRuleCategory<BuilderAPIPlan>('builder_api', BUILDER_API_FIELDS, apiState, false);
     const reveal = resolveRuleCategory<RevealPlan>('reveal', REVEAL_FIELDS, revealState, false);
 
-    const categoryError = bid.error || api.error || reveal.error;
+    const targets = revealTargetsFromRows(revealTargets);
+    const categoryError = bid.error || api.error || reveal.error || targets.error;
     if (categoryError) {
       setFormError(categoryError);
       return;
+    }
+    if (reveal.value?.mode === 'custom' && targets.targets) {
+      reveal.value.targets = targets.targets;
     }
 
     const localPlan = localBuildPlanFromState(localBuild);
@@ -265,6 +278,8 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
     const next: SlotRule = {
       id: id.trim(),
       enabled,
+      // A --rules-json rule stays owned by the flag: the next start resets it.
+      ...(rule?.source ? { source: rule.source } : {}),
       slots_in_epoch: slots,
       ...(description.trim() ? { description: description.trim() } : {}),
       ...(from.value !== undefined ? { from_epoch: from.value } : {}),
@@ -356,20 +371,20 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                       Slot positions within every epoch the rule applies to, 0-based (
                       {slotsPerEpoch > 0 ? `0–${slotsPerEpoch - 1}` : '0 = first slot'}, so the
                       last slot is {slotsPerEpoch > 0 ? slotsPerEpoch - 1 : 'slots per epoch − 1'}).
-                      Single indices, comma lists and inclusive ranges.
+                      Single indices, comma lists and inclusive ranges; empty matches every slot.
                     </InfoHint>
                   </label>
                   <input
                     type="text"
                     className="form-control form-control-sm"
-                    placeholder={slotsPerEpoch > 0 ? String(slotsPerEpoch - 1) : '31'}
+                    placeholder="every slot"
                     value={slotList}
                     disabled={disabled}
                     onChange={(e) => setSlotList(e.target.value)}
                   />
                   <div className="form-text mt-0">
                     0-based indices within the epoch: <code>31</code>, <code>0,15,31</code> or{' '}
-                    <code>28-31</code>.
+                    <code>28-31</code>; empty = every slot.
                   </div>
                 </div>
                 <div className="col-12">
@@ -467,7 +482,9 @@ export const RuleEditModal: React.FC<RuleEditModalProps> = ({
                 fields={REVEAL_FIELDS}
                 disabled={disabled}
                 onChange={setRevealState}
-              />
+              >
+                <RevealTargetsForm rows={revealTargets} disabled={disabled} onChange={setRevealTargets} />
+              </CategoryForm>
               <BuildForm bulk={false} value={buildReorg} disabled={disabled} onChange={setBuildReorg} />
               <CandidatesForm state={candidates} disabled={disabled} onChange={setCandidates} />
               <LocalBuildForm

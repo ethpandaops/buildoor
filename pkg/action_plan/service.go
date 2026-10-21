@@ -333,8 +333,9 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	// Rule resolution reads the plan/rule stores only — it must never take s.mu.
 	plan := s.PlanForSlot(slot)
 
-	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
-	frozen = resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
+	epoch := s.chainSvc.GetEpochOfSlot(slot)
+	fork := s.chainSvc.ActiveForkAtEpoch(epoch)
+	frozen = resolveFrozenPlan(slot, epoch, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
 	s.frozen[slot] = frozen
 
 	return frozen
@@ -574,6 +575,11 @@ func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, er
 		}
 
 		stored := rule.Clone()
+		if stored.SlotsInEpoch == nil {
+			// Every slot: the wire shape stays an array, never null.
+			stored.SlotsInEpoch = []uint64{}
+		}
+
 		stored.UpdatedAt = now
 		stored.UpdatedBy = actor
 		staged[rule.ID] = stored
@@ -602,6 +608,47 @@ func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, er
 	s.ruleChanges.Fire(event)
 
 	return event.Rules, nil
+}
+
+// SeedStartupRules makes the stored flag-owned rules (RuleSourceFlags) match
+// the --rules-json rules: each seed rule replaces the stored rule with its id
+// (whichever its source), a flag-owned rule the seed no longer carries is
+// removed, and every rule written through the API survives. An empty seed
+// thereby clears what an earlier start's flag left in the state-db.
+func (s *PlanService) SeedStartupRules(seed []*SlotRule, actor string) error {
+	seeded := make(map[string]struct{}, len(seed))
+	for _, rule := range seed {
+		if rule != nil {
+			rule.Source = RuleSourceFlags
+			seeded[rule.ID] = struct{}{}
+		}
+	}
+
+	stored := s.Rules()
+	rules := make([]*SlotRule, 0, len(stored)+len(seed))
+	dropped := 0
+
+	for _, rule := range stored {
+		if _, replaced := seeded[rule.ID]; replaced {
+			continue
+		}
+
+		if rule.Source == RuleSourceFlags {
+			dropped++
+
+			continue
+		}
+
+		rules = append(rules, rule)
+	}
+
+	if len(seed) == 0 && dropped == 0 {
+		return nil
+	}
+
+	_, err := s.SetRules(append(rules, seed...), actor)
+
+	return err
 }
 
 // sortedRules returns the stored rules in match order (id-ascending). The

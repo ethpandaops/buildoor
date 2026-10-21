@@ -23,7 +23,9 @@ const CategoryChips: React.FC<{ rule: SlotRule }> = ({ rule }) => {
     <span className="ap-chips">
       {rule.bid && chip('B', rule.bid.mode, `bid: ${rule.bid.mode}`)}
       {rule.builder_api && chip('A', rule.builder_api.mode, `builder api: ${rule.builder_api.mode}`)}
-      {rule.reveal && chip('R', rule.reveal.mode, `reveal: ${rule.reveal.mode}`)}
+      {rule.reveal && chip('R', rule.reveal.mode, `reveal: ${rule.reveal.mode}${
+        rule.reveal.targets?.length ? ` + ${rule.reveal.targets.length} target(s)` : ''
+      }`)}
       {rule.build?.reorg_parent_payload && (
         <span className="ap-chip ap-chip-reorg" title="Build on n-2 payload">
           P
@@ -171,14 +173,26 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
                             {rule.enabled ? 'on' : 'off'}
                           </span>
                           <div>
-                            <div className="fw-semibold">{rule.id}</div>
+                            <div className="fw-semibold">
+                              {rule.id}
+                              {rule.source === 'cli' && (
+                                <span
+                                  className="badge bg-info-subtle text-info-emphasis ms-1"
+                                  title="Seeded by --rules-json: the next start resets it to the flag's version, or removes it when the flag no longer has it"
+                                >
+                                  cli
+                                </span>
+                              )}
+                            </div>
                             {rule.description && (
                               <div className="small text-muted">{rule.description}</div>
                             )}
                           </div>
                         </div>
                       </td>
-                      <td className="font-monospace small">{rule.slots_in_epoch.join(', ')}</td>
+                      <td className="font-monospace small">
+                        {rule.slots_in_epoch?.length ? rule.slots_in_epoch.join(', ') : 'every slot'}
+                      </td>
                       <td className="small">{epochWindow(rule)}</td>
                       <td>
                         <CategoryChips rule={rule} />

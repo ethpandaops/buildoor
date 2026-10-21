@@ -49,8 +49,10 @@ type FrozenPlan struct {
 	BuilderAPI *ResolvedBuilderAPISettings `json:"builder_api,omitempty"`
 	Reveal     *ResolvedRevealSettings     `json:"reveal,omitempty"`
 
-	// Transforms carries the effective jq transform expressions (empty when no
-	// transform plan applies). Nil only when no plan expression is set.
+	// Transforms carries the effective jq transform expressions: the plan's,
+	// and for every object the plan leaves untransformed the startup
+	// transforms (config.TransformsConfig) once their epoch is reached. Nil
+	// when neither sets an expression.
 	Transforms *ResolvedTransforms `json:"transforms,omitempty"`
 }
 
@@ -60,6 +62,10 @@ type ResolvedTransforms struct {
 	Payload  string `json:"payload,omitempty"`
 	Bid      string `json:"bid,omitempty"`
 	Envelope string `json:"envelope,omitempty"`
+
+	// FromFlags lists the objects whose expression comes from the startup
+	// transform flags rather than the plan.
+	FromFlags []string `json:"from_flags,omitempty"`
 }
 
 // ResolvedBuildSettings is the effective build decision and timing for a slot.
@@ -295,12 +301,16 @@ type ResolvedRevealSettings struct {
 	// BypassDeadline disables the "past the in-slot deadline → skip" check so
 	// deliberately late reveals are attempted.
 	BypassDeadline bool `json:"bypass_deadline,omitempty"`
+
+	// Targets are the plan's additional envelope publications (plan-only, no
+	// global setting).
+	Targets []RevealTarget `json:"targets,omitempty"`
 }
 
 // resolveFrozenPlan merges the live global config with a slot's plan (which
 // may be nil) into the frozen execution snapshot. slotsBuilt is the schedule
 // counter for next_n mode at freeze time.
-func resolveFrozenPlan(slot phase0.Slot, plan *SlotPlan, cfg *config.Config,
+func resolveFrozenPlan(slot phase0.Slot, epoch phase0.Epoch, plan *SlotPlan, cfg *config.Config,
 	fork version.DataVersion, frozenAt time.Time, slotsBuilt uint64) *FrozenPlan {
 	frozen := &FrozenPlan{
 		Slot:     slot,
@@ -313,24 +323,46 @@ func resolveFrozenPlan(slot phase0.Slot, plan *SlotPlan, cfg *config.Config,
 	frozen.BuilderAPI = resolveBuilderAPI(plan, cfg)
 	frozen.Reveal = resolveReveal(plan, cfg)
 	frozen.Build = resolveBuild(frozen, cfg, slotsBuilt)
-	frozen.Transforms = resolveTransforms(plan)
+	frozen.Transforms = resolveTransforms(plan, &cfg.Transforms, epoch)
 
 	return frozen
 }
 
-// resolveTransforms lifts the plan's jq transform expressions into the frozen
-// snapshot. Transforms have no global config baseline, so an absent plan (or
-// category) yields nil.
-func resolveTransforms(plan *SlotPlan) *ResolvedTransforms {
-	if plan == nil || plan.Transforms == nil {
+// resolveTransforms lifts the slot's jq transform expressions into the frozen
+// snapshot. The startup transforms are a layer under the plan, per object:
+// they apply from their epoch on wherever the plan (explicit or rule-derived)
+// sets no expression of its own, so they combine with any rule instead of
+// competing with it. Nil when neither sets an expression.
+func resolveTransforms(plan *SlotPlan, startup *config.TransformsConfig, epoch phase0.Epoch) *ResolvedTransforms {
+	resolved := &ResolvedTransforms{}
+	if plan != nil && plan.Transforms != nil {
+		resolved.Payload = plan.Transforms.Payload
+		resolved.Bid = plan.Transforms.Bid
+		resolved.Envelope = plan.Transforms.Envelope
+	}
+
+	if uint64(epoch) >= startup.FromEpoch {
+		for _, layer := range []struct {
+			name string
+			dst  *string
+			expr string
+		}{
+			{"payload", &resolved.Payload, startup.Payload},
+			{"bid", &resolved.Bid, startup.Bid},
+			{"envelope", &resolved.Envelope, startup.Envelope},
+		} {
+			if *layer.dst == "" && layer.expr != "" {
+				*layer.dst = layer.expr
+				resolved.FromFlags = append(resolved.FromFlags, layer.name)
+			}
+		}
+	}
+
+	if resolved.Payload == "" && resolved.Bid == "" && resolved.Envelope == "" {
 		return nil
 	}
 
-	return &ResolvedTransforms{
-		Payload:  plan.Transforms.Payload,
-		Bid:      plan.Transforms.Bid,
-		Envelope: plan.Transforms.Envelope,
-	}
+	return resolved
 }
 
 // resolveBuild derives the complete build decision for the slot from the
@@ -719,6 +751,7 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 	applyOverride(&resolved.GateMode, plan.Reveal.GateMode)
 	applyOverride(&resolved.VoteThresholdPct, plan.Reveal.VoteThresholdPct)
 	applyOverride(&resolved.BroadcastValidation, plan.Reveal.BroadcastValidation)
+	resolved.Targets = plan.Reveal.clone().Targets
 
 	return resolved
 }

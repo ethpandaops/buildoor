@@ -43,3 +43,32 @@ func TestRedactedListCannotBeSavedBack(t *testing.T) {
 	local := &LocalBuildPlan{TxSource: "explicit", TransactionsRedacted: 2}
 	require.ErrorIs(t, local.validate(), errRedactedTransactions)
 }
+
+func TestRedactedHidesRevealTargetCredentials(t *testing.T) {
+	secret := "https://user:pass@bn.example.org/key/abc"
+	plain := "http://cl-1-lighthouse-geth:4000"
+	targets := []RevealTarget{{URLs: []string{plain}}, {URLs: []string{secret}, DelayMs: 500}}
+
+	plan := &SlotPlan{Slot: 10, Reveal: &RevealPlan{Mode: ModeCustom, Targets: targets}}
+	redacted := plan.Redacted()
+	require.Equal(t, plain, redacted.Reveal.Targets[0].URLs[0])
+	require.Equal(t, "https://***@bn.example.org/***", redacted.Reveal.Targets[1].URLs[0])
+	require.Equal(t, int64(500), redacted.Reveal.Targets[1].DelayMs)
+	require.Equal(t, secret, plan.Reveal.Targets[1].URLs[0], "the stored plan is untouched")
+
+	open := &SlotPlan{Slot: 11, Reveal: &RevealPlan{Mode: ModeCustom, Targets: targets[:1]}}
+	require.Same(t, open, open.Redacted(), "URLs without credentials are no reason to copy")
+
+	rule := &SlotRule{ID: "r", Reveal: &RevealPlan{Mode: ModeCustom, Targets: targets}}
+	require.Equal(t, "https://***@bn.example.org/***", rule.Redacted().Reveal.Targets[1].URLs[0])
+
+	frozen := &FrozenPlan{Plan: plan, Reveal: &ResolvedRevealSettings{Targets: targets}}
+	redactedFrozen := frozen.Redacted()
+	require.Equal(t, "https://***@bn.example.org/***", redactedFrozen.Plan.Reveal.Targets[1].URLs[0])
+	require.Equal(t, "https://***@bn.example.org/***", redactedFrozen.Reveal.Targets[1].URLs[0])
+	require.Equal(t, secret, frozen.Reveal.Targets[1].URLs[0])
+
+	// A redacted URL sent back is refused instead of being stored.
+	back := &RevealPlan{Mode: ModeCustom, Targets: redacted.Reveal.Targets}
+	require.ErrorContains(t, back.validate(12000), "redacted for this reader")
+}

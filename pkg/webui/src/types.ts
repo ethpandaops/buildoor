@@ -1100,6 +1100,15 @@ export interface RevealPlan {
   gate_mode?: string; // time | vote | vote_or_time | vote_and_time
   vote_threshold_pct?: number;
   broadcast_validation?: string; // gossip | consensus | consensus_and_equivocation
+  // Additional publications of the slot's envelope after the primary reveal.
+  targets?: RevealTarget[];
+}
+
+export interface RevealTarget {
+  urls?: string[]; // beacon REST bases; empty = the primary node
+  delay_ms?: number;
+  transform?: string; // jq on this copy's envelope message; "" = as built
+  broadcast_validation?: string;
 }
 
 // The build category has no custom/disabled mode: it only tweaks how the
@@ -1166,7 +1175,8 @@ export interface SlotRule {
   id: string;
   enabled: boolean;
   description?: string;
-  slots_in_epoch: number[];
+  source?: string; // 'cli' = seeded by --rules-json (reset on every start)
+  slots_in_epoch: number[]; // empty = every slot
   from_epoch?: number;
   to_epoch?: number;
   bid?: BidPlan;
@@ -1274,6 +1284,7 @@ export interface ResolvedRevealSettings {
   max_attempts: number;
   retry_interval_ms: number;
   bypass_deadline?: boolean;
+  targets?: RevealTarget[];
 }
 
 // FrozenPlan is the immutable per-slot execution snapshot; a nil bid /
@@ -1282,6 +1293,8 @@ export interface ResolvedTransforms {
   payload?: string;
   bid?: string;
   envelope?: string;
+  // Objects whose expression comes from the startup transform flags.
+  from_flags?: string[];
 }
 
 export interface FrozenPlan {
@@ -1449,6 +1462,7 @@ export interface SlotRevealAttempt {
   error?: string;
   attempt: number;
   at: string;
+  target?: string; // beacon URL or "primary" of a reveal target publication
   started_at?: string;
 }
 
