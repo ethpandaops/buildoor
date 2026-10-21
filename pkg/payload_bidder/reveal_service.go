@@ -68,6 +68,11 @@ type RevealResult struct {
 	Attempt     int    // 1-based
 	MaxAttempts int
 
+	// Target names the publication of an additional reveal target (the
+	// beacon URL, or RevealTargetPrimary for the primary node); empty on the
+	// primary reveal itself.
+	Target string `json:"target,omitempty"`
+
 	// StartedAt/CompletedAt bracket the attempt (envelope construction +
 	// submit call) — the submit call alone takes several hundred ms on some
 	// clients, so the span matters. Zero on skips (nothing was attempted).
@@ -79,6 +84,10 @@ type RevealResult struct {
 	// nil on skips and pre-construction failures.
 	Envelope *eth2all.SignedExecutionPayloadEnvelope `json:"-"`
 }
+
+// RevealTargetPrimary marks a reveal target publication that went to the
+// primary beacon node (a target without URLs).
+const RevealTargetPrimary = "primary"
 
 // Skip reasons carried by RevealResult.SkipReason on skipped reveals.
 const (
@@ -115,6 +124,7 @@ type RevealService struct {
 	payments   *PaymentTracker          // optional; nil-guarded
 	planSvc    *action_plan.PlanService // per-slot scheduling/settings authority; required
 	votes      headVoteSource           // optional; nil = vote gates can never open
+	targets    *targetPublishers        // beacon clients of the plans' reveal targets
 
 	requests chan *RevealRequest
 	results  utils.Dispatcher[*RevealResult]
@@ -193,6 +203,7 @@ func NewRevealService(
 		payments:   payments,
 		planSvc:    planSvc,
 		votes:      votes,
+		targets:    newTargetPublishers(log),
 		requests:   make(chan *RevealRequest, 16),
 		pending:    make(map[phase0.Slot]*revealState, 8),
 		log:        log.WithField("component", "reveal-service"),
@@ -563,7 +574,14 @@ func (s *RevealService) processDue(now time.Time) {
 		}).Info("Revealing payload")
 
 		if state.envelope == nil {
-			envelope, blobs, proofs, err := s.buildEnvelope(state.req)
+			// The slot's frozen plan may carry a jq transform applied to the
+			// envelope message before signing (idempotent Freeze).
+			var transform string
+			if t := s.planSvc.Freeze(slot).Transforms; t != nil {
+				transform = t.Envelope
+			}
+
+			envelope, blobs, proofs, err := s.buildEnvelope(state.req, transform)
 			if err != nil {
 				s.handlePublishFailure(slot, state, now, err)
 				continue
@@ -608,6 +626,8 @@ func (s *RevealService) processDue(now time.Time) {
 			"block_hash": fmt.Sprintf("%x", state.req.Payload.BlockHash[:8]),
 			"transport":  state.req.Transport,
 		}).Info("Payload revealed")
+
+		s.publishTargets(slot, state)
 	}
 
 	s.pruneDone(now)
@@ -701,7 +721,7 @@ func (s *RevealService) rearm(timer *time.Timer) {
 // alongside. Signing resolves the fork active at the TARGET slot (never the
 // current fork), so deliberately late reveals crossing a slot/fork boundary
 // are still signed under the fork the slot belongs to.
-func (s *RevealService) buildEnvelope(req *RevealRequest) (
+func (s *RevealService) buildEnvelope(req *RevealRequest, envelopeTransform string) (
 	envelope *eth2all.SignedExecutionPayloadEnvelope, blobs, proofs [][]byte, err error,
 ) {
 	slot := req.Payload.Attributes.ProposalSlot
@@ -710,13 +730,6 @@ func (s *RevealService) buildEnvelope(req *RevealRequest) (
 	forkVersion, err := s.chainSvc.GetChainSpec().GetForkVersion(fork)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get fork version for slot %d (%s): %w", slot, fork, err)
-	}
-
-	// The slot's frozen plan may carry a jq transform applied to the envelope
-	// message before signing (idempotent Freeze).
-	var envelopeTransform string
-	if t := s.planSvc.Freeze(slot).Transforms; t != nil {
-		envelopeTransform = t.Envelope
 	}
 
 	ctx, cancel := context.WithTimeout(s.ctx, transformTimeout)
@@ -751,6 +764,11 @@ func (s *RevealService) buildEnvelope(req *RevealRequest) (
 // validation level.
 func (s *RevealService) publish(envelope *eth2all.SignedExecutionPayloadEnvelope,
 	blobs, proofs [][]byte, broadcastValidation string) error {
+	return s.publishTo(s.publisher, envelope, blobs, proofs, broadcastValidation)
+}
+
+func (s *RevealService) publishTo(publisher envelopePublisher, envelope *eth2all.SignedExecutionPayloadEnvelope,
+	blobs, proofs [][]byte, broadcastValidation string) error {
 	if len(blobs) > 0 {
 		s.log.WithFields(logrus.Fields{
 			"blob_count":      len(blobs),
@@ -761,7 +779,7 @@ func (s *RevealService) publish(envelope *eth2all.SignedExecutionPayloadEnvelope
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 
-	if err := s.publisher.SubmitExecutionPayloadEnvelope(ctx, envelope, blobs, proofs,
+	if err := publisher.SubmitExecutionPayloadEnvelope(ctx, envelope, blobs, proofs,
 		broadcastValidation); err != nil {
 		return fmt.Errorf("failed to submit envelope: %w", err)
 	}

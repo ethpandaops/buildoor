@@ -3,6 +3,7 @@ package action_plan
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/require"
@@ -69,7 +70,6 @@ func TestSlotRuleValidate(t *testing.T) {
 		errMsg string
 	}{
 		{"bad id", func(r *SlotRule) { r.ID = "Not A Slug" }, "must match"},
-		{"no slots", func(r *SlotRule) { r.SlotsInEpoch = nil }, "must not be empty"},
 		{"slot out of range", func(r *SlotRule) { r.SlotsInEpoch = []uint64{32} }, "out of range"},
 		{"duplicate slot", func(r *SlotRule) { r.SlotsInEpoch = []uint64{31, 31} }, "duplicate slot index"},
 		{
@@ -371,4 +371,80 @@ func TestRuleCodecRoundTrip(t *testing.T) {
 
 	_, err = codec.DecodeKey("")
 	require.Error(t, err)
+}
+
+func TestSeedTransformRule(t *testing.T) {
+	svc := newTestService(newStubChain(), nil)
+
+	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "test")
+	require.NoError(t, err)
+
+	expr := `.payload.state_root = "0x" + ("00" * 32)`
+	require.NoError(t, svc.SeedTransformRule(&TransformPlan{Envelope: expr}, 6, "cli"))
+
+	rules := svc.Rules()
+	require.Len(t, rules, 2)
+	require.Equal(t, TransformRuleID, rules[0].ID)
+	require.Equal(t, "slot31-withhold", rules[1].ID)
+
+	seeded := rules[0]
+	require.Empty(t, seeded.SlotsInEpoch, "the startup rule matches every slot")
+	require.Equal(t, expr, seeded.Transforms.Envelope)
+	require.False(t, seeded.Matches(6*32-1, 32))
+	require.True(t, seeded.Matches(6*32, 32))
+	require.True(t, seeded.Matches(9*32+17, 32))
+
+	// Re-seeding replaces the startup rule and keeps the others.
+	require.NoError(t, svc.SeedTransformRule(&TransformPlan{Bid: ".value = 1"}, 2, "cli"))
+	rules = svc.Rules()
+	require.Len(t, rules, 2)
+	require.Equal(t, uint64(2), *rules[0].FromEpoch)
+	require.Empty(t, rules[0].Transforms.Envelope)
+
+	// A bad expression is refused and leaves the rule set untouched.
+	require.Error(t, svc.SeedTransformRule(&TransformPlan{Envelope: ".payload.state_root = ("}, 0, "cli"))
+	require.Equal(t, uint64(2), *svc.Rules()[0].FromEpoch)
+}
+
+func TestSlotRuleEmptySlotsMatchEverySlot(t *testing.T) {
+	rule := slot31Rule()
+	rule.SlotsInEpoch = nil
+
+	require.NoError(t, rule.Validate(32, 12*time.Second))
+
+	for slot := uint64(0); slot < 64; slot++ {
+		require.True(t, rule.Matches(phase0.Slot(slot), 32))
+	}
+}
+
+func TestParseRulesAndSeed(t *testing.T) {
+	svc := newTestService(newStubChain(), nil)
+
+	_, err := svc.SetRules([]*SlotRule{slot31Rule()}, "test")
+	require.NoError(t, err)
+
+	rules, err := ParseRules(`[{
+		"id": "late-copy", "enabled": true, "from_epoch": 6,
+		"transforms": {"envelope": ".payload.state_root = \"0x\" + (\"00\" * 32)"},
+		"reveal": {"mode": "custom", "targets": [
+			{"urls": ["http://cl-1-lighthouse-geth:4000"], "delay_ms": 5000}
+		]}
+	}, {"id": "slot31-withhold", "enabled": false, "slots_in_epoch": [31], "reveal": {"mode": "disabled"}}]`)
+	require.NoError(t, err)
+	require.NoError(t, svc.SeedRules(rules, "cli"))
+
+	stored := svc.Rules()
+	require.Len(t, stored, 2)
+	require.Equal(t, "late-copy", stored[0].ID)
+	require.Len(t, stored[0].Reveal.Targets, 1)
+	require.Equal(t, int64(5000), stored[0].Reveal.Targets[0].DelayMs)
+	require.False(t, stored[1].Enabled, "a seeded rule replaces the stored rule with the same id")
+
+	_, err = ParseRules(`[{"id": "x", "bogus": 1}]`)
+	require.Error(t, err)
+
+	bad, err := ParseRules(`[{"id": "bad", "enabled": true, "reveal": {"mode": "custom", "targets": [{"urls": ["cl-1:4000"]}]}}]`)
+	require.NoError(t, err)
+	require.ErrorContains(t, svc.SeedRules(bad, "cli"), "not an http(s) URL")
+	require.Len(t, svc.Rules(), 2)
 }

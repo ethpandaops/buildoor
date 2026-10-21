@@ -294,6 +294,10 @@ type ResolvedRevealSettings struct {
 	// BypassDeadline disables the "past the in-slot deadline → skip" check so
 	// deliberately late reveals are attempted.
 	BypassDeadline bool `json:"bypass_deadline,omitempty"`
+
+	// Targets are the plan's additional envelope publications (plan-only, no
+	// global setting).
+	Targets []RevealTarget `json:"targets,omitempty"`
 }
 
 // resolveFrozenPlan merges the live global config with a slot's plan (which
@@ -718,6 +722,7 @@ func resolveReveal(plan *SlotPlan, cfg *config.Config) *ResolvedRevealSettings {
 	applyOverride(&resolved.GateMode, plan.Reveal.GateMode)
 	applyOverride(&resolved.VoteThresholdPct, plan.Reveal.VoteThresholdPct)
 	applyOverride(&resolved.BroadcastValidation, plan.Reveal.BroadcastValidation)
+	resolved.Targets = plan.Reveal.clone().Targets
 
 	return resolved
 }

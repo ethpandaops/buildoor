@@ -245,6 +245,28 @@ and begins building blocks according to configuration.`,
 		// final flush (inside Stop) runs while the state-db is still open.
 		defer planSvc.Stop()
 
+		if cfg.RulesJSON != "" {
+			rules, err := action_plan.ParseRules(cfg.RulesJSON)
+			if err != nil {
+				return fmt.Errorf("invalid --rules-json: %w", err)
+			}
+
+			if err := planSvc.SeedRules(rules, "cli"); err != nil {
+				return fmt.Errorf("failed to seed --rules-json: %w", err)
+			}
+		}
+
+		if !cfg.Transforms.IsZero() {
+			err := planSvc.SeedTransformRule(&action_plan.TransformPlan{
+				Payload:  cfg.Transforms.Payload,
+				Bid:      cfg.Transforms.Bid,
+				Envelope: cfg.Transforms.Envelope,
+			}, cfg.Transforms.FromEpoch, "cli")
+			if err != nil {
+				return fmt.Errorf("failed to seed the startup transform rule: %w", err)
+			}
+		}
+
 		// 8. Initialize lifecycle manager (if prerequisites available)
 		var lifecycleMgr *lifecycle.Manager
 
