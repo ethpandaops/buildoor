@@ -1,4 +1,4 @@
-import type { ScheduleConfig } from './types';
+import type { ChainInfo, ScheduleConfig, SlotSegment } from './types';
 
 // formatEventTime renders a timestamp (ms epoch) as HH:mm:ss.mmm in 24h format
 // using the local timezone.
@@ -127,20 +127,74 @@ export const EVENT_CATEGORIES: EventCategory[] = [
   { key: 'other', label: 'Other', color: '#6c757d' }
 ];
 
+type SlotClock = Pick<ChainInfo, 'genesis_time' | 'seconds_per_slot' | 'slot_segments'>;
+
+// slotSegments returns the chain's slot timeline; streams without segments
+// (or before chain_info) run one segment of seconds_per_slot from genesis.
+function slotSegments(chainInfo: SlotClock | null): SlotSegment[] {
+  if (chainInfo?.slot_segments?.length) return chainInfo.slot_segments;
+  return [{ epoch: 0, slot: 0, offset_ms: 0, duration_ms: chainInfo?.seconds_per_slot || 12000 }];
+}
+
+function segmentOfSlot(chainInfo: SlotClock | null, slot: number): SlotSegment {
+  const segments = slotSegments(chainInfo);
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (slot >= segments[i].slot) return segments[i];
+  }
+  return segments[0];
+}
+
+// slotDurationAt returns the duration (ms) of the given slot.
+export function slotDurationAt(chainInfo: SlotClock | null, slot: number): number {
+  return segmentOfSlot(chainInfo, slot).duration_ms;
+}
+
+// slotStartTime returns the start (unix ms) of the given slot.
+export function slotStartTime(chainInfo: SlotClock | null, slot: number): number {
+  const segment = segmentOfSlot(chainInfo, slot);
+  return (chainInfo?.genesis_time || 0) + segment.offset_ms + (slot - segment.slot) * segment.duration_ms;
+}
+
+// slotAtTime returns the slot in progress at the given unix ms time (0 before
+// genesis).
+export function slotAtTime(chainInfo: SlotClock | null, timeMs: number): number {
+  const offset = timeMs - (chainInfo?.genesis_time || 0);
+  if (offset < 0) return 0;
+  const segments = slotSegments(chainInfo);
+  let segment = segments[0];
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (offset >= segments[i].offset_ms) {
+      segment = segments[i];
+      break;
+    }
+  }
+  return segment.slot + Math.floor((offset - segment.offset_ms) / segment.duration_ms);
+}
+
+// nextSlotSegment returns the first slot duration change after the given
+// slot, or null when none is scheduled.
+export function nextSlotSegment(chainInfo: SlotClock | null, slot: number): SlotSegment | null {
+  return slotSegments(chainInfo).find((segment) => segment.slot > slot) ?? null;
+}
+
+// formatSlotDuration renders a slot duration (ms) as seconds, e.g. "9s".
+export function formatSlotDuration(ms: number): string {
+  return `${Number((ms / 1000).toFixed(3))}s`;
+}
+
 export function calculateSlotTiming(
-  chainInfo: { genesis_time: number; seconds_per_slot: number } | null,
+  chainInfo: SlotClock | null,
   slot: number
 ): { slotStartTime: number; rangeStart: number; rangeEnd: number; totalRange: number } {
-  const slotDuration = chainInfo?.seconds_per_slot || 12000;
-  const genesisTime = chainInfo?.genesis_time || 0;
-  const slotStartTime = genesisTime + (slot * slotDuration);
+  const slotDuration = slotDurationAt(chainInfo, slot);
+  const startTime = slotStartTime(chainInfo, slot);
   // A third of the slot before its start keeps the payload builds visible:
   // they start ahead of the slot (default -28% of the slot time).
   const rangeStart = -slotDuration / 3;
   const rangeEnd = slotDuration;
   const totalRange = rangeEnd - rangeStart;
 
-  return { slotStartTime, rangeStart, rangeEnd, totalRange };
+  return { slotStartTime: startTime, rangeStart, rangeEnd, totalRange };
 }
 
 export function calculatePosition(

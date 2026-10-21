@@ -49,6 +49,9 @@ type RuleChangeEvent struct {
 type PlanService struct {
 	cfg      *config.Config
 	chainSvc chain.Service
+	// settings rescales the global timing settings when the first slot of a
+	// new slot duration freezes (nil: never, e.g. in tests).
+	settings *config.Service
 	store    *memstore.Store[phase0.Slot, *SlotPlan]
 	rules    *memstore.Store[string, *SlotRule]
 
@@ -96,6 +99,12 @@ func NewPlanService(cfg *config.Config, chainSvc chain.Service, log logrus.Field
 func (s *PlanService) SetPersistence(ctx context.Context, stateDB *db.Database) {
 	s.store.SetPersistence(ctx, db.NewKVPersistence(stateDB, Namespace, PlanCodec{}), s.log)
 	s.rules.SetPersistence(ctx, db.NewKVPersistence(stateDB, RulesNamespace, RuleCodec{}), s.log)
+}
+
+// SetSettings attaches the settings service whose slot-relative timing
+// settings are rescaled once when a slot duration change is reached.
+func (s *PlanService) SetSettings(settings *config.Service) {
+	s.settings = settings
 }
 
 // Start launches the pruning loop (driven by epoch transitions).
@@ -302,6 +311,19 @@ func (s *PlanService) frozenSlotsInRange(minSlot, maxSlot phase0.Slot) map[phase
 // affect it.
 func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	s.mu.Lock()
+	frozen, ok := s.frozen[slot]
+	s.mu.Unlock()
+
+	if ok {
+		return frozen
+	}
+
+	// The first slot of a new slot duration resolves against the timing
+	// settings rescaled for it. The rescale notifies the settings
+	// subscribers (planSvc.UpdateConfig included), so s.mu is not held here.
+	s.rescaleSlotTiming(slot)
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if frozen, ok := s.frozen[slot]; ok {
@@ -313,10 +335,28 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 
 	epoch := s.chainSvc.GetEpochOfSlot(slot)
 	fork := s.chainSvc.ActiveForkAtEpoch(epoch)
-	frozen := resolveFrozenPlan(slot, epoch, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
+	frozen = resolveFrozenPlan(slot, epoch, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
 	s.frozen[slot] = frozen
 
 	return frozen
+}
+
+// rescaleSlotTiming patches the global timing settings once when slot lies in
+// a later slot duration segment than the one they are scaled for.
+func (s *PlanService) rescaleSlotTiming(slot phase0.Slot) {
+	if s.settings == nil {
+		return
+	}
+
+	segment := s.chainSvc.GetChainSpec().SegmentOfSlot(slot)
+	if uint64(segment.Slot) <= s.settings.SlotTiming().Slot {
+		return
+	}
+
+	s.settings.RescaleSlotTiming(config.SlotTiming{
+		Slot:       uint64(segment.Slot),
+		DurationMs: segment.Duration.Milliseconds(),
+	})
 }
 
 // OnSlotBuilt records a successfully built slot for the next_n schedule
@@ -396,7 +436,7 @@ func (s *PlanService) ApplyUpdates(updates []*PlanUpdate, actor string) (*PlanCh
 		return nil, errors.New("no updates provided")
 	}
 
-	secondsPerSlot := s.chainSvc.GetChainSpec().SecondsPerSlot
+	spec := s.chainSvc.GetChainSpec()
 	currentSlot := s.chainSvc.GetCurrentSlot()
 	now := time.Now()
 
@@ -445,7 +485,7 @@ func (s *PlanService) ApplyUpdates(updates []*PlanUpdate, actor string) (*PlanCh
 				result.UpdatedAt = now
 				result.UpdatedBy = actor
 
-				if err := result.Validate(secondsPerSlot); err != nil {
+				if err := result.Validate(spec.SlotDurationAt(slot)); err != nil {
 					return nil, fmt.Errorf("update %d: slot %d: %w", i, slot, err)
 				}
 			}
@@ -526,7 +566,7 @@ func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, er
 			return nil, fmt.Errorf("rule %d: must not be null", i)
 		}
 
-		if err := rule.Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot); err != nil {
+		if err := rule.Validate(spec); err != nil {
 			return nil, err
 		}
 

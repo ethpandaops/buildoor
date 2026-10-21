@@ -379,7 +379,10 @@ npm run clean
      substring spamoor treats as success). Nonce/balance/fee floors are checked at
      SELECTION time against the parent state (`Select`: batched
      `eth_getTransactionCount`/`eth_getBalance` at the parent hash, next base fee
-     from the parent header, `eth_blobBaseFee`; per-sender contiguous runs merged
+     from the parent header (`txpool/basefee.go`: from Heze/Bogota the
+     EIP-8198 slot-spaced rule, max change `min(Δs, 12·Δslots) / (8·12·Δslots)`
+     = 3/32 at 9s, the spacing read from the slot timeline; identical to 1/8
+     at a 12s spacing), `eth_blobBaseFee`; per-sender contiguous runs merged
      `fifo` | `tip` | `random` under gas/blob/count budgets). The eviction loop
      follows beacon head + payload-available events: included txs are dropped
      (`included_by_us` vs `included_by_other` via `NoteBuiltBlock`), touched
@@ -633,7 +636,18 @@ npm run clean
    - Caches last 2 epochs of state
    - Detects fork transitions (Electra → Gloas)
    - Loads builder registrations from beacon state (post-Gloas)
-   - Provides slot↔timestamp conversions
+   - Provides slot↔timestamp conversions over the **slot timeline**
+     (`chain/slotclock.go`, EIP-8198): the slot duration is per fork —
+     `SLOT_DURATION_MS` from genesis, `SLOT_DURATION_MS_<FORK>` (today
+     `_HEZE`, listed in `slotDurationKeys`) from that fork's epoch; the
+     deprecated `SLOT_DURATION_SCHEDULE` list is never read. `ParseChainSpec`
+     pre-calculates the segments (`SlotSegment{Epoch, Slot, Offset,
+     Duration}`) once, so `SlotStartOffset` / `SlotAtOffset` /
+     `SlotDurationAt` are one pass over a handful of segments. Never compute
+     slot times as `slot × duration` or `elapsed % duration`: go through
+     `SlotToTime` / `TimeToSlot` / `SlotDurationAt(slot)` (BPS deadlines are
+     shares of the slot's OWN duration). The segments reach the UI on
+     `chain_info.slot_segments`, where `utils.ts` mirrors the lookups
    - `HeadVoteTracker`: per-slot attestation participation aggregated locally
      from raw `single_attestation` SSE events ONLY (streaming from the Gloas
      attester deadline at 25% of the slot). The aggregated `attestation` topic
@@ -1031,6 +1045,24 @@ unvalidated typo would be stored, displayed and ignored. A setting that is
 renamed or merged is listed in `retiredKeys` (`pkg/config/settings.go`) so its
 persisted UI override is adopted by the successor instead of being dropped.
 
+**Slot duration changes** (`config/slot_timing.go`): the millisecond timings
+positioned in or sized to the slot (`slotScaledKeys`: build start, payload
+build time, bid window + interval, reveal time, testing build window +
+rebuild interval, speculative build time, respond-at) are written for one slot
+duration. When the chain reaches a new duration they are patched ONCE:
+`RescaleSlotTiming` recomputes the defaults (`ApplySlotDefaults`) and writes
+every operator value (CLI or UI) scaled by new/old as a UI override (actor
+`slot-duration-change`, so an unchanged CLI flag keeps the scaled value on
+restart; a changed flag counts as written for the current duration). The
+duration the settings are scaled for is the reserved `_slot_timing` settings
+row (absent: the genesis duration). The plan service triggers the patch right
+before the first slot of a new segment freezes (`PlanService.Freeze` →
+`rescaleSlotTiming`), so the last slot of the old duration keeps its values
+and the new slot's build/bid window (which starts in the slot before) already
+uses the new ones; startup patches a change that passed while buildoor was
+down. Plans and rules are NOT rescaled: their values are taken as written for
+their slots (rules validate against every duration within their epoch window).
+
 The mutable-setting registry lives in `pkg/config/settings_fields.go` (keys in
 `settings_keys.go`);
 the per-module enable flags (`epbs_enabled`, `builder_api_enabled`,
@@ -1333,9 +1365,13 @@ command polls `/api/v1/overview` and falls back to the pre-v1
   `txpool.rpc_proxy_hops`, 429 beyond). Content-hashed bundles are served
   immutable
 - `config` - the effective config plus `setting_sources` (`{key: {source:
-  cli|ui, updated_at}}` for every non-default setting)
-- `chain_info` - genesis_time, seconds_per_slot, slots_per_epoch, network
-  (CONFIG_NAME), gloas_fork_epoch (initial state)
+  cli|ui, updated_at}}` for every non-default setting); sent at connect and
+  on every settings change (a settings service subscriber, so the timing
+  rescale at a slot duration change reaches the viewers too)
+- `chain_info` - genesis_time, seconds_per_slot (the GENESIS slot duration in
+  ms), slot_segments (`[{epoch, slot, offset_ms, duration_ms}]`, the slot
+  timeline), slots_per_epoch, network (CONFIG_NAME), gloas_fork_epoch
+  (initial state)
 - `slot_outlook` - the next slot before its build: proposer index/client,
   Builder API registration, gossiped proposer preferences, the effective
   (redacted) action plan and whether it is frozen. Sent at connect, every slot

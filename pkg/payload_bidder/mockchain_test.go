@@ -50,8 +50,8 @@ func (m *stubChainService) Stop() error                 { return nil }
 
 func (m *stubChainService) GetChainSpec() *chain.ChainSpec {
 	return &chain.ChainSpec{
-		SecondsPerSlot: m.slotDuration,
-		SlotsPerEpoch:  32,
+		SlotDuration:  m.slotDuration,
+		SlotsPerEpoch: 32,
 		ForkSchedule: []chain.ForkSchedule{
 			{Fork: m.currentFork, Version: phase0.Version{0x01, 0x00, 0x00, 0x00}, Epoch: 0},
 		},

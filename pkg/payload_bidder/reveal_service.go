@@ -396,9 +396,8 @@ func (s *RevealService) schedule(req *RevealRequest) {
 
 	now := time.Now()
 	slotStart := s.chainSvc.SlotToTime(slot)
-	slotDuration := s.chainSvc.GetChainSpec().SecondsPerSlot
 	timeDue := slotStart.Add(time.Duration(settings.RevealTimeMs) * time.Millisecond)
-	deadline := slotStart.Add(slotDuration)
+	deadline := s.chainSvc.SlotToTime(slot + 1)
 
 	if !settings.BypassDeadline && now.After(deadline) {
 		s.pending[slot] = &revealState{req: req, settings: settings, done: true}
@@ -424,7 +423,7 @@ func (s *RevealService) schedule(req *RevealRequest) {
 	// plan-level deadline bypass, matching the custom-reveal-time clamp).
 	expiry := deadline
 	if settings.BypassDeadline {
-		expiry = deadline.Add(slotDuration)
+		expiry = s.chainSvc.SlotToTime(slot + 2)
 	}
 
 	state := &revealState{
@@ -672,14 +671,12 @@ func (s *RevealService) handlePublishFailure(slot phase0.Slot, state *revealStat
 // pruneDone drops finished entries once their slot is more than 2 slots old;
 // until then they stay as slot-dedup markers.
 func (s *RevealService) pruneDone(now time.Time) {
-	slotDuration := s.chainSvc.GetChainSpec().SecondsPerSlot
-
 	for slot, state := range s.pending {
 		if !state.done {
 			continue
 		}
 
-		if now.After(s.chainSvc.SlotToTime(slot).Add(2 * slotDuration)) {
+		if now.After(s.chainSvc.SlotToTime(slot + 2)) {
 			delete(s.pending, slot)
 		}
 	}

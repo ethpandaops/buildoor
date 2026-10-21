@@ -68,7 +68,7 @@ func TestParseChainSpecSlotDuration(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, tt.want, spec.SecondsPerSlot)
+			require.Equal(t, tt.want, spec.SlotDuration)
 		})
 	}
 }

@@ -73,7 +73,7 @@ func (p *Pool) FeeDistribution(ctx context.Context, parentHash common.Hash, incl
 	}
 
 	dist := &FeeDistribution{
-		NextBaseFee:  calcNextBaseFee(parent).String(),
+		NextBaseFee:  p.nextBaseFee(parent, 0).String(),
 		GasLimit:     parent.GasLimit,
 		Buckets:      []FeeBucket{},
 		Private:      includePrivate,

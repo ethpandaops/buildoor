@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import type { SlotState, Config, ChainInfo, OurBid, ExternalBid, HeadVoteDataPoint, ServiceStatus } from '../types';
-import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition, decodeExtraData } from '../utils';
+import { formatGwei, isSlotScheduled, calculateSlotTiming, calculatePosition, decodeExtraData, slotDurationAt } from '../utils';
 import { Popover, PopoverData, type PopoverItem } from './Popover';
 import { HeadVoteHeatmap } from './HeadVoteHeatmap';
 import { BidArtifactLinks } from './BidArtifactLinks';
@@ -249,7 +249,7 @@ const SlotGraphView: React.FC<SlotGraphProps> = ({
   }
 
   const { slotStartTime, rangeStart, totalRange } = calculateSlotTiming(chainInfo, slot);
-  const slotDuration = chainInfo?.seconds_per_slot || 12000;
+  const slotDuration = slotDurationAt(chainInfo, slot);
   const genesisTime = chainInfo?.genesis_time || 0;
 
   // Only use current (live) values for FUTURE slots, otherwise use captured snapshots

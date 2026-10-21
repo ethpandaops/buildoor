@@ -18,12 +18,21 @@ import (
 
 // ChainSpec holds chain specification parameters.
 type ChainSpec struct {
-	// SecondsPerSlot is the slot duration, taken from SLOT_DURATION_MS when the
-	// beacon node serves it (EIP-7782 networks keep serving a stale
+	// SlotDuration is the genesis slot duration, taken from SLOT_DURATION_MS
+	// when the beacon node serves it (EIP-7782 networks keep serving a stale
 	// SECONDS_PER_SLOT preset default alongside it) and from SECONDS_PER_SLOT
-	// otherwise.
-	SecondsPerSlot time.Duration
-	SlotsPerEpoch  uint64
+	// otherwise. Slot timing goes through SlotDurationAt / SlotStartOffset /
+	// SlotAtOffset, which follow the per-fork changes in ForkSlotDurations.
+	SlotDuration time.Duration
+	// ForkSlotDurations holds the per-fork slot durations served by the beacon
+	// node (SLOT_DURATION_MS_<FORK>, see slotDurationKeys), each in effect
+	// from that fork's epoch.
+	ForkSlotDurations map[version.DataVersion]time.Duration
+	SlotsPerEpoch     uint64
+
+	// slotSegments caches the slot timeline built from the fields above
+	// (buildSlotSegments, run by ParseChainSpec).
+	slotSegments []SlotSegment
 
 	// ConfigName is the network's CONFIG_NAME (e.g. "hoodi"; empty when the
 	// beacon node does not serve it).
@@ -125,6 +134,9 @@ func ParseChainSpec(specData map[string]string, rawData map[string]json.RawMessa
 	if err := spec.parseSpecData(specData, rawData); err != nil {
 		return nil, fmt.Errorf("failed to parse spec data: %w", err)
 	}
+
+	spec.slotSegments = spec.buildSlotSegments()
+
 	return spec, nil
 }
 
@@ -138,7 +150,7 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 			return fmt.Errorf("invalid SLOT_DURATION_MS: 0")
 		}
 
-		s.SecondsPerSlot = time.Duration(slotDurationMs) * time.Millisecond
+		s.SlotDuration = time.Duration(slotDurationMs) * time.Millisecond
 	} else {
 		secondsPerSlotStr, ok := specData["SECONDS_PER_SLOT"]
 		if !ok {
@@ -150,7 +162,24 @@ func (s *ChainSpec) parseSpecData(specData map[string]string, rawData map[string
 			return fmt.Errorf("invalid SECONDS_PER_SLOT: %w", err)
 		}
 
-		s.SecondsPerSlot = time.Duration(secondsPerSlot) * time.Second
+		s.SlotDuration = time.Duration(secondsPerSlot) * time.Second
+	}
+
+	for fork, key := range slotDurationKeys {
+		v, err := parseSpecUint64(specData, key)
+		if err != nil {
+			continue
+		}
+
+		if v == 0 {
+			return fmt.Errorf("invalid %s: 0", key)
+		}
+
+		if s.ForkSlotDurations == nil {
+			s.ForkSlotDurations = make(map[version.DataVersion]time.Duration, len(slotDurationKeys))
+		}
+
+		s.ForkSlotDurations[fork] = time.Duration(v) * time.Millisecond
 	}
 
 	s.ConfigName = specData["CONFIG_NAME"]

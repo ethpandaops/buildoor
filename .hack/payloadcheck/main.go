@@ -25,6 +25,7 @@ import (
 	engineall "github.com/ethpandaops/go-eth-engine-client/spec/all"
 	"github.com/ethpandaops/go-eth-engine-client/spec/paris"
 	"github.com/ethpandaops/go-eth-engine-client/spec/shanghai"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/ethpandaops/go-eth2-client/spec/version"
 	"github.com/sirupsen/logrus"
 
@@ -76,9 +77,9 @@ func main() {
 	fatal(err, "chain id")
 
 	// The block after the EL head: next slot's timestamp and fork.
-	slotDur := spec.SecondsPerSlot
-	slot := uint64(head.Time()-uint64(genesis.GenesisTime.Unix()))/uint64(slotDur.Seconds()) + 1
-	timestamp := uint64(genesis.GenesisTime.Unix()) + slot*uint64(slotDur.Seconds())
+	headSlot := spec.SlotAtOffset(time.Duration(head.Time()-uint64(genesis.GenesisTime.Unix())) * time.Second)
+	slot := uint64(headSlot) + 1
+	timestamp := uint64(genesis.GenesisTime.Unix()) + uint64(spec.SlotStartOffset(phase0.Slot(slot)).Seconds())
 	epoch := slot / spec.SlotsPerEpoch
 
 	var fork version.DataVersion

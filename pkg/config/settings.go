@@ -88,6 +88,9 @@ type Service struct {
 	keyState    map[string]*keyState
 	subscribers []func()
 	guards      []SettingGuard
+	// slotTiming is the slot duration the timing settings are scaled for
+	// (slot_timing.go).
+	slotTiming SlotTiming
 }
 
 // SettingGuard vetoes setting writes against runtime state the config layer

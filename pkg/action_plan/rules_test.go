@@ -3,7 +3,6 @@ package action_plan
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 	"github.com/stretchr/testify/require"
@@ -62,7 +61,7 @@ func TestSlotRuleValidate(t *testing.T) {
 	chainSvc := newStubChain()
 	spec := chainSvc.spec
 
-	require.NoError(t, slot31Rule().Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot))
+	require.NoError(t, slot31Rule().Validate(spec))
 
 	tests := []struct {
 		name   string
@@ -104,7 +103,7 @@ func TestSlotRuleValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rule := slot31Rule()
 			tt.mutate(rule)
-			require.ErrorContains(t, rule.Validate(spec.SlotsPerEpoch, spec.SecondsPerSlot), tt.errMsg)
+			require.ErrorContains(t, rule.Validate(spec), tt.errMsg)
 		})
 	}
 }
@@ -414,7 +413,7 @@ func TestSlotRuleEmptySlotsMatchEverySlot(t *testing.T) {
 	rule := slot31Rule()
 	rule.SlotsInEpoch = nil
 
-	require.NoError(t, rule.Validate(32, 12*time.Second))
+	require.NoError(t, rule.Validate(newStubChain().spec))
 
 	for slot := uint64(0); slot < 64; slot++ {
 		require.True(t, rule.Matches(phase0.Slot(slot), 32))

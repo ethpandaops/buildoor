@@ -261,7 +261,7 @@ func (h *APIHandler) nextBlock(ctx context.Context, pool *txpool.Pool) (*NextBlo
 	// The current slot's block is not on chain yet: the slot after it,
 	// assuming our candidate for it gets included.
 	if first == currentSlot {
-		preceding, baseFee := precedingBlock(candidate)
+		preceding, baseFee := precedingBlock(pool, candidate, currentSlot+1)
 
 		next, err := h.estimateNextBlock(ctx, pool, currentSlot+1, preceding, baseFee)
 		if err != nil {
@@ -287,8 +287,10 @@ func (h *APIHandler) nextBlock(ctx context.Context, pool *txpool.Pool) (*NextBlo
 }
 
 // precedingBlock is a candidate's transactions (senders recovered) and the
-// base fee of the block after it.
-func precedingBlock(candidate *payload_builder.Payload) ([]*txpool.PooledTx, *big.Int) {
+// base fee of the block of slot after it.
+func precedingBlock(
+	pool *txpool.Pool, candidate *payload_builder.Payload, slot phase0.Slot,
+) ([]*txpool.PooledTx, *big.Int) {
 	if candidate == nil || candidate.ExecutionPayload == nil {
 		return nil, nil
 	}
@@ -312,7 +314,12 @@ func precedingBlock(candidate *payload_builder.Payload) ([]*txpool.PooledTx, *bi
 
 	var baseFee *big.Int
 	if exec.BaseFeePerGas != nil {
-		baseFee = txpool.NextBaseFee(exec.GasLimit, exec.GasUsed, exec.BaseFeePerGas.ToBig())
+		baseFee = pool.NextBaseFee(&types.Header{
+			GasLimit: exec.GasLimit,
+			GasUsed:  exec.GasUsed,
+			BaseFee:  exec.BaseFeePerGas.ToBig(),
+			Time:     exec.Timestamp,
+		}, slot)
 	}
 
 	return txs, baseFee
@@ -370,6 +377,7 @@ func (h *APIHandler) estimateNextBlock(
 		GasFillPct:     cfg.TxPool.EffectiveGasFillPct(),
 		BaseFeeCeiling: gweiToWei(cfg.TxPool.BaseFeeCeilingGwei),
 		Ordering:       resp.Ordering,
+		Slot:           slot,
 		Seed:           uint64(slot),
 		InclusionList:  inclusionList,
 		IncludeBlobTxs: availability.BlobBundle || cfg.LocalBuild.AllowBlobsWithoutBundle,
