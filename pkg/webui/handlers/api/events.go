@@ -2256,13 +2256,12 @@ func (m *EventStreamManager) SendInitialState(ctx context.Context, ch chan *Stre
 			Type:      "chain_info",
 			Timestamp: time.Now().UnixMilli(),
 			Data: map[string]any{
-				"genesis_time":       genesis.GenesisTime.UnixMilli(),
-				"seconds_per_slot":   chainSpec.SlotDuration.Milliseconds(),
-				"slots_per_epoch":    chainSpec.SlotsPerEpoch,
-				"network":            chainSpec.ConfigName,
-				"gloas_fork_epoch":   gloasForkEpoch(chainSpec),
-				"heze_fork_slot":     hezeForkSlot(chainSpec),
-				"slot_duration_heze": chainSpec.SlotDurationHeze.Milliseconds(),
+				"genesis_time":     genesis.GenesisTime.UnixMilli(),
+				"seconds_per_slot": chainSpec.SlotDuration.Milliseconds(),
+				"slot_segments":    slotSegmentsInfo(chainSpec),
+				"slots_per_epoch":  chainSpec.SlotsPerEpoch,
+				"network":          chainSpec.ConfigName,
+				"gloas_fork_epoch": gloasForkEpoch(chainSpec),
 			},
 		}) {
 			return
@@ -2651,17 +2650,30 @@ func (m *EventStreamManager) BroadcastLifecycle(action, message, status string) 
 	})
 }
 
-// hezeForkSlot returns the first slot of the Heze fork when the slot duration
-// changes there, or nil.
-func hezeForkSlot(spec *chain.ChainSpec) *uint64 {
-	forkSlot, ok := spec.HezeForkSlot()
-	if !ok {
-		return nil
+// slotSegmentInfo is one segment of the slot timeline on the chain_info
+// event: the frontend maps slots and times through these cutoffs.
+type slotSegmentInfo struct {
+	Epoch      uint64 `json:"epoch"`
+	Slot       uint64 `json:"slot"`
+	OffsetMs   int64  `json:"offset_ms"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// slotSegmentsInfo returns the chain's slot timeline, genesis segment first.
+func slotSegmentsInfo(spec *chain.ChainSpec) []slotSegmentInfo {
+	segments := spec.SlotSegments()
+	out := make([]slotSegmentInfo, 0, len(segments))
+
+	for _, segment := range segments {
+		out = append(out, slotSegmentInfo{
+			Epoch:      uint64(segment.Epoch),
+			Slot:       uint64(segment.Slot),
+			OffsetMs:   segment.Offset.Milliseconds(),
+			DurationMs: segment.Duration.Milliseconds(),
+		})
 	}
 
-	slot := uint64(forkSlot)
-
-	return &slot
+	return out
 }
 
 // gloasForkEpoch returns the scheduled Gloas fork epoch, or nil when the

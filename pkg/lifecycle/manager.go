@@ -350,8 +350,13 @@ func (m *Manager) WaitForRegistration(
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(m.chainSvc.GetChainSpec().SlotDurationAt(m.chainSvc.GetCurrentSlot())) // Check every slot
-	defer ticker.Stop()
+	// Check once per slot, following the duration of the current one.
+	slotDuration := func() time.Duration {
+		return m.chainSvc.GetChainSpec().SlotDurationAt(m.chainSvc.GetCurrentSlot())
+	}
+
+	timer := time.NewTimer(slotDuration())
+	defer timer.Stop()
 
 	pubkey := key.Pubkey()
 
@@ -363,7 +368,9 @@ func (m *Manager) WaitForRegistration(
 		case <-m.stopCh:
 			return fmt.Errorf("lifecycle manager stopped")
 
-		case <-ticker.C:
+		case <-timer.C:
+			timer.Reset(slotDuration())
+
 			// Refresh builders cache to pick up new registrations
 			if err := m.chainSvc.RefreshBuilders(ctx); err != nil {
 				m.log.WithError(err).Debug("Error refreshing builders")

@@ -50,7 +50,7 @@ import { ArtifactButtons } from '../ArtifactButtons';
 import { apiPath } from '../../utils/api';
 import { useEventStream } from '../../hooks/useEventStream';
 import { CopyableHash } from '../CopyableHash';
-import { decodeExtraData } from '../../utils';
+import { decodeExtraData, slotStartTime } from '../../utils';
 
 // Target of the modal: either an explicit slot list (single slot or grid
 // selection) or an inclusive from/to range (may extend beyond the grid).
@@ -162,7 +162,7 @@ interface SlotClock {
 const useSlotClock = (slot: number): SlotClock => {
   const { chainInfo } = useEventStream();
   return useMemo(
-    () => ({ start: chainInfo ? chainInfo.genesis_time + slot * chainInfo.seconds_per_slot : undefined }),
+    () => ({ start: chainInfo ? slotStartTime(chainInfo, slot) : undefined }),
     [chainInfo, slot]
   );
 };

@@ -112,8 +112,8 @@ func (r *SlotRule) planFor(slot phase0.Slot) *SlotPlan {
 }
 
 // Validate checks the matcher and, through a materialized plan, every category
-// against the chain spec (the slot durations of the first and last slot of the
-// rule's epoch window).
+// against the chain spec: against each slot duration within the rule's epoch
+// window.
 func (r *SlotRule) Validate(spec *chain.ChainSpec) error {
 	slotsPerEpoch := spec.SlotsPerEpoch
 
@@ -149,22 +149,19 @@ func (r *SlotRule) Validate(spec *chain.ChainSpec) error {
 		return fmt.Errorf("rule %q carries no instruction", r.ID)
 	}
 
-	fromEpoch, toEpoch := uint64(0), uint64(math.MaxUint64)
+	fromSlot, toSlot := phase0.Slot(0), phase0.Slot(math.MaxUint64)
 	if r.FromEpoch != nil {
-		fromEpoch = *r.FromEpoch
+		fromSlot = spec.EpochStartSlot(phase0.Epoch(*r.FromEpoch))
 	}
 
-	if r.ToEpoch != nil {
-		toEpoch = *r.ToEpoch
-	}
-
-	for _, epoch := range []uint64{fromEpoch, toEpoch} {
-		slot := phase0.Slot(math.MaxUint64)
-		if slotsPerEpoch > 0 && epoch <= math.MaxUint64/slotsPerEpoch {
-			slot = phase0.Slot(epoch * slotsPerEpoch)
+	if r.ToEpoch != nil && *r.ToEpoch < math.MaxUint64 {
+		if next := spec.EpochStartSlot(phase0.Epoch(*r.ToEpoch + 1)); next > 0 {
+			toSlot = next - 1
 		}
+	}
 
-		if err := plan.Validate(spec.SlotDurationAt(slot)); err != nil {
+	for _, duration := range spec.SlotDurationsBetween(fromSlot, toSlot) {
+		if err := plan.Validate(duration); err != nil {
 			return fmt.Errorf("rule %q: %w", r.ID, err)
 		}
 	}

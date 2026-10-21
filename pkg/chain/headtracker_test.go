@@ -214,7 +214,7 @@ func TestHeadTracker_ResolveReorg(t *testing.T) {
 func TestHeadTracker_PayloadDueTimeAcrossHeze(t *testing.T) {
 	genesis := time.Unix(1_700_000_000, 0)
 	h := newTestHeadTracker(genesis, version.DataVersionGloas)
-	h.chainSpec.SlotDurationHeze = 9 * time.Second
+	h.chainSpec.ForkSlotDurations = map[version.DataVersion]time.Duration{version.DataVersionHeze: 9 * time.Second}
 	h.chainSpec.ForkSchedule = append(h.chainSpec.ForkSchedule, ForkSchedule{Fork: version.DataVersionHeze, Epoch: 5})
 
 	assert.Equal(t, genesis.Add(159*12*time.Second+6*time.Second), h.payloadDueTime(159))

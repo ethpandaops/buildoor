@@ -491,10 +491,19 @@ export interface ChainInfo {
   network?: string;
   // Scheduled Gloas fork epoch (null/absent when not scheduled).
   gloas_fork_epoch?: number | null;
-  // First slot of HEZE_FORK_EPOCH and the slot duration (ms) from there on
-  // (null/absent when the slot duration does not change at Heze).
-  heze_fork_slot?: number | null;
-  slot_duration_heze?: number | null;
+  // The slot timeline: one segment per slot duration, genesis first. Slot and
+  // time conversions go through these cutoffs (utils.ts slotStartTime /
+  // slotAtTime / slotDurationAt).
+  slot_segments?: SlotSegment[];
+}
+
+// SlotSegment is a span of the chain with a constant slot duration, lasting
+// until the next segment starts.
+export interface SlotSegment {
+  epoch: number;
+  slot: number; // first slot
+  offset_ms: number; // start relative to genesis
+  duration_ms: number;
 }
 
 export interface Stats {

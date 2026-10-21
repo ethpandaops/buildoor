@@ -49,6 +49,9 @@ type RuleChangeEvent struct {
 type PlanService struct {
 	cfg      *config.Config
 	chainSvc chain.Service
+	// settings rescales the global timing settings when the first slot of a
+	// new slot duration freezes (nil: never, e.g. in tests).
+	settings *config.Service
 	store    *memstore.Store[phase0.Slot, *SlotPlan]
 	rules    *memstore.Store[string, *SlotRule]
 
@@ -96,6 +99,12 @@ func NewPlanService(cfg *config.Config, chainSvc chain.Service, log logrus.Field
 func (s *PlanService) SetPersistence(ctx context.Context, stateDB *db.Database) {
 	s.store.SetPersistence(ctx, db.NewKVPersistence(stateDB, Namespace, PlanCodec{}), s.log)
 	s.rules.SetPersistence(ctx, db.NewKVPersistence(stateDB, RulesNamespace, RuleCodec{}), s.log)
+}
+
+// SetSettings attaches the settings service whose slot-relative timing
+// settings are rescaled once when a slot duration change is reached.
+func (s *PlanService) SetSettings(settings *config.Service) {
+	s.settings = settings
 }
 
 // Start launches the pruning loop (driven by epoch transitions).
@@ -302,6 +311,19 @@ func (s *PlanService) frozenSlotsInRange(minSlot, maxSlot phase0.Slot) map[phase
 // affect it.
 func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	s.mu.Lock()
+	frozen, ok := s.frozen[slot]
+	s.mu.Unlock()
+
+	if ok {
+		return frozen
+	}
+
+	// The first slot of a new slot duration resolves against the timing
+	// settings rescaled for it. The rescale notifies the settings
+	// subscribers (planSvc.UpdateConfig included), so s.mu is not held here.
+	s.rescaleSlotTiming(slot)
+
+	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if frozen, ok := s.frozen[slot]; ok {
@@ -312,10 +334,28 @@ func (s *PlanService) Freeze(slot phase0.Slot) *FrozenPlan {
 	plan := s.PlanForSlot(slot)
 
 	fork := s.chainSvc.ActiveForkAtEpoch(s.chainSvc.GetEpochOfSlot(slot))
-	frozen := resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
+	frozen = resolveFrozenPlan(slot, plan, s.cfg, fork, time.Now(), s.slotsBuilt)
 	s.frozen[slot] = frozen
 
 	return frozen
+}
+
+// rescaleSlotTiming patches the global timing settings once when slot lies in
+// a later slot duration segment than the one they are scaled for.
+func (s *PlanService) rescaleSlotTiming(slot phase0.Slot) {
+	if s.settings == nil {
+		return
+	}
+
+	segment := s.chainSvc.GetChainSpec().SegmentOfSlot(slot)
+	if uint64(segment.Slot) <= s.settings.SlotTiming().Slot {
+		return
+	}
+
+	s.settings.RescaleSlotTiming(config.SlotTiming{
+		Slot:       uint64(segment.Slot),
+		DurationMs: segment.Duration.Milliseconds(),
+	})
 }
 
 // OnSlotBuilt records a successfully built slot for the next_n schedule

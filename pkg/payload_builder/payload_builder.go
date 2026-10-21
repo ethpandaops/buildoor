@@ -823,6 +823,7 @@ func (b *PayloadBuilder) buildLocal(
 
 		selection, err := b.txPool.SelectQueued(ctx, req.Queued, &txpool.SelectParams{
 			ParentHash:     common.Hash(attrs.ParentBlockHash),
+			Slot:           attrs.ProposalSlot,
 			GasLimit:       b.localGasLimit(ctx, attrs, prelude),
 			MaxBlobs:       b.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)),
 			InclusionList:  inclusionList.listTransactions(),
@@ -888,6 +889,7 @@ func (b *PayloadBuilder) buildLocal(
 
 		selection, err := b.txPool.Select(ctx, &txpool.SelectParams{
 			ParentHash:     common.Hash(attrs.ParentBlockHash),
+			Slot:           attrs.ProposalSlot,
 			GasLimit:       b.localGasLimit(ctx, attrs, prelude),
 			MaxBlobs:       b.chainSvc.GetChainSpec().MaxBlobsPerBlockAt(b.chainSvc.GetEpochOfSlot(attrs.ProposalSlot)),
 			MaxTxs:         req.MaxTxs,

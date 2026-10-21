@@ -15,6 +15,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/rpc/execution"
+	"github.com/ethpandaops/go-eth2-client/spec/phase0"
 )
 
 // Skip reasons reported per selection.
@@ -70,6 +71,9 @@ type SelectParams struct {
 	BaseFeeCeiling *big.Int
 	// Ordering is fifo, tip or random.
 	Ordering string
+	// Slot is the slot of the block (0 = the slot after the parent's); the
+	// base fee rule reads the block spacing from it from Heze on.
+	Slot phase0.Slot
 	// Seed drives the random ordering (the slot, so a preview and the build
 	// agree).
 	Seed uint64
@@ -284,54 +288,6 @@ func (s *Selection) Summary() *Summary {
 	return out
 }
 
-// EIP-1559 parameters (mainnet defaults; devnets keep them).
-const (
-	elasticityMultiplier     = 2
-	baseFeeChangeDenominator = 8
-)
-
-// calcNextBaseFee computes the base fee of the block after parent per
-// EIP-1559: unchanged at the gas target, otherwise moved by up to 1/8 in
-// proportion to the deviation from the target.
-func calcNextBaseFee(parent *types.Header) *big.Int {
-	baseFee := parent.BaseFee
-	if baseFee == nil {
-		return new(big.Int)
-	}
-
-	gasTarget := parent.GasLimit / elasticityMultiplier
-
-	switch {
-	case parent.GasUsed == gasTarget:
-		return new(big.Int).Set(baseFee)
-
-	case parent.GasUsed > gasTarget:
-		delta := new(big.Int).SetUint64(parent.GasUsed - gasTarget)
-		delta.Mul(delta, baseFee)
-		delta.Div(delta, new(big.Int).SetUint64(gasTarget))
-		delta.Div(delta, big.NewInt(baseFeeChangeDenominator))
-
-		if delta.Sign() == 0 {
-			delta.SetInt64(1)
-		}
-
-		return delta.Add(baseFee, delta)
-
-	default:
-		delta := new(big.Int).SetUint64(gasTarget - parent.GasUsed)
-		delta.Mul(delta, baseFee)
-		delta.Div(delta, new(big.Int).SetUint64(gasTarget))
-		delta.Div(delta, big.NewInt(baseFeeChangeDenominator))
-
-		next := new(big.Int).Sub(baseFee, delta)
-		if next.Sign() < 0 {
-			next.SetInt64(0)
-		}
-
-		return next
-	}
-}
-
 // Select assembles the transaction list for a block on the given parent:
 // every sender's queue is walked from its parent-state nonce (gaps stop the
 // walk), each transaction must cover its cost from the remaining balance and
@@ -357,7 +313,7 @@ func (p *Pool) Select(ctx context.Context, params *SelectParams) (*Selection, er
 		return nil, fmt.Errorf("select: %w", err)
 	}
 
-	sel.BaseFee = calcNextBaseFee(parent)
+	sel.BaseFee = p.nextBaseFee(parent, params.Slot)
 	if params.BaseFee != nil {
 		sel.BaseFee = new(big.Int).Set(params.BaseFee)
 	}
@@ -611,7 +567,7 @@ func (p *Pool) SelectQueued(ctx context.Context, hashes []common.Hash, params *S
 	sel := &Selection{
 		Skipped:  make(map[string]int, 8),
 		Snapshot: time.Now(),
-		BaseFee:  calcNextBaseFee(parent),
+		BaseFee:  p.nextBaseFee(parent, params.Slot),
 		PoolSize: p.Stats().Pending,
 	}
 
@@ -1145,12 +1101,6 @@ func advancePastPreceding(states map[common.Address]*execution.AccountState, pre
 			state.Balance.SetInt64(0)
 		}
 	}
-}
-
-// NextBaseFee is the base fee of the block after one with the given gas
-// limit, gas used and base fee (EIP-1559).
-func NextBaseFee(gasLimit, gasUsed uint64, baseFee *big.Int) *big.Int {
-	return calcNextBaseFee(&types.Header{GasLimit: gasLimit, GasUsed: gasUsed, BaseFee: baseFee})
 }
 
 // fillCandidates groups the EL mempool transactions worth a sender's state
