@@ -91,10 +91,6 @@ func (h *APIHandler) applySettings(w http.ResponseWriter, r *http.Request, token
 		return false
 	}
 
-	if h.eventStreamMgr != nil {
-		h.eventStreamMgr.BroadcastConfigUpdate()
-	}
-
 	h.audit(r, token, action, "", detail, "ok")
 
 	return true

@@ -48,8 +48,8 @@ func newSkipTestService(t *testing.T, cfg *config.Config) (*Service, *action_pla
 	t.Helper()
 
 	chainSvc := &stubChainService{spec: &chain.ChainSpec{
-		SecondsPerSlot: 12 * time.Second,
-		SlotsPerEpoch:  32,
+		SlotDuration:  12 * time.Second,
+		SlotsPerEpoch: 32,
 	}}
 
 	log := logrus.New()

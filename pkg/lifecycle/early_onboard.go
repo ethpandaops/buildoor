@@ -117,10 +117,10 @@ func (m *Manager) earlyOnboard(ctx context.Context) {
 // the slot's block has normally arrived; when it did not, the timer evaluation
 // covers the missing head event.
 func (m *Manager) untilMissedBlockCheck() time.Duration {
-	spec := m.chainSvc.GetChainSpec()
-	next := m.chainSvc.SlotToTime(m.chainSvc.GetCurrentSlot() + 1)
+	nextSlot := m.chainSvc.GetCurrentSlot() + 1
+	next := m.chainSvc.SlotToTime(nextSlot)
 
-	return max(time.Until(next.Add(spec.SecondsPerSlot/3)), time.Second)
+	return max(time.Until(next.Add(m.chainSvc.GetChainSpec().SlotDurationAt(nextSlot)/3)), time.Second)
 }
 
 // earlyOnboardTargets returns the target keys that still need an early deposit:
@@ -348,7 +348,9 @@ func (m *Manager) waitForEarlyRegistration(ctx context.Context, forkEpoch, curre
 	spec := m.chainSvc.GetChainSpec()
 
 	epochsToWait := uint64(forkEpoch-currentEpoch) + earlyRegistrationWaitMargin
-	timeout := max(time.Duration(epochsToWait*spec.SlotsPerEpoch)*spec.SecondsPerSlot, 5*time.Minute)
+	fromSlot := phase0.Slot(uint64(currentEpoch) * spec.SlotsPerEpoch)
+	toSlot := fromSlot + phase0.Slot(epochsToWait*spec.SlotsPerEpoch)
+	timeout := max(spec.SlotStartOffset(toSlot)-spec.SlotStartOffset(fromSlot), 5*time.Minute)
 
 	if err := m.WaitForRegistration(ctx, m.registry.Primary(), timeout); err != nil {
 		m.log.WithError(err).Warn("Builder not registered after early deposits; the reconciler will retry")

@@ -132,8 +132,8 @@ func newGetHeaderTestEnv(t *testing.T, enabled bool, blockValueWei *big.Int) *ge
 	chainSvc := &stubChainService{
 		currentFork: version.DataVersionFulu,
 		chainSpec: &chain.ChainSpec{
-			SecondsPerSlot: 12 * time.Second,
-			SlotsPerEpoch:  32,
+			SlotDuration:  12 * time.Second,
+			SlotsPerEpoch: 32,
 		},
 	}
 

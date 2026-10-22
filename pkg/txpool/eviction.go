@@ -72,7 +72,7 @@ func (p *Pool) retierAfter(blockHash common.Hash) {
 		return
 	}
 
-	p.retier(ctx, calcNextBaseFee(header))
+	p.retier(ctx, p.nextBaseFee(header, 0))
 }
 
 // executionHashOf resolves the execution block hash a beacon block commits to.

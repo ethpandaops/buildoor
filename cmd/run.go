@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -181,18 +182,6 @@ and begins building blocks according to configuration.`,
 			return fmt.Errorf("failed to init global SSZ specs: %w", err)
 		}
 
-		// Apply slot-relative timing defaults now that we know the slot duration
-		slotTimeMs := chainSpec.SecondsPerSlot.Milliseconds()
-		cfg.ApplySlotDefaults(slotTimeMs)
-
-		logger.WithFields(logrus.Fields{
-			"slot_time_ms":       slotTimeMs,
-			"build_start_time":   cfg.EPBS.BuildStartTime,
-			"payload_build_time": cfg.PayloadBuildTime,
-			"bid_start_time":     cfg.EPBS.BidStartTime,
-			"bid_end_time":       cfg.EPBS.BidEndTime,
-		}).Info("Timing defaults applied")
-
 		// 6. Open the optional state-db and build the central settings service.
 		// The settings service applies persisted UI overrides (and detects CLI
 		// changes) into cfg in place BEFORE any service reads it, so every
@@ -203,8 +192,23 @@ and begins building blocks according to configuration.`,
 		}
 		defer stateDB.Close() //nolint:errcheck // cleanup
 
+		// Slot-relative timing defaults follow the slot duration the settings
+		// are scaled for: the persisted one, or the genesis duration on the
+		// first run (operator values are taken as written for it).
+		slotTiming, scaled, err := config.LoadSlotTiming(stateDB)
+		if err != nil {
+			return fmt.Errorf("failed to load slot timing: %w", err)
+		}
+
+		if !scaled {
+			genesisSegment := chainSpec.SegmentOfSlot(0)
+			slotTiming = config.SlotTiming{DurationMs: genesisSegment.Duration.Milliseconds()}
+		}
+
+		cfg.ApplySlotDefaults(slotTiming.DurationMs)
+
 		defaults := config.DefaultConfig()
-		defaults.ApplySlotDefaults(slotTimeMs)
+		defaults.ApplySlotDefaults(slotTiming.DurationMs)
 
 		// Only operator-supplied keys (flag/env/config) form the CLI layer.
 		supplied := make(map[string]bool)
@@ -216,6 +220,32 @@ and begins building blocks according to configuration.`,
 		if err != nil {
 			return fmt.Errorf("failed to init settings service: %w", err)
 		}
+
+		settingsSvc.InitSlotTiming(slotTiming)
+
+		// A slot duration change passed while buildoor was down: patch the
+		// timing settings for the segment of the next slot now. The plan
+		// service patches later changes when it freezes their first slot.
+		nextSegment := chainSpec.SegmentOfSlot(chainSpec.SlotAtOffset(time.Since(genesis.GenesisTime)) + 1)
+		settingsSvc.RescaleSlotTiming(config.SlotTiming{
+			Slot:       uint64(nextSegment.Slot),
+			DurationMs: nextSegment.Duration.Milliseconds(),
+		})
+
+		segments := make([]string, 0, 2)
+		for _, segment := range chainSpec.SlotSegments() {
+			segments = append(segments, fmt.Sprintf("%s from epoch %d", segment.Duration, segment.Epoch))
+		}
+
+		logger.WithFields(logrus.Fields{
+			"slot_durations":     strings.Join(segments, ", "),
+			"slot_time_ms":       settingsSvc.SlotTiming().DurationMs,
+			"build_start_time":   cfg.EPBS.BuildStartTime,
+			"payload_build_time": cfg.PayloadBuildTime,
+			"bid_start_time":     cfg.EPBS.BidStartTime,
+			"bid_end_time":       cfg.EPBS.BidEndTime,
+			"reveal_time":        cfg.Reveal.TimeMs,
+		}).Info("Timing settings applied")
 
 		// 7. Start chain service (epoch-level state management)
 		chainSvc := chain.NewService(cfg, clClient, chainSpec, genesis, logger)
@@ -237,6 +267,7 @@ and begins building blocks according to configuration.`,
 		// persist in the state-db's kv_store when --state-db is set.
 		planSvc := action_plan.NewPlanService(cfg, chainSvc, logger)
 		planSvc.SetPersistence(ctx, stateDB)
+		planSvc.SetSettings(settingsSvc)
 
 		if err := planSvc.Start(ctx); err != nil {
 			return fmt.Errorf("failed to start action plan service: %w", err)

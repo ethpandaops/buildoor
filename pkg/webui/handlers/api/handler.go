@@ -126,6 +126,12 @@ func NewAPIHandler(
 		h.eventStreamMgr.AttachSources(settingsSvc, validatorStore, propPrefSvc, valRanges)
 		h.eventStreamMgr.Start()
 
+		// Every settings change reaches the viewers, the API writes and the
+		// timing rescale at a slot duration change alike.
+		if settingsSvc != nil {
+			settingsSvc.OnChange(h.eventStreamMgr.BroadcastConfigUpdate)
+		}
+
 		go h.runNextBlockFeed(h.eventStreamMgr.ctx)
 	}
 

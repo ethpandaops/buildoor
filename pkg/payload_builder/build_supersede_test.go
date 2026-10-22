@@ -29,7 +29,7 @@ type pastChainService struct {
 
 // newPastChainService anchors genesis so that testSlot started one second ago.
 func newPastChainService(spec *chain.ChainSpec, testSlot phase0.Slot) *pastChainService {
-	slotDuration := time.Duration(testSlot) * spec.SecondsPerSlot
+	slotDuration := time.Duration(testSlot) * spec.SlotDuration
 
 	return &pastChainService{
 		stubChainService: &stubChainService{spec: spec},
@@ -38,7 +38,7 @@ func newPastChainService(spec *chain.ChainSpec, testSlot phase0.Slot) *pastChain
 }
 
 func (s *pastChainService) SlotToTime(slot phase0.Slot) time.Time {
-	return s.genesis.Add(time.Duration(slot) * s.spec.SecondsPerSlot)
+	return s.genesis.Add(time.Duration(slot) * s.spec.SlotDuration)
 }
 
 func supersedeTestService(t *testing.T, chainSvc chain.Service) *Service {
@@ -134,7 +134,7 @@ func nodeAttrs(synthesized *beacon.PayloadAttributesEvent) *beacon.PayloadAttrib
 }
 
 func TestSupersedeSynthesizedBuild_AbortsInFlightBuild(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 
 	synthesized := synthesizedAttrs()
@@ -164,7 +164,7 @@ func TestSupersedeSynthesizedBuild_AbortsInFlightBuild(t *testing.T) {
 }
 
 func TestSupersedeSynthesizedBuild_KeepsEqualInputs(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 
 	synthesized := synthesizedAttrs()
@@ -189,7 +189,7 @@ func TestSupersedeSynthesizedBuild_KeepsEqualInputs(t *testing.T) {
 }
 
 func TestSupersedeSynthesizedBuild_IgnoresNodeBuilds(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 
 	attrs := synthesizedAttrs()
@@ -213,7 +213,7 @@ func TestSupersedeSynthesizedBuild_IgnoresNodeBuilds(t *testing.T) {
 // upgrade both leave the cache, the superseded report is the last event and
 // nothing of the target is reported or selected afterwards.
 func TestSupersedeSynthesizedBuild_WithdrawsEveryPayload(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	svc := supersedeTestService(t, &stubChainService{spec: spec})
 
 	synthesized := synthesizedAttrs()
@@ -267,7 +267,7 @@ func TestSupersedeSynthesizedBuild_WithdrawsEveryPayload(t *testing.T) {
 // aborted by the node's differing event and a fresh target starts from the
 // node's attributes on the same parent tuple.
 func TestHandlePayloadAttributes_RebuildsAfterSupersede(t *testing.T) {
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	chainSvc := newPastChainService(spec, 133)
 	svc := supersedeTestService(t, chainSvc)
 

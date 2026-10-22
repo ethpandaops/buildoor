@@ -299,7 +299,7 @@ func (s *Service) synthesizeCandidateAttributes(
 		synthesized := *base
 		synthesized.ProposalSlot = slot
 		synthesized.Timestamp = base.Timestamp +
-			uint64(slot-base.ProposalSlot)*uint64(spec.SecondsPerSlot.Seconds())
+			uint64((spec.SlotStartOffset(slot) - spec.SlotStartOffset(base.ProposalSlot)).Seconds())
 
 		if proposer, ok := s.lookupProposer(slot); ok {
 			synthesized.ProposerIndex = proposer

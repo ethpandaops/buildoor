@@ -24,8 +24,8 @@ func TestApplyAttributesFallback(t *testing.T) {
 	cfg := config.DefaultConfig()
 
 	chainSvc := &stubChainService{spec: &chain.ChainSpec{
-		SecondsPerSlot: 12 * time.Second,
-		SlotsPerEpoch:  32,
+		SlotDuration:  12 * time.Second,
+		SlotsPerEpoch: 32,
 	}}
 
 	log := logrus.New()
@@ -97,8 +97,8 @@ func TestApplyAttributesFallbackMultiSlotGap(t *testing.T) {
 	cfg := config.DefaultConfig()
 
 	chainSvc := &stubChainService{spec: &chain.ChainSpec{
-		SecondsPerSlot: 12 * time.Second,
-		SlotsPerEpoch:  32,
+		SlotDuration:  12 * time.Second,
+		SlotsPerEpoch: 32,
 	}}
 
 	log := logrus.New()
@@ -150,7 +150,7 @@ func TestApplyAttributesFallbackSkipsWhenHeadAdvanced(t *testing.T) {
 	clClient, err := beacon.NewClient(context.Background(), "http://127.0.0.1:1", log)
 	require.NoError(t, err)
 
-	spec := &chain.ChainSpec{SecondsPerSlot: 12 * time.Second, SlotsPerEpoch: 32}
+	spec := &chain.ChainSpec{SlotDuration: 12 * time.Second, SlotsPerEpoch: 32}
 	tracker := chain.NewHeadTracker(clClient, spec, &beacon.Genesis{}, log)
 	chainSvc := &stubChainService{spec: spec, headTracker: tracker}
 

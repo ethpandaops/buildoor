@@ -853,12 +853,13 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 	}
 
 	skippedSlots := uint64(targetSlot - parent.ProposalSlot)
+	spec := s.chainSvc.GetChainSpec()
 
 	synthesized := *parent
 	synthesized.ProposalSlot = targetSlot
 	synthesized.Synthesized = true
 	synthesized.Timestamp = parent.Timestamp +
-		skippedSlots*uint64(s.chainSvc.GetChainSpec().SecondsPerSlot.Seconds())
+		uint64((spec.SlotStartOffset(targetSlot) - spec.SlotStartOffset(parent.ProposalSlot)).Seconds())
 
 	// The proposer changes per slot: resolve the target slot's proposer from
 	// the cached duties instead of carrying the source slot's over.
@@ -874,7 +875,6 @@ func (s *Service) applyAttributesFallback(targetSlot phase0.Slot) {
 	// validators and the randao mix rotates. Copied across an epoch boundary
 	// they are stale and a payload built from them is rejected; the build
 	// stays only until the beacon node's own attributes supersede it.
-	spec := s.chainSvc.GetChainSpec()
 	if uint64(targetSlot)/spec.SlotsPerEpoch != uint64(parent.ProposalSlot)/spec.SlotsPerEpoch {
 		s.log.WithFields(logrus.Fields{
 			"slot":       targetSlot,
