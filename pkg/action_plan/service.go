@@ -604,6 +604,35 @@ func (s *PlanService) SetRules(rules []*SlotRule, actor string) ([]*SlotRule, er
 	return event.Rules, nil
 }
 
+// SeedRules adds the rules to the stored set, replacing stored rules with the
+// same id and keeping every other one (the startup path: operator rules win
+// over what a state-db carried over, other rules survive).
+func (s *PlanService) SeedRules(seed []*SlotRule, actor string) error {
+	seeded := make(map[string]struct{}, len(seed))
+	for _, rule := range seed {
+		if rule != nil {
+			seeded[rule.ID] = struct{}{}
+		}
+	}
+
+	rules := make([]*SlotRule, 0, len(s.rules.Values())+len(seed))
+
+	for _, rule := range s.Rules() {
+		if _, replaced := seeded[rule.ID]; !replaced {
+			rules = append(rules, rule)
+		}
+	}
+
+	_, err := s.SetRules(append(rules, seed...), actor)
+
+	return err
+}
+
+// SeedTransformRule seeds the startup transform rule; see TransformRuleID.
+func (s *PlanService) SeedTransformRule(t *TransformPlan, fromEpoch uint64, actor string) error {
+	return s.SeedRules([]*SlotRule{transformRule(t, fromEpoch)}, actor)
+}
+
 // sortedRules returns the stored rules in match order (id-ascending). The
 // returned values are the stored pointers — package-internal read-only use.
 func (s *PlanService) sortedRules() []*SlotRule {

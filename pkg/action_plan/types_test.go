@@ -182,6 +182,38 @@ func TestSlotPlanValidate(t *testing.T) {
 			plan:    &SlotPlan{BuilderAPI: &BuilderAPIPlan{Mode: Mode("maybe")}},
 			wantErr: "invalid mode",
 		},
+		{
+			name: "reveal target to another beacon node",
+			plan: &SlotPlan{Reveal: &RevealPlan{Mode: ModeCustom, Targets: []RevealTarget{
+				{URLs: []string{"http://cl-1-lighthouse-geth:4000"}, DelayMs: 5000},
+			}}},
+		},
+		{
+			name: "reveal target without a scheme",
+			plan: &SlotPlan{Reveal: &RevealPlan{Mode: ModeCustom, Targets: []RevealTarget{
+				{URLs: []string{"cl-1-lighthouse-geth:4000"}},
+			}}},
+			wantErr: "targets[0].urls[0]",
+		},
+		{
+			name: "reveal target delayed beyond two slots",
+			plan: &SlotPlan{Reveal: &RevealPlan{Mode: ModeCustom, Targets: []RevealTarget{
+				{DelayMs: 30000},
+			}}},
+			wantErr: "targets[0].delay_ms",
+		},
+		{
+			name: "reveal target with a broken transform",
+			plan: &SlotPlan{Reveal: &RevealPlan{Mode: ModeCustom, Targets: []RevealTarget{
+				{Transform: ".payload.state_root = ("},
+			}}},
+			wantErr: "targets[0].transform",
+		},
+		{
+			name:    "reveal targets on a disabled reveal",
+			plan:    &SlotPlan{Reveal: &RevealPlan{Mode: ModeDisabled, Targets: []RevealTarget{{}}}},
+			wantErr: "custom mode",
+		},
 	}
 
 	for _, tt := range tests {

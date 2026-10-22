@@ -23,6 +23,23 @@ type ValidatorRangesConfig struct {
 	URL string `yaml:"url" json:"url,omitempty"`
 }
 
+// TransformsConfig seeds one recurring action plan rule at startup from the
+// operator's jq transforms (payload / bid / envelope, see
+// action_plan.TransformPlan), matching every slot from FromEpoch on. It lets
+// a devnet run start under a transform without an API call. Startup-only; an
+// invalid expression fails the start.
+type TransformsConfig struct {
+	Payload   string `yaml:"payload" json:"payload,omitempty"`
+	Bid       string `yaml:"bid" json:"bid,omitempty"`
+	Envelope  string `yaml:"envelope" json:"envelope,omitempty"`
+	FromEpoch uint64 `yaml:"from_epoch" json:"from_epoch"`
+}
+
+// IsZero reports whether no transform expression is set.
+func (c TransformsConfig) IsZero() bool {
+	return c.Payload == "" && c.Bid == "" && c.Envelope == ""
+}
+
 // Config represents the complete configuration for the buildoor application.
 //
 // The JSON form of the config is public: GET /api/v1/config and the SSE config
@@ -84,6 +101,11 @@ type Config struct {
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"-"`
+	Transforms      TransformsConfig      `yaml:"transforms" json:"-"`
+	// RulesJSON is a JSON array of recurring action plan rules (the rules API's
+	// wire shape) seeded at startup: stored rules with the same id are
+	// replaced, others kept. Startup-only; an invalid rule fails the start.
+	RulesJSON string `yaml:"rules_json" json:"-"`
 	// SlotResultRetentionEpochs is how many epochs of per-slot result history
 	// (plans + outcome summaries) are kept before pruning, in memory and in the
 	// state-db. Must be > 0.

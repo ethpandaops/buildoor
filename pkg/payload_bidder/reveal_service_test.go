@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -678,4 +679,55 @@ func TestRevealService_RetryPolicyFromConfig(t *testing.T) {
 		assert.Equal(t, attempt, res.Attempt)
 		assert.Equal(t, 2, res.MaxAttempts)
 	}
+}
+
+// A reveal target republishes the slot's envelope to another beacon node
+// after its delay, under its own transform (here: none, while the primary
+// reveal is transformed), so each node receives its own copy.
+func TestRevealService_PublishesRevealTargets(t *testing.T) {
+	env := newRevealTestEnv(t, 4*time.Second, 10)
+	sub := env.svc.SubscribeResults(8, false)
+
+	defer sub.Unsubscribe()
+
+	target := &mockEnvelopePublisher{}
+	env.svc.targets.clients["http://cl-1-lighthouse-geth:4000"] = target
+
+	slot := phase0.Slot(1)
+	_, err := env.planSvc.ApplyUpdates([]*action_plan.PlanUpdate{{
+		Slots: []uint64{uint64(slot)},
+		Reveal: json.RawMessage(`{"mode":"custom","targets":[
+			{"urls":["http://cl-1-lighthouse-geth:4000"],"delay_ms":200,"broadcast_validation":"gossip"}]}`),
+		Transforms: json.RawMessage(`{"envelope":".payload.state_root = \"0x` +
+			strings.Repeat("11", 32) + `\""}`),
+	}}, "test")
+	require.NoError(t, err)
+
+	require.NoError(t, env.svc.Start(context.Background()))
+	defer env.svc.Stop()
+
+	env.svc.RequestReveal(&RevealRequest{
+		Payload:   newTestPayload(slot, phase0.Hash32{0xab}, big.NewInt(1)),
+		Key:       env.key(t),
+		BlockInfo: &beacon.BlockInfo{Slot: slot, Root: phase0.Root{0x11}, ParentRoot: phase0.Root{0x22}},
+		Transport: payload_builder.BidTransportP2P,
+	})
+
+	primary := waitForResult(t, sub.Channel(), 2*time.Second)
+	require.True(t, primary.Success)
+	require.Empty(t, primary.Target)
+	require.Equal(t, 0, target.callCount(), "the target waits its delay")
+
+	extra := waitForResult(t, sub.Channel(), 2*time.Second)
+	require.True(t, extra.Success, extra.Error)
+	require.Equal(t, "http://cl-1-lighthouse-geth:4000", extra.Target)
+	require.Equal(t, 1, target.callCount())
+	require.Equal(t, "gossip", target.lastValidation())
+	require.Equal(t, 1, env.publisher.callCount(), "the primary node gets the primary reveal only")
+
+	require.Equal(t, phase0.Root{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+		0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11,
+		0x11, 0x11, 0x11, 0x11}, primary.Envelope.Message.Payload.StateRoot)
+	require.Equal(t, phase0.Root{}, extra.Envelope.Message.Payload.StateRoot, "the target copy is untransformed")
+	require.NotEqual(t, primary.Envelope.Signature, extra.Envelope.Signature)
 }

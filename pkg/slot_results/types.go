@@ -436,6 +436,10 @@ type RevealAttempt struct {
 	Attempt    int          `json:"attempt"`
 	At         time.Time    `json:"at"`
 
+	// Target is the beacon URL (or "primary") of an additional reveal target
+	// publication; empty on the primary reveal.
+	Target string `json:"target,omitempty"`
+
 	// StartedAt is when the attempt began (envelope construction + submit
 	// call); nil on skips where nothing was attempted.
 	StartedAt *time.Time `json:"started_at,omitempty"`
