@@ -79,8 +79,8 @@ github.com/ethereum/c-kzg-4844/v2 v2.1.8 h1:oQ48q/TMe2SKU8qBE3N7e4/HlG3EpJftom6E
 github.com/ethereum/c-kzg-4844/v2 v2.1.8/go.mod h1:8HMkUZ5JRv4hpw/XUrYWSQNAUzhHMg2UDb/U+5m+XNw=
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab h1:rvv6MJhy07IMfEKuARQ9TKojGqLVNxQajaXEp/BoqSk=
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab/go.mod h1:IuLm4IsPipXKF7CW5Lzf68PIbZ5yl7FFd74l/E0o9A8=
-github.com/ethereum/go-ethereum v1.17.8 h1:iKuXrT38t1PaU6aBw6MjBJhGoCl/+Ir0vf5aqQhYT38=
-github.com/ethereum/go-ethereum v1.17.8/go.mod h1:Iui379BD7ryQSFeIDn3sh9Od2I1uheqJD2/6N0m4xm0=
+github.com/ethereum/go-ethereum v1.17.9 h1:p05tsTJyvqI1WKBZlBl9+wYQG1eo/qVwmz66owsp+yA=
+github.com/ethereum/go-ethereum v1.17.9/go.mod h1:7ruvgGPsxGXtaSFJQKkSGwbKghz8V/G1xuDVY8NqQQM=
 github.com/ethpandaops/go-eth-engine-client v0.0.2 h1:XKSuJo3K7ZtMjnF92u8FGUjgPhQz0KmxlzBn5IlFTjw=
 github.com/ethpandaops/go-eth-engine-client v0.0.2/go.mod h1:ggCXJgxLFNGpC+DkgNQkeTr3dXRQDb0+9niNmaJWAgM=
 github.com/ethpandaops/go-eth2-client v0.1.11 h1:gQErMw/Kc5zZYk4XeZkD27yEn4DPlzaMHlEiuflIluE=
