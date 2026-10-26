@@ -747,6 +747,7 @@ func (t *Tracker) handleRevealResult(result *payload_bidder.RevealResult) {
 		Transport:  string(result.Transport),
 		SkipReason: result.SkipReason,
 		Error:      result.Error,
+		Target:     result.Target,
 		Attempt:    result.Attempt,
 		At:         time.Now(),
 	}
@@ -771,7 +772,9 @@ func (t *Tracker) handleRevealResult(result *payload_bidder.RevealResult) {
 		attempt.Status = RevealStatusFailed
 	}
 
-	if t.cfg.SlotArtifactCaptureEnabled && result.Envelope != nil {
+	// The envelope artifact is the primary reveal's; target copies differ only
+	// by their transform and must not overwrite it.
+	if t.cfg.SlotArtifactCaptureEnabled && result.Envelope != nil && result.Target == "" {
 		meta := EnvelopeArtifactMeta{}
 		if message := result.Envelope.Message; message != nil && message.Payload != nil {
 			meta.BlockHash = fmt.Sprintf("%#x", message.Payload.BlockHash)

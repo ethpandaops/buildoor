@@ -474,7 +474,9 @@ export const CategoryForm: React.FC<{
   disabled: boolean;
   showIgnorePrefs?: boolean;
   onChange: (next: CategoryFormState) => void;
-}> = ({ title, hint, bulk, state, fields, disabled, showIgnorePrefs, onChange }) => (
+  // Rendered below the fields in custom mode (the reveal targets).
+  children?: React.ReactNode;
+}> = ({ title, hint, bulk, state, fields, disabled, showIgnorePrefs, onChange, children }) => (
   <div className="mb-3">
     <div className="d-flex align-items-center gap-2 mb-1">
       <div className="section-header">
@@ -559,6 +561,7 @@ export const CategoryForm: React.FC<{
         <div className="col-12 form-text mt-0">
           Empty fields inherit the global config. Timing values are signed ms relative to slot start.
         </div>
+        {children && <div className="col-12">{children}</div>}
       </div>
     )}
   </div>

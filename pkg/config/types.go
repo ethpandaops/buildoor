@@ -23,6 +23,19 @@ type ValidatorRangesConfig struct {
 	URL string `yaml:"url" json:"url,omitempty"`
 }
 
+// TransformsConfig holds the operator's startup jq transforms (payload / bid
+// / envelope, see action_plan.TransformPlan): from FromEpoch on, every frozen
+// plan applies each of them wherever the slot's own plan sets no expression
+// for that object. It lets a devnet run start under a transform without an
+// API call. Startup-only and never persisted; an invalid expression fails the
+// start.
+type TransformsConfig struct {
+	Payload   string `yaml:"payload" json:"payload,omitempty"`
+	Bid       string `yaml:"bid" json:"bid,omitempty"`
+	Envelope  string `yaml:"envelope" json:"envelope,omitempty"`
+	FromEpoch uint64 `yaml:"from_epoch" json:"from_epoch"`
+}
+
 // Config represents the complete configuration for the buildoor application.
 //
 // The JSON form of the config is public: GET /api/v1/config and the SSE config
@@ -84,6 +97,12 @@ type Config struct {
 	// to mark blocks built by this builder. Defaulted to "buildoor/" when empty.
 	ExtraData       string                `yaml:"extra_data" json:"extra_data"`
 	ValidatorRanges ValidatorRangesConfig `yaml:"validator_ranges" json:"-"`
+	Transforms      TransformsConfig      `yaml:"transforms" json:"-"`
+	// RulesJSON is a JSON array of recurring action plan rules (the rules API's
+	// wire shape) owned by the flag: seeded at startup, replacing stored rules
+	// with the same id, while rules an earlier start seeded and the flag no
+	// longer carries are removed. Startup-only; an invalid rule fails the start.
+	RulesJSON string `yaml:"rules_json" json:"-"`
 	// SlotResultRetentionEpochs is how many epochs of per-slot result history
 	// (plans + outcome summaries) are kept before pruning, in memory and in the
 	// state-db. Must be > 0.
@@ -1005,7 +1024,7 @@ func RedactRPCUpstreams(spec string) string {
 		}
 
 		if target != RPCUpstreamLocal {
-			target = redactURL(target)
+			target = RedactURL(target)
 		}
 
 		out = append(out, target+priority)
@@ -1014,7 +1033,10 @@ func RedactRPCUpstreams(spec string) string {
 	return strings.Join(out, ",")
 }
 
-func redactURL(raw string) string {
+// RedactURL returns the URL with the parts that may carry credentials (user
+// info, path, query, fragment) replaced by RedactedMarker; scheme and host
+// stay readable. A value that does not parse as a URL is redacted whole.
+func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
 		return RedactedMarker

@@ -72,7 +72,7 @@ export function derivePayloadStatus(result?: SlotResult): PayloadDotStatus {
 
 // describeReveal summarizes the slot's reveal attempts for the tooltip.
 function describeReveal(result?: SlotResult): string | null {
-  const reveals = result?.reveal_attempts || [];
+  const reveals = (result?.reveal_attempts || []).filter((attempt) => !attempt.target);
   if (reveals.length === 0) return null;
 
   if (reveals.some((r) => r.status === 'published')) return 'revealed';
