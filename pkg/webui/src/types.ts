@@ -466,6 +466,7 @@ export interface EPBSConfig {
   key_strategy?: string;
   bid_keys_per_slot?: number;
   bid_keys_per_step?: number;
+  bids_per_key?: number;
 }
 
 export interface ServiceStatus {

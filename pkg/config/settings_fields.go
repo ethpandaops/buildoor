@@ -132,6 +132,7 @@ func registeredFields() []Field {
 		newField(KeyEPBSKeyStrategy, "epbs-key-strategy", func(c *Config) *string { return &c.EPBS.KeyStrategy }),
 		newField(KeyEPBSBidKeysPerSlot, "epbs-bid-keys-per-slot", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerSlot }),
 		newField(KeyEPBSBidKeysPerStep, "epbs-bid-keys-per-step", func(c *Config) *uint64 { return &c.EPBS.BidKeysPerStep }),
+		newField(KeyEPBSBidsPerKey, "epbs-bids-per-key", func(c *Config) *uint64 { return &c.EPBS.BidsPerKey }),
 
 		newField(KeyRevealEnabled, "reveal-enabled", func(c *Config) *bool { return &c.Reveal.Enabled }),
 		newField(KeyRevealGateMode, "reveal-gate-mode", func(c *Config) *string { return &c.Reveal.GateMode }),

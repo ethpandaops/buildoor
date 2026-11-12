@@ -289,7 +289,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
     title: 'Keys & candidates',
     description:
       'Which build candidate each bid uses and which builder keys sign the bids of the p2p bidder and the ' +
-      'Builder API. A key is spent once one of its bids reaches the network.',
+      'Builder API. A key bids until its bid limit for the slot and parent (one bid per ETH of balance) is used up.',
     tabs: [
       {
         id: 'candidates',
@@ -301,7 +301,13 @@ export const FLOWS: Record<FlowId, FlowDef> = {
         label: 'Keys',
         sections: [
           {
-            keys: ['epbs.key_strategy', 'epbs.bid_keys_per_slot', 'epbs.bid_keys_per_step', 'builder_api.key_strategy'],
+            keys: [
+              'epbs.key_strategy',
+              'epbs.bid_keys_per_slot',
+              'epbs.bid_keys_per_step',
+              'epbs.bids_per_key',
+              'builder_api.key_strategy',
+            ],
           },
         ],
       },
@@ -312,6 +318,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
       { label: 'Key strategy', keys: ['epbs.key_strategy'] },
       { label: 'Keys per slot', keys: ['epbs.bid_keys_per_slot'] },
       { label: 'Keys per step', keys: ['epbs.bid_keys_per_step'] },
+      { label: 'Bids per key', keys: ['epbs.bids_per_key'] },
       { label: 'Builder API keys', keys: ['builder_api.key_strategy'] },
       { label: 'Weak head below', keys: ['build.auto_weak_head_pct'] },
       {

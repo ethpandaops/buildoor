@@ -76,8 +76,12 @@ type BidPlan struct {
 	BidKeysPerSlot *uint64 `json:"bid_keys_per_slot,omitempty"`
 
 	// BidKeysPerStep overrides how many keys bid a payload per interval step
-	// (0 = every remaining key at once).
+	// (0 = every key with a bid left).
 	BidKeysPerStep *uint64 `json:"bid_keys_per_step,omitempty"`
+
+	// BidsPerKey overrides the cap on the bids one builder key gossips for
+	// this slot per parent (0 = the gossip bid limit).
+	BidsPerKey *uint64 `json:"bids_per_key,omitempty"`
 
 	// BidValueGwei is an absolute bid base value replacing
 	// max(blockValue, min) + subsidy; BidIncrease still applies per re-bid.
@@ -105,6 +109,7 @@ func (p *BidPlan) clone() *BidPlan {
 	c.KeyStrategy = cloneScalar(p.KeyStrategy)
 	c.BidKeysPerSlot = cloneScalar(p.BidKeysPerSlot)
 	c.BidKeysPerStep = cloneScalar(p.BidKeysPerStep)
+	c.BidsPerKey = cloneScalar(p.BidsPerKey)
 
 	return &c
 }
@@ -113,7 +118,8 @@ func (p *BidPlan) hasOverrides() bool {
 	return p.BidStartTime != nil || p.BidEndTime != nil || p.BidMinAmount != nil ||
 		p.BidIncrease != nil || p.BidInterval != nil || p.BidSubsidy != nil ||
 		p.BidValueGwei != nil || p.IgnoreMissingPrefs || p.BidCandidate != nil ||
-		p.KeyStrategy != nil || p.BidKeysPerSlot != nil || p.BidKeysPerStep != nil
+		p.KeyStrategy != nil || p.BidKeysPerSlot != nil || p.BidKeysPerStep != nil ||
+		p.BidsPerKey != nil
 }
 
 func (p *BidPlan) validate(slotMs int64) error {

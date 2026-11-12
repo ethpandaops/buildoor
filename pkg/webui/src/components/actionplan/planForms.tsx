@@ -112,7 +112,7 @@ export const BID_FIELDS: FieldDef[] = [
           <dt>auto</dt>
           <dd>the candidate matching the chain view (head block + its payload status); sticky for the slot unless candidate switching is enabled globally</dd>
           <dt>all</dt>
-          <dd>a bid for every built candidate (multi-parent gossip testing; most nodes only propagate a builder's first bid per slot)</dd>
+          <dd>a bid for every built candidate (multi-parent gossip testing)</dd>
           <CandidateKeyList />
         </dl>
       </>

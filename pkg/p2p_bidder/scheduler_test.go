@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
+	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/chain"
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/memstore"
@@ -209,8 +210,6 @@ func newSchedulerHarness(t *testing.T, opts harnessOptions) *schedulerHarness {
 
 	planSvc := action_plan.NewPlanService(cfg, chainSvc, log)
 
-	// Several keys by default: a key is spent once it has bid a slot, so tests
-	// that re-bid or bid several candidates need more than one.
 	registry := newTestKeyRegistry(t, testBuilderIndex, testBuilderIndex+1,
 		testBuilderIndex+2, testBuilderIndex+3)
 
@@ -765,20 +764,17 @@ func TestSchedulerBidAllIntervalPerPayload(t *testing.T) {
 	require.Nil(t, h.nextEvent())
 }
 
-// With several managed keys, each built candidate is bid from a DIFFERENT key.
-// That is what makes the bids propagate: the gossip rules ignore every bid after
-// a builder's first for a slot, so one key can only ever land one of them.
-func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
+// The bid limit is per slot AND parent, so one key covers every candidate.
+func TestSchedulerBudgetsKeysPerParent(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
 
-	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
-	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
-	h.cache.Select(full)
-	h.cache.Select(empty)
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_candidate":"all","bids_per_key":1}`)
+
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
+	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.cfg.EPBS.BidCandidate = "all"
 	h.bidTick(1000)
 
 	first := h.nextEvent()
@@ -787,26 +783,70 @@ func TestSchedulerAssignsDistinctKeysPerCandidate(t *testing.T) {
 	require.NotNil(t, second)
 	require.Nil(t, h.nextEvent())
 
-	require.NotEqual(t, first.SignedBid.Message.BuilderIndex, second.SignedBid.Message.BuilderIndex,
-		"each candidate must be bid from a distinct builder key")
+	require.Equal(t, first.SignedBid.Message.BuilderIndex, second.SignedBid.Message.BuilderIndex,
+		"one key has a bid for each parent")
 
-	// Both keys are now spent for the slot: the third key is what an escalated
-	// re-bid has to use, because a spent key's next bid is ignored by gossip.
 	h.scheduler.mu.Lock()
-	spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+	keyBids := len(h.scheduler.getSlotState(testSlot).KeyBids)
 	h.scheduler.mu.Unlock()
 
-	require.Equal(t, 2, spent)
+	require.Equal(t, 2, keyBids)
 }
 
-// An escalated re-bid of the SAME payload must come from a key that has not bid
-// this slot yet: the gossip rules ignore a builder's later bids, so re-bidding
-// from the same key means the higher value never reaches the network.
-func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
+// A key re-bids the same payload until its bid limit for the slot and parent
+// (one bid per ETH of builder balance) is used up; only then the next key bids.
+func TestSchedulerReBidsFromOneKeyUpToItsBidLimit(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+
+	registry := newTestKeyRegistry(t, 11, 12)
+	for keyIndex := range uint64(2) {
+		_, err := registry.PrimeKeyState(keyIndex, func(state *builder_keys.State) {
+			state.Balance = 3_500_000_000
+			state.EffectiveBalance = 3_500_000_000
+		})
+		require.NoError(t, err)
+	}
+
+	h.scheduler.registry = registry
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_value_gwei":100,"bid_interval":50,"bid_increase":10,"key_strategy":"single"}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Select(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	builders := make([]uint64, 0, 6)
+	values := make([]uint64, 0, 6)
+
+	for range 6 {
+		h.bidTick(1000)
+
+		event := h.nextEvent()
+		require.NotNil(t, event)
+		require.NotNil(t, event.SignedBid)
+
+		builders = append(builders, uint64(event.SignedBid.Message.BuilderIndex))
+		values = append(values, event.Value)
+
+		h.agePayloadBid(payload.BlockHash)
+	}
+
+	assert.Equal(t, []uint64{11, 11, 11, 12, 12, 12}, builders,
+		"3.5 ETH of balance allow three bids per key")
+	assert.Equal(t, []uint64{100, 110, 120, 130, 140, 150}, values)
+
+	h.bidTick(1000)
+	require.Nil(t, h.nextEvent(), "both keys reached their bid limit")
+}
+
+// bids_per_key 1 keeps one bid per key, so an escalated re-bid of the same
+// payload moves to a key that has not bid yet.
+func TestSchedulerBidsPerKeyCap(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
 
-	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":50,"bid_increase":10}`)
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":50,"bid_increase":10,"bids_per_key":1}`)
 
 	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
 	h.cache.Select(payload)
@@ -830,36 +870,47 @@ func TestSchedulerEscalatesOntoUnusedKeys(t *testing.T) {
 		h.agePayloadBid(payload.BlockHash)
 	}
 
-	// The fleet is exhausted: a fourth attempt has no key left that could
-	// propagate, so it bids nothing rather than repeating a spent key.
 	h.bidTick(1000)
 	require.Nil(t, h.nextEvent())
 }
 
-// bid_keys_per_slot caps how many distinct keys bid a slot, so an operator can
-// keep the single-bid behaviour even with several candidates built.
+// bid_keys_per_slot caps how many distinct keys bid a slot.
 func TestSchedulerBidKeysPerSlotCap(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
 
 	h.applyBidPlan(t, testSlot,
-		`{"mode":"custom","bid_candidate":"all","bid_keys_per_slot":1}`)
+		`{"mode":"custom","bid_interval":50,"bid_keys_per_slot":1,"bid_keys_per_step":0,"bids_per_key":2}`)
 
-	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01))
-	h.cache.Select(newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02))
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Select(payload)
 	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
 
-	h.bidTick(1000)
+	builders := make(map[uint64]struct{}, 1)
 
-	require.NotNil(t, h.nextEvent(), "first candidate bid expected")
-	require.Nil(t, h.nextEvent(), "the key cap must stop the second candidate")
+	for range 2 {
+		h.bidTick(1000)
+
+		event := h.nextEvent()
+		require.NotNil(t, event)
+		require.Nil(t, h.nextEvent(), "the key cap must keep the other keys out of the step")
+
+		builders[uint64(event.SignedBid.Message.BuilderIndex)] = struct{}{}
+
+		h.agePayloadBid(payload.BlockHash)
+	}
+
+	require.Len(t, builders, 1)
+
+	h.bidTick(1000)
+	require.Nil(t, h.nextEvent(), "the only allowed key reached its bid limit")
 }
 
 // The scheduler ticks every 10ms while a bid submission is a network call taking
 // tens of milliseconds. A payload's bid slot must therefore be claimed before the
 // submission, not after it: otherwise the ticks that land mid-flight pass the
 // interval check and gossip the same bid again — which the beacon node rejects as
-// already known and which burns the key's one bid for the slot.
+// already known and which burns one of the key's bids for the slot.
 func TestSchedulerDoesNotReBidDuringSubmission(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 
@@ -922,14 +973,14 @@ func TestSchedulerDoesNotSpendKeysOnIdleTicks(t *testing.T) {
 	require.Nil(t, h.nextEvent(), "ticks inside the interval must not bid")
 
 	h.scheduler.mu.Lock()
-	spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+	spent := len(h.scheduler.getSlotState(testSlot).KeyBids)
 	h.scheduler.mu.Unlock()
 
 	assert.Equal(t, 1, spent, "only the tick that actually bid may spend a key")
 }
 
-// With the per-step count unset a single evaluation spends the whole fleet at
-// once — a slot bid from every active key in parallel instead of one key per
+// With the per-step count unset a single evaluation bids from the whole fleet
+// at once — every active key in parallel, each once, instead of one key per
 // interval tick. Each of those bids carries its own escalated value: gossip
 // forwards only the highest bid seen for a (slot, parent) tuple, so bids sharing
 // a value cannot all propagate no matter how many keys sign them.
@@ -957,7 +1008,7 @@ func TestSchedulerBidsFromEveryKeyInOneStep(t *testing.T) {
 		builders[uint64(event.SignedBid.Message.BuilderIndex)] = struct{}{}
 	}
 
-	require.Nil(t, h.nextEvent(), "the fleet is spent after one step")
+	require.Nil(t, h.nextEvent(), "a step bids from each key at most once")
 	require.Len(t, builders, 3, "each bid must come from a distinct key")
 
 	// Dispatched concurrently, so the report order is arbitrary.
@@ -998,8 +1049,8 @@ func TestSchedulerEscalatesEveryBid(t *testing.T) {
 	assert.Equal(t, []uint64{120, 130}, second, "escalation continues across steps")
 }
 
-// The per-step count bounds one evaluation; the rest of the fleet waits for the
-// next interval step.
+// The per-step count bounds one evaluation; the next interval step bids from
+// the same keys again while they have bids left.
 func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
 	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
 	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
@@ -1015,13 +1066,20 @@ func TestSchedulerBidKeysPerStepBoundsOneStep(t *testing.T) {
 
 	require.NotNil(t, h.nextEvent())
 	require.NotNil(t, h.nextEvent())
-	require.Nil(t, h.nextEvent(), "the step spends at most two keys")
+	require.Nil(t, h.nextEvent(), "the step bids from at most two keys")
 
 	h.agePayloadBid(payload.BlockHash)
 	h.bidTick(1100)
 
-	require.NotNil(t, h.nextEvent(), "the next step spends the last key")
+	require.NotNil(t, h.nextEvent())
+	require.NotNil(t, h.nextEvent())
 	require.Nil(t, h.nextEvent())
+
+	h.scheduler.mu.Lock()
+	keyBids := len(h.scheduler.getSlotState(testSlot).KeyBids)
+	h.scheduler.mu.Unlock()
+
+	assert.Equal(t, 2, keyBids, "both steps bid from the same two keys")
 }
 
 // A submission in flight must not hold up the scheduler: the tick dispatches it
@@ -1058,10 +1116,10 @@ func TestSchedulerTickDoesNotWaitForSubmissions(t *testing.T) {
 	h.scheduler.Wait()
 }
 
-// A bid the beacon node rejected was seen and turned down on merit, so its key
-// stays spent — retrying it unchanged only repeats the rejection, and at fleet
+// A bid the beacon node rejected was seen and turned down on merit, so it
+// stays counted — retrying it unchanged only repeats the rejection, and at fleet
 // scale that spins through every key. A submission that never reached the node
-// still hands its key back.
+// still hands its bid back.
 func TestSchedulerKeepsRejectedKeysSpent(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1095,7 +1153,7 @@ func TestSchedulerKeepsRejectedKeysSpent(t *testing.T) {
 			h.bidTick(1000)
 
 			h.scheduler.mu.Lock()
-			spent := len(h.scheduler.getSlotState(testSlot).UsedKeys)
+			spent := len(h.scheduler.getSlotState(testSlot).KeyBids)
 			h.scheduler.mu.Unlock()
 
 			assert.Equal(t, test.wantSpent, spent)
