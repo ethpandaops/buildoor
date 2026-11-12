@@ -943,12 +943,17 @@ Key config sections:
 - **Key selection**: `--epbs-key-strategy` (round_robin | single | random |
   least_used), `--epbs-bid-keys-per-slot` (cap per slot, 0 = no cap beyond the
   fleet), `--epbs-bid-keys-per-step` (keys bidding a payload per interval step,
-  each one increment higher; 1 = walk the fleet up the ladder, 0 = spend every
-  remaining key at once), `--builder-api-key-strategy` (empty = follow the ePBS
-  strategy). A key is SPENT once one of its bids reaches the network — the
-  gossip rules ignore a builder's later bids for a slot — so every bid, an
-  escalated re-bid of the same payload included, takes a key that has not bid
-  yet, and the submissions of one step go out concurrently
+  each key once and one increment higher; 1 = one key per step, 0 = every key
+  with a bid left), `--epbs-bids-per-key` (cap on a key's bids per slot and
+  parent, 0 = the gossip bid limit, 1 = one bid per key for nodes predating
+  consensus-specs#5805), `--builder-api-key-strategy` (empty = follow the ePBS
+  strategy). Nodes forward `balance // 1 ETH` bids per builder, slot and parent
+  (`get_builder_bid_limit`, `Registry.BidLimit`, at least 1), each of which must
+  beat the highest bid seen. The scheduler counts every bid that reached the
+  network per (key, parent) (`SlotState.KeyBids`): a key keeps bidding, the
+  escalated re-bids of the same payload included, until its limit is used up,
+  then the strategy's next key takes over; the submissions of one step go out
+  concurrently
 - **Lifecycle amounts**: `--deposit-amount` (gwei; the ONE amount sent with
   every builder key deposit — early onboarding via the regular deposit
   contract, the registering builder deposit, and each top-up; there is

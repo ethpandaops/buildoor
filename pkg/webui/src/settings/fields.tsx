@@ -652,7 +652,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       <>
         Minimum ms between two bids on the same payload inside the bid window
         (<code>epbs.bid_interval</code>). 0 = bid each payload only once. Each re-bid needs a key
-        that has not bid this slot yet (see the key selection settings).
+        with a bid left for the slot and parent (see the key selection settings).
       </>
     ),
   },
@@ -722,7 +722,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
       { value: 'grandparent_full', label: 'Grandparent (reorg)', short: 'grandparent (reorg)' },
       { value: 'grandparent_empty', label: 'Grandparent (empty payload)', short: 'grandparent (empty)' },
     ],
-    hint: 'Which built payload the bids commit to. All bids every candidate the slot built, spending keys per candidate.',
+    hint: 'Which built payload the bids commit to. All bids every candidate the slot built.',
     help: (
       <>
         Which built candidate payload the slot&apos;s p2p bids commit to
@@ -732,7 +732,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
           <dt>auto</dt>
           <dd>The payload matching the current head and its payload status (empty-parent build when the head&apos;s payload was withheld), else the slot&apos;s primary payload.</dd>
           <dt>all</dt>
-          <dd>Bids every built candidate, spending keys per candidate: deliberate multi-parent gossip, since only one of those parents can end up canonical.</dd>
+          <dd>Bids every built candidate (the bid limit of a key counts per parent): deliberate multi-parent gossip, since only one of those parents can end up canonical.</dd>
           <dt>parent (full)</dt>
           <dd>Head block and its payload.</dd>
           <dt>parent (empty payload)</dt>
@@ -773,14 +773,15 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     help: (
       <>
         Order the active builder keys are offered in for each bid (<code>epbs.key_strategy</code>);
-        keys that already bid this slot are skipped. Keys that cannot cover the bid sort last but
+        a key bids until its bid limit for the slot and parent is used up, then the next one takes
+        over. Keys that cannot cover the bid sort last but
         are still used when nothing else is left. Also used by Builder API bids unless the Builder
         API sets its own strategy. Per-slot action plans can override it.
         <dl>
           <dt>round robin</dt>
           <dd>Rotates the starting key by slot, spreading bids and payments evenly.</dd>
           <dt>single</dt>
-          <dd>Lowest-index active key that has not bid this slot yet. Combine with keys per slot = 1 for single-key behaviour.</dd>
+          <dd>Lowest-index active key with a bid left. Combine with keys per slot = 1 for single-key behaviour.</dd>
           <dt>random</dt>
           <dd>Shuffles the keys per slot (deterministic per slot).</dd>
           <dt>least used</dt>
@@ -795,13 +796,12 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     kind: 'number',
     min: 0,
     zeroLabel: 'whole fleet',
-    hint: 'Caps how many distinct keys one slot may spend. 0 means every active key is available.',
+    hint: 'Caps how many distinct keys bid one slot. 0 means every active key is available.',
     help: (
       <>
         Maximum distinct builder keys that may bid one slot (<code>epbs.bid_keys_per_slot</code>).
-        Since a key bids at most once per slot, this also caps the slot&apos;s bid count. 0 = no cap
-        beyond the active fleet; 1 = one gossiped bid per slot. Per-slot action plans can override
-        it.
+        0 = no cap beyond the active fleet; 1 = the whole slot is bid from one key. Per-slot action
+        plans can override it.
       </>
     ),
   },
@@ -810,14 +810,31 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     short: 'Keys / step',
     kind: 'number',
     min: 0,
-    zeroLabel: 'all remaining',
-    hint: 'Keys spent on a payload per bid interval, each bidding one increase above the last. 0 spends every remaining key at once.',
+    zeroLabel: 'all with a bid left',
+    hint: 'Keys bidding a payload per bid interval, each once and one increase above the last. 0 bids from every key with a bid left.',
     help: (
       <>
-        Keys that bid a payload per bid interval step, each one bid increase above the previous
-        (<code>epbs.bid_keys_per_step</code>). 1 = walk the fleet up the price ladder one key per
-        interval; 0 = spend every remaining key at once when the window opens. Per-slot action plans
-        can override it.
+        Keys that bid a payload per bid interval step, each key once and one bid increase above the
+        previous (<code>epbs.bid_keys_per_step</code>). 1 = one key per interval, re-bidding until
+        its bid limit is used up; 0 = every key with a bid left bids in each step. Per-slot action
+        plans can override it.
+      </>
+    ),
+  },
+  'epbs.bids_per_key': {
+    label: 'Bids per key',
+    short: 'Bids / key',
+    kind: 'number',
+    min: 0,
+    zeroLabel: 'gossip limit',
+    hint: 'Caps the bids one key gossips per slot and parent. 0 follows the gossip limit of one bid per ETH of builder balance.',
+    help: (
+      <>
+        Maximum bids one builder key gossips per slot and parent (<code>epbs.bids_per_key</code>).
+        Nodes forward one bid per ETH of builder balance for a slot and parent and ignore the rest;
+        0 follows that limit. 1 = one bid per key, every re-bid moves to the next key: the setting
+        for nodes that only forward a builder&apos;s first bid. Per-slot action plans can override
+        it.
       </>
     ),
   },

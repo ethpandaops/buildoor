@@ -36,6 +36,12 @@ type payloadBidState struct {
 	count int
 }
 
+// keyParent is one builder key bidding on one parent tuple.
+type keyParent struct {
+	keyIndex uint64
+	parent   beacon.AttrParentKey
+}
+
 // SlotState tracks the bidding state for a single slot.
 type SlotState struct {
 	LastBidTime      time.Time
@@ -56,12 +62,11 @@ type SlotState struct {
 	BidCandidate    chain.CandidateKey
 	BidCandidateSet bool
 
-	// UsedKeys holds the keys that already gossiped a bid for this slot. The
-	// gossip rules ignore every bid a builder makes after its first for a slot,
-	// so a key is SPENT once one of its bids reached the network — every later
-	// bid, including an escalated re-bid of the very same payload, has to come
-	// from a key that has not bid yet or it never propagates.
-	UsedKeys map[uint64]struct{}
+	// KeyBids counts the bids each key gossiped for this slot per parent.
+	// Nodes forward at most one bid per ETH of builder balance for a slot and
+	// parent (get_builder_bid_limit), so a key is spent for a parent once its
+	// count reaches that limit.
+	KeyBids map[keyParent]uint64
 
 	// Frozen is the slot's immutable action-plan snapshot, resolved on the
 	// first scheduler evaluation of the slot (nil until then).
@@ -396,99 +401,146 @@ func (s *Scheduler) selectBidPayloads(
 	return []*payload_builder.Payload{payload}
 }
 
-// claimBidKey reserves a builder key for one bid on the given payload, or
-// returns nil when the slot has no key left to spend.
+// claimBidKey reserves one bid of a builder key on the payload's parent, or
+// returns nil when no key has a bid left.
 //
-// The gossip rules ignore every bid a builder makes after its first for a slot,
-// so a key is spent as soon as one of its bids reaches the network. Every later
-// bid therefore needs a key that has not bid yet — including an escalated re-bid
-// of the very same payload, which is exactly what makes the escalation reach the
-// network instead of being dropped as already known.
+// Nodes forward at most one bid per ETH of builder balance for a slot and
+// parent, so a key keeps bidding until that limit (or the bids-per-key cap) is
+// reached and the strategy's next key takes over. stepKeys holds the keys that
+// already bid in the current step: a step bids from each key at most once.
 //
-// The key is claimed here rather than after the submission because the
+// The bid is claimed here rather than after the submission because the
 // submission is a network call taking tens of milliseconds while the scheduler
-// ticks every 10ms: the ticks landing mid-flight would otherwise pick the same
-// key again. releaseBidKey hands it back when the submission never made it out.
+// ticks every 10ms: the ticks landing mid-flight would otherwise overdraw the
+// key. releaseBidKey hands it back when the submission never made it out.
 func (s *Scheduler) claimBidKey(
-	slot phase0.Slot, bidSettings *action_plan.ResolvedBidSettings, bidValue uint64,
+	slot phase0.Slot,
+	bidSettings *action_plan.ResolvedBidSettings,
+	parent beacon.AttrParentKey,
+	bidValue uint64,
+	stepKeys map[uint64]struct{},
 ) *builder_keys.Key {
 	s.mu.Lock()
-	state := s.getSlotState(slot)
-
-	// Cap how many keys one slot may spend. Unset means every ready key.
-	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
-		s.mu.Unlock()
-
-		return nil
-	}
-
-	spent := make(map[uint64]struct{}, len(state.UsedKeys))
-	for keyIndex := range state.UsedKeys {
-		spent[keyIndex] = struct{}{}
-	}
-
+	used, bids := s.getSlotState(slot).keyUse(parent)
 	s.mu.Unlock()
+
+	keysCapped := bidSettings.BidKeysPerSlot > 0 && uint64(len(used)) >= bidSettings.BidKeysPerSlot
+
+	exclude := make(map[uint64]struct{}, len(stepKeys))
+	for keyIndex := range stepKeys {
+		exclude[keyIndex] = struct{}{}
+	}
+
+	for _, key := range s.registry.Keys() {
+		keyIndex := key.KeyIndex()
+		_, isUsed := used[keyIndex]
+
+		if (keysCapped && !isUsed) || bids[keyIndex] >= s.keyBidLimit(bidSettings, keyIndex) {
+			exclude[keyIndex] = struct{}{}
+		}
+	}
 
 	selected := s.registry.SelectForBid(slot, builder_keys.SelectRequest{
 		Strategy:     bidSettings.KeyStrategy,
 		RequiredGwei: bidValue,
 		Count:        1,
-		Exclude:      spent,
+		Exclude:      exclude,
 	})
 
 	if len(selected) == 0 {
+		if len(stepKeys) > 0 {
+			return nil
+		}
+
 		s.mu.Lock()
-		state = s.getSlotState(slot)
+		state := s.getSlotState(slot)
 		alreadyWarned := state.NoKeyWarnedFor
 		state.NoKeyWarnedFor = true
 		s.mu.Unlock()
 
 		if !alreadyWarned {
 			s.log.WithFields(logrus.Fields{
-				"slot":       slot,
-				"spent_keys": len(spent),
-				"strategy":   builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
-			}).Info("Every builder key has bid this slot — no further bid can propagate")
+				"slot":      slot,
+				"used_keys": len(used),
+				"strategy":  builder_keys.NormalizedStrategy(bidSettings.KeyStrategy),
+			}).Info("No builder key has a bid left for this slot and parent — no further bid can propagate")
 		}
 
 		return nil
 	}
 
 	key := selected[0]
+	target := keyParent{keyIndex: key.KeyIndex(), parent: parent}
 
 	s.mu.Lock()
-	state = s.getSlotState(slot)
+	defer s.mu.Unlock()
 
-	if state.UsedKeys == nil {
-		state.UsedKeys = make(map[uint64]struct{}, 4)
-	}
+	state := s.getSlotState(slot)
+	used, _ = state.keyUse(parent)
 
-	// Re-check the cap: a concurrent tick may have claimed the last allowed key
-	// while this one was selecting.
-	if limit := bidSettings.BidKeysPerSlot; limit > 0 && uint64(len(state.UsedKeys)) >= limit {
-		s.mu.Unlock()
-
+	// Re-check: a concurrent tick may have claimed in between.
+	if _, isUsed := used[target.keyIndex]; !isUsed &&
+		bidSettings.BidKeysPerSlot > 0 && uint64(len(used)) >= bidSettings.BidKeysPerSlot {
 		return nil
 	}
 
-	if _, taken := state.UsedKeys[key.KeyIndex()]; taken {
-		s.mu.Unlock()
-
+	if state.KeyBids[target] >= s.keyBidLimit(bidSettings, target.keyIndex) {
 		return nil
 	}
 
-	state.UsedKeys[key.KeyIndex()] = struct{}{}
-	s.mu.Unlock()
+	if state.KeyBids == nil {
+		state.KeyBids = make(map[keyParent]uint64, 4)
+	}
+
+	state.KeyBids[target]++
 
 	return key
 }
 
-// releaseBidKey returns a claimed key to the slot's pool after a submission that
-// never reached the network: nothing was gossiped, so the key is not spent.
-func (s *Scheduler) releaseBidKey(slot phase0.Slot, key *builder_keys.Key) {
+// keyBidLimit returns how many bids the key may gossip per slot and parent:
+// the gossip bid limit, capped by the slot's bids-per-key setting.
+func (s *Scheduler) keyBidLimit(bidSettings *action_plan.ResolvedBidSettings, keyIndex uint64) uint64 {
+	limit := s.registry.BidLimit(keyIndex)
+	if bidSettings.BidsPerKey > 0 {
+		limit = min(limit, bidSettings.BidsPerKey)
+	}
+
+	return limit
+}
+
+// keyUse returns the keys that bid the slot on any parent and each key's bid
+// count on the given parent.
+func (state *SlotState) keyUse(parent beacon.AttrParentKey) (used map[uint64]struct{}, bids map[uint64]uint64) {
+	used = make(map[uint64]struct{}, len(state.KeyBids))
+	bids = make(map[uint64]uint64, len(state.KeyBids))
+
+	for target, count := range state.KeyBids {
+		used[target.keyIndex] = struct{}{}
+
+		if target.parent == parent {
+			bids[target.keyIndex] = count
+		}
+	}
+
+	return used, bids
+}
+
+// releaseBidKey returns a claimed bid to the key after a submission that never
+// reached the network: nothing was gossiped, so it does not count.
+func (s *Scheduler) releaseBidKey(slot phase0.Slot, key *builder_keys.Key, parent beacon.AttrParentKey) {
+	target := keyParent{keyIndex: key.KeyIndex(), parent: parent}
+
 	s.mu.Lock()
-	delete(s.getSlotState(slot).UsedKeys, key.KeyIndex())
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+
+	state := s.getSlotState(slot)
+	if state.KeyBids[target] <= 1 {
+		delete(state.KeyBids, target)
+
+		return
+	}
+
+	state.KeyBids[target]--
 }
 
 // preferredPayload picks the built payload matching the chain view's current
@@ -521,10 +573,11 @@ type plannedBid struct {
 
 // planBidStep decides the bids one evaluation of a payload should submit.
 //
-// A step spends up to BidKeysPerStep keys at once. That is what lets a slot be
-// bid from several keys in parallel instead of one key per interval tick: the
-// interval ladder is a single-key shape, and with a fleet the useful shapes run
-// from "one key per step, escalating" all the way to "every key at once".
+// A step bids from up to BidKeysPerStep keys at once, each key at most once.
+// That is what lets a slot be bid from several keys in parallel instead of one
+// key per interval tick: the shapes run from "one key per step, escalating" all
+// the way to "every key at once". Across steps a key bids again until its bid
+// limit for the slot and parent is used up.
 //
 // All bookkeeping happens under one lock — the payload's interval claim, its
 // escalation count and each key's claim — so the ticks that land while the
@@ -575,6 +628,11 @@ func (s *Scheduler) planBidStep(
 	s.mu.Unlock()
 
 	planned := make([]plannedBid, 0, 4)
+	stepKeys := make(map[uint64]struct{}, 4)
+	parent := beacon.AttrParentKey{
+		Root: payload.Attributes.ParentBlockRoot,
+		Hash: payload.Attributes.ParentBlockHash,
+	}
 
 	// Every bid gets its own value, one increase above the last. Gossip only
 	// forwards a bid that is the highest seen for the (slot, parent) tuple, so
@@ -587,10 +645,12 @@ func (s *Scheduler) planBidStep(
 
 		value := s.bidValueFor(slot, bidSettings, payload, escalations)
 
-		key := s.claimBidKey(slot, bidSettings, value)
+		key := s.claimBidKey(slot, bidSettings, parent, value, stepKeys)
 		if key == nil {
 			break
 		}
+
+		stepKeys[key.KeyIndex()] = struct{}{}
 
 		s.mu.Lock()
 		state = s.getSlotState(slot)
@@ -710,11 +770,14 @@ func (s *Scheduler) submitBid(
 
 	if err != nil {
 		// A rejection means the beacon node saw the bid and turned it down, so
-		// the key stays spent: retrying it unchanged only repeats the rejection.
-		// Only a submission that never reached the node hands its key back.
+		// it stays counted: retrying it unchanged only repeats the rejection.
+		// Only a submission that never reached the node hands its bid back.
 		rejected := beacon.BidRejected(err)
 		if !rejected {
-			s.releaseBidKey(slot, planned.key)
+			s.releaseBidKey(slot, planned.key, beacon.AttrParentKey{
+				Root: payload.Attributes.ParentBlockRoot,
+				Hash: payload.Attributes.ParentBlockHash,
+			})
 		}
 
 		// Rejections are the normal outcome of bidding a whole fleet: the node

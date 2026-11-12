@@ -115,7 +115,8 @@ func init() {
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
 	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = no cap beyond the fleet)")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every remaining key at once)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every key with a bid left)")
+	rootCmd.PersistentFlags().Uint64("epbs-bids-per-key", defaults.EPBS.BidsPerKey, "Max bids one builder key gossips per slot and parent (0 = the gossip bid limit, one per ETH of builder balance; 1 = one bid per key)")
 	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
 	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
@@ -348,6 +349,7 @@ func initConfig(root *cobra.Command) error {
 			KeyStrategy:          v.GetString("epbs-key-strategy"),
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
+			BidsPerKey:           v.GetUint64("epbs-bids-per-key"),
 		},
 		LocalBuild: config.LocalBuildConfig{
 			Enabled:                 v.GetBool("local-build-enabled"),

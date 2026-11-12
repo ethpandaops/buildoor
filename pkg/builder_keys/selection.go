@@ -13,8 +13,8 @@ const (
 	// StrategyRoundRobin rotates through the ready keys by slot, spreading bids
 	// and their payments evenly across the fleet.
 	StrategyRoundRobin = "round_robin"
-	// StrategySingle always uses the lowest-index ready key. Keys that already
-	// bid in the slot are not ready, so a re-bid within the slot moves to the
+	// StrategySingle always uses the lowest-index ready key. A key whose bid
+	// limit for the slot is used up is not ready, so the next bid moves to the
 	// next index; with keys-per-slot 1 a single key bids per slot, which is
 	// how a single-key deployment behaves.
 	StrategySingle = "single"
@@ -39,10 +39,8 @@ func NormalizedStrategy(strategy string) string {
 
 // SelectRequest describes the keys a caller needs for one slot.
 //
-// A key may only bid once per slot: the gossip rules ignore every bid after a
-// builder's first for a slot, so a second bid from the same key never
-// propagates. Callers therefore ask for distinct keys and pass the ones they
-// already committed in Exclude.
+// Nodes forward a limited number of bids per builder, slot and parent
+// (Registry.BidLimit). Callers pass the keys that have no bid left in Exclude.
 type SelectRequest struct {
 	// Strategy is the selection strategy; unknown values fall back to
 	// round-robin.
@@ -56,7 +54,7 @@ type SelectRequest struct {
 	RequiredGwei uint64
 	// Count caps how many keys to return; 0 means all ready keys.
 	Count uint64
-	// Exclude holds key indices already committed for this slot.
+	// Exclude holds key indices that must not be returned.
 	Exclude map[uint64]struct{}
 }
 

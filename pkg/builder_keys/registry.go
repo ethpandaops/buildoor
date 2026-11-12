@@ -554,6 +554,8 @@ func resolveStatus(
 	}
 }
 
+const gweiPerETH = 1_000_000_000
+
 // effectiveBalance applies the local adjustment and pending payments to the
 // snapshot balance, flooring at zero.
 func effectiveBalance(state *State) uint64 {
@@ -667,9 +669,31 @@ func (r *Registry) State(keyIndex uint64) *State {
 // adjustment captured at the last refresh. Bid readiness and top-up decisions
 // read this — a payment settled seconds ago must not still look spendable.
 func (r *Registry) EffectiveBalance(keyIndex uint64) uint64 {
+	live := r.liveState(keyIndex)
+	if live == nil {
+		return 0
+	}
+
+	return effectiveBalance(live)
+}
+
+// BidLimit returns how many bids nodes forward from the key per slot and
+// parent: one per ETH of builder balance (get_builder_bid_limit), at least one.
+func (r *Registry) BidLimit(keyIndex uint64) uint64 {
+	live := r.liveState(keyIndex)
+	if live == nil {
+		return 0
+	}
+
+	balance := max(int64(live.Balance)+live.BalanceAdjustment, 0) //nolint:gosec // gwei balances stay far below int64
+
+	return max(uint64(balance)/gweiPerETH, 1)
+}
+
+func (r *Registry) liveState(keyIndex uint64) *State {
 	state := r.State(keyIndex)
 	if state == nil {
-		return 0
+		return nil
 	}
 
 	r.mu.RLock()
@@ -681,7 +705,7 @@ func (r *Registry) EffectiveBalance(keyIndex uint64) uint64 {
 		live.BalanceAdjustment = adjuster.GetBalanceAdjustment(keyIndex)
 	}
 
-	return effectiveBalance(&live)
+	return &live
 }
 
 // States returns a snapshot of every derived key's state, key-index ascending.
