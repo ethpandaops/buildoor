@@ -14,6 +14,13 @@ import (
 	"github.com/ethpandaops/service-authenticatoor/pkg/auth"
 )
 
+// serviceName is the logical app identity passed to the verifier as
+// ExpectedService. Tokens whose "services" directive list denies this
+// name are rejected, so an authenticatoor that grants its tools per team
+// can keep a team out of buildoor. A token without a "services" claim
+// carries no constraint and is accepted, as before.
+const serviceName = "buildoor"
+
 // AuthHandler validates incoming bearer tokens. When verifier is nil the
 // API is treated as open (no authentication required); CheckAuthToken
 // always returns a non-nil token.
@@ -42,6 +49,7 @@ func NewAuthHandler(ctx context.Context, authProviderURL string) (*AuthHandler, 
 		JWKSURL:          jwksURL,
 		ExpectedIssuer:   expectedIssuer,
 		ExpectedAudience: parentZone(authProviderURL),
+		ExpectedService:  serviceName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: build verifier: %w", err)
