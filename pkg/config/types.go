@@ -332,32 +332,35 @@ type EPBSConfig struct {
 	// status), a specific candidate key (parent_full, parent_empty,
 	// grandparent_full, grandparent_empty), or "all" (gossip a bid for every
 	// built candidate — deliberate multi-parent bidding for gossip testing;
-	// most nodes propagate only a builder's first bid per slot).
+	// a key's bid limit counts per parent).
 	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
 
 	// KeyStrategy selects which managed builder key signs each of a slot's
-	// bids: round_robin (default), single, random or least_used. Each key bids
-	// at most once per slot — the gossip rules ignore a builder's later bids —
-	// so with several built candidates the strategy decides which keys cover
-	// them.
+	// bids: round_robin (default), single, random or least_used, among the
+	// keys with a bid left for the slot and parent. round_robin, single and
+	// random stay on one key until its bid limit is used up; least_used moves
+	// to the key with the fewest bids after every bid.
 	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
 
 	// BidKeysPerSlot caps how many distinct builder keys bid a slot. 0 means
-	// no cap beyond the fleet itself; 1 reproduces single-key behaviour (one
-	// gossiped bid per slot) regardless of how many candidates were built.
+	// no cap beyond the fleet itself; 1 keeps the whole slot on one key.
 	BidKeysPerSlot uint64 `yaml:"bid_keys_per_slot" json:"bid_keys_per_slot"`
 
 	// BidKeysPerStep is how many keys bid a payload per interval step, each
-	// one value-increment higher than the last. 1 (default) walks the fleet up
-	// the interval ladder one key at a time; 0 spends every remaining key at
-	// once, so a whole slot can be bid from all active keys in parallel as
-	// soon as the bid window opens.
+	// one value-increment higher than the last and each key at most once per
+	// step. 1 (default) bids from one key per step; 0 bids from every key
+	// that has a bid left.
 	BidKeysPerStep uint64 `yaml:"bid_keys_per_step" json:"bid_keys_per_step"`
+
+	// BidsPerKey caps how many bids one builder key gossips per slot and
+	// parent. 0 follows the gossip bid limit (one bid per ETH of builder
+	// balance); 1 is one bid per key, for nodes that only forward a
+	// builder's first bid.
+	BidsPerKey uint64 `yaml:"bids_per_key" json:"bids_per_key"`
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first
-	// gossiped candidate sticks (the gossip first-seen rule makes a switched
-	// bid unlikely to propagate anyway).
+	// gossiped candidate sticks, so the slot's bids commit to one parent.
 	BidCandidateSwitch bool `yaml:"bid_candidate_switch" json:"bid_candidate_switch"`
 
 	// HeadVoteThresholdPct is the head-vote participation threshold in percent
