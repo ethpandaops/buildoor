@@ -1,6 +1,7 @@
 import React from 'react';
 import type { InclusionListPlan, LocalBuildPlan, ActionMode } from '../../types';
 import { InfoHint } from '../InfoHint';
+import { KEY_STRATEGY_OPTIONS } from '../../settings/fields';
 
 // Shared plan-category form model, used by both the per-slot edit modal and
 // the recurring rule editor: the two author the same categories, only their
@@ -23,6 +24,8 @@ export interface FieldDef {
   // Boolean fields render as a true/false select (options must be
   // ['true', 'false']) and are sent as real booleans.
   bool?: boolean;
+  // Smallest accepted value of a number field.
+  min?: number;
   // Explanation shown in the field's info callout.
   hint?: React.ReactNode;
 }
@@ -115,6 +118,50 @@ export const BID_FIELDS: FieldDef[] = [
           <dd>a bid for every built candidate (multi-parent gossip testing)</dd>
           <CandidateKeyList />
         </dl>
+      </>
+    ),
+  },
+  {
+    key: 'key_strategy', label: 'Key Strategy', unit: '',
+    options: KEY_STRATEGY_OPTIONS.map((option) => option.value),
+    hint: (
+      <>
+        Which managed builder key signs each bid, among the keys with a bid left for the slot and
+        parent.
+        <dl>
+          <dt>round_robin</dt>
+          <dd>starting key rotated by slot; stays on it until its bid limit is used up</dd>
+          <dt>single</dt>
+          <dd>the lowest-index active key with a bid left</dd>
+          <dt>random</dt>
+          <dd>keys shuffled per slot (deterministic per slot)</dd>
+          <dt>least_used</dt>
+          <dd>the key with the fewest bids so far, so it moves on after every bid</dd>
+        </dl>
+      </>
+    ),
+  },
+  {
+    key: 'bid_keys_per_slot', label: 'Keys per Slot', unit: '', min: 0,
+    hint: <>Distinct builder keys that may bid the slot. <code>0</code> = the whole active fleet, <code>1</code> = the slot is bid from one key.</>,
+  },
+  {
+    key: 'bid_keys_per_step', label: 'Keys per Step', unit: '', min: 0,
+    hint: (
+      <>
+        Keys bidding a payload per bid interval, each key once and one Bid Increase above the last.{' '}
+        <code>0</code> = every key with a bid left.
+      </>
+    ),
+  },
+  {
+    key: 'bids_per_key', label: 'Bids per Key', unit: '', min: 0,
+    hint: (
+      <>
+        Cap on the bids one key gossips for the slot per parent. <code>0</code> = the gossip limit
+        (one bid per ETH of builder balance), <code>1</code> = one bid per key, every re-bid moves to
+        the next key. With Keys per Slot <code>1</code> and Bids per Key <code>1</code> the slot gets
+        a single bid.
       </>
     ),
   },
@@ -380,7 +427,10 @@ export function parseCategoryFields(
 
     const num = Number(raw);
     if (!Number.isFinite(num) || !Number.isInteger(num)) {
-      return { values, error: `${name}: ${def.label} must be an integer (${def.unit})` };
+      return { values, error: `${name}: ${def.label} must be an integer${def.unit ? ` (${def.unit})` : ''}` };
+    }
+    if (def.min !== undefined && num < def.min) {
+      return { values, error: `${name}: ${def.label} must be at least ${def.min}` };
     }
     values[def.key] = num;
   }
@@ -526,13 +576,14 @@ export const CategoryForm: React.FC<{
                   type="number"
                   className="form-control"
                   placeholder="inherit"
+                  min={def.min}
                   value={state.fields[def.key] ?? ''}
                   disabled={disabled}
                   onChange={(e) =>
                     onChange({ ...state, fields: { ...state.fields, [def.key]: e.target.value } })
                   }
                 />
-                <span className="input-group-text">{def.unit}</span>
+                {def.unit && <span className="input-group-text">{def.unit}</span>}
               </div>
             )}
           </div>

@@ -107,7 +107,7 @@ const CANDIDATE_MODE_OPTIONS: SettingOption[] = [
   { value: 'never', label: 'Never', short: 'never' },
 ];
 
-const KEY_STRATEGY_OPTIONS: SettingOption[] = [
+export const KEY_STRATEGY_OPTIONS: SettingOption[] = [
   { value: 'round_robin', label: 'Round robin', short: 'round robin' },
   { value: 'single', label: 'Single (lowest-index key first)', short: 'single' },
   { value: 'random', label: 'Random', short: 'random' },
