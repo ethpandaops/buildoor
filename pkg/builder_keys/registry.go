@@ -678,7 +678,9 @@ func (r *Registry) EffectiveBalance(keyIndex uint64) uint64 {
 }
 
 // BidLimit returns how many bids nodes forward from the key per slot and
-// parent: one per ETH of builder balance (get_builder_bid_limit), at least one.
+// parent: one per ETH of builder balance (get_builder_bid_limit). It is at
+// least one, so a key below 1 ETH still sends the single underfunded bid nodes
+// ignore anyway (can_builder_cover_bid needs more than that balance).
 func (r *Registry) BidLimit(keyIndex uint64) uint64 {
 	live := r.liveState(keyIndex)
 	if live == nil {

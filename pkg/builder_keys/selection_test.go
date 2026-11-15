@@ -86,8 +86,8 @@ func TestSelectForBidLeastUsedPrefersIdleKeys(t *testing.T) {
 	require.Equal(t, []uint64{2, 1, 0}, selectedIndices(got))
 }
 
-// A key already committed to a candidate must not be handed out again: its
-// second bid for the slot would be ignored by the gossip rules.
+// Excluded keys (those without a bid left for the slot and parent) are never
+// handed out.
 func TestSelectForBidExcludesCommittedKeys(t *testing.T) {
 	registry := activeRegistry(t, 3, 1_000)
 
@@ -159,4 +159,48 @@ func TestConfigKnowsEveryStrategy(t *testing.T) {
 	require.ElementsMatch(t,
 		[]string{StrategyRoundRobin, StrategySingle, StrategyRandom, StrategyLeastUsed},
 		config.KeyStrategies)
+}
+
+type fixedAdjuster map[uint64]int64
+
+func (a fixedAdjuster) GetBalanceAdjustment(keyIndex uint64) int64 { return a[keyIndex] }
+
+// BidLimit is one bid per whole ETH of the live balance (snapshot plus local
+// adjustment), floored at one; pending payments do not lower it, since the
+// beacon state's builder balance does not deduct them either.
+func TestBidLimit(t *testing.T) {
+	tests := []struct {
+		name       string
+		balance    uint64
+		adjustment int64
+		pending    uint64
+		want       uint64
+	}{
+		{name: "whole ETH", balance: 3_500_000_000, want: 3},
+		{name: "below one ETH", balance: 500_000_000, want: 1},
+		{name: "adjustment lowers it", balance: 3_500_000_000, adjustment: -1_000_000_000, want: 2},
+		{name: "adjustment raises it", balance: 3_500_000_000, adjustment: 600_000_000, want: 4},
+		{name: "adjustment below zero", balance: 1_000_000_000, adjustment: -2_000_000_000, want: 1},
+		{name: "pending payments ignored", balance: 3_500_000_000, pending: 3_000_000_000, want: 3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			registry := activeRegistry(t, 1, test.balance)
+			registry.SetBalanceAdjuster(fixedAdjuster{0: test.adjustment})
+
+			_, err := registry.PrimeKeyState(0, func(state *State) {
+				state.PendingPayments = test.pending
+			})
+			require.NoError(t, err)
+
+			require.Equal(t, test.want, registry.BidLimit(0))
+		})
+	}
+}
+
+func TestBidLimitUnknownKey(t *testing.T) {
+	registry := activeRegistry(t, 1, 3_000_000_000)
+
+	require.Zero(t, registry.BidLimit(42))
 }

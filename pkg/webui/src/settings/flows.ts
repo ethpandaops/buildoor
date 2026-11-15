@@ -289,7 +289,7 @@ export const FLOWS: Record<FlowId, FlowDef> = {
     title: 'Keys & candidates',
     description:
       'Which build candidate each bid uses and which builder keys sign the bids of the p2p bidder and the ' +
-      'Builder API. A key bids until its bid limit for the slot and parent (one bid per ETH of balance) is used up.',
+      'Builder API. A key bids a slot and parent up to its bid limit (one bid per ETH of balance).',
     tabs: [
       {
         id: 'candidates',

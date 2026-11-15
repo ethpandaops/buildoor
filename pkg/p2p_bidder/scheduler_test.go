@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"math/big"
 	"slices"
@@ -1159,4 +1160,75 @@ func TestSchedulerKeepsRejectedKeysSpent(t *testing.T) {
 			assert.Equal(t, test.wantSpent, spent)
 		})
 	}
+}
+
+// A submission that never reached the node hands back only its own bid: the
+// key's earlier bids on the parent stay counted.
+func TestSchedulerReleaseKeepsEarlierBids(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot, `{"mode":"custom","bid_interval":50,"key_strategy":"single"}`)
+
+	payload := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	h.cache.Select(payload)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	keyBids := func() map[keyParent]uint64 {
+		h.scheduler.mu.Lock()
+		defer h.scheduler.mu.Unlock()
+
+		return maps.Clone(h.scheduler.getSlotState(testSlot).KeyBids)
+	}
+
+	target := keyParent{keyIndex: 0, parent: beacon.AttrParentKey{
+		Root: payload.Attributes.ParentBlockRoot,
+		Hash: payload.Attributes.ParentBlockHash,
+	}}
+
+	for range 2 {
+		h.bidTick(1000)
+		require.NotNil(t, h.nextEvent())
+		h.agePayloadBid(payload.BlockHash)
+	}
+
+	require.Equal(t, map[keyParent]uint64{target: 2}, keyBids())
+
+	h.submitter.err = errors.New("connection refused")
+	h.bidTick(1000)
+
+	assert.Equal(t, map[keyParent]uint64{target: 2}, keyBids(),
+		"the failed submission's bid is handed back, the two gossiped ones stay")
+}
+
+// The keys-per-slot cap counts distinct keys across every parent: once the
+// capped key used up its bids on both parents, no other key may take over.
+func TestSchedulerBidKeysPerSlotCapSpansParents(t *testing.T) {
+	h := newSchedulerHarness(t, harnessOptions{epbsEnabled: true, serviceEnabled: true})
+	h.scheduler.registry = newTestKeyRegistry(t, 11, 12, 13)
+
+	h.applyBidPlan(t, testSlot,
+		`{"mode":"custom","bid_candidate":"all","bid_interval":50,"bid_keys_per_slot":1,"bids_per_key":1}`)
+
+	full := newCandidatePayload(testSlot, chain.CandidateParentFull, 0x01)
+	empty := newCandidatePayload(testSlot, chain.CandidateParentEmpty, 0x02)
+	h.cache.Select(full)
+	h.cache.Select(empty)
+	h.prefs.Put(testSlot, &gloasspec.SignedProposerPreferences{})
+
+	h.bidTick(1000)
+
+	first := h.nextEvent()
+	second := h.nextEvent()
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	require.Nil(t, h.nextEvent())
+	require.Equal(t, first.SignedBid.Message.BuilderIndex, second.SignedBid.Message.BuilderIndex,
+		"the capped slot bids both parents from its one key")
+
+	h.agePayloadBid(full.BlockHash)
+	h.agePayloadBid(empty.BlockHash)
+	h.bidTick(1000)
+
+	require.Nil(t, h.nextEvent(), "the key is spent on both parents and the cap keeps the others out")
 }

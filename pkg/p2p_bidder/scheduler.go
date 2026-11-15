@@ -50,7 +50,10 @@ type SlotState struct {
 	BidsClosed       bool        // Block received, no more bids possible
 	ClosedByRoot     phase0.Root // block root that closed bidding (reopens if orphaned)
 	NoPrefsWarnedFor bool        // Missing-preferences skip already reported for this slot
-	NoKeyWarnedFor   bool        // No-ready-key skip already reported for this slot
+
+	// NoKeyWarnedFor holds the parents whose no-bid-left skip was already
+	// reported for this slot.
+	NoKeyWarnedFor map[beacon.AttrParentKey]struct{}
 
 	// PayloadBids tracks each payload's own bid progress, so multi-candidate
 	// bidding ("all") does not starve the other candidates behind one payload's
@@ -364,9 +367,9 @@ func (s *Scheduler) selectBidPayloads(
 	s.mu.Unlock()
 
 	if chosenSet && !s.cfg.EPBS.BidCandidateSwitch {
-		// Sticky: keep bidding the committed candidate (the gossip first-seen
-		// rule makes a switched bid unlikely to propagate anyway); fall back
-		// to the primary payload when that candidate produced none.
+		// Sticky: keep bidding the committed candidate, so the slot's bids
+		// commit to one parent; fall back to the primary payload when that
+		// candidate produced none.
 		if payload := s.payloadCache.GetCandidate(slot, chosen); payload != nil {
 			return []*payload_builder.Payload{payload}
 		}
@@ -405,8 +408,8 @@ func (s *Scheduler) selectBidPayloads(
 // returns nil when no key has a bid left.
 //
 // Nodes forward at most one bid per ETH of builder balance for a slot and
-// parent, so a key keeps bidding until that limit (or the bids-per-key cap) is
-// reached and the strategy's next key takes over. stepKeys holds the keys that
+// parent, so a key stays selectable until that limit (or the bids-per-key cap)
+// is reached; the strategy picks among the keys with a bid left. stepKeys holds the keys that
 // already bid in the current step: a step bids from each key at most once.
 //
 // The bid is claimed here rather than after the submission because the
@@ -426,17 +429,26 @@ func (s *Scheduler) claimBidKey(
 
 	keysCapped := bidSettings.BidKeysPerSlot > 0 && uint64(len(used)) >= bidSettings.BidKeysPerSlot
 
-	exclude := make(map[uint64]struct{}, len(stepKeys))
+	exclude := make(map[uint64]struct{}, len(stepKeys)+len(bids))
 	for keyIndex := range stepKeys {
 		exclude[keyIndex] = struct{}{}
 	}
 
-	for _, key := range s.registry.Keys() {
-		keyIndex := key.KeyIndex()
-		_, isUsed := used[keyIndex]
-
-		if (keysCapped && !isUsed) || bids[keyIndex] >= s.keyBidLimit(bidSettings, keyIndex) {
+	// Only keys that already bid this parent can have reached their limit: the
+	// limit is at least one.
+	for keyIndex, count := range bids {
+		if count >= s.keyBidLimit(bidSettings, keyIndex) {
 			exclude[keyIndex] = struct{}{}
+		}
+	}
+
+	// Once the slot's key cap is reached only the keys that already bid it
+	// remain.
+	if keysCapped {
+		for _, key := range s.registry.Keys() {
+			if _, isUsed := used[key.KeyIndex()]; !isUsed {
+				exclude[key.KeyIndex()] = struct{}{}
+			}
 		}
 	}
 
@@ -454,8 +466,13 @@ func (s *Scheduler) claimBidKey(
 
 		s.mu.Lock()
 		state := s.getSlotState(slot)
-		alreadyWarned := state.NoKeyWarnedFor
-		state.NoKeyWarnedFor = true
+		_, alreadyWarned := state.NoKeyWarnedFor[parent]
+
+		if state.NoKeyWarnedFor == nil {
+			state.NoKeyWarnedFor = make(map[beacon.AttrParentKey]struct{}, 2)
+		}
+
+		state.NoKeyWarnedFor[parent] = struct{}{}
 		s.mu.Unlock()
 
 		if !alreadyWarned {

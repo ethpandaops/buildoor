@@ -760,7 +760,7 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
           <dt>sticky per slot (off)</dt>
           <dd>Keeps bidding the first candidate chosen for the slot.</dd>
           <dt>mid-slot allowed (on)</dt>
-          <dd>Re-selects on every bid and follows chain view changes; a switched bid rarely propagates past the gossip first-seen rule.</dd>
+          <dd>Re-selects on every bid and follows chain view changes, so the slot&apos;s bids may commit to several parents.</dd>
         </dl>
       </>
     ),
@@ -773,19 +773,18 @@ export const SETTING_FIELDS: Record<string, SettingField> = {
     help: (
       <>
         Order the active builder keys are offered in for each bid (<code>epbs.key_strategy</code>);
-        a key bids until its bid limit for the slot and parent is used up, then the next one takes
-        over. Keys that cannot cover the bid sort last but
-        are still used when nothing else is left. Also used by Builder API bids unless the Builder
+        only keys with a bid left for the slot and parent are offered. Keys that cannot cover the
+        bid sort last but are still used when nothing else is left. Also used by Builder API bids unless the Builder
         API sets its own strategy. Per-slot action plans can override it.
         <dl>
           <dt>round robin</dt>
-          <dd>Rotates the starting key by slot, spreading bids and payments evenly.</dd>
+          <dd>Rotates the starting key by slot, spreading bids and payments evenly; a slot stays on its key until the bid limit is used up.</dd>
           <dt>single</dt>
           <dd>Lowest-index active key with a bid left. Combine with keys per slot = 1 for single-key behaviour.</dd>
           <dt>random</dt>
           <dd>Shuffles the keys per slot (deterministic per slot).</dd>
           <dt>least used</dt>
-          <dd>Prefers the keys with the fewest bids so far.</dd>
+          <dd>Prefers the keys with the fewest bids so far, so it moves to another key after every bid.</dd>
         </dl>
       </>
     ),

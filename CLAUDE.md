@@ -948,12 +948,14 @@ Key config sections:
   parent, 0 = the gossip bid limit, 1 = one bid per key for nodes predating
   consensus-specs#5805), `--builder-api-key-strategy` (empty = follow the ePBS
   strategy). Nodes forward `balance // 1 ETH` bids per builder, slot and parent
-  (`get_builder_bid_limit`, `Registry.BidLimit`, at least 1), each of which must
-  beat the highest bid seen. The scheduler counts every bid that reached the
-  network per (key, parent) (`SlotState.KeyBids`): a key keeps bidding, the
-  escalated re-bids of the same payload included, until its limit is used up,
-  then the strategy's next key takes over; the submissions of one step go out
-  concurrently
+  (`get_builder_bid_limit`; `Registry.BidLimit` floors it at 1, a key below
+  1 ETH cannot cover a bid anyway), each of which must beat the highest bid
+  seen. The scheduler counts every bid that reached the network per (key,
+  parent) (`SlotState.KeyBids`) and offers the strategy only keys with a bid
+  left: round_robin/single/random stay on one key, the escalated re-bids of
+  the same payload included, until its limit is used up; least_used moves to
+  the key with the fewest bids after every bid. The submissions of one step
+  go out concurrently
 - **Lifecycle amounts**: `--deposit-amount` (gwei; the ONE amount sent with
   every builder key deposit — early onboarding via the regular deposit
   contract, the registering builder deposit, and each top-up; there is

@@ -331,13 +331,14 @@ type EPBSConfig struct {
 	// status), a specific candidate key (parent_full, parent_empty,
 	// grandparent_full, grandparent_empty), or "all" (gossip a bid for every
 	// built candidate — deliberate multi-parent bidding for gossip testing;
-	// most nodes propagate only a builder's first bid per slot).
+	// a key's bid limit counts per parent).
 	BidCandidate string `yaml:"bid_candidate" json:"bid_candidate"`
 
 	// KeyStrategy selects which managed builder key signs each of a slot's
-	// bids: round_robin (default), single, random or least_used. A key bids
-	// until its bid limit for the slot and parent is used up, then the
-	// strategy's next key takes over.
+	// bids: round_robin (default), single, random or least_used, among the
+	// keys with a bid left for the slot and parent. round_robin, single and
+	// random stay on one key until its bid limit is used up; least_used moves
+	// to the key with the fewest bids after every bid.
 	KeyStrategy string `yaml:"key_strategy" json:"key_strategy"`
 
 	// BidKeysPerSlot caps how many distinct builder keys bid a slot. 0 means
@@ -358,8 +359,7 @@ type EPBSConfig struct {
 
 	// BidCandidateSwitch allows the auto selection to switch to a different
 	// candidate mid-slot when the chain view changes. Default off: the first
-	// gossiped candidate sticks (the gossip first-seen rule makes a switched
-	// bid unlikely to propagate anyway).
+	// gossiped candidate sticks, so the slot's bids commit to one parent.
 	BidCandidateSwitch bool `yaml:"bid_candidate_switch" json:"bid_candidate_switch"`
 
 	// HeadVoteThresholdPct is the head-vote participation threshold in percent
