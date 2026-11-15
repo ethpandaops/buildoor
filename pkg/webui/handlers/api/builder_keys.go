@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/builder_keys"
 	"github.com/ethpandaops/buildoor/pkg/config"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // BuilderKeysResponse is the full view of the managed builder key set.
@@ -117,11 +118,11 @@ func (h *APIHandler) builderKeysSettings() BuilderKeysSettings {
 // @Success 200 {object} BuilderKeysResponse
 // @Failure 400 {object} map[string]string "Invalid request"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature keys"
 // @Router /builder-keys/target [post]
 func (h *APIHandler) UpdateBuilderKeyTarget(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureKeys)
+	if !ok {
 		return
 	}
 
@@ -204,11 +205,11 @@ func (h *APIHandler) resolveKeyParam(w http.ResponseWriter, r *http.Request) *bu
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string "Invalid key index or deposit failed"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature keys"
 // @Router /builder-keys/{index}/deposit [post]
 func (h *APIHandler) DepositBuilderKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureKeys)
+	if !ok {
 		return
 	}
 
@@ -249,11 +250,11 @@ func (h *APIHandler) DepositBuilderKey(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string "Invalid key index or top-up failed"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature keys"
 // @Router /builder-keys/{index}/topup [post]
 func (h *APIHandler) TopupBuilderKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureKeys)
+	if !ok {
 		return
 	}
 
@@ -303,12 +304,12 @@ func (h *APIHandler) TopupBuilderKey(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string "Invalid key index"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature keys"
 // @Failure 409 {object} map[string]string "Key cannot be exited yet"
 // @Router /builder-keys/{index}/exit [post]
 func (h *APIHandler) ExitBuilderKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureKeys)
+	if !ok {
 		return
 	}
 

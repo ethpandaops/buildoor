@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethpandaops/buildoor/pkg/webui/handlers/api"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth/authtest"
 )
 
 // Every route and every alias must be unique per method, or one of them
@@ -204,4 +206,74 @@ func TestOverviewProxyFallsBackToPreV1Instances(t *testing.T) {
 
 	require.Equal(t, http.StatusBadGateway, serve("2").Code)
 	require.Equal(t, http.StatusBadRequest, serve("3").Code)
+}
+
+// Every mutating route answers 401 to a request without a token when an auth
+// provider is configured, on its v1 path and on its pre-v1 alias: its handler
+// starts with the auth check (AuthHandler.Require, which also names the
+// feature the handler needs). A new mutating route that is meant to be public
+// fails here and has to be argued for.
+func TestMutatingAPIRoutesNeedALogin(t *testing.T) {
+	provider := authtest.NewProvider(t)
+
+	authHandler, err := auth.NewAuthHandler(t.Context(), provider.URL(), "")
+	require.NoError(t, err)
+	require.False(t, authHandler.IsOpen())
+
+	// A handler without any service: a request that got past the auth check
+	// would run into one (and panic) instead of answering 401.
+	handler := api.NewAPIHandler(authHandler, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	routes := apiRoutes(handler)
+
+	router := mux.NewRouter()
+	registerAPI(router, routes)
+
+	mutating := map[string]bool{
+		http.MethodPost: true, http.MethodPut: true, http.MethodPatch: true, http.MethodDelete: true,
+	}
+
+	checked := 0
+
+	check := func(method, path string) {
+		if !mutating[method] {
+			return
+		}
+
+		checked++
+
+		// Path variables are filled with a value every pattern accepts.
+		target := routeVarPattern.ReplaceAllString(path, "1")
+
+		for _, header := range []string{"", "Bearer not-a-token"} {
+			req := httptest.NewRequest(method, target, strings.NewReader("{}"))
+			if header != "" {
+				req.Header.Set("Authorization", header)
+			}
+
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusUnauthorized, rec.Code, "%s %s (Authorization %q)", method, path, header)
+			require.JSONEq(t, `{"error":"unauthorized"}`, rec.Body.String(), "%s %s", method, path)
+		}
+	}
+
+	for _, route := range routes {
+		for _, method := range route.methods {
+			check(method, APIBasePath+route.path)
+
+			if route.legacyPath == "" {
+				continue
+			}
+
+			if route.legacyMethod != "" {
+				method = route.legacyMethod
+			}
+
+			check(method, route.legacyPath)
+		}
+	}
+
+	require.NotZero(t, checked, "no mutating route found")
 }

@@ -61,7 +61,10 @@ func (c loginChecker) ValidLogin(r *http.Request) bool {
 		return false
 	}
 
-	return c.handler.CheckAuthToken(r.Header.Get("Authorization")) != nil
+	// Submitting transactions needs no feature: any valid login (basic).
+	_, status := c.handler.Authorize(r, auth.FeatureBasic)
+
+	return status == http.StatusOK
 }
 
 func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, txPool *txpool.Pool, elClient *execution.Client, rpcKeys *txpoolrpc.KeyStore, planVerifier *tx_plan_verifier.Verifier) *api.APIHandler {
@@ -127,6 +130,7 @@ func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.S
 		staticEmbedFS,
 		handlers.RuntimeConfig{
 			AuthProviderURL: frontendConfig.AuthProviderURL,
+			AuthService:     authHandler.Service(),
 			OverviewURL:     frontendConfig.OverviewURL,
 			Version:         version.GetBuildVersion(),
 		},
@@ -204,6 +208,8 @@ func debugHandler(authHandler *auth.AuthHandler, auditor *api.APIHandler, gate, 
 			}
 		}
 
+		// Any valid login (basic access) may read profiles. The token may
+		// come from the cookie, hence the header-less check.
 		if token := authHandler.CheckAuthToken(header); token != nil {
 			profile := strings.Trim(strings.TrimPrefix(r.URL.Path, "/debug/pprof"), "/")
 			if profile == "" {

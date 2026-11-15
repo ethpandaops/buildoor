@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethpandaops/buildoor/pkg/action_plan"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // maxSlotRangeEpochs caps the slot span one range query may request.
@@ -161,13 +162,13 @@ func (h *APIHandler) GetActionPlan(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} UpdateActionPlanResponse "Authoritative normalized result"
 // @Failure 400 {object} map[string]string "Validation error"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature plan"
 // @Failure 409 {object} map[string]string "Slot in the past or frozen"
 // @Failure 503 {object} map[string]string "Plan service unavailable"
 // @Router /action-plan [post]
 func (h *APIHandler) UpdateActionPlan(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeaturePlan)
+	if !ok {
 		return
 	}
 
@@ -256,12 +257,12 @@ func (h *APIHandler) GetActionPlanRules(w http.ResponseWriter, r *http.Request) 
 // @Success 200 {object} ActionPlanRulesResponse "Authoritative rule set"
 // @Failure 400 {object} map[string]string "Validation error"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature plan"
 // @Failure 503 {object} map[string]string "Plan service unavailable"
 // @Router /action-plan/rules [post]
 func (h *APIHandler) UpdateActionPlanRules(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeaturePlan)
+	if !ok {
 		return
 	}
 

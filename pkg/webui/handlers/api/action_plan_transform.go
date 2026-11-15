@@ -12,6 +12,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/db"
 	"github.com/ethpandaops/buildoor/pkg/jqtransform"
 	"github.com/ethpandaops/buildoor/pkg/slot_results"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // transform targets accepted by the test endpoint (match the plan's
@@ -72,8 +73,7 @@ func (h *APIHandler) TestTransform(w http.ResponseWriter, r *http.Request) {
 	// The sample input is a captured artifact, possibly a custom-built
 	// payload holding private transactions, and the endpoint runs jq: an
 	// operator tool behind the login.
-	if !h.isLoggedIn(r) {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	if _, ok := h.authHandler.Require(w, r, auth.FeatureBasic); !ok {
 		return
 	}
 

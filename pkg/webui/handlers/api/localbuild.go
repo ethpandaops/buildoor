@@ -11,6 +11,7 @@ import (
 	"github.com/ethpandaops/buildoor/pkg/payload_builder"
 	"github.com/ethpandaops/buildoor/pkg/tx_plan_verifier"
 	"github.com/ethpandaops/buildoor/pkg/txpool"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // LocalBuildStatusResponse is the local build extension's status: the probed
@@ -126,9 +127,8 @@ func localBuildStatus(builderSvc *payload_builder.Service, verifier *tx_plan_ver
 // @Failure 401 {object} map[string]string "Unauthorized"
 // @Router /local-build/probe [post]
 func (h *APIHandler) ProbeLocalBuild(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureBasic)
+	if !ok {
 		return
 	}
 
@@ -171,8 +171,7 @@ type TxPoolResponse struct {
 // @Router /txpool [get]
 func (h *APIHandler) GetTxPool(w http.ResponseWriter, r *http.Request) {
 	// The pool holds private transactions: only logged-in readers see it.
-	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	if _, ok := h.authHandler.Require(w, r, auth.FeatureBasic); !ok {
 		return
 	}
 
@@ -283,9 +282,9 @@ func (h *APIHandler) GetTxPoolFees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	loggedIn := h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) != nil
-
-	dist, err := pool.FeeDistribution(r.Context(), common.Hash(headTracker.CurrentHead().ExecutionBlockHash), loggedIn)
+	dist, err := pool.FeeDistribution(
+		r.Context(), common.Hash(headTracker.CurrentHead().ExecutionBlockHash), h.isLoggedIn(r),
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -336,12 +335,12 @@ func gweiToWei(gwei uint64) *big.Int {
 // @Produce json
 // @Success 200 {object} map[string]int "dropped count"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature txpool"
 // @Failure 404 {object} map[string]string "Pool not configured"
 // @Router /txpool [delete]
 func (h *APIHandler) ClearTxPool(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureTxPool)
+	if !ok {
 		return
 	}
 
@@ -369,12 +368,12 @@ func (h *APIHandler) ClearTxPool(w http.ResponseWriter, r *http.Request) {
 // @Success 200 {object} map[string]bool "removed"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature txpool"
 // @Failure 404 {object} map[string]string "Not found"
 // @Router /txpool/{hash} [delete]
 func (h *APIHandler) DropTxPoolTx(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureTxPool)
+	if !ok {
 		return
 	}
 

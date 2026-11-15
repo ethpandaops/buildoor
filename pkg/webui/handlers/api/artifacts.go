@@ -354,7 +354,7 @@ func (h *APIHandler) serveArtifact(w http.ResponseWriter, r *http.Request, kind 
 // writeGuardedArtifact serves an artifact; a private one (a testing build's
 // payload, the envelope revealing one) only to logged-in readers.
 func (h *APIHandler) writeGuardedArtifact(w http.ResponseWriter, r *http.Request, artifact *db.SlotArtifact, private bool) {
-	if private && h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
+	if private && !h.isLoggedIn(r) {
 		writeError(w, http.StatusUnauthorized, "custom-built payloads may hold private transactions: log in to download")
 		return
 	}

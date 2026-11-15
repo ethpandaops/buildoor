@@ -28,7 +28,11 @@ type SPAHandler struct {
 // at boot — no extra round-trip to the backend.
 type RuntimeConfig struct {
 	AuthProviderURL string `json:"authProviderURL"`
-	OverviewURL     string `json:"overviewURL,omitempty"`
+	// AuthService is the name this instance has in a login token's
+	// "services" claim (--auth-service). The WebUI evaluates the claim
+	// against it to show or disable controls; the API enforces it.
+	AuthService string `json:"authService,omitempty"`
+	OverviewURL string `json:"overviewURL,omitempty"`
 	// Version is the build version shown in the page footer.
 	Version string `json:"version"`
 }

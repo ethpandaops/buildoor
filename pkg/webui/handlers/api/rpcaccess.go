@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 
 	txpoolrpc "github.com/ethpandaops/buildoor/pkg/txpool/rpc"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // SetRPCIngress attaches the /rpc ingress whose keys, callers and upstreams
@@ -48,9 +49,13 @@ func rpcKeyView(key *txpoolrpc.APIKey) RPCKeyView {
 }
 
 // isLoggedIn reports whether the request carries a valid login (always true
-// when no auth provider is configured: the whole API is open then).
+// when no auth provider is configured: the whole API is open then). It is
+// the check of the reads that serve a redacted view without one: a login
+// with basic access sees them in full.
 func (h *APIHandler) isLoggedIn(r *http.Request) bool {
-	return h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) != nil
+	_, status := h.authHandler.Authorize(r, auth.FeatureBasic)
+
+	return status == http.StatusOK
 }
 
 // requireRPCIngress answers 404 when no ingress exists (no --el-rpc).
@@ -70,11 +75,11 @@ func (h *APIHandler) requireRPCIngress(w http.ResponseWriter) bool {
 // @Produce json
 // @Success 200 {object} RPCAccessResponse "Success"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature rpc"
 // @Failure 404 {object} map[string]string "No ingress"
 // @Router /rpc-access [get]
 func (h *APIHandler) GetRPCAccess(w http.ResponseWriter, r *http.Request) {
-	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	if _, ok := h.authHandler.Require(w, r, auth.FeatureRPC); !ok {
 		return
 	}
 
@@ -118,11 +123,11 @@ type CreateRPCKeyResponse struct {
 // @Success 200 {object} CreateRPCKeyResponse "Success"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature rpc"
 // @Router /rpc-access/keys [post]
 func (h *APIHandler) CreateRPCKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureRPC)
+	if !ok {
 		return
 	}
 
@@ -175,12 +180,12 @@ type UpdateRPCKeyRequest struct {
 // @Success 200 {object} RPCKeyView "Success"
 // @Failure 400 {object} map[string]string "Bad Request"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature rpc"
 // @Failure 404 {object} map[string]string "Not Found"
 // @Router /rpc-access/keys/{id} [patch]
 func (h *APIHandler) UpdateRPCKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureRPC)
+	if !ok {
 		return
 	}
 
@@ -228,12 +233,12 @@ func (h *APIHandler) UpdateRPCKey(w http.ResponseWriter, r *http.Request) {
 // @Param id path string true "Key id"
 // @Success 200 {object} map[string]string "Success"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature rpc"
 // @Failure 404 {object} map[string]string "Not Found"
 // @Router /rpc-access/keys/{id} [delete]
 func (h *APIHandler) DeleteRPCKey(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureRPC)
+	if !ok {
 		return
 	}
 

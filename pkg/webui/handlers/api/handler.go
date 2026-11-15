@@ -3,11 +3,14 @@
 // @title Buildoor API
 // @description REST API of buildoor, the Ethereum builder testing tool: status,
 // @description settings, per-slot action plans and outcomes, builder keys, the
-// @description transaction pool and registrations. Mutating endpoints need a
-// @description login (Bearer token) when an auth provider is configured. The
-// @description Builder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)
-// @description follow their own specifications and are not listed here. The
-// @description pre-v1 paths stay served as deprecated aliases until 2.0.
+// @description transaction pool and registrations. When an auth provider is
+// @description configured, mutating endpoints need a login (Bearer token), and
+// @description most of them a feature granted to that login (plan, txpool,
+// @description config, rpc, keys): 401 without a valid login, 403 without the
+// @description feature. The Builder API (/eth/v1/builder) and the JSON-RPC
+// @description ingress (/rpc) follow their own specifications and are not
+// @description listed here. The pre-v1 paths stay served as deprecated aliases
+// @description until 2.0.
 // @BasePath /api/v1
 package api
 

@@ -11,6 +11,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/ethpandaops/buildoor/pkg/db"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 )
 
 // actorFromToken derives a human-meaningful actor identity for the audit log.
@@ -118,10 +119,9 @@ type AuditLogResponse struct {
 // @Failure 500 {object} map[string]string "Server Error"
 // @Router /audit-log [get]
 func (h *APIHandler) GetAuditLog(w http.ResponseWriter, r *http.Request) {
-	// The audit log is privileged: require authentication. In open mode
-	// CheckAuthToken always returns a valid token, matching the rest of the API.
-	if h.authHandler.CheckAuthToken(r.Header.Get("Authorization")) == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	// The audit log is privileged: require a login (any: basic access). In
+	// open mode every request passes, matching the rest of the API.
+	if _, ok := h.authHandler.Require(w, r, auth.FeatureBasic); !ok {
 		return
 	}
 

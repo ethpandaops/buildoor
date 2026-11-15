@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ethpandaops/buildoor/pkg/config"
 	"github.com/ethpandaops/buildoor/pkg/payload_bidder"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth"
 	"github.com/ethpandaops/buildoor/version"
 )
 
@@ -172,6 +174,22 @@ func (h *APIHandler) GetConfig(w http.ResponseWriter, _ *http.Request) {
 // encodings. Any subset of settings updates in one call.
 type UpdateSettingsRequest map[string]json.RawMessage
 
+// builderKeysSettingsPrefix is the settings namespace of the managed builder
+// key set (config.KeyBuilderKeys*).
+const builderKeysSettingsPrefix = "builder_keys."
+
+// touchesBuilderKeys reports whether a settings update writes a builder key
+// setting.
+func touchesBuilderKeys(req UpdateSettingsRequest) bool {
+	for key := range req {
+		if strings.HasPrefix(key, builderKeysSettingsPrefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // UpdateSettings godoc
 // @Id updateSettings
 // @Summary Update global settings by key path
@@ -182,7 +200,8 @@ type UpdateSettingsRequest map[string]json.RawMessage
 // @Description objects. Unknown keys are rejected. The module enable flags
 // @Description (epbs_enabled, builder_api_enabled, lifecycle_enabled) are
 // @Description settings too; enabling a module this instance cannot run is
-// @Description refused. Requires authentication.
+// @Description refused. Requires a login with the feature "config"; the
+// @Description builder_keys.* settings need the feature "keys" as well.
 // @Accept json
 // @Produce json
 // @Param Authorization header string true "Bearer token"
@@ -190,11 +209,11 @@ type UpdateSettingsRequest map[string]json.RawMessage
 // @Success 200 {object} map[string]string "Success"
 // @Failure 400 {object} map[string]string "Unknown key or invalid value"
 // @Failure 401 {object} map[string]string "Unauthorized"
+// @Failure 403 {object} map[string]string "Forbidden: the login lacks the feature config"
 // @Router /config [patch]
 func (h *APIHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
-	token := h.authHandler.CheckAuthToken(r.Header.Get("Authorization"))
-	if token == nil {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
+	token, ok := h.authHandler.Require(w, r, auth.FeatureConfig)
+	if !ok {
 		return
 	}
 
@@ -209,6 +228,15 @@ func (h *APIHandler) UpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if len(req) == 0 {
 		writeError(w, http.StatusBadRequest, "no settings provided")
 		return
+	}
+
+	// The builder key settings (target count, auto deposit/exit, ...) drive
+	// deposits and exits, so they need the keys feature on top: without it
+	// this endpoint would be a way around POST /builder-keys/target.
+	if touchesBuilderKeys(req) {
+		if _, ok = h.authHandler.Require(w, r, auth.FeatureKeys); !ok {
+			return
+		}
 	}
 
 	toggled, err := h.checkModuleToggles(req)

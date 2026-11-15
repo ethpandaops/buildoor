@@ -125,6 +125,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature plan",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "409": {
                         "description": "Slot in the past or frozen",
                         "schema": {
@@ -224,6 +233,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature plan",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -513,6 +531,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature keys",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -558,6 +585,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature keys",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -627,6 +663,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature keys",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "409": {
                         "description": "Key cannot be exited yet",
                         "schema": {
@@ -689,6 +734,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature keys",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -724,7 +778,7 @@ const docTemplate = `{
                 }
             },
             "patch": {
-                "description": "Applies partial global settings updates keyed by canonical\nsettings paths (e.g. {\"epbs.bid_subsidy\": 1000,\n\"schedule.mode\": \"all\"}) without requiring full config\nobjects. Unknown keys are rejected. The module enable flags\n(epbs_enabled, builder_api_enabled, lifecycle_enabled) are\nsettings too; enabling a module this instance cannot run is\nrefused. Requires authentication.",
+                "description": "Applies partial global settings updates keyed by canonical\nsettings paths (e.g. {\"epbs.bid_subsidy\": 1000,\n\"schedule.mode\": \"all\"}) without requiring full config\nobjects. Unknown keys are rejected. The module enable flags\n(epbs_enabled, builder_api_enabled, lifecycle_enabled) are\nsettings too; enabling a module this instance cannot run is\nrefused. Requires a login with the feature \"config\"; the\nbuilder_keys.* settings need the feature \"keys\" as well.",
                 "consumes": [
                     "application/json"
                 ],
@@ -775,6 +829,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature config",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1168,6 +1231,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature rpc",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "No ingress",
                         "schema": {
@@ -1228,6 +1300,15 @@ const docTemplate = `{
                                 "type": "string"
                             }
                         }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature rpc",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
                     }
                 }
             }
@@ -1263,6 +1344,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature rpc",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1329,6 +1419,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature rpc",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -1866,6 +1965,15 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature txpool",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
                     "404": {
                         "description": "Pool not configured",
                         "schema": {
@@ -2014,6 +2122,15 @@ const docTemplate = `{
                     },
                     "401": {
                         "description": "Unauthorized",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden: the login lacks the feature txpool",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -2236,7 +2353,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "transforms": {
-                    "description": "Transforms carries the effective jq transform expressions (empty when no\ntransform plan applies). Nil only when no plan expression is set.",
+                    "description": "Transforms carries the effective jq transform expressions: the plan's,\nand for every object the plan leaves untransformed the startup\ntransforms (config.TransformsConfig) once their epoch is reached. Nil\nwhen neither sets an expression.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/action_plan.ResolvedTransforms"
@@ -2659,6 +2776,13 @@ const docTemplate = `{
                 "suppressed": {
                     "type": "boolean"
                 },
+                "targets": {
+                    "description": "Targets are the plan's additional envelope publications (plan-only, no\nglobal setting).",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.RevealTarget"
+                    }
+                },
                 "vote_threshold_pct": {
                     "description": "VoteThresholdPct is the participation threshold (percent) opening the\nvote gate.",
                     "type": "integer"
@@ -2673,6 +2797,13 @@ const docTemplate = `{
                 },
                 "envelope": {
                     "type": "string"
+                },
+                "from_flags": {
+                    "description": "FromFlags lists the objects whose expression comes from the startup\ntransform flags rather than the plan.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "payload": {
                     "type": "string"
@@ -2697,9 +2828,40 @@ const docTemplate = `{
                     "description": "RevealTimeMs is signed milliseconds relative to slot start (time gate).",
                     "type": "integer"
                 },
+                "targets": {
+                    "description": "Targets are additional publications of the slot's envelope after the\nprimary reveal succeeded, each to its own set of beacon nodes.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/action_plan.RevealTarget"
+                    }
+                },
                 "vote_threshold_pct": {
                     "description": "VoteThresholdPct overrides the vote gate's participation threshold.",
                     "type": "integer"
+                }
+            }
+        },
+        "action_plan.RevealTarget": {
+            "type": "object",
+            "properties": {
+                "broadcast_validation": {
+                    "description": "BroadcastValidation overrides the slot's level for this publication.",
+                    "type": "string"
+                },
+                "delay_ms": {
+                    "description": "DelayMs is the wait after the primary publish (at most two slots).",
+                    "type": "integer"
+                },
+                "transform": {
+                    "description": "Transform is the jq expression applied to this copy's envelope message\nbefore signing; \"\" publishes the envelope as built.",
+                    "type": "string"
+                },
+                "urls": {
+                    "description": "URLs are beacon REST base URLs; empty = the primary beacon node.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2769,11 +2931,15 @@ const docTemplate = `{
                     "$ref": "#/definitions/action_plan.RevealPlan"
                 },
                 "slots_in_epoch": {
-                    "description": "SlotsInEpoch are the matched slot indices within an epoch (0-based, so\n31 is the last slot of a 32-slot epoch).",
+                    "description": "SlotsInEpoch are the matched slot indices within an epoch (0-based, so\n31 is the last slot of a 32-slot epoch); empty matches every slot.",
                     "type": "array",
                     "items": {
                         "type": "integer"
                     }
+                },
+                "source": {
+                    "description": "Source is RuleSourceFlags for a rule seeded from --rules-json, empty for\na rule written through the API.",
+                    "type": "string"
                 },
                 "to_epoch": {
                     "type": "integer"
@@ -4699,6 +4865,10 @@ const docTemplate = `{
                 "status": {
                     "$ref": "#/definitions/slot_results.RevealStatus"
                 },
+                "target": {
+                    "description": "Target is the beacon URL (or \"primary\") of an additional reveal target\npublication; empty on the primary reveal.",
+                    "type": "string"
+                },
                 "transport": {
                     "type": "string"
                 }
@@ -5288,7 +5458,7 @@ var SwaggerInfo = &swag.Spec{
 	BasePath:         "/api/v1",
 	Schemes:          []string{},
 	Title:            "Buildoor API",
-	Description:      "REST API of buildoor, the Ethereum builder testing tool: status,\nsettings, per-slot action plans and outcomes, builder keys, the\ntransaction pool and registrations. Mutating endpoints need a\nlogin (Bearer token) when an auth provider is configured. The\nBuilder API (/eth/v1/builder) and the JSON-RPC ingress (/rpc)\nfollow their own specifications and are not listed here. The\npre-v1 paths stay served as deprecated aliases until 2.0.",
+	Description:      "REST API of buildoor, the Ethereum builder testing tool: status,\nsettings, per-slot action plans and outcomes, builder keys, the\ntransaction pool and registrations. When an auth provider is\nconfigured, mutating endpoints need a login (Bearer token), and\nmost of them a feature granted to that login (plan, txpool,\nconfig, rpc, keys): 401 without a valid login, 403 without the\nfeature. The Builder API (/eth/v1/builder) and the JSON-RPC\ningress (/rpc) follow their own specifications and are not\nlisted here. The pre-v1 paths stay served as deprecated aliases\nuntil 2.0.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",
