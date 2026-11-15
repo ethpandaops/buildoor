@@ -466,6 +466,7 @@ export interface EPBSConfig {
   key_strategy?: string;
   bid_keys_per_slot?: number;
   bid_keys_per_step?: number;
+  bids_per_key?: number;
 }
 
 export interface ServiceStatus {
@@ -1080,6 +1081,10 @@ export interface BidPlan {
   bid_value_gwei?: number; // absolute bid base value
   ignore_missing_prefs?: boolean;
   bid_candidate?: string; // auto | all | candidate key
+  key_strategy?: string; // round_robin | single | random | least_used
+  bid_keys_per_slot?: number; // distinct keys per slot, 0 = whole fleet
+  bid_keys_per_step?: number; // keys per interval step, 0 = every key with a bid left
+  bids_per_key?: number; // bids per key, slot and parent, 0 = gossip limit
 }
 
 export interface BuilderAPIPlan {

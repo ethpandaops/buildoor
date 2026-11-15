@@ -95,7 +95,7 @@ func newPlanAPITestEnv(t *testing.T) *planAPITestEnv {
 
 	tracker := slot_results.NewTracker(cfg, chainSvc, stateDB, planSvc, nil, nil, nil, nil, nil, log)
 
-	authHandler, err := auth.NewAuthHandler(context.Background(), "")
+	authHandler, err := auth.NewAuthHandler(context.Background(), "", "")
 	require.NoError(t, err)
 
 	handler := NewAPIHandler(authHandler, nil, stateDB, nil, nil, nil, nil, chainSvc,
@@ -508,7 +508,7 @@ func TestUpdateSettingsPathBased(t *testing.T) {
 	settingsSvc, err := config.NewService(cfg, defaults, map[string]bool{}, stateDB, log)
 	require.NoError(t, err)
 
-	authHandler, err := auth.NewAuthHandler(context.Background(), "")
+	authHandler, err := auth.NewAuthHandler(context.Background(), "", "")
 	require.NoError(t, err)
 
 	handler := NewAPIHandler(authHandler, settingsSvc, stateDB, nil, nil, nil, nil, nil,
