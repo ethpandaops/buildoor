@@ -14,6 +14,14 @@ import (
 	"github.com/ethpandaops/service-authenticatoor/pkg/auth"
 )
 
+// DefaultServiceName is the logical app identity passed to the verifier
+// as ExpectedService unless another name is configured (--auth-service).
+// Tokens whose "services" directive list denies the name are rejected, so
+// an authenticatoor that grants its tools per team can keep a team out of
+// buildoor. A token without a "services" claim carries no constraint and
+// is accepted, as before.
+const DefaultServiceName = "buildoor"
+
 // AuthHandler validates incoming bearer tokens. When verifier is nil the
 // API is treated as open (no authentication required); CheckAuthToken
 // always returns a non-nil token.
@@ -24,9 +32,15 @@ type AuthHandler struct {
 // NewAuthHandler returns a handler. When authProviderURL is empty the
 // returned handler operates in open mode (no token verification, all
 // calls allowed). When set, it bootstraps a JWKS verifier from the
-// service's OIDC discovery doc, falling back to <url>/jwks.json.
-func NewAuthHandler(ctx context.Context, authProviderURL string) (*AuthHandler, error) {
+// service's OIDC discovery doc, falling back to <url>/jwks.json. An
+// empty service means DefaultServiceName.
+func NewAuthHandler(ctx context.Context, authProviderURL, service string) (*AuthHandler, error) {
 	authProviderURL = strings.TrimRight(authProviderURL, "/")
+
+	service = strings.TrimSpace(service)
+	if service == "" {
+		service = DefaultServiceName
+	}
 	if authProviderURL == "" {
 		return &AuthHandler{}, nil
 	}
@@ -42,6 +56,7 @@ func NewAuthHandler(ctx context.Context, authProviderURL string) (*AuthHandler, 
 		JWKSURL:          jwksURL,
 		ExpectedIssuer:   expectedIssuer,
 		ExpectedAudience: parentZone(authProviderURL),
+		ExpectedService:  service,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("auth: build verifier: %w", err)

@@ -189,16 +189,20 @@ type ResolvedBidSettings struct {
 	BidKeysPerSlot uint64 `json:"bid_keys_per_slot,omitempty"`
 
 	// BidKeysPerStep is how many keys bid a payload per interval step
-	// (0 = every remaining key at once).
+	// (0 = every key with a bid left).
 	BidKeysPerStep uint64 `json:"bid_keys_per_step,omitempty"`
+
+	// BidsPerKey caps the bids one builder key gossips per slot and parent
+	// (0 = the gossip bid limit, one per ETH of builder balance).
+	BidsPerKey uint64 `json:"bids_per_key,omitempty"`
 
 	// Forced marks that the plan activated bidding although the module is
 	// globally disabled.
 	Forced bool `json:"forced,omitempty"`
 }
 
-// EffectiveKeysPerStep returns how many keys one step may spend: the configured
-// count, or every key the fleet has left when unset.
+// EffectiveKeysPerStep returns how many keys one step may bid from: the
+// configured count, or every key with a bid left when unset.
 func (s *ResolvedBidSettings) EffectiveKeysPerStep() uint64 {
 	if s.BidKeysPerStep > 0 {
 		return s.BidKeysPerStep
@@ -614,6 +618,7 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 		KeyStrategy:    cfg.EPBS.KeyStrategy,
 		BidKeysPerSlot: cfg.EPBS.BidKeysPerSlot,
 		BidKeysPerStep: cfg.EPBS.BidKeysPerStep,
+		BidsPerKey:     cfg.EPBS.BidsPerKey,
 		Forced:         forced,
 	}
 
@@ -647,6 +652,7 @@ func resolveBid(plan *SlotPlan, cfg *config.Config, fork version.DataVersion) *R
 
 		applyOverride(&resolved.BidKeysPerSlot, bid.BidKeysPerSlot)
 		applyOverride(&resolved.BidKeysPerStep, bid.BidKeysPerStep)
+		applyOverride(&resolved.BidsPerKey, bid.BidsPerKey)
 	}
 
 	return resolved

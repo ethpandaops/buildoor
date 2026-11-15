@@ -2085,7 +2085,11 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "bid_keys_per_step": {
-                    "description": "BidKeysPerStep overrides how many keys bid a payload per interval step\n(0 = every remaining key at once).",
+                    "description": "BidKeysPerStep overrides how many keys bid a payload per interval step\n(0 = every key with a bid left).",
+                    "type": "integer"
+                },
+                "bids_per_key": {
+                    "description": "BidsPerKey overrides the cap on the bids one builder key gossips for\nthis slot per parent (0 = the gossip bid limit).",
                     "type": "integer"
                 },
                 "bid_min_amount": {
@@ -2400,7 +2404,11 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "bid_keys_per_step": {
-                    "description": "BidKeysPerStep is how many keys bid a payload per interval step\n(0 = every remaining key at once).",
+                    "description": "BidKeysPerStep is how many keys bid a payload per interval step\n(0 = every key with a bid left).",
+                    "type": "integer"
+                },
+                "bids_per_key": {
+                    "description": "BidsPerKey caps the bids one builder key gossips per slot and parent\n(0 = the gossip bid limit, one per ETH of builder balance).",
                     "type": "integer"
                 },
                 "end_ms": {
