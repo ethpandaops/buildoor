@@ -34,21 +34,24 @@ async function call<T>(url: string, method: string, body?: unknown): Promise<Out
 // useRPCAccess polls the /rpc ingress access state (API keys, per-caller
 // stats, read upstreams) while `active` (the caller decides: Access tab open,
 // document visible, logged in) and wraps the key mutations. The
-// endpoint needs a login: `unauthorized` is set on 401, `unavailable` on 404
-// (no ingress without --el-rpc).
+// endpoint needs a login with the rpc feature: `unauthorized` is set on 401,
+// `forbidden` on 403 (the login lacks the feature), `unavailable` on 404 (no
+// ingress without --el-rpc).
 export function useRPCAccess(active: boolean) {
   const loggedIn = useLoggedIn();
   const [data, setData] = useState<RPCAccessResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
 
   const fetchAccess = useCallback(async () => {
     try {
       const response = await fetch(apiPath('/rpc-access'), { headers: await authHeaders() });
       setUnauthorized(response.status === 401);
+      setForbidden(response.status === 403);
       setUnavailable(response.status === 404);
-      if (response.status === 401 || response.status === 404) {
+      if (response.status === 401 || response.status === 403 || response.status === 404) {
         setData(null);
         setError(null);
         return;
@@ -101,5 +104,5 @@ export function useRPCAccess(active: boolean) {
     [fetchAccess]
   );
 
-  return { data, error, unauthorized, unavailable, refresh: fetchAccess, createKey, updateKey, deleteKey };
+  return { data, error, unauthorized, forbidden, unavailable, refresh: fetchAccess, createKey, updateKey, deleteKey };
 }

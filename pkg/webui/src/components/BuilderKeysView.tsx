@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BuilderKeysTable } from './BuilderKeysTable';
 import { InfoHint } from './InfoHint';
+import { useFeatures } from '../hooks/authFetch';
 import { useBuilderKeyActions, useBuilderKeys } from '../hooks/useBuilderKeys';
 import { openSettings } from '../stores/settingsDrawerStore';
 import type { BuilderKeysAggregate } from '../types';
@@ -26,6 +27,7 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
     `${connectionGeneration}:${streamKeys?.managed ?? 0}:${streamKeys?.active ?? 0}:${streamKeys?.target ?? 0}`,
   );
   const actions = useBuilderKeyActions();
+  const features = useFeatures();
 
   const [busyKey, setBusyKey] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -98,7 +100,7 @@ export const BuilderKeysView: React.FC<BuilderKeysViewProps> = ({
           loading={loading}
           error={error}
           target={settings.target_count}
-          isLoggedIn={actions.isLoggedIn}
+          canManage={actions.isLoggedIn && features.keys}
           busyKey={busyKey}
           actionError={actionError}
           onDeposit={(keyIndex) => runAction(keyIndex, () => actions.depositKey(keyIndex))}

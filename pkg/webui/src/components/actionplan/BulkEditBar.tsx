@@ -8,6 +8,8 @@ const MAX_SLOTS_PER_UPDATE = 6400;
 interface BulkEditBarProps {
   selectionCount: number;
   canEdit: boolean;
+  // Why editing is not possible (shown as the tooltip while !canEdit).
+  editHint: string;
   currentSlot: number;
   onClearSelection: () => void;
   onEditSelected: () => void;
@@ -17,6 +19,7 @@ interface BulkEditBarProps {
 export const BulkEditBar: React.FC<BulkEditBarProps> = ({
   selectionCount,
   canEdit,
+  editHint,
   currentSlot,
   onClearSelection,
   onEditSelected,
@@ -67,7 +70,7 @@ export const BulkEditBar: React.FC<BulkEditBarProps> = ({
             className="btn btn-sm btn-primary"
             onClick={onEditSelected}
             disabled={!canEdit}
-            title={canEdit ? 'Edit the selected slots' : 'Login required to edit plans'}
+            title={canEdit ? 'Edit the selected slots' : editHint}
           >
             <i className="fas fa-pencil-alt me-1"></i>
             Edit selected
@@ -109,7 +112,7 @@ export const BulkEditBar: React.FC<BulkEditBarProps> = ({
           type="submit"
           className="btn btn-sm btn-outline-primary"
           disabled={!canEdit || fromInput === '' || toInput === ''}
-          title={canEdit ? 'Edit an explicit slot range (may extend beyond the grid)' : 'Login required to edit plans'}
+          title={canEdit ? 'Edit an explicit slot range (may extend beyond the grid)' : editHint}
         >
           Edit range&hellip;
         </button>

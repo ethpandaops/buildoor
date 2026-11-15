@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useFeatures } from '../../hooks/authFetch';
+import { needsFeature } from '../../utils/authFeatures';
 import { Pagination } from '../Pagination';
 import { Tag } from '../ui/Tag';
 import { ErrorNotice, LockNotice } from './LockNotice';
@@ -60,6 +62,7 @@ export const QueueTab: React.FC<QueueTabProps> = ({
   onSortChange,
   onDrop,
 }) => {
+  const { txpool: canDrop } = useFeatures();
   const [dropping, setDropping] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -159,8 +162,8 @@ export const QueueTab: React.FC<QueueTabProps> = ({
                           <button
                             type="button"
                             className="bd-btn bd-btn-sm bd-btn-danger bd-mp-icon-btn"
-                            disabled={dropping !== null}
-                            title="Drop"
+                            disabled={dropping !== null || !canDrop}
+                            title={canDrop ? 'Drop' : needsFeature('txpool')}
                             aria-label="Drop transaction"
                             onClick={() => handleDrop(tx.hash)}
                           >

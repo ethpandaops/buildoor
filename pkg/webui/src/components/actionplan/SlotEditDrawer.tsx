@@ -1391,6 +1391,8 @@ interface SlotEditDrawerProps {
   results: Record<number, SlotResult>;
   currentSlot: number;
   canEdit: boolean;
+  // Why the plan is read-only (shown while !canEdit).
+  editHint: string;
   applyUpdates: (updates: PlanUpdate[]) => Promise<ApplyUpdatesResult>;
   onClose: () => void;
   // Reports unsaved edits, so the page can ask before a selection change
@@ -1410,6 +1412,7 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
   results,
   currentSlot,
   canEdit,
+  editHint,
   applyUpdates,
   onClose,
   onDirtyChange,
@@ -1813,7 +1816,7 @@ export const SlotEditDrawer: React.FC<SlotEditDrawerProps> = ({
             {!canEdit && (
               <div className="alert alert-info small py-2">
                 <i className="fas fa-info-circle me-1"></i>
-                Login required to edit per-slot plans.
+                Read-only. {editHint}.
               </div>
             )}
             {rulePlan && (

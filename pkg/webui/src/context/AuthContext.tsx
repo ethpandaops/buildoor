@@ -1,11 +1,13 @@
 import React, { createContext, useContext, type ReactNode } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import type { FeatureSet } from '../utils/authFeatures';
 
 interface AuthContextValue {
   authEnabled: boolean;
   isLoggedIn: boolean;
   user: string | null;
   expiresAt: number | null;
+  features: FeatureSet;
   loading: boolean;
   getAuthHeader: () => Promise<string | null>;
   login: () => void;

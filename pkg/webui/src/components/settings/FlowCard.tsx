@@ -24,7 +24,7 @@ function relativeTime(at: number): string {
 // headline metric, and its configuration read-only. Configure opens the
 // settings drawer.
 const FlowCardView: React.FC<FlowCardProps> = ({ flow, ctx }) => {
-  const { isLoggedIn } = useAuthContext();
+  const { isLoggedIn, features } = useAuthContext();
   const [toggleError, setToggleError] = useState<string | null>(null);
   // Until the stream delivered the config and service status, every flow
   // would read as off/paused.
@@ -66,7 +66,7 @@ const FlowCardView: React.FC<FlowCardProps> = ({ flow, ctx }) => {
       </dl>
       <div className="fc-foot">
         <button type="button" className="bd-btn bd-btn-sm" onClick={() => openSettings(flow.id)}>
-          {isLoggedIn ? 'Configure' : 'All settings'}
+          {isLoggedIn && features.config ? 'Configure' : 'All settings'}
         </button>
         {changed > 0 && (
           <span className="fc-changed" title={new Date(changed).toLocaleString()}>

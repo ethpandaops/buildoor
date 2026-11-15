@@ -21,7 +21,8 @@ interface FlowSettingsSummaryProps {
 export const FlowSettingsSummary: React.FC<FlowSettingsSummaryProps> = ({ flow: flowId, tab: tabId }) => {
   const flow = FLOWS[flowId];
   const ctx = useFlowContext();
-  const { isLoggedIn } = useAuthContext();
+  const { isLoggedIn, features } = useAuthContext();
+  const canEdit = isLoggedIn && features.config;
   const tabs = tabId ? flow.tabs.filter((t) => t.id === tabId) : flow.tabs;
   const sources = ctx.config?.setting_sources ?? {};
 
@@ -35,8 +36,8 @@ export const FlowSettingsSummary: React.FC<FlowSettingsSummaryProps> = ({ flow: 
             className="bd-btn bd-btn-sm ms-auto"
             onClick={() => openSettings(flowId, tabs[0]?.id)}
           >
-            <i className={`fas ${isLoggedIn ? 'fa-pen' : 'fa-eye'}`} aria-hidden="true"></i>
-            {isLoggedIn ? 'Edit' : 'Details'}
+            <i className={`fas ${canEdit ? 'fa-pen' : 'fa-eye'}`} aria-hidden="true"></i>
+            {canEdit ? 'Edit' : 'Details'}
           </button>
         </div>
         <div className="fs-sections">

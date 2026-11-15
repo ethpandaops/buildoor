@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useAuthContext } from '../../context/AuthContext';
+import { needsFeature } from '../../utils/authFeatures';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useRPCAccess } from '../../hooks/useRPCAccess';
 import { InfoHint } from '../InfoHint';
@@ -437,17 +438,19 @@ const Section: React.FC<{ title: React.ReactNode; hint?: React.ReactNode; childr
 // a read-only summary of the access settings (edited in the settings
 // drawer). Keys, callers and upstreams are operator-only; the access state
 // is polled only while this tab is shown, the document is visible and the
-// reader is logged in.
+// reader is logged in with the rpc feature.
 export const AccessTab: React.FC = () => {
-  const { isLoggedIn } = useAuthContext();
+  const { isLoggedIn, features } = useAuthContext();
   const { config } = useEventStream();
   const visible = usePageVisible();
-  const { data, error, unauthorized, unavailable, createKey, updateKey, deleteKey } =
-    useRPCAccess(visible && isLoggedIn);
+  const { data, error, unauthorized, forbidden, unavailable, createKey, updateKey, deleteKey } =
+    useRPCAccess(visible && isLoggedIn && features.rpc);
   const [message, setMessage] = useState<string | null>(null);
   const [created, setCreated] = useState<CreateRPCKeyResponse | null>(null);
 
   const showData = isLoggedIn && !unauthorized;
+  // Logged in, but the login lacks the rpc feature (the API says the same).
+  const lacksFeature = !features.rpc || forbidden;
 
   return (
     <div className="row g-3">
@@ -468,6 +471,13 @@ export const AccessTab: React.FC = () => {
 
         {!showData ? (
           <LockNotice>Log in to manage API keys and see per-caller stats and upstreams.</LockNotice>
+        ) : lacksFeature ? (
+          <div className="bd-notice bd-mp-lock">
+            <i className="fas fa-lock"></i>
+            <span>
+              {needsFeature('rpc')} to manage API keys and see per-caller stats and upstreams.
+            </span>
+          </div>
         ) : unavailable ? (
           <div className="bd-notice">The /rpc ingress is not available (no --el-rpc).</div>
         ) : (

@@ -8,7 +8,8 @@ interface BuilderKeysTableProps {
   loading: boolean;
   error: string | null;
   target: number;
-  isLoggedIn: boolean;
+  // Whether the key actions are offered: a login with the keys feature.
+  canManage: boolean;
   busyKey: number | null;
   actionError: string | null;
   onDeposit: (keyIndex: number) => void;
@@ -37,7 +38,7 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
   loading,
   error,
   target,
-  isLoggedIn,
+  canManage,
   busyKey,
   actionError,
   onDeposit,
@@ -136,7 +137,7 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
                   Bids signed with this key / bids won, counted since buildoor started.
                 </InfoHint>
               </th>
-              {isLoggedIn && (
+              {canManage && (
                 <th className="text-end">
                   Actions
                   <InfoHint alignEnd>
@@ -190,7 +191,7 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
                     <td className="text-end small">
                       {key.bids_submitted} / {key.bids_won}
                     </td>
-                    {isLoggedIn && (
+                    {canManage && (
                       <td className="text-end text-nowrap">
                         {canDeposit && (
                           <button
@@ -228,7 +229,7 @@ export const BuilderKeysTable: React.FC<BuilderKeysTableProps> = ({
                   </tr>
                   {confirmExit === key.key_index && (
                     <tr className="table-warning">
-                      <td colSpan={isLoggedIn ? 10 : 9}>
+                      <td colSpan={canManage ? 10 : 9}>
                         <div className="small">
                           <strong>Exit builder key #{key.key_index}?</strong> This is irreversible —
                           the key cannot be reactivated until its registry entry is reused by another

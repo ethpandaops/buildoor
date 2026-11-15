@@ -12,7 +12,8 @@ import {
   toFormValue,
   type FormValue,
 } from '../../settings/values';
-import { writeSettings } from '../../settings/write';
+import { missingFeature, writeSettings } from '../../settings/write';
+import { needsFeature } from '../../utils/authFeatures';
 import { InfoHint } from '../InfoHint';
 import { Tabs } from '../ui/Tabs';
 import { Tag } from '../ui/Tag';
@@ -192,8 +193,11 @@ interface FlowDrawerProps {
 const FlowDrawer: React.FC<FlowDrawerProps> = ({ flowId, initialTab }) => {
   const flow = FLOWS[flowId];
   const ctx = useFlowContext();
-  const { isLoggedIn, login } = useAuthContext();
+  const { isLoggedIn, login, features } = useAuthContext();
   const keys = useMemo(() => flowKeys(flow), [flow]);
+  // A login edits the settings its features cover; the rest stay read-only.
+  const lockedBy = (key: string) => (isLoggedIn ? missingFeature(key, features) : null);
+  const canWrite = isLoggedIn && keys.some((key) => missingFeature(key, features) === null);
 
   const [state, dispatch] = useReducer(draftReducer, undefined, () => initDraft(keys, ctx));
   const [activeTab, setActiveTab] = useState(
@@ -366,6 +370,13 @@ const FlowDrawer: React.FC<FlowDrawerProps> = ({ flowId, initialTab }) => {
             </div>
           )}
 
+          {isLoggedIn && !canWrite && (
+            <div className="bd-notice mb-3">
+              <i className="fas fa-lock" aria-hidden="true"></i>
+              <span className="flex-grow-1">Read-only. {needsFeature('config')} to change these settings.</span>
+            </div>
+          )}
+
           {tab.panel === 'el-status' && <ElStatusPanel />}
 
           {tab.sections.map((section, index) => (
@@ -379,8 +390,13 @@ const FlowDrawer: React.FC<FlowDrawerProps> = ({ flowId, initialTab }) => {
                   const conflict = state.conflicts[key];
                   const wide = field.kind === 'upstreams' || field.kind === 'bool';
                   const id = `sd-${key.replace(/[^a-z0-9]/gi, '-')}`;
+                  const missing = lockedBy(key);
                   return (
-                    <div className={`sd-field${wide ? ' sd-field-wide' : ''}${inactive ? ' sd-field-inactive' : ''}`} key={key}>
+                    <div
+                      className={`sd-field${wide ? ' sd-field-wide' : ''}${inactive ? ' sd-field-inactive' : ''}`}
+                      key={key}
+                      title={missing ? needsFeature(missing) : undefined}
+                    >
                       <div className="sd-label-row">
                         <label htmlFor={id} className="sd-label">
                           {field.label}
@@ -398,7 +414,7 @@ const FlowDrawer: React.FC<FlowDrawerProps> = ({ flowId, initialTab }) => {
                         id={id}
                         field={field}
                         value={state.draft[key]}
-                        disabled={!isLoggedIn || saving}
+                        disabled={!isLoggedIn || saving || missing !== null}
                         invalid={key in errors}
                         onChange={(value) => {
                           setConfirming(false);
@@ -446,7 +462,7 @@ const FlowDrawer: React.FC<FlowDrawerProps> = ({ flowId, initialTab }) => {
           )}
         </div>
 
-        {isLoggedIn && (
+        {canWrite && (
           <div className="sd-foot">
             {closePrompt ? (
               <>

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+import { useFeatures } from '../../hooks/authFetch';
 import { useSettings } from '../../hooks/useSettings';
+import { needsFeature } from '../../utils/authFeatures';
 import { InfoHint } from '../InfoHint';
 import { Switch } from '../ui/Switch';
 import { Tag } from '../ui/Tag';
@@ -27,6 +29,12 @@ export const MempoolHeader: React.FC<MempoolHeaderProps> = ({
   onClear,
 }) => {
   const { isLoggedIn, postSettings } = useSettings();
+  const features = useFeatures();
+  const switchBlocked = !features.config
+    ? needsFeature('config')
+    : !enabled && !available
+      ? unavailableReason || 'The transaction pool is not available'
+      : undefined;
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -74,8 +82,8 @@ export const MempoolHeader: React.FC<MempoolHeaderProps> = ({
               checked={enabled}
               label="accepting transactions"
               busy={busy}
-              disabled={!enabled && !available}
-              title={!enabled && !available ? unavailableReason || 'The transaction pool is not available' : undefined}
+              disabled={switchBlocked !== undefined}
+              title={switchBlocked}
               onChange={toggle}
             />
             <span>Accept transactions</span>
@@ -86,7 +94,8 @@ export const MempoolHeader: React.FC<MempoolHeaderProps> = ({
             </InfoHint>
           </div>
           <ConfirmButton
-            disabled={pending === 0}
+            disabled={pending === 0 || !features.txpool}
+            title={features.txpool ? undefined : needsFeature('txpool')}
             prompt={`Drop all ${pending.toLocaleString()} queued transactions?`}
             confirmLabel="Drop all"
             onConfirm={clear}

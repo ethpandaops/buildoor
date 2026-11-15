@@ -2,6 +2,7 @@ import { authHeaders } from '../hooks/authFetch';
 import { SETTING_FIELDS } from './fields';
 import type { SettingValue } from './types';
 import { apiPath } from '../utils/api';
+import type { Feature, FeatureSet } from '../utils/authFeatures';
 
 export interface WriteResult {
   ok: boolean;
@@ -23,6 +24,18 @@ async function send(method: 'PATCH' | 'POST', url: string, body: unknown): Promi
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// missingFeature names the feature a login lacks to write a setting (null
+// when it may write it), following the endpoints writeSettings uses: the
+// settings need "config", the builder key settings "keys" as well, and the
+// key target, written through its own endpoint, "keys" only.
+export function missingFeature(key: string, features: FeatureSet): Feature | null {
+  if (key.startsWith('builder_keys.')) {
+    if (!features.keys) return 'keys';
+    if (SETTING_FIELDS[key]?.writer === 'builder-keys-target') return null;
+  }
+  return features.config ? null : 'config';
 }
 
 // writeSettings stores setting values through the endpoint each one needs:

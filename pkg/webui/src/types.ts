@@ -1,3 +1,5 @@
+import type { FeatureSet } from './utils/authFeatures';
+
 // Auth types
 export interface AuthState {
   /**
@@ -10,6 +12,12 @@ export interface AuthState {
   isLoggedIn: boolean;
   user: string | null;
   expiresAt: number | null; // Local timestamp (ms)
+  /**
+   * What the login may do, as the authenticatoor client reports it (all
+   * true in open mode, all false when logged out). It only drives which
+   * controls are shown or enabled: the API enforces the same rules.
+   */
+  features: FeatureSet;
 }
 
 // Event types from the SSE stream

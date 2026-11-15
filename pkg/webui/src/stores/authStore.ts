@@ -1,4 +1,5 @@
 import type { AuthState } from '../types';
+import { ALL_FEATURES, FEATURES, NO_FEATURES, sameFeatures, type Feature, type FeatureSet } from '../utils/authFeatures';
 
 // Singleton auth store. Drives authentication via the centralized
 // authenticatoor service (v2 shared-session client) when
@@ -13,6 +14,14 @@ import type { AuthState } from '../types';
 // state and asks the client for a fresh token on every API call. No token
 // is ever cached in the app.
 //
+// The features of the login (state.features) are asked from the auth
+// client on every session change (login, refresh, logout):
+// hasFeature(<authService>, <feature>), with the service name the backend
+// injects (--auth-service). A client without hasFeature (an older
+// authenticatoor) yields no feature: its tokens carry no grants, so the API
+// would refuse the actions anyway. The features only decide which controls
+// the UI offers; the API enforces them.
+//
 // Public surface:
 //   authStore.initialize(): kicks off boot — must be called once at app start.
 //   authStore.getState(): synchronous current state.
@@ -26,6 +35,7 @@ import type { AuthState } from '../types';
 //
 // In open mode:
 //   - authEnabled = false, isLoggedIn = true (UI treats user as authorized)
+//   - every feature is allowed, as on the server
 //   - getAuthHeader resolves null (no Authorization header on requests)
 //   - login()/logout() are no-ops (and the UI should hide login controls)
 
@@ -37,6 +47,10 @@ export interface AuthTokenInfo {
   authenticated: boolean;
   user: string;
   exp: number;
+  // The token's team memberships and "services" claim (directive list);
+  // absent from clients that predate service grants.
+  teams?: string[];
+  services?: string;
 }
 
 // Minimal shape of the v2 window.ethpandaops.authenticatoor we rely on.
@@ -49,10 +63,28 @@ interface AuthenticatoorLib {
   login: () => Promise<boolean>;
   logout: () => Promise<void>;
   authServiceURL: () => string;
+
+  // Service grants of the current session. Optional: an older authenticatoor
+  // serves a client without them (feature-detect with typeof).
+  /** Whether the session may use the service at all (basic access). */
+  hasService?: (service: string) => boolean;
+  /**
+   * Whether the session has a feature of a service. Default-deny (the
+   * feature needs a grant) unless opts.defaultAllow; false when
+   * unauthenticated.
+   */
+  hasFeature?: (service: string, feature: string, opts?: { defaultAllow?: boolean }) => boolean;
+  /** The claims of the current token, null when unauthenticated. */
+  getClaims?: () => Record<string, unknown> | null;
+  getTeams?: () => string[];
+  /** Pure evaluation of a "services" directive list. */
+  serviceAllowed?: (directives: string, service: string) => boolean;
+  featureAllowed?: (directives: string, service: string, feature: string, defaultAllow: boolean) => boolean;
 }
 
 interface RuntimeConfig {
   authProviderURL: string;
+  authService: string;
   overviewURL: string;
 }
 
@@ -74,6 +106,7 @@ const OPEN_STATE: AuthState = {
   isLoggedIn: true, // open mode: treat as authorized
   user: null,
   expiresAt: null,
+  features: ALL_FEATURES,
 };
 
 const ANON_STATE: AuthState = {
@@ -81,6 +114,7 @@ const ANON_STATE: AuthState = {
   isLoggedIn: false,
   user: null,
   expiresAt: null,
+  features: NO_FEATURES,
 };
 
 class AuthStore {
@@ -118,6 +152,7 @@ class AuthStore {
     const cfg = window.ethpandaops?.buildoor?.config;
     return {
       authProviderURL: cfg?.authProviderURL ?? '',
+      authService: cfg?.authService || 'buildoor',
       overviewURL: cfg?.overviewURL ?? '',
     };
   }
@@ -126,13 +161,32 @@ class AuthStore {
   // "refreshing" status still carries authenticated=true while the old
   // token is valid, so the UI doesn't flicker during background refreshes.
   private applyTokenInfo = (info: AuthTokenInfo): void => {
+    const features = info.authenticated ? this.sessionFeatures() : NO_FEATURES;
     this.setState({
       authEnabled: true,
       isLoggedIn: info.authenticated,
       user: info.authenticated ? info.user || null : null,
       expiresAt: info.authenticated && info.exp ? info.exp * 1000 : null,
+      // Keep the object while nothing changed, so readers do not re-render.
+      features: sameFeatures(features, this.state.features) ? this.state.features : features,
     });
   };
+
+  // What the auth client says the current session may do on this instance.
+  private sessionFeatures(): FeatureSet {
+    const lib = this.lib;
+    if (!lib || typeof lib.hasFeature !== 'function') return NO_FEATURES;
+    const service = this.readRuntimeConfig().authService;
+    const features = {} as Record<Feature, boolean>;
+    for (const feature of FEATURES) {
+      try {
+        features[feature] = lib.hasFeature(service, feature) === true;
+      } catch {
+        features[feature] = false;
+      }
+    }
+    return features;
+  }
 
   private loadAuthScript(authProviderURL: string): Promise<void> {
     return new Promise((resolve, reject) => {

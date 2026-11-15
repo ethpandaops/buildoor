@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { authStore } from '../stores/authStore';
 import type { LocalBuildPlan, SlotPlan, SlotRule } from '../types';
+import type { FeatureSet } from '../utils/authFeatures';
 
 // authHeaders returns the login Authorization header (empty when logged out
 // or in open mode), plus any extra headers.
@@ -21,6 +22,18 @@ const getLoggedIn = () => authStore.getState().isLoggedIn;
 // a login lands from another tab: reads without a login come back redacted.
 export function useLoggedIn(): boolean {
   return useSyncExternalStore(subscribeAuth, getLoggedIn);
+}
+
+const getFeatures = () => authStore.getState().features;
+
+// useFeatures tracks what the current login may do ({plan, txpool, config,
+// rpc, keys}): what the authenticatoor client answers for the session,
+// asked again on login, token refresh and logout; all true in open mode,
+// none with a client that cannot tell. Controls for an
+// action the login lacks are disabled or hidden with it; the API answers
+// 403 regardless.
+export function useFeatures(): FeatureSet {
+  return useSyncExternalStore(subscribeAuth, getFeatures);
 }
 
 function localRedacted(local: LocalBuildPlan | undefined): boolean {

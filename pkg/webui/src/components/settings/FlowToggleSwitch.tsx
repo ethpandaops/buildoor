@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuthContext } from '../../context/AuthContext';
+import { needsFeature } from '../../utils/authFeatures';
 import { Switch } from '../ui/Switch';
 import type { FlowContext, FlowDef } from '../../settings/flows';
 import { readSetting } from '../../settings/values';
@@ -13,10 +14,10 @@ interface FlowToggleSwitchProps {
 }
 
 // FlowToggleSwitch turns a flow on or off with one click. Logged-out readers
-// see the state but cannot change it; a module that cannot run at all can
-// only be switched off.
+// and logins without the config feature see the state but cannot change it;
+// a module that cannot run at all can only be switched off.
 export const FlowToggleSwitch: React.FC<FlowToggleSwitchProps> = ({ flow, ctx, onError }) => {
-  const { isLoggedIn } = useAuthContext();
+  const { isLoggedIn, features } = useAuthContext();
   const [busy, setBusy] = useState(false);
 
   if (!flow.toggle) return null;
@@ -29,10 +30,12 @@ export const FlowToggleSwitch: React.FC<FlowToggleSwitchProps> = ({ flow, ctx, o
   }
   const on = value === true;
   const unavailable = flow.toggle.unavailable?.(ctx) ?? null;
-  const blocked = !isLoggedIn || (!on && unavailable !== null);
+  const blocked = !isLoggedIn || !features.config || (!on && unavailable !== null);
   const title = !isLoggedIn
     ? 'Log in to change'
-    : !on && unavailable
+    : !features.config
+      ? needsFeature('config')
+      : !on && unavailable
       ? unavailable
       : `${on ? 'Disable' : 'Enable'} ${flow.title}`;
 

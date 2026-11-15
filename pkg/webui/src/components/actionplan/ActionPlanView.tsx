@@ -9,6 +9,7 @@ import { RulesPanel } from './RulesPanel';
 import { SlotEditDrawer, type ModalTarget } from './SlotEditDrawer';
 import type { CellClickModifiers } from './SlotCell';
 import { InfoHint } from '../InfoHint';
+import { needsFeature } from '../../utils/authFeatures';
 
 // Default epoch window around the current epoch.
 const EPOCHS_BACK = 8;
@@ -21,8 +22,10 @@ interface EpochWindow {
 
 export const ActionPlanView: React.FC = () => {
   const { chainInfo, currentSlot } = useEventStream();
-  const { isLoggedIn } = useAuthContext();
-  const canEdit = isLoggedIn;
+  const { isLoggedIn, features } = useAuthContext();
+  const canEdit = isLoggedIn && features.plan;
+  // Why the plans are read-only: no login, or a login without the feature.
+  const editHint = !isLoggedIn ? 'Login required to edit plans' : needsFeature('plan');
 
   const slotsPerEpoch = chainInfo?.slots_per_epoch ?? 0;
   const currentEpoch = slotsPerEpoch > 0 ? Math.floor(currentSlot / slotsPerEpoch) : 0;
@@ -236,6 +239,7 @@ export const ActionPlanView: React.FC = () => {
           <BulkEditBar
             selectionCount={selection.size}
             canEdit={canEdit}
+            editHint={editHint}
             currentSlot={currentSlot}
             onClearSelection={closeDrawer}
             onEditSelected={handleEditSelected}
@@ -313,6 +317,7 @@ export const ActionPlanView: React.FC = () => {
           results={drawerResults}
           currentSlot={currentSlot}
           canEdit={canEdit}
+          editHint={editHint}
           applyUpdates={applyUpdates}
           onClose={closeDrawer}
           onDirtyChange={handleDirtyChange}
