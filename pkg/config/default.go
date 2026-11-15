@@ -7,6 +7,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		APIPort:           0,
 		AuthProviderURL:   "",
+		AuthService:       "buildoor",
 		LifecycleEnabled:  false,
 		EPBSEnabled:       false, // Disabled by default
 		BuilderAPIEnabled: false, // Disabled by default

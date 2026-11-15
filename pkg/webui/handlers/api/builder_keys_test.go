@@ -42,7 +42,7 @@ func keysTestHandler(t *testing.T, target uint64) *APIHandler {
 	require.NoError(t, err)
 	registry.Refresh()
 
-	authHandler, err := auth.NewAuthHandler(t.Context(), "")
+	authHandler, err := auth.NewAuthHandler(t.Context(), "", "")
 	require.NoError(t, err)
 
 	return &APIHandler{authHandler: authHandler, keys: registry, settingsSvc: settingsSvc}

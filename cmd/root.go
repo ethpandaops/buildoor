@@ -66,6 +66,7 @@ func init() {
 	rootCmd.PersistentFlags().String("wallet-privkey", "", "Wallet ECDSA private key (hex)")
 	rootCmd.PersistentFlags().Int("api-port", 0, "HTTP API port (0 = disabled)")
 	rootCmd.PersistentFlags().String("auth-provider-url", "", "Optional authenticatoor URL (e.g. https://auth.<devnet>.example.io); when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty the API is unauthenticated.")
+	rootCmd.PersistentFlags().String("auth-service", "buildoor", "Name of this instance in the authenticatoor token's services claim; a token that does not allow it is rejected. Only used with --auth-provider-url.")
 	rootCmd.PersistentFlags().String("inject-head-html", "", "Raw HTML snippet injected into <head> of the served SPA (e.g. global panda menu loader). Falls back to the BUILDOOR_INJECT_HEAD_HTML env var when empty.")
 	rootCmd.PersistentFlags().String("overview-url", "", "Optional URL of the multi-instance overview UI. When set, the dashboard renders an Overview entry as the first top-nav item so navigation stays consistent across instances.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
@@ -298,6 +299,7 @@ func initConfig(root *cobra.Command) error {
 		WalletPrivkey:     v.GetString("wallet-privkey"),
 		APIPort:           v.GetInt("api-port"),
 		AuthProviderURL:   v.GetString("auth-provider-url"),
+		AuthService:       v.GetString("auth-service"),
 		InjectHeadHTML:    v.GetString("inject-head-html"),
 		OverviewURL:       v.GetString("overview-url"),
 		LifecycleEnabled:  v.GetBool("lifecycle"),
