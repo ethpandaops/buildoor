@@ -254,6 +254,60 @@ The dashboard provides:
 - Bids Won tracking (Builder API mode)
 - Validator registration overview
 
+## Authentication
+
+Without further flags the WebUI and its API are open: everybody who reaches the port can change everything. To require a login, point buildoor at a [service-authenticatoor](https://github.com/ethpandaops/service-authenticatoor):
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--auth-provider-url` | | URL of the authenticatoor (e.g. `https://auth.<devnet>.example.io`). When set, the API verifies the bearer token of a request against the authenticatoor's JWKS; when empty the API is unauthenticated (open mode) |
+| `--auth-service` | `buildoor` | Name of this instance in the token's `services` claim. A token that does not allow the name is rejected, and the features below are granted to this name. Only used with `--auth-provider-url` |
+
+Reading the dashboard needs no login. A login (a valid token that allows the service) sees the private data as well and may use the actions that change nothing; everything that changes state needs a **feature** on top.
+
+### Features
+
+| Feature | Endpoints (under `/api/v1`) |
+|---------|-----------------------------|
+| basic (any login allowed for the service, no feature) | `GET /txpool` (pool contents), `POST /local-build/probe`, `POST /action-plan/test-transform` (dry run), `GET /audit-log`, the unredacted view of plans, slot results, payloads and the next block, the profiles under `/debug/pprof/`, and submitting transactions to `/rpc` as a WebUI login |
+| `plan` | `POST /action-plan`, `POST /action-plan/rules` |
+| `txpool` | `DELETE /txpool`, `DELETE /txpool/{hash}` |
+| `config` | `PATCH /config` |
+| `rpc` | `GET /rpc-access` (its caller stats carry client IPs), `POST /rpc-access/keys`, `PATCH /rpc-access/keys/{id}`, `DELETE /rpc-access/keys/{id}` |
+| `keys` | `POST /builder-keys/target`, `POST /builder-keys/{index}/deposit`, `/topup`, `/exit`; the `builder_keys.*` settings in `PATCH /config` (which then needs `config` and `keys`) |
+
+The pre-v1 aliases of these routes need the same. The table is a summary: the handlers are authoritative, each one names the feature it needs in the first line of its code (`pkg/webui/handlers/api`), and the generated API docs (`/api/docs/`) list the `403` next to every endpoint that needs one.
+
+A request without a valid token for the service is answered `401 {"error":"unauthorized"}`; a valid login without the feature `403 {"error":"forbidden: this login lacks the feature buildoor:keys"}`. A refused request changes nothing and is not written to the audit log. In open mode every request is allowed.
+
+Features are handed out in the authenticatoor's `grants` section, per group of users, under the service name of the instance:
+
+```yaml
+grants:
+  - members: ["oidc/team:ethpandaops"]
+    services: ["all:all"]                        # every tool, every feature
+  - members: ["oidc/team:lighthouse"]
+    services: ["buildoor:plan", "buildoor:txpool"] # log in, edit plans, drop pool transactions
+  - members: ["oidc/user:alice@example.org"]
+    services: ["buildoor"]                       # log in and read, nothing else
+```
+
+| Grant | Meaning |
+|-------|---------|
+| `buildoor` | basic access: log in, no feature |
+| `buildoor:plan` | basic access and the feature `plan` (`buildoor:plan:keys` for two) |
+| `buildoor:k*` | basic access and every feature starting with `k` |
+| `buildoor:all` | basic access and every feature |
+| `all:all` | every feature of every tool behind the authenticatoor |
+
+An instance started with `--auth-service buildoor-2` is granted as `buildoor-2`, `buildoor-2:plan`, `buildoor-2:all`; a grant for `buildoor` does not reach it.
+
+Features are default-deny: a token whose `services` claim does not grant a feature does not have it, and a token **without** a `services` claim (as an authenticatoor without a `grants` section issues it) has basic access only.
+
+The WebUI does not decide anything. It asks the authenticatoor's browser client (`client-v2.js`, `hasFeature(<service>, <feature>)`) which features the logged-in user has, on every login, token refresh and logout, and disables or hides the controls for the others ("Needs the feature buildoor:keys"); the service name comes from the instance (`--auth-service`). The API enforces the features on every request, whatever the page shows. With an authenticatoor whose client cannot tell the features yet, the WebUI offers none of the feature-gated controls.
+
+**Rollout:** deploy this version after the authenticatoor has `grants` configured (and serves a client with `hasFeature`). With an authenticatoor that issues tokens without grants, logged-in users keep reading everything but lose the mutating actions until they are granted the features.
+
 ## Local Development
 
 ```bash
