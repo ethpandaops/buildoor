@@ -12,6 +12,10 @@ type FrontendConfig struct {
 	// shared-session client with automatic token refresh).
 	AuthProviderURL string
 
+	// AuthService is the name of this instance in the token's "services"
+	// claim. Empty means the default, "buildoor".
+	AuthService string
+
 	// InjectHeadHTML is a raw HTML snippet (typically <script>/<meta>/<link>
 	// tags) injected into <head> of the served SPA after the runtime-config
 	// script. Set per deployment; commonly used for the global ethPandaOps

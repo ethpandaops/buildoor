@@ -66,6 +66,7 @@ func init() {
 	rootCmd.PersistentFlags().String("wallet-privkey", "", "Wallet ECDSA private key (hex)")
 	rootCmd.PersistentFlags().Int("api-port", 0, "HTTP API port (0 = disabled)")
 	rootCmd.PersistentFlags().String("auth-provider-url", "", "Optional authenticatoor URL (e.g. https://auth.<devnet>.example.io); when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty the API is unauthenticated.")
+	rootCmd.PersistentFlags().String("auth-service", "buildoor", "Name of this instance in the authenticatoor token's services claim; a token that does not allow it is rejected. Only used with --auth-provider-url.")
 	rootCmd.PersistentFlags().String("inject-head-html", "", "Raw HTML snippet injected into <head> of the served SPA (e.g. global panda menu loader). Falls back to the BUILDOOR_INJECT_HEAD_HTML env var when empty.")
 	rootCmd.PersistentFlags().String("overview-url", "", "Optional URL of the multi-instance overview UI. When set, the dashboard renders an Overview entry as the first top-nav item so navigation stays consistent across instances.")
 	rootCmd.PersistentFlags().Bool("lifecycle", false, "Enable builder lifecycle management")
@@ -115,7 +116,8 @@ func init() {
 	rootCmd.PersistentFlags().String("epbs-bid-candidate", defaults.EPBS.BidCandidate, "Which built candidate payload p2p bids commit to: auto, parent_full, parent_empty, grandparent_full, grandparent_empty or all")
 	rootCmd.PersistentFlags().String("epbs-key-strategy", defaults.EPBS.KeyStrategy, "Which managed builder key signs each bid: round_robin, single, random or least_used")
 	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-slot", defaults.EPBS.BidKeysPerSlot, "Max distinct builder keys bidding one slot (0 = no cap beyond the fleet)")
-	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every remaining key at once)")
+	rootCmd.PersistentFlags().Uint64("epbs-bid-keys-per-step", defaults.EPBS.BidKeysPerStep, "Builder keys bidding a payload per interval step, each one increment higher (0 = every key with a bid left)")
+	rootCmd.PersistentFlags().Uint64("epbs-bids-per-key", defaults.EPBS.BidsPerKey, "Max bids one builder key gossips per slot and parent (0 = the gossip bid limit, one per ETH of builder balance; 1 = one bid per key)")
 	rootCmd.PersistentFlags().String("builder-api-key-strategy", defaults.BuilderAPI.KeyStrategy, "Which managed builder key signs served Builder API bids (empty = follow --epbs-key-strategy)")
 	rootCmd.PersistentFlags().Bool("epbs-bid-candidate-switch", defaults.EPBS.BidCandidateSwitch, "Allow the auto bid candidate selection to switch mid-slot when the chain view changes")
 
@@ -297,6 +299,7 @@ func initConfig(root *cobra.Command) error {
 		WalletPrivkey:     v.GetString("wallet-privkey"),
 		APIPort:           v.GetInt("api-port"),
 		AuthProviderURL:   v.GetString("auth-provider-url"),
+		AuthService:       v.GetString("auth-service"),
 		InjectHeadHTML:    v.GetString("inject-head-html"),
 		OverviewURL:       v.GetString("overview-url"),
 		LifecycleEnabled:  v.GetBool("lifecycle"),
@@ -348,6 +351,7 @@ func initConfig(root *cobra.Command) error {
 			KeyStrategy:          v.GetString("epbs-key-strategy"),
 			BidKeysPerSlot:       v.GetUint64("epbs-bid-keys-per-slot"),
 			BidKeysPerStep:       v.GetUint64("epbs-bid-keys-per-step"),
+			BidsPerKey:           v.GetUint64("epbs-bids-per-key"),
 		},
 		LocalBuild: config.LocalBuildConfig{
 			Enabled:                 v.GetBool("local-build-enabled"),

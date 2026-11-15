@@ -601,6 +601,7 @@ and begins building blocks according to configuration.`,
 				Minify:   true,
 
 				AuthProviderURL: cfg.AuthProviderURL,
+				AuthService:     cfg.AuthService,
 				InjectHeadHTML:  cfg.InjectHeadHTML,
 				OverviewURL:     cfg.OverviewURL,
 			}, settingsSvc, stateDB, builderSvc, epbsSvc, lifecycleMgr, keyRegistry, chainSvc, validatorStore, builderAPISrv, propPrefSvc, valRanges, revealSvc, inclusionTracker, paymentTracker, planSvc, resultTracker, txPool, rpcClient, rpcKeys, planVerifier)

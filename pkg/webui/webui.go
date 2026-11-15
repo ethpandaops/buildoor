@@ -65,7 +65,7 @@ func (c loginChecker) ValidLogin(r *http.Request) bool {
 }
 
 func StartHttpServer(frontendConfig *types.FrontendConfig, settingsSvc *config.Service, stateDB *db.Database, builderSvc *payload_builder.Service, epbsSvc *p2p_bidder.Service, lifecycleMgr *lifecycle.Manager, keys *builder_keys.Registry, chainSvc chain.Service, validatorStore *memstore.Store[phase0.BLSPubKey, *apiv1.SignedValidatorRegistration], builderAPISvc *builderapi.Server, propPrefSvc *payload_bidder.ProposerPreferencesService, valRanges *validatorranges.Resolver, revealSvc *payload_bidder.RevealService, inclusionTracker *payload_bidder.InclusionTracker, payments *payload_bidder.PaymentTracker, planSvc *action_plan.PlanService, resultTracker *slot_results.Tracker, txPool *txpool.Pool, elClient *execution.Client, rpcKeys *txpoolrpc.KeyStore, planVerifier *tx_plan_verifier.Verifier) *api.APIHandler {
-	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL)
+	authHandler, err := auth.NewAuthHandler(context.Background(), frontendConfig.AuthProviderURL, frontendConfig.AuthService)
 	if err != nil {
 		logrus.WithError(err).Fatal("failed to initialize auth handler")
 	}
