@@ -5,9 +5,9 @@ go 1.26.10
 require (
 	github.com/OffchainLabs/go-bitfield v0.0.0-20251031151322-f427d04d8506
 	github.com/cockroachdb/pebble/v2 v2.1.7
-	github.com/ethereum/go-ethereum v1.17.9
+	github.com/ethereum/go-ethereum v1.17.10
 	github.com/ethpandaops/go-eth-engine-client v0.0.2
-	github.com/ethpandaops/go-eth2-client v0.1.11
+	github.com/ethpandaops/go-eth2-client v0.1.12
 	github.com/ethpandaops/service-authenticatoor v0.0.3
 	github.com/glebarez/go-sqlite v1.23.0
 	github.com/goccy/go-yaml v1.19.2
@@ -15,7 +15,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/herumi/bls-eth-go-binary v1.38.0
 	github.com/holiman/uint256 v1.3.2
-	github.com/itchyny/gojq v0.12.19
+	github.com/itchyny/gojq v0.12.20
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/klauspost/compress v1.20.3
 	github.com/pk910/dynamic-ssz v1.4.0
@@ -81,7 +81,7 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/huandu/go-clone v1.7.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/itchyny/timefmt-go v0.1.8 // indirect
+	github.com/itchyny/timefmt-go v0.1.9 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
