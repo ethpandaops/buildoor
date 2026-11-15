@@ -27,6 +27,7 @@ const DefaultServiceName = "buildoor"
 // always returns a non-nil token.
 type AuthHandler struct {
 	verifier auth.Verifier // nil → open mode
+	service  string        // the name this instance has in a "services" claim
 }
 
 // NewAuthHandler returns a handler. When authProviderURL is empty the
@@ -42,7 +43,7 @@ func NewAuthHandler(ctx context.Context, authProviderURL, service string) (*Auth
 		service = DefaultServiceName
 	}
 	if authProviderURL == "" {
-		return &AuthHandler{}, nil
+		return &AuthHandler{service: service}, nil
 	}
 
 	expectedIssuer := authProviderURL
@@ -62,13 +63,19 @@ func NewAuthHandler(ctx context.Context, authProviderURL, service string) (*Auth
 		return nil, fmt.Errorf("auth: build verifier: %w", err)
 	}
 
-	return &AuthHandler{verifier: verifier}, nil
+	return &AuthHandler{verifier: verifier, service: service}, nil
 }
 
 // IsOpen reports whether this handler is running in open mode (no auth
 // provider configured).
 func (h *AuthHandler) IsOpen() bool {
 	return h.verifier == nil
+}
+
+// Service returns the name this instance has in a token's "services" claim
+// (--auth-service): the service gate and every feature check use it.
+func (h *AuthHandler) Service() string {
+	return h.service
 }
 
 // parentZone returns the parent DNS zone of a URL's host, used as the

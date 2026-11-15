@@ -85,8 +85,8 @@ github.com/ethpandaops/go-eth-engine-client v0.0.2 h1:XKSuJo3K7ZtMjnF92u8FGUjgPh
 github.com/ethpandaops/go-eth-engine-client v0.0.2/go.mod h1:ggCXJgxLFNGpC+DkgNQkeTr3dXRQDb0+9niNmaJWAgM=
 github.com/ethpandaops/go-eth2-client v0.1.11 h1:gQErMw/Kc5zZYk4XeZkD27yEn4DPlzaMHlEiuflIluE=
 github.com/ethpandaops/go-eth2-client v0.1.11/go.mod h1:sIVbaug0GsltsJS+hj8ID4dmWBIt8TXoNIesvuBCGt0=
-github.com/ethpandaops/service-authenticatoor v0.0.3 h1:jb7G49zU49yA2lr9D3WRAWjfD9LQx+/Nzdnj8OqwIac=
-github.com/ethpandaops/service-authenticatoor v0.0.3/go.mod h1:z8kjSSRa87a9QumFfUXQISLQBm+w+oeWZ4o0ICv3MAs=
+github.com/ethpandaops/service-authenticatoor v0.0.4-0.20261115002157-bf178e3913dd h1:oNJCe56iE63aUHONekSxkdfHrleNL0ZJaOVaSZARvG4=
+github.com/ethpandaops/service-authenticatoor v0.0.4-0.20261115002157-bf178e3913dd/go.mod h1:vPmhGGjYhF5BVl5H+oYjeln6u2IeHKcbnWNRJy7hn+o=
 github.com/ferranbt/fastssz v0.1.4 h1:OCDB+dYDEQDvAgtAGnTSidK1Pe2tW3nFV40XyMkTeDY=
 github.com/ferranbt/fastssz v0.1.4/go.mod h1:Ea3+oeoRGGLGm5shYAeDgu6PGUlcvQhE2fILyD9+tGg=
 github.com/fjl/jsonw v0.1.0 h1:V3MyR79fjLpn/+bMgvegdGUIhoJOzjmqWcKDgcOmY1I=

@@ -1,92 +1,15 @@
 package auth
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/ethpandaops/service-authenticatoor/pkg/issuer"
+	"github.com/ethpandaops/buildoor/pkg/webui/handlers/auth/authtest"
 )
 
-// authProvider is a stand-in authenticatoor: discovery document and JWKS
-// for one signing key, plus tokens minted with a chosen services claim.
-type authProvider struct {
-	t      *testing.T
-	server *httptest.Server
-	key    *rsa.PrivateKey
-}
-
-func newAuthProvider(t *testing.T) *authProvider {
-	t.Helper()
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	p := &authProvider{t: t, key: key}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"issuer":   p.server.URL,
-			"jwks_uri": p.server.URL + "/jwks.json",
-		})
-	})
-	mux.HandleFunc("/jwks.json", func(w http.ResponseWriter, _ *http.Request) {
-		jwks, jwksErr := p.issuer("").JWKS()
-		if jwksErr != nil {
-			http.Error(w, jwksErr.Error(), http.StatusInternalServerError)
-
-			return
-		}
-
-		_, _ = w.Write(jwks)
-	})
-
-	p.server = httptest.NewServer(mux)
-	t.Cleanup(p.server.Close)
-
-	return p
-}
-
-func (p *authProvider) issuer(services string) *issuer.RS256Issuer {
-	p.t.Helper()
-
-	iss, err := issuer.NewRS256Issuer(issuer.Config{
-		ActiveKey:       p.key,
-		Issuer:          p.server.URL,
-		DefaultAudience: []string{parentZone(p.server.URL)},
-		Services:        services,
-		TTL:             time.Minute,
-	})
-	if err != nil {
-		p.t.Fatalf("issuer: %v", err)
-	}
-
-	return iss
-}
-
-// token mints a token whose "services" claim is the given directive list.
-func (p *authProvider) token(services string) string {
-	p.t.Helper()
-
-	token, _, err := p.issuer(services).Issue("dev@example.org", "dev@example.org", nil)
-	if err != nil {
-		p.t.Fatalf("issue: %v", err)
-	}
-
-	return token
-}
-
 func TestCheckAuthTokenEnforcesTheServicesGate(t *testing.T) {
-	provider := newAuthProvider(t)
+	provider := authtest.NewProvider(t)
 
-	handler, err := NewAuthHandler(t.Context(), provider.server.URL, "")
+	handler, err := NewAuthHandler(t.Context(), provider.URL(), "")
 	if err != nil {
 		t.Fatalf("NewAuthHandler: %v", err)
 	}
@@ -110,7 +33,7 @@ func TestCheckAuthTokenEnforcesTheServicesGate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token := provider.token(tt.services)
+			token := provider.Token(tt.services)
 
 			for _, header := range []string{token, "Bearer " + token} {
 				if got := handler.CheckAuthToken(header) != nil; got != tt.want {
@@ -137,9 +60,9 @@ func TestOpenModeAcceptsEverything(t *testing.T) {
 }
 
 func TestCheckAuthTokenUsesTheConfiguredServiceName(t *testing.T) {
-	provider := newAuthProvider(t)
+	provider := authtest.NewProvider(t)
 
-	handler, err := NewAuthHandler(t.Context(), provider.server.URL, " buildoor-2 ")
+	handler, err := NewAuthHandler(t.Context(), provider.URL(), " buildoor-2 ")
 	if err != nil {
 		t.Fatalf("NewAuthHandler: %v", err)
 	}
@@ -157,7 +80,7 @@ func TestCheckAuthTokenUsesTheConfiguredServiceName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := handler.CheckAuthToken(provider.token(tt.services)) != nil; got != tt.want {
+			if got := handler.CheckAuthToken(provider.Token(tt.services)) != nil; got != tt.want {
 				t.Errorf("CheckAuthToken accepted = %v, want %v (services %q)", got, tt.want, tt.services)
 			}
 		})
