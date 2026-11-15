@@ -60,6 +60,7 @@ type Config struct {
 	WalletPrivkey     string            `yaml:"wallet_privkey" json:"-"`          // Optional: only if lifecycle enabled
 	APIPort           int               `yaml:"api_port" json:"api_port"`         // Optional, 0 = disabled
 	AuthProviderURL   string            `yaml:"auth_provider_url" json:"-"`       // Optional: authenticatoor URL; when set, API requests must carry a JWT verified against the authenticatoor's JWKS. When empty, the API is unauthenticated.
+	AuthService       string            `yaml:"auth_service" json:"-"`            // Optional: name of this instance in the token's services claim (default "buildoor"); only used with auth_provider_url
 	InjectHeadHTML    string            `yaml:"inject_head_html" json:"-"`        // Optional: raw HTML snippet (e.g. analytics tags) injected into <head> of the served SPA. Falls back to BUILDOOR_INJECT_HEAD_HTML env var when empty.
 	OverviewURL       string            `yaml:"overview_url" json:"overview_url"` // Optional: URL of the multi-instance overview UI. When set, the dashboard renders an "Overview" entry in the top nav and the brand logo links back to the overview, so operators get consistent navigation across instances.
 	LifecycleEnabled  bool              `yaml:"lifecycle_enabled" json:"lifecycle_enabled"`

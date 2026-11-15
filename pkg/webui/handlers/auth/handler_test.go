@@ -86,7 +86,7 @@ func (p *authProvider) token(services string) string {
 func TestCheckAuthTokenEnforcesTheServicesGate(t *testing.T) {
 	provider := newAuthProvider(t)
 
-	handler, err := NewAuthHandler(t.Context(), provider.server.URL)
+	handler, err := NewAuthHandler(t.Context(), provider.server.URL, "")
 	if err != nil {
 		t.Fatalf("NewAuthHandler: %v", err)
 	}
@@ -126,12 +126,40 @@ func TestCheckAuthTokenEnforcesTheServicesGate(t *testing.T) {
 }
 
 func TestOpenModeAcceptsEverything(t *testing.T) {
-	handler, err := NewAuthHandler(t.Context(), "")
+	handler, err := NewAuthHandler(t.Context(), "", "")
 	if err != nil {
 		t.Fatalf("NewAuthHandler: %v", err)
 	}
 
 	if !handler.IsOpen() || handler.CheckAuthToken("") == nil {
 		t.Error("without an auth provider every request must pass")
+	}
+}
+
+func TestCheckAuthTokenUsesTheConfiguredServiceName(t *testing.T) {
+	provider := newAuthProvider(t)
+
+	handler, err := NewAuthHandler(t.Context(), provider.server.URL, " buildoor-2 ")
+	if err != nil {
+		t.Fatalf("NewAuthHandler: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		services string
+		want     bool
+	}{
+		{name: "no services claim carries no constraint", services: "", want: true},
+		{name: "the configured name", services: "-all,+buildoor-2", want: true},
+		{name: "the default name only", services: "-all,+buildoor", want: false},
+		{name: "everything but the configured name", services: "+all,-buildoor-2", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := handler.CheckAuthToken(provider.token(tt.services)) != nil; got != tt.want {
+				t.Errorf("CheckAuthToken accepted = %v, want %v (services %q)", got, tt.want, tt.services)
+			}
+		})
 	}
 }

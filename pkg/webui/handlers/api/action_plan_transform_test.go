@@ -18,7 +18,7 @@ import (
 func openTransformHandler(t *testing.T) *APIHandler {
 	t.Helper()
 
-	authHandler, err := auth.NewAuthHandler(t.Context(), "")
+	authHandler, err := auth.NewAuthHandler(t.Context(), "", "")
 	require.NoError(t, err)
 
 	return &APIHandler{authHandler: authHandler} // nil resultTracker → template sample path
